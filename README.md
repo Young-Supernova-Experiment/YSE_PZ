@@ -77,22 +77,24 @@ archivePrefix = {arXiv},
 }
 ```
 
-## Fork development (astrofoley/YSE_PZ)
+## Development
 
-This fork’s **`main`** branch tracks [davecoulter/YSE_PZ `develop`](https://github.com/davecoulter/YSE_PZ/tree/develop), plus local Docker/CI fixes and work merged from [YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) (that repo is **archived**; use this repo only). Day-to-day branches should start from **`main`**.
+**Canonical collaboration repo:** [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ) — branch from **`main`**, open PRs into **`main`**.
+
+**Collaboration org (future upstream):** [Young-Supernova-Experiment/YSE_PZ](https://github.com/Young-Supernova-Experiment/YSE_PZ) `develop` — integration PR postponed; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Branch | Purpose |
 |--------|---------|
-| `main` | Unified develop-based line |
-| `deploy/apache-subpath` | Apache subpath / deploy-only changes (not on `main`) |
+| `main` | Active development line (Docker, CI, tests) |
+| `deploy/apache-subpath` | Apache subpath / deploy-only (not on `main`) |
 
-**Remotes:** `origin` → davecoulter/YSE_PZ; `astrofoley` → this fork.
+**Suggested remotes:** `astrofoley` → this repo; `yse` → Young-Supernova-Experiment/YSE_PZ (optional).
 
-**Upstream PR:** When ready, open a cross-fork PR from `astrofoley/main` to `davecoulter/develop` via [compare across forks](https://github.com/davecoulter/YSE_PZ/compare/develop...astrofoley:YSE_PZ:main?expand=1) (not the fork “Contribute” button, which targets simulationstation).
+**Local Docker:** [CONTRIBUTING.md](CONTRIBUTING.md), [docker/readme.txt](docker/readme.txt).
 
-**Local Docker:** see [CONTRIBUTING.md](CONTRIBUTING.md) (setup, pruning, `collectstatic`) and [docker/readme.txt](docker/readme.txt).
+Apache subpath (`URL_PREFIX = /YSE_PZ`): `deploy/apache-subpath`, [deploy/apache/yse_pz-subpath.conf.example](deploy/apache/yse_pz-subpath.conf.example).
 
-For Apache subpath deployments (`URL_PREFIX = /YSE_PZ`), use `deploy/apache-subpath` and [deploy/apache/yse_pz-subpath.conf.example](deploy/apache/yse_pz-subpath.conf.example).
+**Issues:** https://github.com/astrofoley/YSE_PZ/issues
 
-Track open work on [GitHub Issues](https://github.com/astrofoley/YSE_PZ/issues).
+[YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) is **archived**; do not use for new work.
 

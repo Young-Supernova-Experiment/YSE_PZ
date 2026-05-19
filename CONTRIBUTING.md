@@ -1,6 +1,6 @@
 # Contributing to astrofoley/YSE_PZ
 
-This fork’s day-to-day development targets **`main`** on [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ). Upstream is [davecoulter/YSE_PZ](https://github.com/davecoulter/YSE_PZ) (`develop`); cross-fork PRs come later when that workflow is verified.
+Day-to-day development targets **`main`** on [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ). We do **not** open PRs to personal or legacy forks (including davecoulter/YSE_PZ). Longer term, changes may land on [Young-Supernova-Experiment/YSE_PZ](https://github.com/Young-Supernova-Experiment/YSE_PZ) `develop` via a separate integration PR.
 
 ## Workflow
 
@@ -14,7 +14,14 @@ This fork’s day-to-day development targets **`main`** on [astrofoley/YSE_PZ](h
 3. Open a PR into **`main`** on astrofoley/YSE_PZ (not direct pushes unless trivial).
 4. Wait for CI; merge when green.
 
-**Remotes:** `astrofoley` → this fork; `origin` → davecoulter/YSE_PZ.
+**Remotes:** `astrofoley` → https://github.com/astrofoley/YSE_PZ.git ; optional `yse` → https://github.com/Young-Supernova-Experiment/YSE_PZ.git
+
+If your clone still has `origin` pointing at davecoulter/YSE_PZ, remove or repoint it:
+
+```bash
+git remote remove origin    # optional
+git remote add yse https://github.com/Young-Supernova-Experiment/YSE_PZ.git
+```
 
 ## Local Docker
 
@@ -59,7 +66,7 @@ Docker pull/build cycles can use 10–20 GB per iteration on macOS. **`yse-docke
 | Command | What it does |
 |---------|----------------|
 | `./docker/scripts/yse-docker.sh up` | Start stack; light prune after success |
-| `./docker/scripts/yse-docker.sh pull` | Pull `ghcr.io/davecoulter/yse_pz:latest`; aggressive prune |
+| `./docker/scripts/yse-docker.sh pull` | Pull published web image (`ghcr.io/davecoulter/yse_pz:latest`); aggressive prune |
 | `./docker/scripts/yse-docker.sh rebuild` | Build local dev image + start; aggressive prune |
 | `./docker/scripts/yse-docker.sh prune` | Prune only (`prune aggressive` for more) |
 | `./docker/scripts/yse-docker.sh down` | Stop stack (**keeps** MySQL data in `VOL_DB`) |
@@ -71,7 +78,7 @@ Docker pull/build cycles can use 10–20 GB per iteration on macOS. **`yse-docke
 YSE_DOCKER_PRUNE=0 ./docker/scripts/yse-docker.sh up
 ```
 
-**What pruning removes:** dangling layers, build cache, and old `ghcr.io/davecoulter/yse_pz` / `local/yse_pz_web` images not used by `ysepz_*` containers.
+**What pruning removes:** dangling layers, build cache, and old published web / `local/yse_pz_web` images not used by `ysepz_*` containers.
 
 **What pruning does not remove:** MySQL data under `VOL_DB`.
 

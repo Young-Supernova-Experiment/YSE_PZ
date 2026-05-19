@@ -244,7 +244,7 @@ Installing the YSE_PZ Code
 
 Should be straightforward::
 
-   git clone https://github.com/davecoulter/YSE_PZ.git
+   git clone https://github.com/Young-Supernova-Experiment/YSE_PZ.git
    cd YSE_PZ
    conda env create -f yse_pz.yml
    conda activate yse_pz
