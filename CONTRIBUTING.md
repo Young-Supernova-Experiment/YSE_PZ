@@ -96,6 +96,21 @@ Keep several GB free on the host; git and Docker both fail when the disk is full
 docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
 ```
 
+### Performance baselines
+
+Page-load regression tests track **SQL query count** and **wall-clock load time (ms)** for each page. A summary table prints at the end of the run.
+
+```bash
+docker exec ysepz_web_container python3 manage.py test YSE_App.tests.test_performance --verbosity=2
+```
+
+| Variable | Effect |
+|----------|--------|
+| `YSE_PERF_SKIP_TIMING=1` | Skip load-time ceiling assertions (queries still checked) |
+| `YSE_PERF_RECORD_PATH=/tmp/yse_perf.json` | Export metrics JSON for CI or local comparison |
+
+Targets: `/transient_detail/<slug>/` (shell + synthetic loaded), `/personaldashboard/`, `/dashboard/`, `/explorer/` (including 200-row catalog + logs; query count only).
+
 CI runs the same flow via [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 ## Secrets (optional)
