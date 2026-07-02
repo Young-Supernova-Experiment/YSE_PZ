@@ -1,26 +1,19 @@
 name: Deploy Experimental Stack
 
 on:
+  push:
+    branches:
+      - experimental
   pull_request:
     branches:
       - experimental
     types:
-      - closed  # Triggers when a PR targeting experimental is closed
+      - closed
 
 jobs:
   deploy:
-    # This conditional ensures it ONLY runs if the PR was actually merged, 
-    # and not just closed without merging.
-    if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-
-on:
-  push:
-    branches:
-      - experimental  # Triggers when code is pushed to the experimental branch
-
-jobs:
-  deploy:
+    # Run if it's a direct push OR if a pull request was successfully merged
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
 
     steps:
@@ -34,21 +27,16 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # 1. Navigate to experimental folder
             cd /data/yse_pz/YSE_PZ_experimental
             
-            # 2. Pull fresh code from github
             git fetch origin
             git reset --hard origin/experimental
             
-            # 3. Synchronize core requirements (skipping build isolation for extinction)
             ./venv/bin/pip install wheel
             ./venv/bin/pip install --no-build-isolation "extinction==0.4.2"
             ./venv/bin/pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
             ./venv/bin/pip install --use-deprecated=legacy-resolver -r requirements.txt
             
-            # 4. Run database migrations safely
             ./venv/bin/python manage.py migrate --noinput
             
-            # 5. Reload the server environment
             sudo systemctl restart apache2
