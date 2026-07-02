@@ -1,6 +1,20 @@
 name: Deploy Experimental Stack
 
 on:
+  pull_request:
+    branches:
+      - experimental
+    types:
+      - closed  # Triggers when a PR targeting experimental is closed
+
+jobs:
+  deploy:
+    # This conditional ensures it ONLY runs if the PR was actually merged, 
+    # and not just closed without merging.
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+on:
   push:
     branches:
       - experimental  # Triggers when code is pushed to the experimental branch
