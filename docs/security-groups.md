@@ -121,9 +121,13 @@ Plot HTML cache keys use `group_access_plot_cache_token()` — a hash of sorted 
 
 ## Remaining ([#102](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/102))
 
-- Per-group Slack ([#100](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/100))
-- DRF hardening (`TransientViewSet`, export headers, notifications)
-- `creator_only` observing resources (extension point exists; no production rows yet)
+**Ship in progress** on `security/phase-5-hardening` → `experimental` → `develop` → `master`:
+
+- Phase 5 DRF hardening (`TransientViewSet`, User/Profile/Group viewsets)
+- Export header redaction + notification audience checks
+- `creator_only` BooleanField on Classical/ToO/Queued resources (admin + forms)
+
+**Deferred (not #102):** per-group Slack [#100](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/100), Slack docs [#101](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/101).
 
 ### v1 audience UI — stage status (2026-06)
 

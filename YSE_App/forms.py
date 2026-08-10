@@ -218,7 +218,9 @@ class ClassicalResourceForm(ModelForm):
         model = ClassicalResource
         fields = [
             'telescope',
-            'principal_investigator']
+            'principal_investigator',
+            'creator_only',
+        ]
 
 class ToOResourceForm(ModelForm):
 
@@ -237,7 +239,9 @@ class ToOResourceForm(ModelForm):
             'awarded_too_hours',
             'used_too_hours',
             'awarded_too_triggers',
-            'used_too_triggers']
+            'used_too_triggers',
+            'creator_only',
+        ]
 
 class SurveyFieldForm(ModelForm):
 
