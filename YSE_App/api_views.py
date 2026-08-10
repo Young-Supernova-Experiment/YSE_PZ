@@ -10,6 +10,7 @@ from rest_framework.reverse import reverse
 from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
+from YSE_App.services.visibility import filter_transients_by_user_access
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
@@ -343,6 +344,13 @@ class ProfileViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = ProfileSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        qs = Profile.objects.all()
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(user=user)
+
 ### `UserQuery` ViewSets ###
 class UserQueryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = UserQuery.objects.all()
@@ -465,6 +473,10 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     filter_class = TransientFilter
     #filter_fields = ('status','created_date','modified_date','mw_ebv','status__name')
 
+    def get_queryset(self):
+        qs = Transient.objects.all()
+        return filter_transients_by_user_access(self.request.user, qs)
+
 class AlternateTransientNamesViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = AlternateTransientNames.objects.all()
     serializer_class = AlternateTransientNamesSerializer
@@ -476,11 +488,25 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = UserSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        qs = User.objects.all()
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(pk=user.pk)
+
 ### `Group` ViewSets ###
 class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Group.objects.all()
     serializer_class = GroupSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        qs = Group.objects.all()
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(pk__in=user.groups.values_list("pk", flat=True))
 
 ### `Tag` ViewSets ###
 class TransientTagViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):

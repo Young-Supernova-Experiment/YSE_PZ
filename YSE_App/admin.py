@@ -34,9 +34,17 @@ admin.site.register(OnCallDate)
 admin.site.register(YSEOnCallDate)
 admin.site.register(Telescope)
 admin.site.register(Instrument)
-admin.site.register(ToOResource)
-admin.site.register(ClassicalResource)
-admin.site.register(QueuedResource)
+
+
+class ObservingResourceAdmin(admin.ModelAdmin):
+	list_display = ("__str__", "creator_only", "begin_date_valid", "end_date_valid")
+	list_filter = ("creator_only",)
+	filter_horizontal = ("groups",)
+
+
+admin.site.register(ToOResource, ObservingResourceAdmin)
+admin.site.register(ClassicalResource, ObservingResourceAdmin)
+admin.site.register(QueuedResource, ObservingResourceAdmin)
 admin.site.register(ClassicalObservingDate)
 admin.site.register(InstrumentConfig)
 admin.site.register(ConfigElement)

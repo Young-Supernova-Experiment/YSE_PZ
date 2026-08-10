@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from django.conf import settings
@@ -11,6 +11,7 @@ from django.contrib.auth.models import User
 
 from YSE_App.common import alert
 from YSE_App.models import Log
+from YSE_App.services.visibility import log_visible_to_user
 
 
 def _comment_base_url() -> str:
@@ -21,24 +22,32 @@ def _comment_base_url() -> str:
     return "https://ziggy.ucolick.org/yse/"
 
 
-def collect_mention_emails(comment_text: str) -> List[str]:
+def collect_mention_emails(
+    comment_text: str, log: Optional[Log] = None
+) -> List[str]:
+    """Return emails for @mentions / @channel that may view ``log`` when provided."""
     emaillist = []
     if "@channel" in comment_text:
-        for user in User.objects.all():
-            if user.email:
-                emaillist.append(user.email)
+        candidates = User.objects.exclude(email="").exclude(email__isnull=True)
+        for user in candidates:
+            if log is not None and not log_visible_to_user(user, log):
+                continue
+            emaillist.append(user.email)
     else:
         for username in re.compile(r"@(\w+)").findall(comment_text):
-            usermatch = User.objects.filter(username=username)
-            if len(usermatch) and usermatch[0].email:
-                emaillist.append(usermatch[0].email)
+            usermatch = User.objects.filter(username=username).first()
+            if not usermatch or not usermatch.email:
+                continue
+            if log is not None and not log_visible_to_user(usermatch, log):
+                continue
+            emaillist.append(usermatch.email)
     return list(np.unique(emaillist))
 
 
 def notify_email_mentions(log: Log) -> None:
     if not log.transient_id or not log.comment:
         return
-    emaillist = collect_mention_emails(log.comment)
+    emaillist = collect_mention_emails(log.comment, log=log)
     if not emaillist:
         return
     transient_name = log.transient.name

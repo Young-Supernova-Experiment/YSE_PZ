@@ -1905,7 +1905,10 @@ def download_bulk_photometry(request, query_title):
         transients = filter_transients_by_user_access(user, transients)
 
     elif getattr(yse_python_queries,query_title):
+        from YSE_App.services.visibility import filter_transients_by_user_access
+
         transients = getattr(yse_python_queries,query_title)()
+        transients = filter_transients_by_user_access(user, transients)
 
     s = BytesIO()
     archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
@@ -1915,9 +1918,13 @@ def download_bulk_photometry(request, query_title):
 
         data = {transient.name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
         data[transient.name]['transient'] = json.loads(serializers.serialize("json", Transient.objects.filter(name=transient.name), use_natural_foreign_keys=True))
-        for k in data[transient.name]['transient'][0]['fields'].keys():
-            if k not in ['created_by','modified_by','candidate_hosts']:
-                content += "# %s: %s\n"%(k.upper(),data[transient.name]['transient'][0]['fields'][k])
+        from YSE_App.services.visibility import redact_transient_export_header_fields
+
+        header_fields = redact_transient_export_header_fields(
+            data[transient.name]['transient'][0]['fields']
+        )
+        for k in header_fields.keys():
+            content += "# %s: %s\n"%(k.upper(),header_fields[k])
 
         content += "\n"
         content += "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT\n"

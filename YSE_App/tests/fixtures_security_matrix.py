@@ -288,6 +288,20 @@ def create_secvis_matrix_resources(admin: User) -> None:
                 groups=groups,
                 principal_investigator=pi,
             )
+    # Dedicated creator-only classical resource (empty audience follow-ups allowed).
+    creator_resource = _attach_labeled_resource(
+        admin,
+        mag=99,
+        group_keys=["a"],
+        band_suffix="creatorOnly",
+        kind_code="Cls",
+        kind_label="classical",
+        resource_model=ClassicalResource,
+        groups=groups,
+        principal_investigator=pi,
+    )
+    creator_resource.creator_only = True
+    creator_resource.save(update_fields=["creator_only"])
 
 
 def create_secvis_matrix_transient(admin: User) -> Transient:

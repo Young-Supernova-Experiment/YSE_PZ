@@ -167,6 +167,35 @@ def filter_transients_by_user_access(
     return [t for t in transients if user_can_view_transient(user, t.id)]
 
 
+# Transient detail shell allows broad metadata; export zip headers must stay narrow.
+EXPORT_TRANSIENT_HEADER_ALLOWLIST = frozenset(
+    {
+        "name",
+        "ra",
+        "dec",
+        "disc_date",
+        "slug",
+        "status",
+        "obs_group",
+        "mw_ebv",
+        "redshift",
+        "redshift_err",
+        "redshift_source",
+        "non_detect_limit",
+        "non_detect_instrument",
+        "non_detect_band",
+        "non_detect_date",
+        "TNS_name",
+        "TNS_spec_class",
+    }
+)
+
+
+def redact_transient_export_header_fields(fields: dict) -> dict:
+    """Keep public-facing metadata keys only in bulk photometry export headers."""
+    return {k: v for k, v in fields.items() if k in EXPORT_TRANSIENT_HEADER_ALLOWLIST}
+
+
 def _user_in_public_group(user: User) -> bool:
     return PUBLIC_COLLABORATION_GROUP_NAME in user_group_names(user)
 

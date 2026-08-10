@@ -29,6 +29,8 @@ class TelescopeResource(BaseModel):
 
 	# Optional
 	description = models.TextField(null=True, blank=True)
+	# When True, follow-ups may use empty audience (requester-only); see audience.resource_is_creator_only
+	creator_only = models.BooleanField(default=False)
 
 
 class ToOResource(TelescopeResource):

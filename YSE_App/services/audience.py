@@ -106,8 +106,8 @@ def resource_is_creator_only(resource) -> bool:
     """
     True when the observing resource is private to the requester only.
 
-    No production resources use this yet; set ``creator_only`` on a resource row
-    when that workflow is introduced.
+    Set ``creator_only`` on ClassicalResource / ToOResource / QueuedResource rows
+    (BooleanField, default False) when that workflow is needed.
     """
     if resource is None:
         return False
