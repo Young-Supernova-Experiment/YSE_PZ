@@ -551,17 +551,25 @@ def followup(request):
     followup_transients = None
 
     telescopes = Telescope.objects.all()
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     table_list = []
     for t in telescopes:
         followup_transients = TransientFollowup.objects.filter(Q(too_resource__telescope__name=t) |
                                                                Q(classical_resource__telescope__name=t) |
                                                                Q(queued_resource__telescope__name=t))
+        followup_transients = filter_transient_followups_for_user(
+            followup_transients,
+            request.user,
+        )
         followuptransientfilter = FollowupFilter(request.GET, queryset=followup_transients,prefix=t)
         
+        if not followuptransientfilter.qs.exists():
+            continue
+
         followup_table = FollowupTable(followuptransientfilter.qs,prefix=t)
         RequestConfig(request, paginate={'per_page': 10}).configure(followup_table)
-        table_list += [(t.name,followup_table,t.name.replace(' ','_'),followup_transients,followuptransientfilter)]
+        table_list += [(t.name,followup_table,t.name.replace(' ','_'),followuptransientfilter.qs,followuptransientfilter)]
 
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-ex')[0]
@@ -667,7 +675,10 @@ def yse_oncall_calendar(request):
 
 @login_required
 def observing_calendar(request):
-    all_dates = ClassicalObservingDate.objects.all().select_related()
+    from YSE_App.data.ObservingResourceService import (
+        GetAuthorizedClassicalObservingDate_ByUser,
+    )
+
     colors = ['#dd4b39', 
                 '#f39c12', 
                 '#00c0ef', 
@@ -678,9 +689,18 @@ def observing_calendar(request):
                 '#d2d6de',
                 '#001f3f']
 
+    all_dates = (
+        GetAuthorizedClassicalObservingDate_ByUser(request.user)
+        .select_related("resource", "resource__telescope", "resource__principal_investigator")
+    )
+
     telescope_colors = {}
-    for i, c in enumerate(ClassicalResource.objects.all().select_related()):
-        telescope_colors[c.telescope.name] = colors[i % len(colors)]
+    seen_telescopes = set()
+    for date in all_dates:
+        tel_name = date.resource.telescope.name
+        if tel_name not in seen_telescopes:
+            telescope_colors[tel_name] = colors[len(seen_telescopes) % len(colors)]
+            seen_telescopes.add(tel_name)
 
     context = {
         'all_dates': all_dates,
@@ -1244,19 +1264,9 @@ def _load_transient_followups(transient_id, user):
 
 def _transient_followup_form_context(request, transient_obj):
     """Forms and authorized querysets for follow-up tab fragments."""
-    from django.utils import timezone
-
-    transient_followup_form = TransientFollowupForm()
-    valid_after = timezone.now() - datetime.timedelta(days=1)
-    transient_followup_form.fields["too_resource"].queryset = (
-        view_utils.get_authorized_too_resources(request.user)
-        .filter(end_date_valid__gt=valid_after)
-        .order_by('telescope__name')
-    )
-    transient_followup_form.fields["queued_resource"].queryset = (
-        view_utils.get_authorized_queued_resources(request.user)
-        .filter(end_date_valid__gt=valid_after)
-        .order_by('telescope__name')
+    transient_followup_form = TransientFollowupForm(
+        user=request.user,
+        transient_id=transient_obj.id,
     )
     ctx = {
         'transient': transient_obj,
@@ -1448,7 +1458,10 @@ def transient_detail(request, slug):
         alt_names = AlternateTransientNames.objects.filter(transient__pk=transient_id)
 
         if defer_detail:
-            transient_followup_form = TransientFollowupForm()
+            transient_followup_form = TransientFollowupForm(
+                user=request.user,
+                transient_id=transient_id,
+            )
             transient_observation_task_form = TransientObservationTaskForm()
             classical_resource_form = ClassicalResourceForm()
             too_resource_form = ToOResourceForm()
@@ -1470,7 +1483,10 @@ def transient_detail(request, slug):
         transient_status_watch = status_by_name.get("Watch")
         transient_status_interesting = status_by_name.get("Interesting")
         transient_status_ignore = status_by_name.get("Ignore")
-        transient_comment_form = TransientCommentForm()
+        transient_comment_form = TransientCommentForm(
+            user=request.user,
+            transient_id=transient_id,
+        )
         # Transient tag
         all_colors = WebAppColor.objects.all().select_related()
         all_transient_tags = TransientTag.objects.all().select_related()
@@ -1553,19 +1569,9 @@ def transient_detail(request, slug):
             )
 
         comment_cutoff = timezone.now() - datetime.timedelta(1)
-        if defer_detail:
-            logs = []
-            has_new_comment = Log.objects.filter(
-                transient_id=transient_id,
-                modified_date__gt=comment_cutoff,
-            ).exists()
-        else:
-            logs = list(
-                Log.objects.filter(transient_id=transient_id).order_by('-modified_date')
-            )
-            has_new_comment = any(
-                log.modified_date > comment_cutoff for log in logs
-            )
+        has_new_comment = any(
+            log.modified_date > comment_cutoff for log in logs
+        )
         
         date = datetime.datetime.now(tz=pytz.utc)
         date_format='%m/%d/%Y %H:%M:%S'
@@ -1686,7 +1692,11 @@ def comments_fragment(request, slug):
 
     comment_cutoff = dj_timezone.now() - datetime.timedelta(days=1)
     has_new_comment = any(log.modified_date > comment_cutoff for log in logs)
-    form = TransientCommentForm(initial={"transient": transient.id})
+    form = TransientCommentForm(
+        user=request.user,
+        transient_id=transient.id,
+        initial={"transient": transient.id},
+    )
     return render(
         request,
         "YSE_App/transient_detail/comments_panel.html",
