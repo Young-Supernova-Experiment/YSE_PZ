@@ -46,6 +46,9 @@
         return;
       }
       $box.toggleClass("collapsed-box");
+      if (!$box.hasClass("collapsed-box")) {
+        $box.children(".box-body, .box-footer").removeClass("collapsed-box");
+      }
     });
   }
 

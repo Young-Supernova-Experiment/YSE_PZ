@@ -619,12 +619,12 @@
 
                                         <div class="box box-default box-solid collapsed-box">
                                             <div class="box-header with-border" data-widget="collapse" type="button" class="btn btn-box-tool">
-                                                <button id="tags_btn" class="btn btn-box-tool" style="height: 30px;"><h3 class="box-title">Available Tags</h3></button>
+                                                <button id="tags_btn" class="btn btn-box-tool" data-widget="collapse" style="height: 30px;"><h3 class="box-title">Available Tags</h3></button>
                                                 <div class="box-tools float-right">
-                                                    <button id="tags_btn" class="btn btn-box-tool"><i class="fa fa-plus"></i></button>
+                                                    <button id="tags_btn" type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-plus"></i></button>
                                                 </div>
                                             </div>
-                                            <div id="external-events" class="box-body collapsed-box">
+                                            <div id="external-events" class="box-body">
                                                 {% for tag in all_transient_tags %}
                                                     <div data-tag_id="{{ tag.id }}" class="external-event bg-{{ tag.color }}">{{ tag.name }}</div>
                                                 {% endfor %}

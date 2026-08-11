@@ -397,33 +397,48 @@ body.yse-theme .yse-page-observing-night #telescope_tbl > tbody > tr > td {
 
 /* --- Transient detail summary --- */
 body.yse-theme .yse-page-transient-summary .nav-tabs-custom {
-  margin-bottom: var(--yse-space-md);
+  margin-bottom: var(--yse-space-xs);
 }
 
 body.yse-theme .yse-page-transient-summary .nav-tabs-custom > .nav-tabs > li > a {
-  padding: var(--yse-space-sm) var(--yse-space-md);
+  padding: var(--yse-space-xs) var(--yse-space-sm);
   font-size: var(--yse-font-size-sm);
 }
 
-body.yse-theme .yse-page-transient-summary .form-group {
-  margin-bottom: var(--yse-space-sm);
+body.yse-theme .yse-page-transient-summary .box {
+  margin-bottom: var(--yse-space-xs);
 }
 
+body.yse-theme .yse-page-transient-summary .box-header,
+body.yse-theme .yse-page-transient-summary .box-body,
 body.yse-theme .yse-page-transient-summary .box.box-default.box-solid .box-header,
 body.yse-theme .yse-page-transient-summary .box.box-default.box-solid .box-body {
-  padding: var(--yse-space-sm) var(--yse-space-md);
+  padding: 4px 8px;
 }
 
-body.yse-theme .yse-page-transient-summary .btn {
+body.yse-theme .yse-page-transient-summary .form-group {
   margin-bottom: 2px;
 }
 
-body.yse-theme .yse-page-transient-summary .form-group p {
+body.yse-theme .yse-page-transient-summary .form-group br {
+  display: none;
+}
+
+body.yse-theme .yse-page-transient-summary .btn {
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-page-transient-summary .form-group p,
+body.yse-theme .yse-page-transient-summary p {
   margin-bottom: 0;
 }
 
 body.yse-theme .yse-page-transient-summary p:empty {
   display: none;
+}
+
+body.yse-theme .yse-page-transient-summary hr {
+  margin: 4px 0;
 }
 
 body.yse-theme .yse-summary-side-col {
@@ -433,7 +448,7 @@ body.yse-theme .yse-summary-side-col {
 
 body.yse-theme .yse-comments-panel {
   margin-top: 0;
-  margin-bottom: var(--yse-space-md);
+  margin-bottom: var(--yse-space-xs);
   flex-shrink: 0;
 }
 
@@ -626,17 +641,11 @@ body.yse-theme .tab-content > .tab-pane.active {
   display: block;
 }
 
-/* AdminLTE 2 collapsed boxes — LTE3 only knows collapsed-card */
-body.yse-theme .collapsed-box > .box-body,
-body.yse-theme .collapsed-box > .box-footer,
-body.yse-theme .box.collapsed-box .box-body,
-body.yse-theme .box.collapsed-box .box-footer,
-body.yse-theme .collapsed-box.box-body {
+/* AdminLTE 2 collapsed boxes — LTE3 only knows collapsed-card.
+   Only the parent .box.collapsed-box; do not hide .box-body.collapsed-box forever. */
+body.yse-theme .box.collapsed-box > .box-body,
+body.yse-theme .box.collapsed-box > .box-footer {
   display: none !important;
-  height: 0 !important;
-  overflow: hidden !important;
-  padding: 0 !important;
-  border: 0 !important;
 }
 
 /* BS3 carousel slides */
@@ -699,15 +708,40 @@ body.yse-theme .yse-audience-panel ul {
   padding-left: 0;
 }
 
+body.yse-theme .yse-audience-check {
+  display: flex;
+  align-items: center;
+  gap: var(--yse-space-sm);
+  font-weight: 400;
+  color: var(--yse-color-text);
+  margin: var(--yse-space-xs) 0;
+  cursor: pointer;
+}
+
 body.yse-theme .checkbox label,
 body.yse-theme .yse-audience-panel label {
   font-weight: 400;
   color: var(--yse-color-text);
 }
 
-body.yse-theme input[type="checkbox"] {
-  margin-right: var(--yse-space-xs);
+body.yse-theme input[type="checkbox"],
+body.yse-theme .yse-audience-check input[type="checkbox"] {
+  -webkit-appearance: checkbox;
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0;
+  opacity: 1;
+  position: static;
+  display: inline-block;
+  visibility: visible;
+  vertical-align: middle;
   accent-color: var(--yse-color-accent);
+  background-color: #fff;
+  border: 1px solid var(--yse-border);
+  flex-shrink: 0;
 }
 
 body.yse-theme .select2-container--default .select2-selection--single,

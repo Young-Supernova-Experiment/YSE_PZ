@@ -7,7 +7,7 @@ import os
 import time
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.test import Client, TestCase
 from django.urls import reverse
 from rest_framework.authtoken.models import Token
@@ -29,6 +29,8 @@ class Phase2CommentTests(TestCase):
         self.client.force_login(self.user)
 
     def test_transient_detail_summary_has_comments_section(self):
+        group = Group.objects.create(name="phase2-collab")
+        self.user.groups.add(group)
         url = reverse("transient_detail", kwargs={"slug": self.transient.slug})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
@@ -36,6 +38,9 @@ class Phase2CommentTests(TestCase):
         self.assertIn("yse-comments-section", html)
         self.assertIn("yse-comment-thread", html)
         self.assertIn("Who can see this?", html)
+        self.assertIn('id="id_is_public"', html)
+        self.assertIn('type="checkbox"', html)
+        self.assertIn("phase2-collab", html)
         self.assertNotIn('id="comments_tab"', html)
 
     @patch.dict(os.environ, {"YSE_TRANSIENT_DETAIL_DEFER": "1"})

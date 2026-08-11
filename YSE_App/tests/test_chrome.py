@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+from django.contrib.auth.models import Group
 from django.test import Client, TestCase
 
 from YSE_App.tests.fixtures_minimal import create_minimal_transient, create_test_user
@@ -44,13 +45,21 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('class="nav-header yse-nav-core"', html)
 
     def test_transient_detail_chrome(self):
+        group = Group.objects.create(name="chrome-collab")
+        self.user.groups.add(group)
         url = f"/transient_detail/{self.transient.slug}/"
         html = self._assert_chrome(self.client.get(url))
         self.assertIn('class="nav-link active"', html)
         self.assertIn("carousel-item", html)
         self.assertIn("collapsed-box", html)
         self.assertIn("Who can see this?", html)
-        self.assertIn("yse-audience-toggle-public", html)
+        self.assertIn('id="id_is_public"', html)
+        self.assertIn('type="checkbox"', html)
+        self.assertIn("chrome-collab", html)
+        followup_at = html.find("add_transient_followup_btn")
+        self.assertGreater(followup_at, 0)
+        self.assertNotIn("collapsed-box", html[max(0, followup_at - 500):followup_at])
+        self.assertNotIn('class="box-body collapsed-box"', html)
         self.assertIn('placeholder="Tag name"', html)
         self.assertNotIn('placeholder="Event Title"', html)
         self.assertNotIn("dataTables.bootstrap.min.css", html)
@@ -64,7 +73,10 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('html[data-yse-theme="dark"]', css)
         self.assertIn("#070913", css)
         self.assertIn("collapsed-box", css)
+        self.assertIn(".box.collapsed-box > .box-body", css)
+        self.assertNotIn(".collapsed-box.box-body", css)
         self.assertIn("carousel-inner > .item", css)
+        self.assertIn(".yse-page-transient-summary .form-group br", css)
         self.assertIn("width: 33.33333% !important", css)
         self.assertIn("width: 50% !important", css)
         self.assertIn('content: "/"', css)
