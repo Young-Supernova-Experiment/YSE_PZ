@@ -157,6 +157,7 @@ def build_followup_resource_audience_map(form) -> Dict[str, Dict[str, Any]]:
             resource_map[f"{field_name}:{resource.pk}"] = {
                 "is_public": resource_is_public(resource),
                 "group_ids": list(resource.groups.values_list("pk", flat=True)),
+                "creator_only": bool(getattr(resource, "creator_only", False)),
             }
     return resource_map
 

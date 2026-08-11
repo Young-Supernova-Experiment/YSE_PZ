@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from django.contrib.auth.models import Group, User
+from django.contrib.auth.models import Group, Permission, User
+from django.contrib.contenttypes.models import ContentType
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from YSE_App.forms import TransientFollowupForm
 from YSE_App.models import FollowupStatus, Log, TransientFollowup
+from YSE_App.services.audience import build_followup_resource_audience_map
 from YSE_App.services.notifications import collect_mention_emails
 from YSE_App.services.visibility import (
     EXPORT_TRANSIENT_HEADER_ALLOWLIST,
@@ -41,6 +44,27 @@ class Phase5DRFHardeningTests(TestCase):
         usernames = {row["username"] for row in results}
         self.assertEqual(usernames, {"sec_user_b"})
 
+    def test_user_viewset_staff_list_ok(self):
+        """Staff list must not 500 on hyperlinked user_permissions."""
+        from YSE_App.models import Transient
+
+        ct = ContentType.objects.get_for_model(Transient)
+        perm = Permission.objects.filter(content_type=ct).first()
+        self.assertIsNotNone(perm)
+        self.staff.user_permissions.add(perm)
+
+        client = APIClient()
+        client.force_authenticate(user=self.staff)
+        response = client.get("/api/users/")
+        self.assertEqual(response.status_code, 200, response.content)
+        results = response.data["results"] if "results" in response.data else response.data
+        usernames = {row["username"] for row in results}
+        self.assertIn("sec_staff", usernames)
+        self.assertIn("sec_user_b", usernames)
+        for row in results:
+            self.assertNotIn("user_permissions", row)
+            self.assertNotIn("password", row)
+
     def test_group_viewset_non_staff_sees_own_groups_only(self):
         client = APIClient()
         client.force_authenticate(user=self.user_b)
@@ -59,6 +83,25 @@ class Phase5DRFHardeningTests(TestCase):
         client.force_authenticate(user=self.user_b)
         response = client.get("/api/transients/")
         self.assertEqual(response.status_code, 200)
+
+    def test_followup_resource_audience_map_includes_creator_only(self):
+        from YSE_App.models import ClassicalResource
+
+        user_ab = self.users["sec_user_ab"]
+        form = TransientFollowupForm(user=user_ab)
+        resource_map = build_followup_resource_audience_map(form)
+        resource = ClassicalResource.objects.get(
+            telescope__name="SecVis-Cls-mag99-creatorOnly"
+        )
+        key = f"classical_resource:{resource.pk}"
+        self.assertIn(key, resource_map)
+        self.assertTrue(resource_map[key]["creator_only"])
+        public = ClassicalResource.objects.get(
+            telescope__name="SecVis-Cls-mag0-public"
+        )
+        public_key = f"classical_resource:{public.pk}"
+        self.assertIn(public_key, resource_map)
+        self.assertFalse(resource_map[public_key]["creator_only"])
 
 
 class Phase5ExportRedactionTests(TestCase):

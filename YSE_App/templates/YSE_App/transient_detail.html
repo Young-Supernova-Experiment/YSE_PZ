@@ -276,14 +276,14 @@
                 activeField = yseUpdateActiveFollowupResourceField($form);
             }
             if (!activeField) {
-                return { is_public: false, group_ids: [] };
+                return { is_public: false, group_ids: [], creator_only: false };
             }
             var resourcePk = $form.find('select[name=' + activeField + ']').val();
             if (!resourcePk) {
-                return { is_public: false, group_ids: [] };
+                return { is_public: false, group_ids: [], creator_only: false };
             }
             var key = activeField + ':' + resourcePk;
-            return map[key] || { is_public: false, group_ids: [] };
+            return map[key] || { is_public: false, group_ids: [], creator_only: false };
         }
 
         function yseGroupIdEligible(groupId, meta) {
@@ -380,10 +380,17 @@
                 );
                 return false;
             }
+            var resourceMeta = yseSelectedFollowupResourceMeta($form);
+            var creatorOnly = resourceMeta.creator_only === true
+                || resourceMeta.creator_only === 'true';
             var checkedEligible = $form.find(
                 '.yse-followup-audience-group:checked:not(:disabled)'
             ).length;
-            if ($form.find('.yse-followup-audience-group').length && checkedEligible < 1) {
+            if (
+                !creatorOnly
+                && $form.find('.yse-followup-audience-group').length
+                && checkedEligible < 1
+            ) {
                 yseFollowupShowSubmitError(
                     'Select at least one collaboration group for this follow-up.'
                 );
