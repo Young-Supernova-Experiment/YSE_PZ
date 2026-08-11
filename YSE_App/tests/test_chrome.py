@@ -45,6 +45,26 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('class="nav-header yse-nav-core"', html)
         self.assertIn("layout-footer-not-fixed", html)
 
+    def test_comment_audience_lists_all_user_groups(self):
+        group_a = Group.objects.create(name="sec-group-a")
+        group_b = Group.objects.create(name="sec-group-b")
+        user_ab = create_test_user("sec_user_ab", is_staff=False)
+        user_ab.groups.add(group_a, group_b)
+        self.client.force_login(user_ab)
+        html = self._assert_chrome(
+            self.client.get(f"/transient_detail/{self.transient.slug}/")
+        )
+        self.assertIn(">Public</span>", html)
+        self.assertIn("sec-group-a", html)
+        self.assertIn("sec-group-b", html)
+        self.assertNotRegex(html, r'id="id_is_public"[^>]*\bchecked\b')
+        self.assertRegex(
+            html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_a.pk
+        )
+        self.assertRegex(
+            html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_b.pk
+        )
+
     def test_transient_detail_chrome(self):
         group = Group.objects.create(name="chrome-collab")
         self.user.groups.add(group)
