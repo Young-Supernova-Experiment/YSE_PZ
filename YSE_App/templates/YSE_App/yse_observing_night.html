@@ -29,7 +29,7 @@ function toggle(source) {
     <section class="content yse-page-observing-night">
 
 <div class="row">
-    <div class="col-xs-7">
+    <div class="col-7">
       <div class="box">
     <table id="telescope_tbl" class="table table-bordered">
       <thead>
@@ -63,7 +63,7 @@ function toggle(source) {
     <div class="box"> <!--id="{{followup_table.2}}">-->
 
     <div class="row">
-      <div class="col-xs-6">
+      <div class="col-6">
         <!--<input type="hidden" id="survey_field" value=""/>-->
         <div class="box-body">
       <!--<form id="obs_table" action="" method="post">-->
@@ -71,7 +71,7 @@ function toggle(source) {
         <!--<button class="btn btn-primary red" type="submit" disabled>Delete</button>-->
       <!--</form>-->
       <div class="btn-group">
-        <button style="margin-bottom:5px;" type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+        <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
           Change Selected<span class="caret"></span>
           </button>
           <ul class="dropdown-menu">
@@ -85,7 +85,7 @@ function toggle(source) {
 
     </div>
     <div class="row">
-      <div class="col-xs-6">
+      <div class="col-6">
         <!--<input type="hidden" id="survey_field" value=""/>-->
         {% include "YSE_App/form_snippets/survey_obs_form.html" with form=survey_obs_form %}
       </div>

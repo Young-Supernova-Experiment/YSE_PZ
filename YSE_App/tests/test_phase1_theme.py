@@ -15,7 +15,7 @@ class Phase1ThemeSmokeTests(TestCase):
     def _assert_theme_stylesheet(self, response):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "yse-theme.css")
-        self.assertContains(response, 'class="hold-transition skin-red sidebar-mini yse-theme"')
+        self.assertContains(response, 'class="hold-transition sidebar-mini sidebar-collapse yse-theme"')
 
     def test_dashboard_includes_theme(self):
         self._assert_theme_stylesheet(self.client.get("/dashboard/"))

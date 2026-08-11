@@ -1,7 +1,10 @@
 /**
- * YSE-PZ theme layer (AdminLTE 3 / Bootstrap 3 compatible).
- * Loaded after AdminLTE skins in base.html. AJAX partials inherit via base.
+ * YSE-PZ theme layer (AdminLTE 3 / Bootstrap 4).
+ * Night default (AstroScheduler tokens). Light via html[data-yse-theme="light"].
+ * Loaded after AdminLTE in base.html. AJAX partials inherit via base.
  */
+
+html[data-yse-theme="dark"],
 :root {
   --yse-font-size-base: 14px;
   --yse-font-size-sm: 12px;
@@ -10,9 +13,18 @@
   --yse-space-sm: 8px;
   --yse-space-md: 12px;
   --yse-space-lg: 16px;
-  --yse-color-text: #222;
-  --yse-color-muted: #666;
-  --yse-color-accent: #3c8dbc;
+  --yse-bg: #070913;
+  --yse-card-bg: rgb(16, 20, 38);
+  --yse-border: rgba(255, 255, 255, 0.08);
+  --yse-border-hover: rgba(255, 255, 255, 0.15);
+  --yse-color-text: #f8fafc;
+  --yse-color-muted: #94a3b8;
+  --yse-color-accent: #3b82f6;
+  --yse-color-cyan: #06b6d4;
+  --yse-color-purple: #8b5cf6;
+  --yse-success: #10b981;
+  --yse-warning: #f59e0b;
+  --yse-danger: #ef4444;
   --yse-table-cell-py: 4px;
   --yse-table-cell-px: 8px;
   --yse-table-font-size: var(--yse-font-size-sm);
@@ -20,27 +32,242 @@
   --yse-box-header-py: var(--yse-space-sm);
   --yse-focus-ring: 2px solid var(--yse-color-accent);
   --yse-focus-offset: 2px;
+  --yse-font-sans: Inter, "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --yse-header-bg: rgb(12, 16, 32);
+  --yse-sidebar-bg: #0b0f1c;
+  --yse-link: #93c5fd;
+}
+
+html[data-yse-theme="light"] {
+  --yse-bg: #f4f6fb;
+  --yse-card-bg: #ffffff;
+  --yse-border: rgba(15, 23, 42, 0.12);
+  --yse-border-hover: rgba(15, 23, 42, 0.22);
+  --yse-color-text: #0f172a;
+  --yse-color-muted: #475569;
+  --yse-header-bg: #ffffff;
+  --yse-sidebar-bg: #111827;
+  --yse-link: #1d4ed8;
 }
 
 body.yse-theme {
   font-size: var(--yse-font-size-base);
+  font-family: var(--yse-font-sans);
   color: var(--yse-color-text);
+  background-color: var(--yse-bg);
 }
 
-/* --- Accessibility: focus --- */
+body.yse-theme .wrapper,
+body.yse-theme .content-wrapper {
+  background-color: var(--yse-bg);
+}
+
+body.yse-theme a {
+  color: var(--yse-link);
+}
+
+body.yse-theme a:hover {
+  color: var(--yse-color-cyan);
+}
+
+/* --- Accessibility --- */
+.yse-skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  z-index: 10000;
+  padding: var(--yse-space-sm) var(--yse-space-md);
+  background: var(--yse-color-accent);
+  color: #fff;
+}
+
+.yse-skip-link:focus {
+  left: var(--yse-space-sm);
+  color: #fff;
+}
+
 body.yse-theme a:focus-visible,
 body.yse-theme button:focus-visible,
 body.yse-theme input:focus-visible,
 body.yse-theme select:focus-visible,
 body.yse-theme textarea:focus-visible,
 body.yse-theme .btn:focus-visible,
-body.yse-theme .nav-tabs > li > a:focus-visible {
+body.yse-theme .nav-tabs > li > a:focus-visible,
+body.yse-theme .nav-link:focus-visible {
   outline: var(--yse-focus-ring);
   outline-offset: var(--yse-focus-offset);
 }
 
 body.yse-theme .text-muted {
+  color: var(--yse-color-muted) !important;
+}
+
+/* --- Header / sidebar / footer --- */
+body.yse-theme .yse-navbar,
+body.yse-theme .main-header {
+  background-color: var(--yse-header-bg);
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .yse-header-search {
+  flex: 1 1 16rem;
+  max-width: 28rem;
+  margin-left: var(--yse-space-md);
+}
+
+body.yse-theme .yse-header-search .form-control {
+  width: 100%;
+  background: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .yse-theme-toggle {
+  margin-right: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-sidebar,
+body.yse-theme .main-sidebar {
+  background-color: var(--yse-sidebar-bg);
+}
+
+body.yse-theme .brand-link {
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .nav-sidebar .nav-header {
   color: var(--yse-color-muted);
+  font-size: var(--yse-font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+body.yse-theme .nav-sidebar .nav-link.active {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .yse-footer,
+body.yse-theme .main-footer {
+  background-color: var(--yse-header-bg);
+  border-top: 1px solid var(--yse-border);
+  color: var(--yse-color-muted);
+  font-size: var(--yse-font-size-sm);
+  padding: var(--yse-space-sm) var(--yse-space-md);
+}
+
+body.yse-theme .content-header {
+  padding: var(--yse-space-sm) var(--yse-space-md) 0;
+}
+
+body.yse-theme .content-header h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+body.yse-theme .content {
+  padding: var(--yse-space-sm) var(--yse-space-md);
+}
+
+body.yse-theme .content-header .breadcrumb {
+  background: transparent;
+  margin-bottom: 0;
+  padding: 0;
+  font-size: var(--yse-font-size-sm);
+}
+
+/* --- AdminLTE 2 .box compatibility (inner pages keep .box markup) --- */
+body.yse-theme .box {
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  box-shadow: none;
+  margin-bottom: var(--yse-space-md);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .box-header {
+  padding: var(--yse-box-header-py) var(--yse-box-padding);
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .box-body {
+  padding: var(--yse-box-padding);
+}
+
+body.yse-theme .box-footer {
+  padding: var(--yse-space-sm) var(--yse-box-padding);
+  border-top: 1px solid var(--yse-border);
+  background: transparent;
+}
+
+body.yse-theme .box-title,
+body.yse-theme h3.box-title {
+  font-size: 15px;
+  margin: 0;
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .box.box-primary,
+body.yse-theme .box.box-default {
+  border-top: 2px solid var(--yse-color-accent);
+}
+
+body.yse-theme .nav-tabs-custom {
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  margin-bottom: var(--yse-space-md);
+  box-shadow: none;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs {
+  border-bottom: 1px solid var(--yse-border);
+  background: transparent;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li.active > a {
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .nav-tabs .nav-link.active {
+  background: var(--yse-card-bg);
+  border-color: var(--yse-border) var(--yse-border) var(--yse-card-bg);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .table {
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .table-striped tbody tr:nth-of-type(odd) {
+  background-color: rgba(148, 163, 184, 0.08);
+}
+
+body.yse-theme .form-control {
+  background-color: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .dropdown-menu {
+  background-color: var(--yse-card-bg);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .dropdown-item {
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .dropdown-item:hover {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .btn-primary {
+  background-color: var(--yse-color-accent);
+  border-color: var(--yse-color-accent);
 }
 
 /* --- Compact boxes (dashboard, observing, global) --- */
@@ -103,7 +330,6 @@ body.yse-theme .yse-page-observing-night .pagination > li > a {
   font-size: var(--yse-font-size-sm);
 }
 
-/* Observing night twilight table */
 body.yse-theme .yse-page-observing-night #telescope_tbl {
   font-size: var(--yse-font-size-sm);
 }
@@ -132,19 +358,10 @@ body.yse-theme .yse-page-transient-summary .box.box-default.box-solid .box-body 
   padding: var(--yse-space-sm) var(--yse-space-md);
 }
 
-body.yse-theme .yse-page-transient-summary .box-title {
-  font-size: 15px;
-}
-
-body.yse-theme .yse-page-transient-summary h3.box-title {
-  margin: 0;
-}
-
 body.yse-theme .yse-page-transient-summary .btn {
   margin-bottom: var(--yse-space-xs);
 }
 
-/* --- Transient comments (Summary tab, right column above host) --- */
 body.yse-theme .yse-summary-side-col {
   display: flex;
   flex-direction: column;
@@ -168,7 +385,7 @@ body.yse-theme .yse-comment-thread {
 
 body.yse-theme .yse-comment-item {
   padding: var(--yse-space-sm) 0;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--yse-border);
 }
 
 body.yse-theme .yse-comment-meta {
@@ -228,4 +445,39 @@ body.yse-theme .yse-comment-submit {
 body.yse-theme .yse-comments-new-badge {
   margin-left: var(--yse-space-sm);
   font-size: var(--yse-font-size-xs);
+}
+
+/* Login (standalone page, no AdminLTE wrapper) */
+body.yse-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--yse-bg);
+  font-family: var(--yse-font-sans);
+  color: var(--yse-color-text);
+}
+
+body.yse-login .yse-login-box {
+  width: 22rem;
+  max-width: calc(100% - 2rem);
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  padding: var(--yse-space-lg);
+}
+
+body.yse-login .yse-login-logo {
+  text-align: center;
+  font-size: 1.5rem;
+  margin-bottom: var(--yse-space-md);
+}
+
+body.yse-login .yse-login-logo a {
+  color: var(--yse-color-text);
+}
+
+body.yse-login label {
+  font-size: var(--yse-font-size-sm);
+  margin-bottom: var(--yse-space-xs);
 }

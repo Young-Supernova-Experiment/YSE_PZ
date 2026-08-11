@@ -19,7 +19,7 @@
 
 <div class="box-body">
     <div class="row">
-    <div class="col-xs-12">
+    <div class="col-12">
   <div class="nav-tabs-custom">
     <ul class="nav nav-tabs">
       <li class="active"><a href="#summary_tab_{{transient.id}}" data-toggle="tab">Summary</a></li>
@@ -30,7 +30,7 @@
     <div class="tab-content">
       <div class="active tab-pane" id="summary_tab_{{transient.id}}" style="height:800;overflow:visible;">
         <div class="row">
-          <div class="col-xs-6">
+          <div class="col-6">
             <div class="box box-default">
                 <!--<strong style="float:left;margin-right:10px;">Status:</strong>-->
                 <h4 id="{{transient.id}}_status_name">Status: {{ transient.status }}</h4>
@@ -41,7 +41,7 @@
                   <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" data-status_id="{{ transient_status_interesting.id }}" data-status_name="{{ transient_status_interesting.name }}" class="transientStatusChange btn btn-success">{{ transient_status_interesting.name }}</button>
                   <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" data-status_id="{{ transient_status_ignore.id }}" data-status_name="{{ transient_status_ignore.name }}" class="transientStatusChange btn btn-danger">{{ transient_status_ignore.name }}</button>
                   <div class="btn-group">
-                    <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+                    <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
                       <span class="caret"></span>
                     </button>
                     <ul class="dropdown-menu">
@@ -53,14 +53,14 @@
                 </div>
               </div>
             </div>
-            <div class="col-xs-6">
+            <div class="col-6">
             <div class="box box-default">
                 <!--<strong style="float:left;margin-right:10px;">Status:</strong>-->
                 <!--{% if simple_followup %}
                 <h4 id="{{transient.id}}_status_name">Spec Status: {{ simple_followup.status }}</h4>
                 <div class="btn-group-horizontal">
                   <div class="btn-group">
-                    <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+                    <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
                       <span class="caret"></span>
                     </button>
                     <ul class="dropdown-menu">
@@ -71,7 +71,7 @@
                   </div>
                 </div>
                   {% else %}
-                  <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+                  <button style="margin-bottom:5px;" type="button" transient_id="{{transient.id}}" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
                       <h4 id="{{transient.id}}_status_name">Add to Spectrum Requested List</h4>
                   </button>
                 {% endif %}
@@ -79,7 +79,7 @@
             </div>
             </div>
         <div class="row">
-        <div class="col-xs-12">
+        <div class="col-12">
           <div style="margin-top:0px;" class="form-group">
             <table class="table table-bordered table-striped">
             <thead>
@@ -178,18 +178,18 @@
           </div>
         </div>
         <!--<div class="row">
-          <div class="col-xs-12">
+          <div class="col-12">
               <h3>Tags</h3>
           </div>
         </div>-->
         <div class="row">
-          <div class="col-xs-3">
+          <div class="col-3">
           </div>
         </div>
           <div class="row">
         <div class="container" id="centered">
         <div class="row">
-            <div class="col-lg-4 col-md-4 col-xs-12">
+            <div class="col-lg-4 col-md-4 col-12">
               <!--<div style="margin-top:0px;" class="form-group">-->
                 <div class="box box-primary">
             <h3>Archival Images</h3>
@@ -234,7 +234,7 @@
               </div>
 
             <!-- Wrapping two boxes into a larger box -->
-            <div class="col-lg-8 col-md-8 col-xs-12">
+            <div class="col-lg-8 col-md-8 col-12">
                 <div class="row">
                     <div class="col-lg-11 col-md-11 col-sm-11">
                       <div class="box box-secondary">
@@ -250,7 +250,7 @@
             <h5>Spectra</h5>
               {% if all_transient_spectra.count > 1 %}
               &ensp;&nbsp;<div class="btn-group">
-              <button style="margin-bottom:5px;" type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+              <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
                 Select from {{ all_transient_spectra.count }} Spectra<span class="caret"></span>
               </button>
               <ul class="dropdown-menu">
@@ -271,12 +271,12 @@
           </div>
           {% if transient.postage_stamp_file %}
           <div class="row">
-          <div class="col-lg-6 col-md-6 col-xs-12">
+          <div class="col-lg-6 col-md-6 col-12">
               <div class="box box-primary">
                 <div class="box-header">
                   <h3 class="box-title">Image Stamps</h3>
                 </div>
-                <div class="col-xs-4">
+                <div class="col-4">
                   {% static "" as baseUrl %}
                   {% with "YSE_App/images/stamps/"|add:transient.postage_stamp_file as stampfile %}
                   {% with "YSE_App/images/stamps/"|add:transient.postage_stamp_file_fits as stampfitsfile %}
@@ -285,7 +285,7 @@
                   {% endwith %}
                   <br><br>
                 </div>
-                <div class="col-xs-4">
+                <div class="col-4">
                   {% static "" as baseUrl %}
                   {% with "YSE_App/images/stamps/"|add:transient.postage_stamp_ref as stampfile %}
                   {% with "YSE_App/images/stamps/"|add:transient.postage_stamp_ref_fits as stampfitsfile %}
@@ -294,7 +294,7 @@
                   {% endwith %}
                   <br><br>
                 </div>
-                <div class="col-xs-4">
+                <div class="col-4">
                   {% static "" as baseUrl %}
                   {% with "YSE_App/images/stamps/"|add:transient.postage_stamp_diff as stampfile %}
                   {% with "YSE_App/images/stamps/"|add:transient.postage_stamp_diff_fits as stampfitsfile %}
@@ -313,7 +313,7 @@
   </div>
     <div class="tab-pane" id="followup_tab_{{transient.id}}">
       <div class="row">
-        <div class="col-xs-6">
+        <div class="col-6">
         </div>
     </div>
   </div>
@@ -531,19 +531,19 @@
             }
 
             // Construct HTML to append container
-            var followupHTML = "<div class='col-xs-12'>" +
+            var followupHTML = "<div class='col-12'>" +
               "<div class='followupbox box box-primary'>" +
               "<div class='box-header'>" + 
-              "<div class='col-xs-4'>" + 
+              "<div class='col-4'>" + 
               "<h3 class='box-title'>Follow-up (id: " + followup_pk + ")</h3>" + 
               "</div>" +
-              "<div class='col-xs-4'>" + 
+              "<div class='col-4'>" + 
               "<h3 class='box-title'>Valid: " + start_date_str + " - " + end_date_str + "</h3>" + 
               "</div>" +
-              "<div class='col-xs-4'>" + 
+              "<div class='col-4'>" + 
               "<h3 style='float:right;padding-right:10px' class='box-title'>Last Modified: " + modified_by + "</h3>" + 
               "</div>" +
-              "<div class='box-tools pull-right'>" +
+              "<div class='box-tools float-right'>" +
               "<button type='button' class='btn btn-box-tool' data-widget='collapse'><i class='fa fa-minus'></i></button>" +
               "</div>" + 
               "</div>" + 
