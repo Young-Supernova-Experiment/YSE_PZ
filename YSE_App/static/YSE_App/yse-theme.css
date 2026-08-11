@@ -587,7 +587,9 @@ body.yse-login label {
 body.yse-theme .box-body::after,
 body.yse-theme .box-header::after,
 body.yse-theme .tab-pane::after,
-body.yse-theme form::after {
+body.yse-theme form::after,
+body.yse-theme .content::after,
+body.yse-theme [class*="col-"]::after {
   content: "";
   display: table;
   clear: both;
@@ -615,6 +617,38 @@ body.yse-theme .col-9 { width: 75% !important; max-width: 75% !important; }
 body.yse-theme .col-10 { width: 83.33333% !important; max-width: 83.33333% !important; }
 body.yse-theme .col-11 { width: 91.66667% !important; max-width: 91.66667% !important; }
 body.yse-theme .col-12 { width: 100% !important; max-width: 100% !important; }
+
+/* AdminLTE 2 calendar chips — LTE3 dropped .external-event and .bg-red/… */
+body.yse-theme .external-event {
+  display: block;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  font-weight: 700;
+  border-radius: 3px;
+  cursor: move;
+  color: #fff !important;
+}
+
+body.yse-theme #associated-events-list {
+  min-height: 8rem;
+}
+
+body.yse-theme .bg-red { background-color: #dd4b39 !important; color: #fff !important; }
+body.yse-theme .bg-yellow { background-color: #f39c12 !important; color: #fff !important; }
+body.yse-theme .bg-aqua { background-color: #00c0ef !important; color: #fff !important; }
+body.yse-theme .bg-blue { background-color: #0073b7 !important; color: #fff !important; }
+body.yse-theme .bg-light-blue { background-color: #3c8dbc !important; color: #fff !important; }
+body.yse-theme .bg-green { background-color: #00a65a !important; color: #fff !important; }
+body.yse-theme .bg-navy { background-color: #001f3f !important; color: #fff !important; }
+body.yse-theme .bg-teal { background-color: #39cccc !important; color: #fff !important; }
+body.yse-theme .bg-olive { background-color: #3d9970 !important; color: #fff !important; }
+body.yse-theme .bg-lime { background-color: #01ff70 !important; color: #111 !important; }
+body.yse-theme .bg-orange { background-color: #ff851b !important; color: #fff !important; }
+body.yse-theme .bg-fuchsia { background-color: #f012be !important; color: #fff !important; }
+body.yse-theme .bg-purple { background-color: #605ca8 !important; color: #fff !important; }
+body.yse-theme .bg-maroon { background-color: #d81b60 !important; color: #fff !important; }
+body.yse-theme .bg-black { background-color: #111111 !important; color: #fff !important; }
+body.yse-theme .bg-gray { background-color: #d2d6de !important; color: #111 !important; }
 
 /* AdminLTE 2 tabs: li > a, not .nav-item > .nav-link */
 body.yse-theme .nav-tabs-custom {

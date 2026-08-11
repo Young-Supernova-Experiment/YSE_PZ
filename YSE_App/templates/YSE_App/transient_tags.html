@@ -16,7 +16,7 @@
 
 	<!-- Main content -->
 	<section class="content">
-		<div class="col-12">
+		<div class="row">
 			<div class="col-6">
 
 				<div class="box box-default box-solid">
@@ -41,35 +41,34 @@
 				</div>
 			</div>
 		</div>
-	</section>
-
-	<div class="col-12">
-		<div class="box">
-			<div class="box-header with-border">
-				<h3 class="box-title">Matching Transients</h3>
+		<div class="row">
+			<div class="col-12">
+				<div class="box">
+					<div class="box-header with-border">
+						<h3 class="box-title">Matching Transients</h3>
+					</div>
+					<div class="box-body">
+						<table id="transient_tag_tbl" class="table table-bordered table-hover"> <!-- sortable -->
+							<thead>
+								<tr>
+									<th>Name</th>
+									<th>RA</th>
+									<th>Dec</th>
+									<th>Disc. Date</th>
+									<th>Spec Class</th>
+									<th>Internal Survey</th>
+								</tr>
+							</thead>
+							<tbody>
+							</tbody>
+						</table>
+					</div>
+					<div class="box-footer">
+					</div>
+				</div>
 			</div>
-			<div class="box-body">
-				<table id="transient_tag_tbl" class="table table-bordered table-hover"> <!-- sortable -->
-					<thead>
-						<tr>
-							<th>Name</th>
-							<th>RA</th>
-							<th>Dec</th>
-							<th>Disc. Date</th>
-							<th>Spec Class</th>
-							<th>Internal Survey</th>
-						</tr>
-					</thead>
-					<tbody>
-					</tbody>
-				</table>
-			</div>
-			<!-- /.box-body -->
-			<div class="box-footer">
-			</div>
-			<!-- /.box-footer-->
 		</div>
-	</div>
+	</section>
 
 {% endblock %}
 

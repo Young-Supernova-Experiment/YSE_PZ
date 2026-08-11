@@ -5,6 +5,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import Group
 from django.test import Client, TestCase
 
+from YSE_App.models import TransientTag, WebAppColor
 from YSE_App.tests.fixtures_minimal import create_minimal_transient, create_test_user
 from YSE_App.tests.static_asset_utils import static_asset_available
 
@@ -39,6 +40,23 @@ class ChromeSmokeTests(TestCase):
         self.assertNotIn("skin-red", html)
         self.assertNotIn("user-scalable=no", html)
         return html
+
+    def test_search_by_tag_lists_available_tags(self):
+        audit = {"created_by": self.user, "modified_by": self.user}
+        color, _ = WebAppColor.objects.get_or_create(color="red", defaults=audit)
+        TransientTag.objects.get_or_create(
+            name="chrome-tag-young",
+            defaults={"color": color, **audit},
+        )
+        html = self._assert_chrome(self.client.get("/transient_tags/"))
+        self.assertIn("Available Tags", html)
+        self.assertIn("Selected Tags", html)
+        self.assertIn("Matching Transients", html)
+        self.assertIn("chrome-tag-young", html)
+        self.assertIn("external-event", html)
+        self.assertIn("bg-red", html)
+        self.assertIn('id="external-events"', html)
+        self.assertIn('id="associated-events"', html)
 
     def test_dashboard_chrome(self):
         html = self._assert_chrome(self.client.get("/dashboard/"))
@@ -111,6 +129,9 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('content: "/"', css)
         self.assertIn(".btn-box-tool", css)
         self.assertIn("yse-page-dashboard .btn-group .btn", css)
+        self.assertIn(".external-event", css)
+        self.assertIn(".bg-red", css)
+        self.assertIn(".bg-light-blue", css)
 
     def test_observing_calendar_fits_viewport(self):
         from pathlib import Path
