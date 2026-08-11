@@ -52,9 +52,32 @@
     });
   }
 
+  function yseCalendarHeight() {
+    var h = window.innerHeight;
+    var nodes = document.querySelectorAll(".main-header, .main-footer, .content-header");
+    for (var i = 0; i < nodes.length; i += 1) {
+      h -= nodes[i].offsetHeight || 0;
+    }
+    return Math.max(360, h - 72);
+  }
+
+  function fitYseCalendar() {
+    if (typeof window.jQuery === "undefined" || typeof window.jQuery.fn.fullCalendar !== "function") {
+      return;
+    }
+    var $cal = window.jQuery("#calendar");
+    if (!$cal.length) {
+      return;
+    }
+    $cal.fullCalendar("option", "height", yseCalendarHeight());
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     apply(currentTheme());
     shimBs3Widgets();
+    window.setTimeout(fitYseCalendar, 0);
+    window.addEventListener("resize", fitYseCalendar);
+    window.addEventListener("load", fitYseCalendar);
     var btn = document.getElementById("yse-theme-toggle");
     if (!btn) {
       return;

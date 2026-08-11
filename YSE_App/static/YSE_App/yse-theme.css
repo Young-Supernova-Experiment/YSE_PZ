@@ -155,8 +155,25 @@ body.yse-theme .nav-sidebar .nav-link.active {
   color: var(--yse-color-text);
 }
 
+body.yse-theme .wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+body.yse-theme .content-wrapper {
+  flex: 1 0 auto;
+}
+
 body.yse-theme .yse-footer,
 body.yse-theme .main-footer {
+  position: static !important;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  z-index: 2;
+  flex-shrink: 0;
   background-color: var(--yse-header-bg);
   border-top: 1px solid var(--yse-border);
   color: var(--yse-color-muted);
@@ -713,12 +730,14 @@ body.yse-theme .yse-audience-panel ul {
 body.yse-theme .yse-audience-check {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: var(--yse-space-sm);
   font-weight: 400;
-  color: var(--yse-color-text);
+  color: var(--yse-color-text) !important;
   margin: var(--yse-space-xs) 0;
   cursor: pointer;
   position: relative;
+  width: 100%;
 }
 
 body.yse-theme .checkbox label,
@@ -767,7 +786,13 @@ body.yse-theme .yse-audience-check input[type="checkbox"]:checked + .yse-audienc
 }
 
 body.yse-theme .yse-audience-label {
-  color: var(--yse-color-text);
+  flex: 1 1 auto;
+  min-width: 4rem;
+  color: var(--yse-color-text) !important;
+  font-size: 13px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow: visible;
 }
 
 body.yse-theme .select2-container--default .select2-selection--single,
@@ -781,4 +806,12 @@ body.yse-theme .select2-dropdown {
 body.yse-theme .select2-container--default .select2-selection--single .select2-selection__rendered,
 body.yse-theme .select2-container--default .select2-results__option {
   color: var(--yse-color-text);
+}
+
+body.yse-theme #calendar {
+  max-height: calc(100vh - 10.5rem);
+}
+
+body.yse-theme .fc-view-container .fc-row {
+  min-height: 0 !important;
 }

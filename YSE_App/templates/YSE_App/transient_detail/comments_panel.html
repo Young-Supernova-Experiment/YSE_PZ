@@ -40,9 +40,9 @@
                     <div class="yse-audience-panel yse-comment-audience">
                         <p class="yse-audience-heading text-muted"><strong>Who can see this?</strong></p>
                         <label class="yse-audience-check yse-audience-public">
-                            {{ transient_comment_form.is_public }}
+                            <input type="checkbox" name="is_public" id="id_is_public" value="on" class="yse-audience-input">
                             <span class="yse-audience-box" aria-hidden="true"></span>
-                            <span class="yse-audience-label">{{ transient_comment_form.is_public.label }}</span>
+                            <span class="yse-audience-label">Public</span>
                         </label>
                         <div id="yse-comment-audience-groups" class="yse-audience-groups">
                             {% if transient_comment_form.show_audience_picker %}

@@ -43,6 +43,7 @@ class ChromeSmokeTests(TestCase):
     def test_dashboard_chrome(self):
         html = self._assert_chrome(self.client.get("/dashboard/"))
         self.assertIn('class="nav-header yse-nav-core"', html)
+        self.assertIn("layout-footer-not-fixed", html)
 
     def test_transient_detail_chrome(self):
         group = Group.objects.create(name="chrome-collab")
@@ -56,6 +57,7 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('id="id_is_public"', html)
         self.assertIn('type="checkbox"', html)
         self.assertIn("yse-audience-box", html)
+        self.assertIn(">Public</span>", html)
         self.assertIn("chrome-collab", html)
         followup_at = html.find("add_transient_followup_btn")
         self.assertGreater(followup_at, 0)
@@ -80,11 +82,24 @@ class ChromeSmokeTests(TestCase):
         self.assertIn(".yse-page-transient-summary .form-group br", css)
         self.assertIn(".yse-audience-box", css)
         self.assertIn("color-scheme: dark", css)
+        self.assertIn("position: static !important", css)
+        self.assertIn("yse-audience-label", css)
         self.assertIn("width: 33.33333% !important", css)
         self.assertIn("width: 50% !important", css)
         self.assertIn('content: "/"', css)
         self.assertIn(".btn-box-tool", css)
         self.assertIn("yse-page-dashboard .btn-group .btn", css)
+
+    def test_observing_calendar_fits_viewport(self):
+        from pathlib import Path
+
+        js_path = Path(__file__).resolve().parents[1] / "static" / "YSE_App" / "yse-chrome.js"
+        js = js_path.read_text(encoding="utf-8")
+        self.assertIn("fitYseCalendar", js)
+        self.assertIn("yseCalendarHeight", js)
+        html = self._assert_chrome(self.client.get("/observing_calendar/"))
+        self.assertIn('id="calendar"', html)
+        self.assertIn("$(window).height() - 180", html)
 
     def test_vendored_assets_exist(self):
         for rel in (

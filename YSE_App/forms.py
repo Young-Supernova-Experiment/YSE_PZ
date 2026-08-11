@@ -317,7 +317,7 @@ class TransientCommentForm(ModelForm):
     is_public = forms.BooleanField(
         required=False,
         initial=False,
-        label="Visible to all YSE users who can open this transient",
+        label="Public",
     )
     audience_groups = forms.ModelMultipleChoiceField(
         queryset=Group.objects.none(),
