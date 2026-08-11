@@ -1,5 +1,5 @@
 /**
- * YSE-PZ chrome: night/light theme toggle.
+ * YSE-PZ chrome: night/light theme toggle + BS3 widget shims.
  * Default is dark. Persists in localStorage key "yse-theme".
  * Head FOUC script in base.html must run first.
  */
@@ -13,6 +13,10 @@
   function apply(theme) {
     var next = theme === "light" ? "light" : "dark";
     document.documentElement.setAttribute("data-yse-theme", next);
+    document.documentElement.classList.toggle("dark-mode", next === "dark");
+    if (document.body) {
+      document.body.classList.toggle("dark-mode", next === "dark");
+    }
     try {
       localStorage.setItem(KEY, next);
     } catch (err) {
@@ -26,8 +30,27 @@
     }
   }
 
+  function shimBs3Widgets() {
+    if (typeof window.jQuery === "undefined") {
+      return;
+    }
+    var $ = window.jQuery;
+    $(".carousel-inner > .item").addClass("carousel-item");
+    $(".carousel-control.left").addClass("carousel-control-prev");
+    $(".carousel-control.right").addClass("carousel-control-next");
+    $(document).on("click", "[data-widget='collapse']", function (event) {
+      event.preventDefault();
+      var $box = $(this).closest(".box");
+      if (!$box.length) {
+        return;
+      }
+      $box.toggleClass("collapsed-box");
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     apply(currentTheme());
+    shimBs3Widgets();
     var btn = document.getElementById("yse-theme-toggle");
     if (!btn) {
       return;

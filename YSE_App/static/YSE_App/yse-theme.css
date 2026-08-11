@@ -4,7 +4,6 @@
  * Loaded after AdminLTE in base.html. AJAX partials inherit via base.
  */
 
-html[data-yse-theme="dark"],
 :root {
   --yse-font-size-base: 14px;
   --yse-font-size-sm: 12px;
@@ -13,26 +12,30 @@ html[data-yse-theme="dark"],
   --yse-space-sm: 8px;
   --yse-space-md: 12px;
   --yse-space-lg: 16px;
-  --yse-bg: #070913;
-  --yse-card-bg: rgb(16, 20, 38);
-  --yse-border: rgba(255, 255, 255, 0.08);
-  --yse-border-hover: rgba(255, 255, 255, 0.15);
-  --yse-color-text: #f8fafc;
-  --yse-color-muted: #94a3b8;
+  --yse-table-cell-py: 4px;
+  --yse-table-cell-px: 8px;
+  --yse-table-font-size: var(--yse-font-size-sm);
+  --yse-box-padding: var(--yse-space-md);
+  --yse-box-header-py: var(--yse-space-sm);
+  --yse-focus-offset: 2px;
+  --yse-font-sans: Inter, "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --yse-color-accent: #3b82f6;
   --yse-color-cyan: #06b6d4;
   --yse-color-purple: #8b5cf6;
   --yse-success: #10b981;
   --yse-warning: #f59e0b;
   --yse-danger: #ef4444;
-  --yse-table-cell-py: 4px;
-  --yse-table-cell-px: 8px;
-  --yse-table-font-size: var(--yse-font-size-sm);
-  --yse-box-padding: var(--yse-space-md);
-  --yse-box-header-py: var(--yse-space-sm);
   --yse-focus-ring: 2px solid var(--yse-color-accent);
-  --yse-focus-offset: 2px;
-  --yse-font-sans: Inter, "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* AstroScheduler night tokens — only on dark, so light can actually differ */
+html[data-yse-theme="dark"] {
+  --yse-bg: #070913;
+  --yse-card-bg: rgb(16, 20, 38);
+  --yse-border: rgba(255, 255, 255, 0.08);
+  --yse-border-hover: rgba(255, 255, 255, 0.15);
+  --yse-color-text: #f8fafc;
+  --yse-color-muted: #94a3b8;
   --yse-header-bg: rgb(12, 16, 32);
   --yse-sidebar-bg: #0b0f1c;
   --yse-link: #93c5fd;
@@ -57,9 +60,12 @@ body.yse-theme {
   background-color: var(--yse-bg);
 }
 
+body.yse-theme,
 body.yse-theme .wrapper,
-body.yse-theme .content-wrapper {
-  background-color: var(--yse-bg);
+body.yse-theme .content-wrapper,
+body.yse-theme .content {
+  background-color: var(--yse-bg) !important;
+  color: var(--yse-color-text);
 }
 
 body.yse-theme a {
@@ -480,4 +486,101 @@ body.yse-login .yse-login-logo a {
 body.yse-login label {
   font-size: var(--yse-font-size-sm);
   margin-bottom: var(--yse-space-xs);
+}
+
+/* --- BS3 markup on BS4/AdminLTE 3 (regression from chrome checkpoint) --- */
+
+/* Columns in old templates sit in .box-body without .row; BS4 flex only works in .row. */
+body.yse-theme .box-body::after,
+body.yse-theme .box-header::after,
+body.yse-theme .tab-pane::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+body.yse-theme .box-body > [class*="col-"],
+body.yse-theme .box-body [class*="col-"] > [class*="col-"],
+body.yse-theme .tab-pane > [class*="col-"] {
+  float: left;
+  min-height: 1px;
+}
+
+/* AdminLTE 2 tabs: li > a, not .nav-item > .nav-link */
+body.yse-theme .nav-tabs-custom {
+  overflow: hidden;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs {
+  display: block;
+  border-bottom: 1px solid var(--yse-border);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li {
+  float: left;
+  display: block;
+  margin: 0;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link {
+  display: block;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  color: var(--yse-color-muted);
+  text-decoration: none;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li.active > a,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.active,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link.active {
+  color: var(--yse-color-text);
+  background: var(--yse-card-bg);
+  border-color: var(--yse-border) var(--yse-border) transparent;
+}
+
+body.yse-theme .tab-content > .tab-pane {
+  display: none;
+}
+
+body.yse-theme .tab-content > .tab-pane.active {
+  display: block;
+}
+
+/* AdminLTE 2 collapsed boxes — LTE3 only knows collapsed-card */
+body.yse-theme .box.collapsed-box > .box-body,
+body.yse-theme .box.collapsed-box > .box-footer,
+body.yse-theme .collapsed-box.box-body {
+  display: none !important;
+}
+
+/* BS3 carousel slides */
+body.yse-theme .carousel-inner > .item {
+  display: none;
+  position: relative;
+}
+
+body.yse-theme .carousel-inner > .item.active {
+  display: block;
+}
+
+body.yse-theme .yse-page-dashboard .box-footer {
+  padding: 0;
+  min-height: 0;
+  border: 0;
+}
+
+body.yse-theme .yse-page-dashboard .box {
+  margin-bottom: var(--yse-space-sm);
+}
+
+body.yse-theme .content-header {
+  padding: 4px 8px 0;
+}
+
+body.yse-theme .content {
+  padding: 4px 8px !important;
 }

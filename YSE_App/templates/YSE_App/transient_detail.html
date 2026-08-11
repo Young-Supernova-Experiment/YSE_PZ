@@ -35,18 +35,18 @@
             {% endif %}
             <div class="nav-tabs-custom yse-page-transient-summary">
                 <ul class="nav nav-tabs">
-                    <li class="active"><a href="#summary_tab" data-toggle="tab">Summary</a></li>
-                    <li><a href="#followup_tab" data-toggle="tab">Follow-up</a></li>
-                    <li><a href="#resources_tab" data-toggle="tab">Resources</a></li>
-                    <li><a href="#photometry_tab" data-toggle="tab">Detailed Photometry</a></li>
-                    <li><a href="#spectra_tab" data-toggle="tab">Spectra</a></li>
-                    <li><a href="#hst_tab" data-toggle="tab" id="hst_tab_header">HST Data</a></li>
-                    <li><a href="#chandra_tab" data-toggle="tab" id="chandra_tab_header">Chandra Data</a></li>
+                    <li class="nav-item active"><a class="nav-link active" href="#summary_tab" data-toggle="tab">Summary</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#followup_tab" data-toggle="tab">Follow-up</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#resources_tab" data-toggle="tab">Resources</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#photometry_tab" data-toggle="tab">Detailed Photometry</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#spectra_tab" data-toggle="tab">Spectra</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#hst_tab" data-toggle="tab" id="hst_tab_header">HST Data</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#chandra_tab" data-toggle="tab" id="chandra_tab_header">Chandra Data</a></li>
                     {% if has_gw_candidate_tag %}
-                        <li><a href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW Info</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW Info</a></li>
                     {% endif %}
-                    <li class="hidden">
-                        <a href="#summary_tab" data-toggle="tab" id="yse-comments-tab-legacy">Comments (on Summary)</a>
+                    <li class="nav-item d-none">
+                        <a class="nav-link" href="#summary_tab" data-toggle="tab" id="yse-comments-tab-legacy">Comments (on Summary)</a>
                     </li>
                 </ul>
                 <div class="tab-content">

@@ -22,10 +22,10 @@
     <div class="col-12">
   <div class="nav-tabs-custom">
     <ul class="nav nav-tabs">
-      <li class="active"><a href="#summary_tab_{{transient.id}}" data-toggle="tab">Summary</a></li>
-      <li><a href="#photometry_tab_{{transient.id}}" data-toggle="tab">Photometry</a></li>
-      <li><a href="#followup_tab_{{transient.id}}" data-toggle="tab">Follow-up</a></li>
-      <li><a href="#tags_tab_{{transient.id}}" data-toggle="tab">Tags</a></li>
+      <li class="nav-item active"><a class="nav-link active" href="#summary_tab_{{transient.id}}" data-toggle="tab">Summary</a></li>
+      <li class="nav-item"><a class="nav-link" href="#photometry_tab_{{transient.id}}" data-toggle="tab">Photometry</a></li>
+      <li class="nav-item"><a class="nav-link" href="#followup_tab_{{transient.id}}" data-toggle="tab">Follow-up</a></li>
+      <li class="nav-item"><a class="nav-link" href="#tags_tab_{{transient.id}}" data-toggle="tab">Tags</a></li>
     </ul>
     <div class="tab-content">
       <div class="active tab-pane" id="summary_tab_{{transient.id}}" style="height:800;overflow:visible;">
@@ -201,7 +201,7 @@
                   <li data-target="#carousel-example-generic" data-slide-to="3" class=""></li>
               </ol>
                 <div class="carousel-inner">
-                  <div class="item active">
+                  <div class="item carousel-item active">
                     <strong>SDSS Footprint</strong>
                     <div style="width:400px;height:400px;">
                       <a href="http://skyserver.sdss3.org/public/en/tools/chart/navi.aspx?opt=G&amp;ra={{ transient.ra }}&amp;dec={{ transient.dec }}&amp;scale=0.1981" target="_blank" title="Link to SDSS Navigate Tool" class="sdss-image-link">
@@ -209,15 +209,15 @@
                       </a>
                     </div>
                   </div>
-                  <div class="item">
+                  <div class="item carousel-item">
                     <strong>DSS Footprint (Aladin)</strong>
                     <div id="aladin-lite-div_{{transient.id}}" style="width:400px;height:400px;"></div>
                   </div>
-                    <div class="item">
+                    <div class="item carousel-item">
                       <strong>Pan-STARRS Footprint</strong>
                         <div id="ps1_image_{{transient.id}}" style="width:400px;height:400px;"></div>
                     </div>
-                    <div class="item">
+                    <div class="item carousel-item">
                         <strong>Legacy Survey Image</strong>
                       <div id="legacy_image_{{transient.id}}" style="width:400px;height:400px;"></div>
                     </div>

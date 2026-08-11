@@ -1,5 +1,7 @@
 """Chrome redesign smokes: header search, skip link, night theme, nav groups (#123–#130)."""
 
+from unittest.mock import patch
+
 from django.test import Client, TestCase
 
 from YSE_App.tests.fixtures_minimal import create_minimal_transient, create_test_user
@@ -10,7 +12,8 @@ class ChromeSmokeTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = create_test_user("chrome_user")
-        cls.transient = create_minimal_transient(cls.user, name="chrome-sn")
+        with patch("YSE_App.models.transient_models.tess_obs", return_value=False):
+            cls.transient = create_minimal_transient(cls.user, name="chrome-sn")
 
     def setUp(self):
         self.client = Client()
@@ -42,7 +45,21 @@ class ChromeSmokeTests(TestCase):
 
     def test_transient_detail_chrome(self):
         url = f"/transient_detail/{self.transient.slug}/"
-        self._assert_chrome(self.client.get(url))
+        html = self._assert_chrome(self.client.get(url))
+        self.assertIn('class="nav-link active"', html)
+        self.assertIn("carousel-item", html)
+        self.assertIn("collapsed-box", html)
+
+    def test_theme_css_has_light_and_collapsed_box(self):
+        from pathlib import Path
+
+        css_path = Path(__file__).resolve().parents[1] / "static" / "YSE_App" / "yse-theme.css"
+        css = css_path.read_text(encoding="utf-8")
+        self.assertIn('html[data-yse-theme="light"]', css)
+        self.assertIn('html[data-yse-theme="dark"]', css)
+        self.assertIn("#070913", css)
+        self.assertIn("collapsed-box", css)
+        self.assertIn("carousel-inner > .item", css)
 
     def test_vendored_assets_exist(self):
         for rel in (

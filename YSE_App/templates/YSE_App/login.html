@@ -10,7 +10,9 @@
   (function () {
     try {
       var t = localStorage.getItem("yse-theme") || "dark";
-      document.documentElement.setAttribute("data-yse-theme", t === "light" ? "light" : "dark");
+      var dark = t !== "light";
+      document.documentElement.setAttribute("data-yse-theme", dark ? "dark" : "light");
+      document.documentElement.classList.toggle("dark-mode", dark);
     } catch (e) {
       document.documentElement.setAttribute("data-yse-theme", "dark");
     }

@@ -1,6 +1,7 @@
 """Minimal ORM rows for page-load and performance tests."""
 
 import datetime
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -185,19 +186,20 @@ def create_transient_with_synthetic_data(
     obs_group, instrument, band = create_instrument_stack(
         user, obs_group_name=f"bundle-{name}"
     )
-    transient, _ = Transient.objects.get_or_create(
-        name=name,
-        defaults={
-            "ra": 10.0,
-            "dec": 20.0,
-            "status": statuses[status_name],
-            "obs_group": obs_group,
-            "disc_date": timezone.now() - datetime.timedelta(days=5),
-            **audit,
-        },
-    )
-    if not transient.slug:
-        transient.save()
+    with patch("YSE_App.models.transient_models.tess_obs", return_value=False):
+        transient, _ = Transient.objects.get_or_create(
+            name=name,
+            defaults={
+                "ra": 10.0,
+                "dec": 20.0,
+                "status": statuses[status_name],
+                "obs_group": obs_group,
+                "disc_date": timezone.now() - datetime.timedelta(days=5),
+                **audit,
+            },
+        )
+        if not transient.slug:
+            transient.save()
     attach_synthetic_photometry(
         user,
         transient,
@@ -233,18 +235,19 @@ def create_minimal_transient(
     obs_group, _ = ObservationGroup.objects.get_or_create(
         name=obs_group_name, defaults=audit
     )
-    transient, _ = Transient.objects.get_or_create(
-        name=name,
-        defaults={
-            "ra": ra,
-            "dec": dec,
-            "status": statuses[status_name],
-            "obs_group": obs_group,
-            **audit,
-        },
-    )
-    if not transient.slug:
-        transient.save()
+    with patch("YSE_App.models.transient_models.tess_obs", return_value=False):
+        transient, _ = Transient.objects.get_or_create(
+            name=name,
+            defaults={
+                "ra": ra,
+                "dec": dec,
+                "status": statuses[status_name],
+                "obs_group": obs_group,
+                **audit,
+            },
+        )
+        if not transient.slug:
+            transient.save()
     return transient
 
 

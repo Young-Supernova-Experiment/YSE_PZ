@@ -1,5 +1,7 @@
 """Phase 1 theme: yse-theme.css loaded on hot pages (#24–#32)."""
 
+from unittest.mock import patch
+
 from django.test import Client, TestCase
 
 from YSE_App.tests.fixtures_minimal import create_minimal_transient, create_test_user
@@ -10,12 +12,14 @@ class Phase1ThemeSmokeTests(TestCase):
         self.user = create_test_user()
         self.client = Client()
         self.client.force_login(self.user)
-        self.transient = create_minimal_transient(self.user, name="phase1-theme-sn")
+        with patch("YSE_App.models.transient_models.tess_obs", return_value=False):
+            self.transient = create_minimal_transient(self.user, name="phase1-theme-sn")
 
     def _assert_theme_stylesheet(self, response):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "yse-theme.css")
-        self.assertContains(response, 'class="hold-transition sidebar-mini sidebar-collapse yse-theme"')
+        self.assertContains(response, "sidebar-mini sidebar-collapse yse-theme")
+        self.assertContains(response, 'data-yse-theme="dark"')
 
     def test_dashboard_includes_theme(self):
         self._assert_theme_stylesheet(self.client.get("/dashboard/"))
