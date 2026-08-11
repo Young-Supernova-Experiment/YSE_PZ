@@ -46,17 +46,19 @@ class ChromeSmokeTests(TestCase):
         self.assertIn("layout-footer-not-fixed", html)
 
     def test_comment_audience_lists_all_user_groups(self):
-        group_a = Group.objects.create(name="sec-group-a")
-        group_b = Group.objects.create(name="sec-group-b")
+        group_public, _ = Group.objects.get_or_create(name="Public")
+        group_a, _ = Group.objects.get_or_create(name="sec-group-a")
+        group_b, _ = Group.objects.get_or_create(name="sec-group-b")
         user_ab = create_test_user("sec_user_ab", is_staff=False)
-        user_ab.groups.add(group_a, group_b)
+        user_ab.groups.add(group_public, group_a, group_b)
         self.client.force_login(user_ab)
         html = self._assert_chrome(
             self.client.get(f"/transient_detail/{self.transient.slug}/")
         )
-        self.assertIn(">Public</span>", html)
+        self.assertEqual(html.count(">Public</span>"), 1)
         self.assertIn("sec-group-a", html)
         self.assertIn("sec-group-b", html)
+        self.assertNotIn('id="id_audience_groups_%s"' % group_public.pk, html)
         self.assertNotRegex(html, r'id="id_is_public"[^>]*\bchecked\b')
         self.assertRegex(
             html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_a.pk
@@ -76,7 +78,7 @@ class ChromeSmokeTests(TestCase):
         self.assertIn("Who can see this?", html)
         self.assertIn('id="id_is_public"', html)
         self.assertIn('type="checkbox"', html)
-        self.assertIn("yse-audience-box", html)
+        self.assertIn("yse-audience-native", html)
         self.assertIn(">Public</span>", html)
         self.assertIn("chrome-collab", html)
         followup_at = html.find("add_transient_followup_btn")
@@ -100,7 +102,7 @@ class ChromeSmokeTests(TestCase):
         self.assertNotIn(".collapsed-box.box-body", css)
         self.assertIn("carousel-inner > .item", css)
         self.assertIn(".yse-page-transient-summary .form-group br", css)
-        self.assertIn(".yse-audience-box", css)
+        self.assertIn("yse-audience-native", css)
         self.assertIn("color-scheme: dark", css)
         self.assertIn("position: static !important", css)
         self.assertIn("yse-audience-label", css)

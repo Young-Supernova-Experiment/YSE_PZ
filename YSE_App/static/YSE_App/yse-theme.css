@@ -712,7 +712,11 @@ body.yse-theme .btn-default {
 }
 
 body.yse-theme .yse-audience-panel {
+  display: block;
+  clear: both;
+  width: 100%;
   margin-top: var(--yse-space-sm);
+  overflow: visible;
 }
 
 body.yse-theme .yse-audience-heading {
@@ -728,16 +732,18 @@ body.yse-theme .yse-audience-panel ul {
 }
 
 body.yse-theme .yse-audience-check {
-  display: flex;
+  display: flex !important;
   align-items: center;
   flex-wrap: nowrap;
   gap: var(--yse-space-sm);
   font-weight: 400;
   color: var(--yse-color-text) !important;
-  margin: var(--yse-space-xs) 0;
+  margin: 6px 0;
   cursor: pointer;
   position: relative;
   width: 100%;
+  float: none !important;
+  visibility: visible !important;
 }
 
 body.yse-theme .checkbox label,
@@ -746,43 +752,21 @@ body.yse-theme .yse-audience-panel label {
   color: var(--yse-color-text);
 }
 
-body.yse-theme .yse-audience-check input[type="checkbox"] {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  opacity: 0;
+body.yse-theme .yse-audience-check input[type="checkbox"],
+body.yse-theme .yse-audience-native {
+  position: static !important;
+  opacity: 1 !important;
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0 8px 0 0;
   cursor: pointer;
-  z-index: 1;
-}
-
-body.yse-theme .yse-audience-box {
-  width: 18px;
-  height: 18px;
-  min-width: 18px;
-  min-height: 18px;
-  box-sizing: border-box;
-  border: 2px solid var(--yse-color-text);
-  border-radius: 3px;
-  background: var(--yse-bg);
-  display: inline-block;
   flex-shrink: 0;
-}
-
-body.yse-theme .yse-audience-check input[type="checkbox"]:checked + .yse-audience-box {
-  background: var(--yse-color-accent);
-  border-color: var(--yse-color-accent);
-}
-
-body.yse-theme .yse-audience-check input[type="checkbox"]:checked + .yse-audience-box::after {
-  content: "";
-  display: block;
-  width: 5px;
-  height: 9px;
-  margin: 1px auto 0;
-  border: solid #fff;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
+  -webkit-appearance: checkbox;
+  appearance: auto;
+  accent-color: var(--yse-color-accent);
+  visibility: visible !important;
 }
 
 body.yse-theme .yse-audience-label {
