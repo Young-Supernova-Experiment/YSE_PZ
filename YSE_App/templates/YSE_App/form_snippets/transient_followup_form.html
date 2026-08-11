@@ -103,6 +103,8 @@
 									Select collaboration groups that can see the selected observing resource
 									(default: all eligible groups checked). Check <strong>Public</strong> to share
 									with everyone in the Public group (only available for public observing resources).
+									For <strong>creator-only</strong> observing resources, you may leave all groups
+									unchecked so only you (the requester) can see the follow-up.
 								</p>
 								{% for choice in form.followup_audience_choices %}
 								<div class="checkbox yse-followup-audience-choice" data-group-id="{{ choice.group.pk }}">
