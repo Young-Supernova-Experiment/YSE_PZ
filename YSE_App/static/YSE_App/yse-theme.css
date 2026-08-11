@@ -30,6 +30,7 @@
 
 /* AstroScheduler night tokens — only on dark, so light can actually differ */
 html[data-yse-theme="dark"] {
+  color-scheme: dark;
   --yse-bg: #070913;
   --yse-card-bg: rgb(16, 20, 38);
   --yse-border: rgba(255, 255, 255, 0.08);
@@ -42,6 +43,7 @@ html[data-yse-theme="dark"] {
 }
 
 html[data-yse-theme="light"] {
+  color-scheme: light;
   --yse-bg: #f4f6fb;
   --yse-card-bg: #ffffff;
   --yse-border: rgba(15, 23, 42, 0.12);
@@ -716,6 +718,7 @@ body.yse-theme .yse-audience-check {
   color: var(--yse-color-text);
   margin: var(--yse-space-xs) 0;
   cursor: pointer;
+  position: relative;
 }
 
 body.yse-theme .checkbox label,
@@ -724,24 +727,47 @@ body.yse-theme .yse-audience-panel label {
   color: var(--yse-color-text);
 }
 
-body.yse-theme input[type="checkbox"],
 body.yse-theme .yse-audience-check input[type="checkbox"] {
-  -webkit-appearance: checkbox;
-  appearance: auto;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
+  position: absolute;
+  width: 18px;
+  height: 18px;
   margin: 0;
-  opacity: 1;
-  position: static;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+body.yse-theme .yse-audience-box {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  box-sizing: border-box;
+  border: 2px solid var(--yse-color-text);
+  border-radius: 3px;
+  background: var(--yse-bg);
   display: inline-block;
-  visibility: visible;
-  vertical-align: middle;
-  accent-color: var(--yse-color-accent);
-  background-color: #fff;
-  border: 1px solid var(--yse-border);
   flex-shrink: 0;
+}
+
+body.yse-theme .yse-audience-check input[type="checkbox"]:checked + .yse-audience-box {
+  background: var(--yse-color-accent);
+  border-color: var(--yse-color-accent);
+}
+
+body.yse-theme .yse-audience-check input[type="checkbox"]:checked + .yse-audience-box::after {
+  content: "";
+  display: block;
+  width: 5px;
+  height: 9px;
+  margin: 1px auto 0;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+body.yse-theme .yse-audience-label {
+  color: var(--yse-color-text);
 }
 
 body.yse-theme .select2-container--default .select2-selection--single,

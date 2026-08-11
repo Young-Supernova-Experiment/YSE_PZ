@@ -40,6 +40,7 @@ class Phase2CommentTests(TestCase):
         self.assertIn("Who can see this?", html)
         self.assertIn('id="id_is_public"', html)
         self.assertIn('type="checkbox"', html)
+        self.assertIn("yse-audience-box", html)
         self.assertIn("phase2-collab", html)
         self.assertNotIn('id="comments_tab"', html)
 

@@ -41,13 +41,18 @@
                         <p class="yse-audience-heading text-muted"><strong>Who can see this?</strong></p>
                         <label class="yse-audience-check yse-audience-public">
                             {{ transient_comment_form.is_public }}
-                            <span>{{ transient_comment_form.is_public.label }}</span>
+                            <span class="yse-audience-box" aria-hidden="true"></span>
+                            <span class="yse-audience-label">{{ transient_comment_form.is_public.label }}</span>
                         </label>
                         <div id="yse-comment-audience-groups" class="yse-audience-groups">
                             {% if transient_comment_form.show_audience_picker %}
                                 <p class="text-muted small">Restrict to collaboration groups (default: all groups you share on this transient). Uncheck all groups to keep the comment visible only to you.</p>
                                 {% for checkbox in transient_comment_form.audience_groups %}
-                                <div class="yse-audience-check">{{ checkbox }}</div>
+                                <label class="yse-audience-check">
+                                    {{ checkbox.tag }}
+                                    <span class="yse-audience-box" aria-hidden="true"></span>
+                                    <span class="yse-audience-label">{{ checkbox.choice_label }}</span>
+                                </label>
                                 {% endfor %}
                             {% else %}
                                 <p class="text-muted small yse-audience-default-note">
