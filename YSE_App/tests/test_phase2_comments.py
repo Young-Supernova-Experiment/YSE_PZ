@@ -35,6 +35,7 @@ class Phase2CommentTests(TestCase):
         html = response.content.decode()
         self.assertIn("yse-comments-section", html)
         self.assertIn("yse-comment-thread", html)
+        self.assertIn("Who can see this?", html)
         self.assertNotIn('id="comments_tab"', html)
 
     @patch.dict(os.environ, {"YSE_TRANSIENT_DETAIL_DEFER": "1"})

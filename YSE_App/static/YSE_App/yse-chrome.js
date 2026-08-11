@@ -40,6 +40,7 @@
     $(".carousel-control.right").addClass("carousel-control-next");
     $(document).on("click", "[data-widget='collapse']", function (event) {
       event.preventDefault();
+      event.stopPropagation();
       var $box = $(this).closest(".box");
       if (!$box.length) {
         return;

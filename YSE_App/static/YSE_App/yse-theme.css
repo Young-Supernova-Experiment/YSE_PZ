@@ -15,8 +15,8 @@
   --yse-table-cell-py: 4px;
   --yse-table-cell-px: 8px;
   --yse-table-font-size: var(--yse-font-size-sm);
-  --yse-box-padding: var(--yse-space-md);
-  --yse-box-header-py: var(--yse-space-sm);
+  --yse-box-padding: var(--yse-space-sm);
+  --yse-box-header-py: var(--yse-space-xs);
   --yse-focus-offset: 2px;
   --yse-font-sans: Inter, "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --yse-color-accent: #3b82f6;
@@ -163,12 +163,18 @@ body.yse-theme .main-footer {
 }
 
 body.yse-theme .content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0 var(--yse-space-sm);
   padding: var(--yse-space-sm) var(--yse-space-md) 0;
 }
 
 body.yse-theme .content-header h1 {
   font-size: 1.25rem;
   margin: 0;
+  color: var(--yse-color-text);
 }
 
 body.yse-theme .content {
@@ -176,20 +182,40 @@ body.yse-theme .content {
 }
 
 body.yse-theme .content-header .breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
   background: transparent;
-  margin-bottom: 0;
+  margin: 0;
   padding: 0;
   font-size: var(--yse-font-size-sm);
 }
 
+body.yse-theme .content-header .breadcrumb > li {
+  display: flex;
+  align-items: center;
+}
+
+body.yse-theme .content-header .breadcrumb > li + li::before {
+  content: "/";
+  padding: 0 0.5rem;
+  color: var(--yse-color-muted);
+}
+
 /* --- AdminLTE 2 .box compatibility (inner pages keep .box markup) --- */
+body.yse-theme .box,
+body.yse-theme .nav-tabs-custom,
+body.yse-theme .tab-content {
+  background: var(--yse-card-bg) !important;
+  color: var(--yse-color-text);
+}
+
 body.yse-theme .box {
-  background: var(--yse-card-bg);
   border: 1px solid var(--yse-border);
   border-radius: 8px;
   box-shadow: none;
-  margin-bottom: var(--yse-space-md);
-  color: var(--yse-color-text);
+  margin-bottom: var(--yse-space-sm);
 }
 
 body.yse-theme .box-header {
@@ -208,10 +234,31 @@ body.yse-theme .box-footer {
 }
 
 body.yse-theme .box-title,
+body.yse-theme h3.box-title,
+body.yse-theme .btn-box-tool,
+body.yse-theme .btn-box-tool .box-title,
+body.yse-theme .box-header,
+body.yse-theme .box-header h3,
+body.yse-theme .box-header strong,
+body.yse-theme .box-header p,
+body.yse-theme .box-body,
+body.yse-theme .box-body strong,
+body.yse-theme .box-body label,
+body.yse-theme .box-body p:not(.text-muted) {
+  color: var(--yse-color-text) !important;
+}
+
+body.yse-theme .box-title,
 body.yse-theme h3.box-title {
   font-size: 15px;
   margin: 0;
-  color: var(--yse-color-text);
+}
+
+body.yse-theme .btn-box-tool {
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  padding: 0 var(--yse-space-xs);
 }
 
 body.yse-theme .box.box-primary,
@@ -243,8 +290,11 @@ body.yse-theme .nav-tabs .nav-link.active {
   color: var(--yse-color-text);
 }
 
-body.yse-theme .table {
+body.yse-theme .table,
+body.yse-theme .table td,
+body.yse-theme .table th {
   color: var(--yse-color-text);
+  background-color: var(--yse-card-bg);
 }
 
 body.yse-theme .table-striped tbody tr:nth-of-type(odd) {
@@ -365,7 +415,15 @@ body.yse-theme .yse-page-transient-summary .box.box-default.box-solid .box-body 
 }
 
 body.yse-theme .yse-page-transient-summary .btn {
-  margin-bottom: var(--yse-space-xs);
+  margin-bottom: 2px;
+}
+
+body.yse-theme .yse-page-transient-summary .form-group p {
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-page-transient-summary p:empty {
+  display: none;
 }
 
 body.yse-theme .yse-summary-side-col {
@@ -490,21 +548,39 @@ body.yse-login label {
 
 /* --- BS3 markup on BS4/AdminLTE 3 (regression from chrome checkpoint) --- */
 
-/* Columns in old templates sit in .box-body without .row; BS4 flex only works in .row. */
+/* Columns in old templates sit in .box-body/.form without .row.
+   BS4 sets width:100% on every .col-* so float alone still stacks them. */
 body.yse-theme .box-body::after,
 body.yse-theme .box-header::after,
-body.yse-theme .tab-pane::after {
+body.yse-theme .tab-pane::after,
+body.yse-theme form::after {
   content: "";
   display: table;
   clear: both;
 }
 
 body.yse-theme .box-body > [class*="col-"],
-body.yse-theme .box-body [class*="col-"] > [class*="col-"],
-body.yse-theme .tab-pane > [class*="col-"] {
+body.yse-theme .box-body > form > [class*="col-"],
+body.yse-theme .box-header > [class*="col-"],
+body.yse-theme .tab-pane > [class*="col-"],
+body.yse-theme [class*="col-"] > [class*="col-"] {
   float: left;
   min-height: 1px;
+  box-sizing: border-box;
 }
+
+body.yse-theme .col-1 { width: 8.33333% !important; max-width: 8.33333% !important; }
+body.yse-theme .col-2 { width: 16.66667% !important; max-width: 16.66667% !important; }
+body.yse-theme .col-3 { width: 25% !important; max-width: 25% !important; }
+body.yse-theme .col-4 { width: 33.33333% !important; max-width: 33.33333% !important; }
+body.yse-theme .col-5 { width: 41.66667% !important; max-width: 41.66667% !important; }
+body.yse-theme .col-6 { width: 50% !important; max-width: 50% !important; }
+body.yse-theme .col-7 { width: 58.33333% !important; max-width: 58.33333% !important; }
+body.yse-theme .col-8 { width: 66.66667% !important; max-width: 66.66667% !important; }
+body.yse-theme .col-9 { width: 75% !important; max-width: 75% !important; }
+body.yse-theme .col-10 { width: 83.33333% !important; max-width: 83.33333% !important; }
+body.yse-theme .col-11 { width: 91.66667% !important; max-width: 91.66667% !important; }
+body.yse-theme .col-12 { width: 100% !important; max-width: 100% !important; }
 
 /* AdminLTE 2 tabs: li > a, not .nav-item > .nav-link */
 body.yse-theme .nav-tabs-custom {
@@ -551,10 +627,16 @@ body.yse-theme .tab-content > .tab-pane.active {
 }
 
 /* AdminLTE 2 collapsed boxes — LTE3 only knows collapsed-card */
-body.yse-theme .box.collapsed-box > .box-body,
-body.yse-theme .box.collapsed-box > .box-footer,
+body.yse-theme .collapsed-box > .box-body,
+body.yse-theme .collapsed-box > .box-footer,
+body.yse-theme .box.collapsed-box .box-body,
+body.yse-theme .box.collapsed-box .box-footer,
 body.yse-theme .collapsed-box.box-body {
   display: none !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border: 0 !important;
 }
 
 /* BS3 carousel slides */
@@ -583,4 +665,60 @@ body.yse-theme .content-header {
 
 body.yse-theme .content {
   padding: 4px 8px !important;
+}
+
+body.yse-theme .yse-page-dashboard .btn-group .btn,
+body.yse-theme .yse-page-dashboard .dropdown-toggle,
+body.yse-theme .yse-page-dashboard .btn-default,
+body.yse-theme .yse-page-dashboard .btn-secondary.dropdown-toggle {
+  font-size: var(--yse-font-size-xs) !important;
+  line-height: 1.2;
+  padding: 1px 6px;
+}
+
+body.yse-theme .btn-default {
+  color: var(--yse-color-text);
+  background-color: var(--yse-card-bg);
+  border-color: var(--yse-border);
+  font-size: var(--yse-font-size-sm);
+}
+
+body.yse-theme .yse-audience-panel {
+  margin-top: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-audience-heading {
+  margin-bottom: var(--yse-space-xs);
+}
+
+body.yse-theme .checkbox,
+body.yse-theme .yse-audience-panel ul {
+  display: block;
+  list-style: none;
+  margin: var(--yse-space-xs) 0;
+  padding-left: 0;
+}
+
+body.yse-theme .checkbox label,
+body.yse-theme .yse-audience-panel label {
+  font-weight: 400;
+  color: var(--yse-color-text);
+}
+
+body.yse-theme input[type="checkbox"] {
+  margin-right: var(--yse-space-xs);
+  accent-color: var(--yse-color-accent);
+}
+
+body.yse-theme .select2-container--default .select2-selection--single,
+body.yse-theme .select2-container--default .select2-selection--multiple,
+body.yse-theme .select2-dropdown {
+  background-color: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .select2-container--default .select2-selection--single .select2-selection__rendered,
+body.yse-theme .select2-container--default .select2-results__option {
+  color: var(--yse-color-text);
 }

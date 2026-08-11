@@ -49,6 +49,11 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('class="nav-link active"', html)
         self.assertIn("carousel-item", html)
         self.assertIn("collapsed-box", html)
+        self.assertIn("Who can see this?", html)
+        self.assertIn("yse-audience-toggle-public", html)
+        self.assertIn('placeholder="Tag name"', html)
+        self.assertNotIn('placeholder="Event Title"', html)
+        self.assertNotIn("dataTables.bootstrap.min.css", html)
 
     def test_theme_css_has_light_and_collapsed_box(self):
         from pathlib import Path
@@ -60,6 +65,11 @@ class ChromeSmokeTests(TestCase):
         self.assertIn("#070913", css)
         self.assertIn("collapsed-box", css)
         self.assertIn("carousel-inner > .item", css)
+        self.assertIn("width: 33.33333% !important", css)
+        self.assertIn("width: 50% !important", css)
+        self.assertIn('content: "/"', css)
+        self.assertIn(".btn-box-tool", css)
+        self.assertIn("yse-page-dashboard .btn-group .btn", css)
 
     def test_vendored_assets_exist(self):
         for rel in (

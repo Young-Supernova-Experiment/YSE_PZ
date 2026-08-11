@@ -1,10 +1,12 @@
 from django.db import models
 from django.forms import ModelForm
 from django import forms
+from django.contrib.auth.models import Group
 from YSE_App.models import *
 from django.utils import timezone
 from datetime import timedelta
 from YSE_App.queries.yse_python_queries import python_query_reg
+from YSE_App.services.visibility import shared_groups_for_transient
 
 class TransientForm(ModelForm):
     class Meta:
