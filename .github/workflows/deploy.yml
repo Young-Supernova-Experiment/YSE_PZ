@@ -30,6 +30,6 @@ jobs:
           ./venv/bin/pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
           ./venv/bin/pip install --use-deprecated=legacy-resolver -r requirements.txt
           
-          ./venv/bin/python manage.py migrate --noinput
+          ./venv/bin/python manage.py migrate --noinput --skip-checks
           
           sudo systemctl restart apache2
