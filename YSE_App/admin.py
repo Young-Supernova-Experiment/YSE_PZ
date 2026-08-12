@@ -56,7 +56,20 @@ admin.site.register(UserTelescopeToFollow)
 admin.site.register(Host)
 admin.site.register(Transient)
 #admin.site.register(SimpleTransientSpecRequest)
-admin.site.register(TransientFollowup)
+
+
+class TransientFollowupRequestInline(admin.TabularInline):
+	model = TransientFollowupRequest
+	extra = 0
+	raw_id_fields = ('requestor',)
+
+
+@admin.register(TransientFollowup)
+class TransientFollowupAdmin(admin.ModelAdmin):
+	inlines = [TransientFollowupRequestInline]
+
+
+admin.site.register(TransientFollowupRequest)
 admin.site.register(HostFollowup)
 admin.site.register(TransientObservationTask)
 admin.site.register(HostObservationTask)

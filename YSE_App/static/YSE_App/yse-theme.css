@@ -732,10 +732,51 @@ body.yse-theme .content {
 body.yse-theme .yse-page-dashboard .btn-group .btn,
 body.yse-theme .yse-page-dashboard .dropdown-toggle,
 body.yse-theme .yse-page-dashboard .btn-default,
-body.yse-theme .yse-page-dashboard .btn-secondary.dropdown-toggle {
+body.yse-theme .yse-page-dashboard .btn-secondary.dropdown-toggle,
+body.yse-theme .yse-page-observing-night .btn-group .btn,
+body.yse-theme .yse-page-observing-night .dropdown-toggle,
+body.yse-theme .yse-page-observing-night .btn-default,
+body.yse-theme .yse-page-observing-night .btn-secondary.dropdown-toggle,
+body.yse-theme .content .btn-group .dropdown-toggle,
+body.yse-theme .content .btn-secondary.dropdown-toggle,
+body.yse-theme table .btn-group .btn,
+body.yse-theme table .btn-group .dropdown-toggle,
+body.yse-theme table .btn-group .dropbtn {
   font-size: var(--yse-font-size-xs) !important;
   line-height: 1.2;
   padding: 1px 6px;
+}
+
+body.yse-theme table .dropdown-menu,
+body.yse-theme table .dropdown-menu > li > a,
+body.yse-theme .yse-page-observing-night .dropdown-menu,
+body.yse-theme .yse-page-observing-night .dropdown-menu > li > a {
+  font-size: var(--yse-font-size-xs) !important;
+}
+
+body.yse-theme .yse-page-observing-night .yse-obs-night-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--yse-space-md);
+  margin: 0 0 var(--yse-space-md);
+  padding: 0;
+}
+
+body.yse-theme .yse-page-observing-night .yse-obs-night-toolbar .btn {
+  margin: 0;
+  width: auto;
+}
+
+body.yse-theme .yse-page-observing-night .yse-obs-night-filter {
+  margin: var(--yse-space-sm) 0 0;
+  display: flex;
+  align-items: center;
+  gap: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-page-observing-night .yse-obs-night-filter .form-group {
+  margin: 0;
 }
 
 body.yse-theme .btn-default {
