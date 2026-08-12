@@ -7,7 +7,10 @@ from django.urls import reverse
 
 from YSE_App.models import ClassicalObservingDate, ClassicalResource, QueuedResource, ToOResource
 from YSE_App.tests.fixtures_security_matrix import (
+    EXPECTED_CLASSICAL_RESOURCE_MAGS_BY_USER,
     EXPECTED_MAGS_BY_USER,
+    SECVIS_CLASSICAL_RESOURCE_COUNT,
+    SECVIS_PHOTOMETRY_SERIES_COUNT,
     TRANSIENT_NAME,
     authorized_resource_mags_for_user,
     seed_security_test_matrix,
@@ -20,17 +23,22 @@ class SecurityMatrixResourceTests(TestCase):
         cls.transient, cls.users = seed_security_test_matrix()
 
     def test_each_resource_kind_seeded_for_all_series(self):
-        for resource_model in (ClassicalResource, ToOResource, QueuedResource):
+        expected_by_model = {
+            ClassicalResource: SECVIS_CLASSICAL_RESOURCE_COUNT,
+            ToOResource: SECVIS_PHOTOMETRY_SERIES_COUNT,
+            QueuedResource: SECVIS_PHOTOMETRY_SERIES_COUNT,
+        }
+        for resource_model, expected_count in expected_by_model.items():
             with self.subTest(model=resource_model.__name__):
                 self.assertEqual(
                     resource_model.objects.filter(
                         description__startswith="secvis-matrix"
                     ).count(),
-                    8,
+                    expected_count,
                 )
 
     def test_authorized_classical_resources_per_user(self):
-        for username, expected in EXPECTED_MAGS_BY_USER.items():
+        for username, expected in EXPECTED_CLASSICAL_RESOURCE_MAGS_BY_USER.items():
             user = self.users[username]
             with self.subTest(user=username, kind="classical"):
                 mags = authorized_resource_mags_for_user(user, ClassicalResource)
@@ -58,7 +66,7 @@ class SecurityMatrixResourceTests(TestCase):
         seed_security_test_matrix()
         self.assertEqual(
             ClassicalObservingDate.objects.filter(resource__in=classical).count(),
-            8,
+            SECVIS_CLASSICAL_RESOURCE_COUNT,
         )
 
     def test_observing_calendar_shows_only_authorized_runs(self):

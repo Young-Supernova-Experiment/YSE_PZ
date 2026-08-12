@@ -74,6 +74,17 @@ EXPECTED_MAGS_BY_USER: Dict[str, Set[int]] = {
     "sec_user_d": {0, 4},
 }
 
+# Extra classical-only creator_only resource (mag 99 / group A).
+CREATOR_ONLY_RESOURCE_MAG = 99
+SECVIS_PHOTOMETRY_SERIES_COUNT = len(PHOTOMETRY_SERIES)  # 8
+SECVIS_CLASSICAL_RESOURCE_COUNT = SECVIS_PHOTOMETRY_SERIES_COUNT + 1  # + mag99
+
+# Classical resources include mag99 for users who can see group A (mag 1).
+EXPECTED_CLASSICAL_RESOURCE_MAGS_BY_USER: Dict[str, Set[int]] = {
+    username: (mags | {CREATOR_ONLY_RESOURCE_MAG} if 1 in mags else set(mags))
+    for username, mags in EXPECTED_MAGS_BY_USER.items()
+}
+
 RESOURCE_KINDS: Tuple[Tuple[str, str, Type], ...] = (
     ("Cls", "classical", ClassicalResource),
     ("Too", "too", ToOResource),

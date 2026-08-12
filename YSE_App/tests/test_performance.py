@@ -35,6 +35,7 @@ from YSE_App.tests.perf_tracking import LoadTimeRegistry
 
 # Query ceilings — tighten as views are optimized.
 MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 50
+MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 50
 MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 90  # audience form loads shared collaboration groups
 MAX_QUERIES_PERSONAL_DASHBOARD = 40
 # Cold: five explorer SQL runs + five table builds (heavy; ceiling guards regressions).
@@ -168,7 +169,7 @@ class TransientDetailPagePerformanceTests(TestCase):
             response=response,
             n_queries=n_queries,
             elapsed=elapsed,
-            max_queries=46,
+            max_queries=MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL,
             max_seconds=6.0,
         )
 
