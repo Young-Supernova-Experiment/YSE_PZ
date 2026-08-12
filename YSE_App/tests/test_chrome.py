@@ -77,12 +77,19 @@ class ChromeSmokeTests(TestCase):
         self.assertIn("sec-group-a", html)
         self.assertIn("sec-group-b", html)
         self.assertNotIn('id="id_audience_groups_%s"' % group_public.pk, html)
-        self.assertNotRegex(html, r'id="id_is_public"[^>]*\bchecked\b')
-        self.assertRegex(
-            html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_a.pk
+        self.assertNotRegex(
+            html,
+            r'<input(?=[^>]*\bid="id_is_public")(?=[^>]*\bchecked\b)[^>]*>',
         )
         self.assertRegex(
-            html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_b.pk
+            html,
+            r'<input(?=[^>]*\bid="id_audience_groups_%s")(?=[^>]*\bchecked\b)[^>]*>'
+            % group_a.pk,
+        )
+        self.assertRegex(
+            html,
+            r'<input(?=[^>]*\bid="id_audience_groups_%s")(?=[^>]*\bchecked\b)[^>]*>'
+            % group_b.pk,
         )
 
     def test_transient_detail_chrome(self):
