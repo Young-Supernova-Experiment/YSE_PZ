@@ -10,26 +10,26 @@
 				{% for hidden_field in form.hidden_fields %}
 					{{ hidden_field }}
 				{% endfor %}
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>ID</label>
 						{% render_field form.user class+="form-control select2" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Date Range (UT)</label>
 						<div class="input-group">
 							<div class="input-group-addon">
 								<i class="fa fa-clock-o"></i>
 							</div>
-							<input type="text" class="form-control pull-right" id="oncall_date_range">
+							<input type="text" class="form-control float-right" id="oncall_date_range">
 						</div>
 						<input type="hidden" id="valid_start" name="valid_start">
 						<input type="hidden" id="valid_stop" name="valid_stop">
 					</div>
 				</div>
-				<div class="col-xs-12">
+				<div class="col-12">
 					<div class="form-group">
 						<br>
 						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>

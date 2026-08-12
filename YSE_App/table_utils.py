@@ -69,7 +69,7 @@ class TransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -191,7 +191,7 @@ class FieldTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -313,7 +313,7 @@ class AdjustFieldTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -434,7 +434,7 @@ class YSETransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -592,7 +592,7 @@ class YSEFullTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -747,7 +747,7 @@ class YSERisingTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -900,7 +900,7 @@ class NewTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1001,7 +1001,7 @@ class FollowupTable(tables.Table):
                                    verbose_name='Action',orderable=False)
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:5px;" type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+<button style="margin-bottom:5px;" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1083,7 +1083,7 @@ class ObsNightFollowupTable(tables.Table):
     comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.transient.id }}_status_name" class="dropbtn">{{ record.transient.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1096,7 +1096,7 @@ class ObsNightFollowupTable(tables.Table):
 
 
     followup_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1226,7 +1226,7 @@ class ToOFollowupTable(tables.Table):
     comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.transient.id }}_status_name" class="dropbtn">{{ record.transient.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1239,7 +1239,7 @@ class ToOFollowupTable(tables.Table):
 
 
     followup_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1359,7 +1359,7 @@ class YSEObsNightTable(tables.Table):
                                                               {"onclick": "toggle(this)"}})
     status_str = tables.TemplateColumn("<span id='{{record.id}}_status'>{{record.status.name}}</span>",verbose_name="status")
     #status_string = tables.TemplateColumn("""<div class="btn-group">
-#<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+#<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
     #										<span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
     #									</button>
     #									<ul class="dropdown-menu">

@@ -615,6 +615,14 @@ class AddTransientCommentFormView(FormView):
 		)
 		return log, log_to_comment_dict(log)
 
+	def get_form_kwargs(self):
+		kwargs = super().get_form_kwargs()
+		kwargs["user"] = self.request.user
+		transient_id = self.request.POST.get("transient") or self.request.GET.get("transient")
+		if transient_id:
+			kwargs["transient_id"] = int(transient_id)
+		return kwargs
+
 	def form_invalid(self, form):
 		if is_ajax(self.request):
 			return JsonResponse(form.errors, status=400)
