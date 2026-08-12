@@ -63,7 +63,8 @@ jobs:
 
           "$PYTHON" manage.py migrate --noinput --skip-checks
 
-          # Apache serves /static/ from STATIC_ROOT; chrome/vendor CSS lands here.
+          # Writes into this stack's STATIC_ROOT. Apache must Alias that URL
+          # (prod: /static/, test: /test_static/, experimental: /experimental_static/).
           "$PYTHON" manage.py collectstatic --noinput
 
           sudo systemctl restart apache2
