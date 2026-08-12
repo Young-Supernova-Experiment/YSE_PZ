@@ -44,20 +44,14 @@ class TransientFollowupForm(ModelForm):
     status = forms.ModelChoiceField(
         FollowupStatus.objects.all(),
         initial=FollowupStatus.objects.filter(name='Requested').first())
-    qs = ClassicalResource.objects.filter(end_date_valid__gt = timezone.now()-timedelta(days=1)).order_by('end_date_valid').select_related()
-    if len(qs):
-        classical_resource = forms.ModelChoiceField(
-            queryset=qs,
-            initial=qs[0],
-            required=False)
-        valid_start = forms.DateTimeField(initial=qs[0].begin_date_valid)
-        valid_stop = forms.DateTimeField(initial=qs[0].end_date_valid)
-    else:
-        classical_resource = forms.ModelChoiceField(
-            queryset=qs,
-            required=False)
-        valid_start = forms.DateTimeField()
-        valid_stop = forms.DateTimeField()
+    # Use empty querysets at class definition time. Evaluating ClassicalResource
+    # here (e.g. ``if len(qs)``) runs during ``migrate`` URL checks before
+    # migrations like ``creator_only`` are applied and breaks CI/deploy.
+    classical_resource = forms.ModelChoiceField(
+        queryset=ClassicalResource.objects.none(),
+        required=False)
+    valid_start = forms.DateTimeField(required=False)
+    valid_stop = forms.DateTimeField(required=False)
     comment = forms.CharField(required=False)
 
     def __init__(self, *args, user=None, transient_id=None, **kwargs):
@@ -72,10 +66,10 @@ class TransientFollowupForm(ModelForm):
         self.followup_audience_choices = []
         self.resource_audience_map = {}
 
+        valid_after = timezone.now() - timedelta(days=1)
         if user is not None:
             from YSE_App import view_utils
 
-            valid_after = timezone.now() - timedelta(days=1)
             self.fields["classical_resource"].queryset = (
                 view_utils.get_authorized_classical_resources(user)
                 .filter(end_date_valid__gt=valid_after)
@@ -91,13 +85,22 @@ class TransientFollowupForm(ModelForm):
                 .filter(end_date_valid__gt=valid_after)
                 .order_by("telescope__name")
             )
-            classical_qs = self.fields["classical_resource"].queryset
-            if classical_qs.exists():
-                initial_resource = classical_qs.first()
-                self.fields["classical_resource"].initial = initial_resource
-                self.fields["valid_start"].initial = initial_resource.begin_date_valid
-                self.fields["valid_stop"].initial = initial_resource.end_date_valid
+        else:
+            # Safe deferred querysets for non-user forms (admin/tests); still lazy.
+            self.fields["classical_resource"].queryset = (
+                ClassicalResource.objects.filter(end_date_valid__gt=valid_after)
+                .order_by("end_date_valid")
+                .select_related()
+            )
 
+        classical_qs = self.fields["classical_resource"].queryset
+        if classical_qs.exists():
+            initial_resource = classical_qs.first()
+            self.fields["classical_resource"].initial = initial_resource
+            self.fields["valid_start"].initial = initial_resource.begin_date_valid
+            self.fields["valid_stop"].initial = initial_resource.end_date_valid
+
+        if user is not None:
             self.fields["audience_groups"].queryset = user.groups.order_by("name")
             self.show_audience_picker = user.groups.exists()
             from YSE_App.services.audience import (
