@@ -34,7 +34,7 @@ jobs:
               echo "branch=experimental" >> "$GITHUB_OUTPUT"
               ;;
             develop)
-              echo "dir=/data/yse_pz/YSE_PZ_develop" >> "$GITHUB_OUTPUT"
+              echo "dir=/data/yse_pz/YSE_PZ_test" >> "$GITHUB_OUTPUT"
               echo "branch=develop" >> "$GITHUB_OUTPUT"
               ;;
             *)
