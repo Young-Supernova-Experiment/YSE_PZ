@@ -32,10 +32,14 @@ jobs:
             experimental)
               echo "dir=/data/yse_pz/YSE_PZ_experimental" >> "$GITHUB_OUTPUT"
               echo "branch=experimental" >> "$GITHUB_OUTPUT"
+              # Matches yse-experimental.conf WSGIDaemonProcess python-home
+              echo "python=/data/yse_pz/YSE_PZ_experimental/venv/bin/python" >> "$GITHUB_OUTPUT"
               ;;
             develop)
               echo "dir=/data/yse_pz/YSE_PZ_test" >> "$GITHUB_OUTPUT"
               echo "branch=develop" >> "$GITHUB_OUTPUT"
+              # Matches yse-test.conf WSGIDaemonProcess python-home
+              echo "python=/data/yse_pz/yse_test_virtual/bin/python" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported deploy branch: $BRANCH" >&2
@@ -47,18 +51,19 @@ jobs:
       - name: Deploy Application
         run: |
           cd "${{ steps.target.outputs.dir }}"
+          PYTHON="${{ steps.target.outputs.python }}"
 
           git fetch origin
           git reset --hard "origin/${{ steps.target.outputs.branch }}"
 
-          ./venv/bin/pip install wheel
-          ./venv/bin/pip install --no-build-isolation "extinction==0.4.2"
-          ./venv/bin/pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
-          ./venv/bin/pip install --use-deprecated=legacy-resolver -r requirements.txt
+          "$PYTHON" -m pip install wheel
+          "$PYTHON" -m pip install --no-build-isolation "extinction==0.4.2"
+          "$PYTHON" -m pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
+          "$PYTHON" -m pip install --use-deprecated=legacy-resolver -r requirements.txt
 
-          ./venv/bin/python manage.py migrate --noinput --skip-checks
+          "$PYTHON" manage.py migrate --noinput --skip-checks
 
           # Apache serves /static/ from STATIC_ROOT; chrome/vendor CSS lands here.
-          ./venv/bin/python manage.py collectstatic --noinput
+          "$PYTHON" manage.py collectstatic --noinput
 
           sudo systemctl restart apache2
