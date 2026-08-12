@@ -58,4 +58,7 @@ jobs:
 
           ./venv/bin/python manage.py migrate --noinput --skip-checks
 
+          # Apache serves /static/ from STATIC_ROOT; chrome/vendor CSS lands here.
+          ./venv/bin/python manage.py collectstatic --noinput
+
           sudo systemctl restart apache2
