@@ -1,0 +1,7 @@
+Vendored UI assets for YSE-PZ chrome (#124). Bower AdminLTE 2 / Bootstrap 3 copies are still on disk.
+
+adminlte-3.2/     AdminLTE 3.2.0  (css/adminlte.min.css, js/adminlte.min.js)
+bootstrap-4.6/    Bootstrap 4.6.2 (css/bootstrap.min.css, js/bootstrap.bundle.min.js)
+datatables-bs4/   DataTables 1.13.8 Bootstrap 4 integration CSS/JS
+
+Font Awesome 4 and jQuery remain in bower_components.

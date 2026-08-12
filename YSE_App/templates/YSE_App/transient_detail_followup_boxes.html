@@ -1,21 +1,21 @@
 {% for f in followups %}
-    <div class="col-xs-12">
+    <div class="col-12">
         {% if forloop.counter <= 1 %}
             <div class="followupbox box box-primary">
         {% else %}
             <div class="followupbox box box-primary collapsed-box">
         {% endif %}
                 <div class="box-header">
-                    <div class="col-xs-4">
+                    <div class="col-4">
                         <h3 class="box-title">Follow-up (id: {{f.id}})</h3>
                     </div>
-                    <div class="col-xs-4">
+                    <div class="col-4">
                         <h3 class="box-title">Valid: {{ f.valid_start|date:"SHORT_DATE_FORMAT" }} - {{ f.valid_stop|date:"SHORT_DATE_FORMAT" }}</h3>
                     </div>
-                    <div class="col-xs-4">
+                    <div class="col-4">
                         <h3 style="float:right;padding-right:10px" class="box-title">Last Modified: {{f.modified_by}}</h3>
                     </div>
-                    <div class="box-tools pull-right">
+                    <div class="box-tools float-right">
                         {% if forloop.counter <= 1 %}
                             <button type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-minus"></i></button>
                         {% else %}

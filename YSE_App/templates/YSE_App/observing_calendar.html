@@ -1,4 +1,4 @@
-{{% extends 'YSE_App/base.html' %}
+{% extends 'YSE_App/base.html' %}
 {% load static %}
 {% block content %}
 {% load transient_detail_extras %}
@@ -79,6 +79,7 @@
         m    = date.getMonth(),
         y    = date.getFullYear()
     $('#calendar').fullCalendar({
+      height    : Math.max(360, $(window).height() - 180),
       header    : {
         left  : 'prev,next today',
         center: 'title',

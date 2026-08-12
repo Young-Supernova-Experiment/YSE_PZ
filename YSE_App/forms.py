@@ -1,6 +1,7 @@
 from django.db import models
 from django.forms import ModelForm
 from django import forms
+from django.contrib.auth.models import Group
 from YSE_App.models import *
 from django.utils import timezone
 from datetime import timedelta
@@ -316,7 +317,7 @@ class TransientCommentForm(ModelForm):
     is_public = forms.BooleanField(
         required=False,
         initial=False,
-        label="Visible to all YSE users who can open this transient",
+        label="Public",
     )
     audience_groups = forms.ModelMultipleChoiceField(
         queryset=Group.objects.none(),

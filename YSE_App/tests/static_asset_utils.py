@@ -45,13 +45,14 @@ def local_static_paths_from_html(html):
 
 
 def static_relpath_from_url(static_url_path):
-    """Map /static/YSE_App/foo.css -> YSE_App/foo.css."""
+    """Map /static/YSE_App/foo.css -> YSE_App/foo.css (strip ?v= cache-bust)."""
+    path = urlparse(static_url_path).path
     prefix = static_url_prefix()
-    if static_url_path.startswith(prefix):
-        return static_url_path[len(prefix) :].lstrip("/")
-    if static_url_path.startswith("/static/"):
-        return static_url_path[len("/static/") :]
-    return static_url_path.lstrip("/")
+    if path.startswith(prefix):
+        return path[len(prefix) :].lstrip("/")
+    if path.startswith("/static/"):
+        return path[len("/static/") :]
+    return path.lstrip("/")
 
 
 def static_asset_available(relative_path):
