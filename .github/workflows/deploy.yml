@@ -65,7 +65,8 @@ jobs:
             "$PYTHON" -m pip install wheel
             "$PYTHON" -m pip install --no-build-isolation "extinction==0.4.2"
             "$PYTHON" -m pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
-            "$PYTHON" -m pip install --use-deprecated=legacy-resolver -r requirements.txt
+            # Ziggy pips are often too old for --use-deprecated=legacy-resolver
+            "$PYTHON" -m pip install -r requirements.txt
           else
             echo "Skipping pip install (shared interpreter; not writable by runner)"
           fi
