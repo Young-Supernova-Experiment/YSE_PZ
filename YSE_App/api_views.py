@@ -10,6 +10,7 @@ from rest_framework.reverse import reverse
 from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
+from YSE_App.services.visibility import filter_transients_by_user_access
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
@@ -186,6 +187,12 @@ class TransientFollowupViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientFollowupSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        from YSE_App.services.visibility import filter_transient_followups_for_user
+
+        qs = TransientFollowup.objects.all().prefetch_related("groups")
+        return filter_transient_followups_for_user(qs, self.request.user)
+
 class HostFollowupViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = HostFollowup.objects.all()
     serializer_class = HostFollowupSerializer
@@ -235,6 +242,12 @@ class LogViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = Log.objects.all()
     serializer_class = LogSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.visibility import filter_transient_comments_for_user
+
+        qs = Log.objects.all().prefetch_related("groups")
+        return filter_transient_comments_for_user(qs, self.request.user)
 
 ### `Observation Task` ViewSets ###
 class TransientObservationTaskViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -330,6 +343,13 @@ class ProfileViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = Profile.objects.all()
     serializer_class = ProfileSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        qs = Profile.objects.all()
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(user=user)
 
 ### `UserQuery` ViewSets ###
 class UserQueryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -453,6 +473,10 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     filter_class = TransientFilter
     #filter_fields = ('status','created_date','modified_date','mw_ebv','status__name')
 
+    def get_queryset(self):
+        qs = Transient.objects.all()
+        return filter_transients_by_user_access(self.request.user, qs)
+
 class AlternateTransientNamesViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = AlternateTransientNames.objects.all()
     serializer_class = AlternateTransientNamesSerializer
@@ -464,11 +488,25 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = UserSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        qs = User.objects.all()
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(pk=user.pk)
+
 ### `Group` ViewSets ###
 class GroupViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Group.objects.all()
     serializer_class = GroupSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        qs = Group.objects.all()
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(pk__in=user.groups.values_list("pk", flat=True))
 
 ### `Tag` ViewSets ###
 class TransientTagViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -486,3 +524,51 @@ class GWCandidateImageViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = GWCandidateImage.objects.all()
     serializer_class = GWCandidateImageSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+
+class TransientCommentListCreate(generics.ListCreateAPIView):
+    """List/create transient-level comments (Log rows, not follow-up comments)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+    serializer_class = None  # set in get_serializer_class
+
+    def get_serializer_class(self):
+        from YSE_App.serializers.transient_comment_serializers import (
+            TransientCommentSerializer,
+        )
+
+        return TransientCommentSerializer
+
+    def get_queryset(self):
+        from YSE_App.services.comments import transient_comment_queryset
+        from YSE_App.services.visibility import user_can_view_transient
+
+        transient_id = int(self.kwargs["transient_id"])
+        if not user_can_view_transient(self.request.user, transient_id):
+            return Log.objects.none()
+        return transient_comment_queryset(transient_id, user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        from YSE_App.services.audience import resolve_comment_audience
+        from YSE_App.services.comments import create_transient_comment
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        transient = serializer.validated_data["transient"]
+        is_public, audience_groups = resolve_comment_audience(
+            request.user,
+            transient.id,
+            is_public=serializer.validated_data.get("is_public", False),
+            audience_group_ids=serializer.validated_data.get("audience_group_ids"),
+        )
+        log = create_transient_comment(
+            transient=transient,
+            comment=serializer.validated_data["comment"],
+            user=request.user,
+            is_public=is_public,
+            audience_groups=audience_groups,
+        )
+        return Response(
+            self.get_serializer(log).data,
+            status=status.HTTP_201_CREATED,
+        )

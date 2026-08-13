@@ -26,12 +26,28 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # See https://docs.djangoproject.com/en/1.11/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'f9zh73k2z&-p*k^fzj!sydk03zwlxdm%*13rd9t$*n0i6*sr6%'
+# Prefer DJANGO_SECRET_KEY env var; optional [site_settings] SECRET_KEY in settings.ini.
+if os.environ.get('DJANGO_SECRET_KEY'):
+    SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
+elif config.has_option('site_settings', 'SECRET_KEY'):
+    SECRET_KEY = config.get('site_settings', 'SECRET_KEY')
+else:
+    SECRET_KEY = 'f9zh73k2z&-p*k^fzj!sydk03zwlxdm%*13rd9t$*n0i6*sr6%'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = bool(config.get('site_settings', 'IS_DEBUG'))
 
 ALLOWED_HOSTS = ['*']
+
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS = [
+        'http://localhost:8080',
+        'http://127.0.0.1:8080',
+        'http://localhost:8000',
+        'http://127.0.0.1:8000',
+    ]
+    CSRF_COOKIE_SECURE = False
+    SESSION_COOKIE_SECURE = False
 
 
 # Application definitionEXPLORER_SQL_BLACKLIST
@@ -82,7 +98,7 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.TNS_uploads.TNS_recent',
 	'YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime',
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
-    'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads'
+    'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
     'YSE_App.data_ingest.TNS_uploads.UpdateGHOST'
 ]
@@ -97,7 +113,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     #'django.middleware.cache.UpdateCacheMiddleware',
-    'django.middleware.common.CommonMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
     #'django.middleware.cache.FetchFromCacheMiddleware'
 ]
@@ -149,7 +164,8 @@ DATABASES = {
         'USER': config.get('database', 'EXPLORER_USER'),
         'PASSWORD': config.get('database', 'EXPLORER_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
-        'PORT': config.get('database', 'DATABASE_PORT')
+        'PORT': config.get('database', 'DATABASE_PORT'),
+        'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
     },
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -158,17 +174,38 @@ DATABASES = {
         'PASSWORD': config.get('database', 'DATABASE_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
-		'OPTIONS': {'ssl': {'ssl_disabled': True}}
+		'OPTIONS': {'ssl': {'ssl_disabled': True}},
+        'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
     }
 }
+
+_redis_url = os.environ.get('REDIS_URL', '').strip()
+if _redis_url:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _redis_url,
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'yse-default',
+        }
+    }
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
 
 EXPLORER_CONNECTIONS = { 'Explorer': 'explorer' }
 EXPLORER_DEFAULT_CONNECTION = 'explorer'
-# Allow all users to access and modify SQL Explorer queries.
-EXPLORER_PERMISSION_VIEW = lambda u: u
-EXPLORER_PERMISSION_CHANGE = lambda u: u
+# SQL Explorer: staff only (see issue #102). Dashboard SQL is post-filtered separately.
+EXPLORER_PERMISSION_VIEW = lambda request: request.user.is_authenticated and (
+    request.user.is_staff or request.user.is_superuser
+)
+EXPLORER_PERMISSION_CHANGE = lambda request: request.user.is_authenticated and (
+    request.user.is_staff or request.user.is_superuser
+)
 
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
@@ -214,10 +251,10 @@ ZTFPASS = config.get('ztf','ztfforcedphotpass')
 KEPLER_API_ENDPOINT = "http://api.keplerscience.org/is-k2-observing"
 TNSUSER = config.get('main','tns_bot_name')
 TNSID = config.get('main','tns_bot_id')
-TNSAPIKEY = config.get('main','tnsapikey')
+TNSAPIKEY = os.environ.get('TNS_API_KEY') or config.get('main', 'tnsapikey')
 TNSDECAMUSER = config.get('main','tns_decam_bot_name')
 TNSDECAMID = config.get('main','tns_decam_bot_id')
-TNSDECAMAPIKEY = config.get('main','tnsdecamapikey')
+TNSDECAMAPIKEY = os.environ.get('TNS_DECAM_API_KEY') or config.get('main', 'tnsdecamapikey')
 REDYSEFILTER = config.get('yse','red_yse_filter')
 ghost_path = config.get('main','ghost_path')
 
@@ -245,6 +282,18 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 ZTFTMPDIR = config.get('ztf','ztfforcedtmpdir')
 
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+# Transient comments + Slack (phase 2); disabled in CI unless explicitly enabled
+SLACK_ENABLED = os.environ.get('SLACK_ENABLED', '0').strip() in ('1', 'true', 'yes')
+SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+SLACK_SIGNING_SECRET = os.environ.get('SLACK_SIGNING_SECRET', '')
+SLACK_DEFAULT_CHANNEL_ID = os.environ.get('SLACK_DEFAULT_CHANNEL_ID', '')
+SLACK_SERVICE_USERNAME = os.environ.get('SLACK_SERVICE_USERNAME', 'slack_bot')
+YSE_PUBLIC_BASE_URL = os.environ.get(
+    'YSE_PUBLIC_BASE_URL',
+    'http://127.0.0.1:8000' if DEBUG else 'https://ziggy.ucolick.org/yse/',
+)
+
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True

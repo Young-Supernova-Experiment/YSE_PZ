@@ -1,4 +1,4 @@
-{{% extends 'YSE_App/base.html' %}
+{% extends 'YSE_App/base.html' %}
 {% load static %}
 {% block content %}
 {% load transient_detail_extras %}
@@ -10,7 +10,7 @@
 			</h1>
 			<ol class="breadcrumb">
 		<li><a href="{% url 'dashboard' %}"><i class="fa fa-dashboard"></i> Home</a></li>
-		<li>On-Call Calendar</li>
+		<li>Observing Calendar</li>
 	</ol>
 		</section>
 
@@ -79,6 +79,7 @@
         m    = date.getMonth(),
         y    = date.getFullYear()
     $('#calendar').fullCalendar({
+      height    : Math.max(360, $(window).height() - 180),
       header    : {
         left  : 'prev,next today',
         center: 'title',

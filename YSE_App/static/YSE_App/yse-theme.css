@@ -1,0 +1,835 @@
+/**
+ * YSE-PZ theme layer (AdminLTE 3 / Bootstrap 4).
+ * Night default (AstroScheduler tokens). Light via html[data-yse-theme="light"].
+ * Loaded after AdminLTE in base.html. AJAX partials inherit via base.
+ */
+
+:root {
+  --yse-font-size-base: 14px;
+  --yse-font-size-sm: 12px;
+  --yse-font-size-xs: 11px;
+  --yse-space-xs: 4px;
+  --yse-space-sm: 8px;
+  --yse-space-md: 12px;
+  --yse-space-lg: 16px;
+  --yse-table-cell-py: 4px;
+  --yse-table-cell-px: 8px;
+  --yse-table-font-size: var(--yse-font-size-sm);
+  --yse-box-padding: var(--yse-space-sm);
+  --yse-box-header-py: var(--yse-space-xs);
+  --yse-focus-offset: 2px;
+  --yse-font-sans: Inter, "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --yse-color-accent: #3b82f6;
+  --yse-color-cyan: #06b6d4;
+  --yse-color-purple: #8b5cf6;
+  --yse-success: #10b981;
+  --yse-warning: #f59e0b;
+  --yse-danger: #ef4444;
+  --yse-focus-ring: 2px solid var(--yse-color-accent);
+}
+
+/* AstroScheduler night tokens — only on dark, so light can actually differ */
+html[data-yse-theme="dark"] {
+  color-scheme: dark;
+  --yse-bg: #070913;
+  --yse-card-bg: rgb(16, 20, 38);
+  --yse-border: rgba(255, 255, 255, 0.08);
+  --yse-border-hover: rgba(255, 255, 255, 0.15);
+  --yse-color-text: #f8fafc;
+  --yse-color-muted: #94a3b8;
+  --yse-header-bg: rgb(12, 16, 32);
+  --yse-sidebar-bg: #0b0f1c;
+  --yse-link: #93c5fd;
+}
+
+html[data-yse-theme="light"] {
+  color-scheme: light;
+  --yse-bg: #f4f6fb;
+  --yse-card-bg: #ffffff;
+  --yse-border: rgba(15, 23, 42, 0.12);
+  --yse-border-hover: rgba(15, 23, 42, 0.22);
+  --yse-color-text: #0f172a;
+  --yse-color-muted: #475569;
+  --yse-header-bg: #ffffff;
+  --yse-sidebar-bg: #111827;
+  --yse-link: #1d4ed8;
+}
+
+body.yse-theme {
+  font-size: var(--yse-font-size-base);
+  font-family: var(--yse-font-sans);
+  color: var(--yse-color-text);
+  background-color: var(--yse-bg);
+}
+
+body.yse-theme,
+body.yse-theme .wrapper,
+body.yse-theme .content-wrapper,
+body.yse-theme .content {
+  background-color: var(--yse-bg) !important;
+  color: var(--yse-color-text);
+}
+
+body.yse-theme a {
+  color: var(--yse-link);
+}
+
+body.yse-theme a:hover {
+  color: var(--yse-color-cyan);
+}
+
+/* --- Accessibility --- */
+.yse-skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  z-index: 10000;
+  padding: var(--yse-space-sm) var(--yse-space-md);
+  background: var(--yse-color-accent);
+  color: #fff;
+}
+
+.yse-skip-link:focus {
+  left: var(--yse-space-sm);
+  color: #fff;
+}
+
+body.yse-theme a:focus-visible,
+body.yse-theme button:focus-visible,
+body.yse-theme input:focus-visible,
+body.yse-theme select:focus-visible,
+body.yse-theme textarea:focus-visible,
+body.yse-theme .btn:focus-visible,
+body.yse-theme .nav-tabs > li > a:focus-visible,
+body.yse-theme .nav-link:focus-visible {
+  outline: var(--yse-focus-ring);
+  outline-offset: var(--yse-focus-offset);
+}
+
+body.yse-theme .text-muted {
+  color: var(--yse-color-muted) !important;
+}
+
+/* --- Header / sidebar / footer --- */
+body.yse-theme .yse-navbar,
+body.yse-theme .main-header {
+  background-color: var(--yse-header-bg);
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .yse-header-search {
+  flex: 1 1 16rem;
+  max-width: 28rem;
+  margin-left: var(--yse-space-md);
+}
+
+body.yse-theme .yse-header-search .form-control {
+  width: 100%;
+  background: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .yse-theme-toggle {
+  margin-right: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-sidebar,
+body.yse-theme .main-sidebar {
+  background-color: var(--yse-sidebar-bg);
+}
+
+body.yse-theme .brand-link {
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .nav-sidebar .nav-header {
+  color: var(--yse-color-muted);
+  font-size: var(--yse-font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+body.yse-theme .nav-sidebar .nav-link.active {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+body.yse-theme .content-wrapper {
+  flex: 1 0 auto;
+}
+
+body.yse-theme .yse-footer,
+body.yse-theme .main-footer {
+  position: static !important;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  z-index: 2;
+  flex-shrink: 0;
+  background-color: var(--yse-header-bg);
+  border-top: 1px solid var(--yse-border);
+  color: var(--yse-color-muted);
+  font-size: var(--yse-font-size-sm);
+  padding: var(--yse-space-sm) var(--yse-space-md);
+}
+
+body.yse-theme .content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0 var(--yse-space-sm);
+  padding: var(--yse-space-sm) var(--yse-space-md) 0;
+}
+
+body.yse-theme .content-header h1 {
+  font-size: 1.25rem;
+  margin: 0;
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .content {
+  padding: var(--yse-space-sm) var(--yse-space-md);
+}
+
+body.yse-theme .content-header .breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  font-size: var(--yse-font-size-sm);
+}
+
+body.yse-theme .content-header .breadcrumb > li {
+  display: flex;
+  align-items: center;
+}
+
+body.yse-theme .content-header .breadcrumb > li + li::before {
+  content: "/";
+  padding: 0 0.5rem;
+  color: var(--yse-color-muted);
+}
+
+/* --- AdminLTE 2 .box compatibility (inner pages keep .box markup) --- */
+body.yse-theme .box,
+body.yse-theme .nav-tabs-custom,
+body.yse-theme .tab-content {
+  background: var(--yse-card-bg) !important;
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .box {
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  box-shadow: none;
+  margin-bottom: var(--yse-space-sm);
+}
+
+body.yse-theme .box-header {
+  padding: var(--yse-box-header-py) var(--yse-box-padding);
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .box-body {
+  padding: var(--yse-box-padding);
+}
+
+body.yse-theme .box-footer {
+  padding: var(--yse-space-sm) var(--yse-box-padding);
+  border-top: 1px solid var(--yse-border);
+  background: transparent;
+}
+
+body.yse-theme .box-title,
+body.yse-theme h3.box-title,
+body.yse-theme .btn-box-tool,
+body.yse-theme .btn-box-tool .box-title,
+body.yse-theme .box-header,
+body.yse-theme .box-header h3,
+body.yse-theme .box-header strong,
+body.yse-theme .box-header p,
+body.yse-theme .box-body,
+body.yse-theme .box-body strong,
+body.yse-theme .box-body label,
+body.yse-theme .box-body p:not(.text-muted) {
+  color: var(--yse-color-text) !important;
+}
+
+body.yse-theme .box-title,
+body.yse-theme h3.box-title {
+  font-size: 15px;
+  margin: 0;
+}
+
+body.yse-theme .btn-box-tool {
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  padding: 0 var(--yse-space-xs);
+}
+
+body.yse-theme .box.box-primary,
+body.yse-theme .box.box-default {
+  border-top: 2px solid var(--yse-color-accent);
+}
+
+body.yse-theme .nav-tabs-custom {
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  margin-bottom: var(--yse-space-md);
+  box-shadow: none;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs {
+  border-bottom: 1px solid var(--yse-border);
+  background: transparent;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li.active > a {
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .nav-tabs .nav-link.active {
+  background: var(--yse-card-bg);
+  border-color: var(--yse-border) var(--yse-border) var(--yse-card-bg);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .table,
+body.yse-theme .table td,
+body.yse-theme .table th {
+  color: var(--yse-color-text);
+  background-color: var(--yse-card-bg);
+}
+
+body.yse-theme .table-striped tbody tr:nth-of-type(odd) {
+  background-color: rgba(148, 163, 184, 0.08);
+}
+
+body.yse-theme .form-control {
+  background-color: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .dropdown-menu {
+  background-color: var(--yse-card-bg);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .dropdown-item {
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .dropdown-item:hover {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .btn-primary {
+  background-color: var(--yse-color-accent);
+  border-color: var(--yse-color-accent);
+}
+
+/* --- Compact boxes (dashboard, observing, global) --- */
+body.yse-theme .yse-page-dashboard .box-header,
+body.yse-theme .yse-page-observing-night .box-header,
+body.yse-theme .yse-page-transient-summary .box-header {
+  padding: var(--yse-box-header-py) var(--yse-box-padding);
+}
+
+body.yse-theme .yse-page-dashboard .box-body,
+body.yse-theme .yse-page-observing-night .box-body,
+body.yse-theme .yse-page-transient-summary .box-body {
+  padding: var(--yse-box-padding);
+}
+
+body.yse-theme .yse-page-dashboard .box-footer,
+body.yse-theme .yse-page-observing-night .box-footer {
+  padding: var(--yse-space-sm) var(--yse-box-padding);
+}
+
+body.yse-theme .yse-page-dashboard .box,
+body.yse-theme .yse-page-observing-night .box {
+  margin-bottom: var(--yse-space-md);
+}
+
+/* --- Tables (django-tables2 + plain) --- */
+body.yse-theme .yse-page-dashboard table.table,
+body.yse-theme .yse-page-observing-night table.table,
+body.yse-theme .yse-page-dashboard .table-container table,
+body.yse-theme .yse-page-observing-night .table-container table {
+  font-size: var(--yse-table-font-size);
+  margin-bottom: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-page-dashboard table.table > thead > tr > th,
+body.yse-theme .yse-page-dashboard table.table > tbody > tr > td,
+body.yse-theme .yse-page-observing-night table.table > thead > tr > th,
+body.yse-theme .yse-page-observing-night table.table > tbody > tr > td,
+body.yse-theme .yse-page-dashboard .table-container table > thead > tr > th,
+body.yse-theme .yse-page-dashboard .table-container table > tbody > tr > td,
+body.yse-theme .yse-page-observing-night .table-container table > thead > tr > th,
+body.yse-theme .yse-page-observing-night .table-container table > tbody > tr > td {
+  padding: var(--yse-table-cell-py) var(--yse-table-cell-px);
+  vertical-align: middle;
+}
+
+body.yse-theme .yse-page-dashboard .form-inline,
+body.yse-theme .yse-page-observing-night .form-inline {
+  margin-bottom: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-page-dashboard .pagination,
+body.yse-theme .yse-page-observing-night .pagination {
+  margin: var(--yse-space-sm) 0;
+}
+
+body.yse-theme .yse-page-dashboard .pagination > li > a,
+body.yse-theme .yse-page-observing-night .pagination > li > a {
+  padding: var(--yse-space-xs) var(--yse-space-sm);
+  font-size: var(--yse-font-size-sm);
+}
+
+body.yse-theme .yse-page-observing-night #telescope_tbl {
+  font-size: var(--yse-font-size-sm);
+}
+
+body.yse-theme .yse-page-observing-night #telescope_tbl > thead > tr > th,
+body.yse-theme .yse-page-observing-night #telescope_tbl > tbody > tr > td {
+  padding: var(--yse-table-cell-py) var(--yse-table-cell-px);
+}
+
+/* --- Transient detail summary --- */
+body.yse-theme .yse-page-transient-summary .nav-tabs-custom {
+  margin-bottom: var(--yse-space-xs);
+}
+
+body.yse-theme .yse-page-transient-summary .nav-tabs-custom > .nav-tabs > li > a {
+  padding: var(--yse-space-xs) var(--yse-space-sm);
+  font-size: var(--yse-font-size-sm);
+}
+
+body.yse-theme .yse-page-transient-summary .box {
+  margin-bottom: var(--yse-space-xs);
+}
+
+body.yse-theme .yse-page-transient-summary .box-header,
+body.yse-theme .yse-page-transient-summary .box-body,
+body.yse-theme .yse-page-transient-summary .box.box-default.box-solid .box-header,
+body.yse-theme .yse-page-transient-summary .box.box-default.box-solid .box-body {
+  padding: 4px 8px;
+}
+
+body.yse-theme .yse-page-transient-summary .form-group {
+  margin-bottom: 2px;
+}
+
+body.yse-theme .yse-page-transient-summary .form-group br {
+  display: none;
+}
+
+body.yse-theme .yse-page-transient-summary .btn {
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-page-transient-summary .form-group p,
+body.yse-theme .yse-page-transient-summary p {
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-page-transient-summary p:empty {
+  display: none;
+}
+
+body.yse-theme .yse-page-transient-summary hr {
+  margin: 4px 0;
+}
+
+body.yse-theme .yse-summary-side-col {
+  display: flex;
+  flex-direction: column;
+}
+
+body.yse-theme .yse-comments-panel {
+  margin-top: 0;
+  margin-bottom: var(--yse-space-xs);
+  flex-shrink: 0;
+}
+
+body.yse-theme .yse-comments-panel .box {
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-comment-thread {
+  margin: 0 0 var(--yse-space-sm);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+body.yse-theme .yse-comment-item {
+  padding: var(--yse-space-sm) 0;
+  border-bottom: 1px solid var(--yse-border);
+}
+
+body.yse-theme .yse-comment-meta {
+  font-size: var(--yse-font-size-sm);
+  margin-bottom: var(--yse-space-xs);
+}
+
+body.yse-theme .yse-comment-author {
+  margin-right: var(--yse-space-sm);
+}
+
+body.yse-theme .yse-comment-body {
+  font-size: var(--yse-font-size-base);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+body.yse-theme .yse-mention {
+  color: var(--yse-color-accent);
+  font-weight: 600;
+}
+
+body.yse-theme .yse-comment-composer-row {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+body.yse-theme .yse-comment-composer-row > [class*="col-"] {
+  padding-left: var(--yse-space-xs);
+  padding-right: var(--yse-space-xs);
+}
+
+body.yse-theme .yse-comment-composer-row > [class*="col-"]:first-child {
+  padding-left: 0;
+}
+
+body.yse-theme .yse-comment-composer-row > .yse-comment-submit-col {
+  padding-right: 0;
+}
+
+body.yse-theme .yse-comment-submit-col {
+  padding-top: 0;
+}
+
+body.yse-theme .yse-comment-composer textarea,
+body.yse-theme .yse-comment-input {
+  min-height: 2.5em;
+  resize: vertical;
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-comment-submit {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+body.yse-theme .yse-comments-new-badge {
+  margin-left: var(--yse-space-sm);
+  font-size: var(--yse-font-size-xs);
+}
+
+/* Login (standalone page, no AdminLTE wrapper) */
+body.yse-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--yse-bg);
+  font-family: var(--yse-font-sans);
+  color: var(--yse-color-text);
+}
+
+body.yse-login .yse-login-box {
+  width: 22rem;
+  max-width: calc(100% - 2rem);
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  padding: var(--yse-space-lg);
+}
+
+body.yse-login .yse-login-logo {
+  text-align: center;
+  font-size: 1.5rem;
+  margin-bottom: var(--yse-space-md);
+}
+
+body.yse-login .yse-login-logo a {
+  color: var(--yse-color-text);
+}
+
+body.yse-login label {
+  font-size: var(--yse-font-size-sm);
+  margin-bottom: var(--yse-space-xs);
+}
+
+/* --- BS3 markup on BS4/AdminLTE 3 (regression from chrome checkpoint) --- */
+
+/* Columns in old templates sit in .box-body/.form without .row.
+   BS4 sets width:100% on every .col-* so float alone still stacks them. */
+body.yse-theme .box-body::after,
+body.yse-theme .box-header::after,
+body.yse-theme .tab-pane::after,
+body.yse-theme form::after,
+body.yse-theme .content::after,
+body.yse-theme [class*="col-"]::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+body.yse-theme .box-body > [class*="col-"],
+body.yse-theme .box-body > form > [class*="col-"],
+body.yse-theme .box-header > [class*="col-"],
+body.yse-theme .tab-pane > [class*="col-"],
+body.yse-theme [class*="col-"] > [class*="col-"] {
+  float: left;
+  min-height: 1px;
+  box-sizing: border-box;
+}
+
+body.yse-theme .col-1 { width: 8.33333% !important; max-width: 8.33333% !important; }
+body.yse-theme .col-2 { width: 16.66667% !important; max-width: 16.66667% !important; }
+body.yse-theme .col-3 { width: 25% !important; max-width: 25% !important; }
+body.yse-theme .col-4 { width: 33.33333% !important; max-width: 33.33333% !important; }
+body.yse-theme .col-5 { width: 41.66667% !important; max-width: 41.66667% !important; }
+body.yse-theme .col-6 { width: 50% !important; max-width: 50% !important; }
+body.yse-theme .col-7 { width: 58.33333% !important; max-width: 58.33333% !important; }
+body.yse-theme .col-8 { width: 66.66667% !important; max-width: 66.66667% !important; }
+body.yse-theme .col-9 { width: 75% !important; max-width: 75% !important; }
+body.yse-theme .col-10 { width: 83.33333% !important; max-width: 83.33333% !important; }
+body.yse-theme .col-11 { width: 91.66667% !important; max-width: 91.66667% !important; }
+body.yse-theme .col-12 { width: 100% !important; max-width: 100% !important; }
+
+/* AdminLTE 2 calendar chips — LTE3 dropped .external-event and .bg-red/… */
+body.yse-theme .external-event {
+  display: block;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  font-weight: 700;
+  border-radius: 3px;
+  cursor: move;
+  color: #fff !important;
+}
+
+body.yse-theme #associated-events-list {
+  min-height: 8rem;
+}
+
+body.yse-theme .bg-red { background-color: #dd4b39 !important; color: #fff !important; }
+body.yse-theme .bg-yellow { background-color: #f39c12 !important; color: #fff !important; }
+body.yse-theme .bg-aqua { background-color: #00c0ef !important; color: #fff !important; }
+body.yse-theme .bg-blue { background-color: #0073b7 !important; color: #fff !important; }
+body.yse-theme .bg-light-blue { background-color: #3c8dbc !important; color: #fff !important; }
+body.yse-theme .bg-green { background-color: #00a65a !important; color: #fff !important; }
+body.yse-theme .bg-navy { background-color: #001f3f !important; color: #fff !important; }
+body.yse-theme .bg-teal { background-color: #39cccc !important; color: #fff !important; }
+body.yse-theme .bg-olive { background-color: #3d9970 !important; color: #fff !important; }
+body.yse-theme .bg-lime { background-color: #01ff70 !important; color: #111 !important; }
+body.yse-theme .bg-orange { background-color: #ff851b !important; color: #fff !important; }
+body.yse-theme .bg-fuchsia { background-color: #f012be !important; color: #fff !important; }
+body.yse-theme .bg-purple { background-color: #605ca8 !important; color: #fff !important; }
+body.yse-theme .bg-maroon { background-color: #d81b60 !important; color: #fff !important; }
+body.yse-theme .bg-black { background-color: #111111 !important; color: #fff !important; }
+body.yse-theme .bg-gray { background-color: #d2d6de !important; color: #111 !important; }
+
+/* AdminLTE 2 tabs: li > a, not .nav-item > .nav-link */
+body.yse-theme .nav-tabs-custom {
+  overflow: hidden;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs {
+  display: block;
+  border-bottom: 1px solid var(--yse-border);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li {
+  float: left;
+  display: block;
+  margin: 0;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link {
+  display: block;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  color: var(--yse-color-muted);
+  text-decoration: none;
+}
+
+body.yse-theme .nav-tabs-custom > .nav-tabs > li.active > a,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.active,
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link.active {
+  color: var(--yse-color-text);
+  background: var(--yse-card-bg);
+  border-color: var(--yse-border) var(--yse-border) transparent;
+}
+
+body.yse-theme .tab-content > .tab-pane {
+  display: none;
+}
+
+body.yse-theme .tab-content > .tab-pane.active {
+  display: block;
+}
+
+/* AdminLTE 2 collapsed boxes — LTE3 only knows collapsed-card.
+   Only the parent .box.collapsed-box; do not hide .box-body.collapsed-box forever. */
+body.yse-theme .box.collapsed-box > .box-body,
+body.yse-theme .box.collapsed-box > .box-footer {
+  display: none !important;
+}
+
+/* BS3 carousel slides */
+body.yse-theme .carousel-inner > .item {
+  display: none;
+  position: relative;
+}
+
+body.yse-theme .carousel-inner > .item.active {
+  display: block;
+}
+
+body.yse-theme .yse-page-dashboard .box-footer {
+  padding: 0;
+  min-height: 0;
+  border: 0;
+}
+
+body.yse-theme .yse-page-dashboard .box {
+  margin-bottom: var(--yse-space-sm);
+}
+
+body.yse-theme .content-header {
+  padding: 4px 8px 0;
+}
+
+body.yse-theme .content {
+  padding: 4px 8px !important;
+}
+
+body.yse-theme .yse-page-dashboard .btn-group .btn,
+body.yse-theme .yse-page-dashboard .dropdown-toggle,
+body.yse-theme .yse-page-dashboard .btn-default,
+body.yse-theme .yse-page-dashboard .btn-secondary.dropdown-toggle {
+  font-size: var(--yse-font-size-xs) !important;
+  line-height: 1.2;
+  padding: 1px 6px;
+}
+
+body.yse-theme .btn-default {
+  color: var(--yse-color-text);
+  background-color: var(--yse-card-bg);
+  border-color: var(--yse-border);
+  font-size: var(--yse-font-size-sm);
+}
+
+body.yse-theme .yse-audience-panel {
+  display: block;
+  clear: both;
+  width: 100%;
+  margin-top: var(--yse-space-sm);
+  overflow: visible;
+}
+
+body.yse-theme .yse-audience-heading {
+  margin-bottom: var(--yse-space-xs);
+}
+
+body.yse-theme .checkbox,
+body.yse-theme .yse-audience-panel ul {
+  display: block;
+  list-style: none;
+  margin: var(--yse-space-xs) 0;
+  padding-left: 0;
+}
+
+body.yse-theme .yse-audience-check {
+  display: flex !important;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--yse-space-sm);
+  font-weight: 400;
+  color: var(--yse-color-text) !important;
+  margin: 6px 0;
+  cursor: pointer;
+  position: relative;
+  width: 100%;
+  float: none !important;
+  visibility: visible !important;
+}
+
+body.yse-theme .checkbox label,
+body.yse-theme .yse-audience-panel label {
+  font-weight: 400;
+  color: var(--yse-color-text);
+}
+
+body.yse-theme .yse-audience-check input[type="checkbox"],
+body.yse-theme .yse-audience-native {
+  position: static !important;
+  opacity: 1 !important;
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0 8px 0 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-appearance: checkbox;
+  appearance: auto;
+  accent-color: var(--yse-color-accent);
+  visibility: visible !important;
+}
+
+body.yse-theme .yse-audience-label {
+  flex: 1 1 auto;
+  min-width: 4rem;
+  color: var(--yse-color-text) !important;
+  font-size: 13px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow: visible;
+}
+
+body.yse-theme .select2-container--default .select2-selection--single,
+body.yse-theme .select2-container--default .select2-selection--multiple,
+body.yse-theme .select2-dropdown {
+  background-color: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-color: var(--yse-border);
+}
+
+body.yse-theme .select2-container--default .select2-selection--single .select2-selection__rendered,
+body.yse-theme .select2-container--default .select2-results__option {
+  color: var(--yse-color-text);
+}
+
+body.yse-theme #calendar {
+  max-height: calc(100vh - 10.5rem);
+}
+
+body.yse-theme .fc-view-container .fc-row {
+  min-height: 0 !important;
+}

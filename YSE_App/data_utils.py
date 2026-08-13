@@ -25,6 +25,26 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.parsers import JSONParser
 from django.db.models import ForeignKey
 from .common.alert import sendemail
+
+
+def _smtp_configured():
+    host = getattr(djangoSettings, 'SMTP_HOST', '') or ''
+    return bool(host) and not str(host).strip().startswith('<')
+
+
+def _safe_sendemail(*args, **kwargs):
+    if not _smtp_configured():
+        print('SMTP not configured in settings.ini; skipping notification email')
+        return
+    try:
+        sendemail(*args, **kwargs)
+    except Exception as exc:
+        print(f'Email notification failed: {exc}')
+from .common.collaboration_groups import (
+    apply_collaboration_groups_to_photometry,
+    collaboration_groups_from_photometry_upload,
+    normalize_collaboration_group_names,
+)
 from .common.utilities import getRADecBox
 from django.db.models import Q
 from .queries.yse_python_queries import *
@@ -279,7 +299,7 @@ def add_transient(request):
                         print("Sending email to: %s" % user.username)
                         html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                         html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
-                        sendemail(from_addr, user.email, subject,
+                        _safe_sendemail(from_addr, user.email, subject,
                                   html_msg%(transient['name'],transient[transientkey],transientkey),
                                   djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
 
@@ -406,11 +426,12 @@ def add_transient(request):
             print("Sending email to: %s" % user.username)
             html_msg = """Alert : YSE_PZ Failed to upload transient %s with error %s at line number %s"""
 
-            sendemail(from_addr, user.email, subject, html_msg%(transient['name'],e,exc_tb.tb_lineno),
+            _safe_sendemail(from_addr, user.email, subject, html_msg%(transient['name'],e,exc_tb.tb_lineno),
                       djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
-            # sending SMS is too scary for now
-            #sendsms(from_addr, phone_email, subject, txt_msg%transient['name'],
-            #        djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+            return JsonResponse(
+                {"message": f"Error uploading {transient['name']}: {e}"},
+                status=500,
+            )
 
     Transient.objects.bulk_create(transient_entries)
     for t in transient_entries:
@@ -486,7 +507,7 @@ def add_transient(request):
             response,transientphot = add_transient_phot_util(
                 transient['transientphotometry'],dbtransient,user,do_photdata=True)
             for t in transientphot:
-                phot_entries.append(t)
+                photdata_entries.append(t)
     
     TransientPhotometry.objects.bulk_create(photdata_entries)
     
@@ -546,7 +567,7 @@ def add_gw_candidate(request):
                         print("Sending email to: %s" % user.username)
                         html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                         html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
-                        sendemail(from_addr, user.email, subject,
+                        _safe_sendemail(from_addr, user.email, subject,
                                   html_msg%(transient['name'],transient[transientkey],transientkey),
                                   djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
 
@@ -733,15 +754,22 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
         if k == 'clobber' or k == 'mjdmatchmin': continue
         photometry = photdict[k]
 
-        instrument = Instrument.objects.filter(name=photometry['instrument'])
-        if not len(instrument):
-            instrument = Instrument.objects.filter(name='Unknown')
-        instrument = instrument[0]
+        from YSE_App.common.tns_photometry_map import (
+            lookup_instrument_band,
+            resolve_tns_photometry,
+        )
 
-        obs_group = ObservationGroup.objects.filter(name=photometry['obs_group'])
-        if not len(obs_group):
-            obs_group = ObservationGroup.objects.filter(name='Unknown')
-        obs_group = obs_group[0]
+        obs_group_name = photometry.get('obs_group') or None
+        if obs_group_name in (None, '', 'None'):
+            obs_group_name = None
+        _resolved_inst = resolve_tns_photometry(photometry['instrument'], 'r')
+        _obs_group, instrument, _ = lookup_instrument_band(
+            user,
+            photometry['instrument'],
+            _resolved_inst.band,
+            obs_group_name=obs_group_name or _resolved_inst.obs_group_hint,
+        )
+        obs_group = _obs_group
 
         transientphot = TransientPhotometry.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group)
         if not len(transientphot):
@@ -756,9 +784,16 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
                 p = photometry['photdata'][k]
                 pmjd = Time(p['obs_date'],format='isot').mjd
 
-                band = PhotometricBand.objects.filter(name=p['band']).filter(instrument__name=photometry['instrument'])
-                if len(band): band = band[0]
-                else: band = PhotometricBand.objects.filter(name='Unknown')[0]
+                _og, _inst, band = lookup_instrument_band(
+                    user,
+                    photometry['instrument'],
+                    p['band'],
+                    obs_group_name=obs_group_name,
+                )
+                if _inst.id != instrument.id:
+                    instrument = _inst
+                if _og.id != obs_group.id:
+                    obs_group = _og
                 obsExists = False
 
                 for idx,e in enumerate(existingphot):
@@ -839,6 +874,10 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
                         p['diffimg']['phot_data_id'] = e.id
                         TransientDiffImage.objects.create(**p['diffimg'])
 
+        group_names = collaboration_groups_from_photometry_upload(photometry)
+        if transientphot.pk:
+            apply_collaboration_groups_to_photometry(transientphot, group_names)
+
     return_dict = {"message":"successfully added phot data"}
     return JsonResponse(return_dict),transientphot_entries
 
@@ -860,7 +899,7 @@ def add_transient_spec_util(specdict,transient,user):
 
         allgroups = []
         if 'groups' in spectrum.keys() and spectrum['groups']:
-            for specgroup in spectrum['groups'].split(','):
+            for specgroup in normalize_collaboration_group_names(spectrum['groups']):
                 group = Group.objects.filter(name=specgroup)
                 if not len(group):
                     return_dict = {"message":"group %s is not in DB"%hd['groups']}
@@ -887,6 +926,7 @@ def add_transient_spec_util(specdict,transient,user):
         spectrum['transient'] = transient
         spectrum_copy = spectrum.copy()
         del spectrum_copy['specdata']
+        spectrum_copy.pop('groups', None)
 
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(**spectrum_copy)
@@ -1397,7 +1437,7 @@ def getRADecBox(ra,dec,size=None,dec_size=None):
         RAboxsize = DECboxsize = size
     else:
         RAboxsize = size
-        DECboxsize = size
+        DECboxsize = dec_size
 
     # get the maximum 1.0/cos(DEC) term: used for RA cut
     minDec = dec-0.5*DECboxsize

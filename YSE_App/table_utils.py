@@ -5,7 +5,7 @@ import django_tables2 as tables
 from django_tables2 import RequestConfig
 from django.db.models import F, Q
 from django.db.models.functions import Length, Substr
-from django.db.models import Count, Value, Max, Min
+from django.db.models import Count, OuterRef, Subquery, Value, Max, Min
 from django.db.models.functions import Greatest, Coalesce
 from django_tables2 import A
 from django.db import models
@@ -19,7 +19,23 @@ from matplotlib.figure import Figure
 from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
+from .common.magnitude_format import format_magnitude
 rcParams['figure.figsize'] = (7,7)
+
+
+def stable_order_by(queryset, field, is_descending):
+    """Append pk tie-breaker so pagination stays stable (Fixes #35)."""
+    if is_descending:
+        return queryset.order_by(f'-{field}', '-pk')
+    return queryset.order_by(field, 'pk')
+
+
+class MagnitudeColumn(tables.Column):
+    """Dashboard magnitude column with two decimal places."""
+
+    def render(self, value):
+        return format_magnitude(value)
+
 
 class TransientTable(tables.Table):
 
@@ -31,7 +47,7 @@ class TransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -53,7 +69,7 @@ class TransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -70,12 +86,16 @@ class TransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -93,9 +113,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -105,8 +124,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -142,7 +161,7 @@ class FieldTransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -172,7 +191,7 @@ class FieldTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -189,12 +208,16 @@ class FieldTransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -212,9 +235,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -224,8 +246,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -261,7 +283,7 @@ class AdjustFieldTransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -291,7 +313,7 @@ class AdjustFieldTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -308,12 +330,16 @@ class AdjustFieldTransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -331,9 +357,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -343,8 +368,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -381,7 +406,7 @@ class YSETransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -409,7 +434,7 @@ class YSETransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -426,12 +451,16 @@ class YSETransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def render_requested_followup_resources(self, value):
 
@@ -490,9 +519,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -502,8 +530,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -539,7 +567,7 @@ class YSEFullTransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -564,7 +592,7 @@ class YSEFullTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -581,12 +609,16 @@ class YSEFullTransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def render_requested_followup_resources(self, value):
 
@@ -636,9 +668,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -648,8 +679,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -685,7 +716,7 @@ class YSERisingTransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -716,7 +747,7 @@ class YSERisingTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -733,12 +764,16 @@ class YSERisingTransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def render_requested_followup_resources(self, value):
 
@@ -792,9 +827,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -804,8 +838,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -842,7 +876,7 @@ class NewTransientTable(tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = tables.Column(accessor='recent_mag',
+    recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = tables.Column(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
@@ -866,7 +900,7 @@ class NewTransientTable(tables.Table):
 
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -883,12 +917,16 @@ class NewTransientTable(tables.Table):
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
 
+
+    def order_best_spec_class(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'best_spec_class', is_descending), True)
+
     def order_best_redshift(self, queryset, is_descending):
 
         queryset = queryset.annotate(
             best_redshift=Coalesce('redshift', 'host__redshift'),
-        ).order_by(('-' if is_descending else '') + 'best_redshift')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def order_recent_mag(self, queryset, is_descending):
 
@@ -905,9 +943,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     def order_recent_magdate(self, queryset, is_descending):
 
@@ -917,8 +954,8 @@ SELECT pd.mag
         phot_data_query = Q(transientphotometry__id__in=phot_ids)
         queryset = queryset.annotate(
             recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        ).order_by(('-' if is_descending else '') + 'recent_magdate')
-        return (queryset, True)
+        )
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -948,7 +985,7 @@ SELECT pd.mag
 class FollowupTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
-                                        verbose_name='Name',orderable=True,order_by='name')
+                                        verbose_name='Name',orderable=True,order_by='transient__name')
     ra_string = tables.Column(accessor='transient.CoordString.0',
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
@@ -964,7 +1001,7 @@ class FollowupTable(tables.Table):
                                    verbose_name='Action',orderable=False)
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:5px;" type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+<button style="margin-bottom:5px;" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1001,9 +1038,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     class Meta:
         model = TransientFollowup
@@ -1028,7 +1064,7 @@ SELECT pd.mag
 class ObsNightFollowupTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
-                                        verbose_name='Name',orderable=True,order_by='name')
+                                        verbose_name='Name',orderable=True,order_by='transient__name')
     ra_string = tables.Column(accessor='transient.CoordString.0',
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
@@ -1047,7 +1083,7 @@ class ObsNightFollowupTable(tables.Table):
     comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.transient.id }}_status_name" class="dropbtn">{{ record.transient.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1060,7 +1096,7 @@ class ObsNightFollowupTable(tables.Table):
 
 
     followup_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1143,9 +1179,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     class Meta:
         model = TransientFollowup
@@ -1191,7 +1226,7 @@ class ToOFollowupTable(tables.Table):
     comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.transient.id }}_status_name" class="dropbtn">{{ record.transient.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1204,7 +1239,7 @@ class ToOFollowupTable(tables.Table):
 
 
     followup_status_string = tables.TemplateColumn("""<div class="btn-group">
-<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
                                             <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
@@ -1280,9 +1315,8 @@ SELECT pd.mag
      )
 """
 
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'recent_mag')
-
-        return (queryset, True)
+        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     class Meta:
         model = TransientFollowup
@@ -1325,7 +1359,7 @@ class YSEObsNightTable(tables.Table):
                                                               {"onclick": "toggle(this)"}})
     status_str = tables.TemplateColumn("<span id='{{record.id}}_status'>{{record.status.name}}</span>",verbose_name="status")
     #status_string = tables.TemplateColumn("""<div class="btn-group">
-#<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-default dropdown-toggle btn-md" data-toggle="dropdown">
+#<button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
     #										<span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
     #									</button>
     #									<ul class="dropdown-menu">
@@ -1399,6 +1433,28 @@ class YSEObsNightTable(tables.Table):
             'class': 'table table-bordered table-hover',
             "order": [[ 2, "desc" ]],
         }
+
+def annotate_dashboard_transient_fields(qs):
+    """
+    Prefetch FKs and annotate recent photometry for dashboard tables.
+
+    Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
+    """
+    # Match PhotometryService / Transient.recent_mag: exclude flagged bad data.
+    recent_phot = TransientPhotData.objects.filter(
+        photometry__transient=OuterRef('pk'),
+    ).exclude(data_quality__isnull=False)
+    recent_mag_sq = (
+        recent_phot.filter(mag__isnull=False)
+        .order_by('-obs_date')
+        .values('mag')[:1]
+    )
+    recent_magdate_sq = recent_phot.order_by('-obs_date').values('obs_date')[:1]
+    return qs.select_related('status', 'host', 'obs_group').annotate(
+        recent_mag=Subquery(recent_mag_sq),
+        recent_magdate=Subquery(recent_magdate_sq),
+    )
+
 
 def annotate_with_disc_mag(qs):
 

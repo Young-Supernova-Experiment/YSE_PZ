@@ -15,11 +15,12 @@
 {% endblock %}
 
 {% block content %}
+<div class="yse-page-dashboard">
 
 {% if not transient_categories %}
   <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_query_form.html" with form=add_dashboard_query_form %}
         </div>
@@ -49,8 +50,8 @@
       {% endfor %}
 
     <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_followup_notice_form.html" with form=add_followup_notice_form %}
         </div>
@@ -75,7 +76,7 @@
       </form>
     </h3><span style="float:right;"><a href="{% url 'transient_summary' transient_cat.1 %}"><h3 class="box-title">Summary View</h3></a></span>
       <div class="btn-group">
-        <button style="margin-bottom:5px;" type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+        <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
           Change All Statuses For Query<span class="caret"></span>
         </button>
         <ul class="dropdown-menu">
@@ -96,9 +97,14 @@
       {% endif %}
     </div>
     <div class="box-body">
-
+      {% if transient_cat.0 %}
       {% render_table transient_cat.0 %}
-
+      {% elif personal_dashboard_defer %}
+      <div class="pdash-section-loading" id="pdash-section-{{ transient_cat.4 }}"
+           data-url="{% url 'personaldashboard_section' transient_cat.4 %}">
+        <p><i class="fa fa-spinner fa-spin"></i> Loading section…</p>
+      </div>
+      {% endif %}
     </div>
     <!-- /.box-body -->
     <div class="box-footer">
@@ -110,8 +116,8 @@
 
 {% if transient_categories %}
   <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_query_form.html" with form=add_dashboard_query_form %}
         </div>
@@ -141,8 +147,8 @@
       {% endfor %}  
 
     <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_followup_notice_form.html" with form=add_followup_notice_form %}
         </div>
@@ -150,11 +156,32 @@
   </div>
 {% endif %}
 
-
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script type='text/javascript'>
+{% if personal_dashboard_defer %}
+$(document).ready(function() {
+  function sectionUrl($slot) {
+    var url = $slot.data('url');
+    var search = window.location.search;
+    if (search && search.length > 1) {
+      url += (url.indexOf('?') >= 0 ? '&' : '?') + search.substring(1);
+    }
+    return url;
+  }
+
+  $('.pdash-section-loading').each(function() {
+    var $slot = $(this);
+    $.get(sectionUrl($slot), function(html) {
+      $slot.replaceWith(html);
+    }).fail(function() {
+      $slot.html('<p class="text-danger">Failed to load this section.</p>');
+    });
+  });
+});
+{% endif %}
 {% if anchor %}
 $(document).ready(function(){
     window.location = '#{{ anchor }}'

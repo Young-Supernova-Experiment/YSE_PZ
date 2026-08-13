@@ -77,3 +77,20 @@ archivePrefix = {arXiv},
 }
 ```
 
+## Fork development (astrofoley/YSE_PZ)
+
+This fork’s **`main`** branch tracks [davecoulter/YSE_PZ `develop`](https://github.com/davecoulter/YSE_PZ/tree/develop), plus local Docker/CI fixes and work merged from [YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) (that repo is **archived**; use this repo only). Day-to-day branches should start from **`main`**.
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Unified develop-based line |
+| `deploy/apache-subpath` | Apache subpath / deploy-only changes (not on `main`) |
+
+**Remotes:** `origin` → davecoulter/YSE_PZ; `astrofoley` → this fork.
+
+**Upstream PR:** When ready, open a cross-fork PR from `astrofoley/main` to `davecoulter/develop` via [compare across forks](https://github.com/davecoulter/YSE_PZ/compare/develop...astrofoley:YSE_PZ:main?expand=1) (not the fork “Contribute” button, which targets simulationstation).
+
+**Integration:** Changes from [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ) merge via `integrate/yse-*` branches. [YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) is archived.
+
+**CI:** `.github/workflows/ci.yml` runs `py_compile`, Docker compose, `manage.py check`, and `YSE_App.tests` on push/PR.
+
