@@ -34,12 +34,17 @@ jobs:
               echo "branch=experimental" >> "$GITHUB_OUTPUT"
               # Matches yse-experimental.conf WSGIDaemonProcess python-home
               echo "python=/data/yse_pz/YSE_PZ_experimental/venv/bin/python" >> "$GITHUB_OUTPUT"
+              # Project venv is writable by the runner — refresh deps each deploy
+              echo "install_deps=true" >> "$GITHUB_OUTPUT"
               ;;
             develop)
               echo "dir=/data/yse_pz/YSE_PZ_test" >> "$GITHUB_OUTPUT"
               echo "branch=develop" >> "$GITHUB_OUTPUT"
               # Matches yse-test.conf WSGIDaemonProcess python-home
               echo "python=/data/yse_pz/yse_test_virtual/bin/python" >> "$GITHUB_OUTPUT"
+              # Shared env is not writable by the runner; passwordless sudo is
+              # only available for systemctl (not pip). Keep deps ops-managed.
+              echo "install_deps=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported deploy branch: $BRANCH" >&2
@@ -56,14 +61,19 @@ jobs:
           git fetch origin
           git reset --hard "origin/${{ steps.target.outputs.branch }}"
 
-          "$PYTHON" -m pip install wheel
-          "$PYTHON" -m pip install --no-build-isolation "extinction==0.4.2"
-          "$PYTHON" -m pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
-          "$PYTHON" -m pip install --use-deprecated=legacy-resolver -r requirements.txt
+          if [ "${{ steps.target.outputs.install_deps }}" = "true" ]; then
+            "$PYTHON" -m pip install wheel
+            "$PYTHON" -m pip install --no-build-isolation "extinction==0.4.2"
+            "$PYTHON" -m pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
+            # Ziggy pips are often too old for --use-deprecated=legacy-resolver
+            "$PYTHON" -m pip install -r requirements.txt
+          else
+            echo "Skipping pip install (shared interpreter; not writable by runner)"
+          fi
 
           "$PYTHON" manage.py migrate --noinput --skip-checks
 
-          # Apache serves /static/ from STATIC_ROOT; chrome/vendor CSS lands here.
+          # Apache serves static from STATIC_ROOT; chrome/vendor CSS lands here.
           "$PYTHON" manage.py collectstatic --noinput
 
           sudo systemctl restart apache2
