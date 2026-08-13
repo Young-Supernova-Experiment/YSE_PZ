@@ -1,4 +1,6 @@
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.dispatch import receiver
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import User
 from YSE_App.models.base import *
@@ -34,8 +36,7 @@ class Followup(BaseModel):
 	valid_stop = models.DateTimeField()
 
 	# Optional
-	spec_priority = models.IntegerField(null=True, blank=True)
-	phot_priority = models.IntegerField(null=True, blank=True)
+	priority = models.FloatField(null=True, blank=True)
 	offset_star_ra = models.FloatField(null=True, blank=True)
 	offset_star_dec = models.FloatField(null=True, blank=True)
 	offset_north = models.FloatField(null=True, blank=True)
@@ -58,6 +59,43 @@ class TransientFollowup(Followup):
 
 	def observation_window(self):
 		return "%s - %s" % (self.valid_start.strftime('%m/%d/%Y'), self.valid_stop.strftime('%m/%d/%Y'))		
+
+class TransientFollowupRequest(BaseModel):
+	"""One observing-request submit attached to a parent TransientFollowup.
+
+	Same user may have many rows. Display priority is min of each
+	requestor's most recent ``priority`` (1.0 highest, 5.0 lowest).
+	"""
+
+	class Meta:
+		ordering = ['requested_at', 'id']
+		indexes = [
+			models.Index(fields=['followup', 'requestor', '-requested_at']),
+		]
+
+	followup = models.ForeignKey(
+		TransientFollowup,
+		on_delete=models.CASCADE,
+		related_name='requests',
+	)
+	requestor = models.ForeignKey(
+		User,
+		on_delete=models.PROTECT,
+		related_name='transient_followup_requests',
+	)
+	requested_at = models.DateTimeField(auto_now_add=True)
+	priority = models.FloatField(
+		default=4.0,
+		validators=[MinValueValidator(1.0), MaxValueValidator(5.0)],
+	)
+	comment = models.TextField(blank=True)
+
+	def __str__(self):
+		return "Followup request: [%s] by %s at %s" % (
+			self.followup_id,
+			self.requestor,
+			self.requested_at,
+		)
 
 @receiver(models.signals.post_save, sender=TransientFollowup)
 def execute_after_save(sender, instance, created, *args, **kwargs):

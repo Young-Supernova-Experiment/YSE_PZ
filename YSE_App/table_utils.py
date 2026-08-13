@@ -20,6 +20,8 @@ from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
 from .common.magnitude_format import format_magnitude
+# Circular: table_utils is imported from yse_pa during views import, before
+# follow-up request helpers are safe to load. Import in render methods.
 rcParams['figure.figsize'] = (7,7)
 
 
@@ -495,13 +497,16 @@ class YSETransientTable(tables.Table):
         return ', '.join(np.unique(resource_list))
 
     def render_followup_comments(self, value):
-        qs = Log.objects.filter(transient_followup__transient__id=value).values_list('comment')
+        from YSE_App.services.followup_requests import format_comments
 
-        comment_list = []
-        for q in qs:
-            if q is not None: comment_list += [q]
-
-        return '; '.join(np.unique(comment_list))
+        comments = []
+        for followup in TransientFollowup.objects.filter(transient__id=value).prefetch_related(
+            'requests__requestor'
+        ):
+            text = format_comments(followup)
+            if text:
+                comments.append(text)
+        return '; '.join(comments)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -1079,8 +1084,9 @@ class ObsNightFollowupTable(tables.Table):
     rise_time = tables.Column(verbose_name='Rise Time (UT)',orderable=False,accessor='transient.CoordString')
     set_time = tables.Column(verbose_name='Set Time (UT)',orderable=False,accessor='transient.CoordString')
     moon_angle = tables.Column(verbose_name='Moon Angle',orderable=False,accessor='transient.CoordString')
-    created_by = tables.Column(verbose_name='Added By',orderable=True,accessor='created_by')
-    comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
+    requestors = tables.Column(verbose_name='Requestors',orderable=False,accessor='id')
+    priority = tables.Column(verbose_name='Priority',orderable=True,accessor='priority')
+    comment = tables.Column(verbose_name='Comments',orderable=False,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
@@ -1154,15 +1160,15 @@ class ObsNightFollowupTable(tables.Table):
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
 
-    def render_comment(self, value):
+    def render_requestors(self, value, record):
+        from YSE_App.services.followup_requests import format_requestors
 
-        comments = Log.objects.filter(transient_followup__id=value)
-        comment_list = []
-        for c in comments:
-            comment_list += [c.comment]
-        if len(comment_list): return '; '.join(comment_list)
-        else: return ''
+        return format_requestors(record)
 
+    def render_comment(self, value, record):
+        from YSE_App.services.followup_requests import format_comments
+
+        return format_comments(record)
 
     def order_recent_mag(self, queryset, is_descending):
 
@@ -1186,7 +1192,7 @@ SELECT pd.mag
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag',
                   'rise_time','set_time','moon_angle','transient_status_string',
-                  'created_by')
+                  'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
         attrs = {
             'th' : {
@@ -1222,8 +1228,9 @@ class ToOFollowupTable(tables.Table):
     rise_time = tables.Column(verbose_name='Rise Time (UT)',orderable=False,accessor='transient.CoordString')
     set_time = tables.Column(verbose_name='Set Time (UT)',orderable=False,accessor='transient.CoordString')
     moon_angle = tables.Column(verbose_name='Moon Angle',orderable=False,accessor='transient.CoordString')
-    created_by = tables.Column(verbose_name='Added By',orderable=True,accessor='created_by')
-    comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
+    requestors = tables.Column(verbose_name='Requestors',orderable=False,accessor='id')
+    priority = tables.Column(verbose_name='Priority',orderable=True,accessor='priority')
+    comment = tables.Column(verbose_name='Comments',orderable=False,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
@@ -1290,15 +1297,15 @@ class ToOFollowupTable(tables.Table):
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
 
-    def render_comment(self, value):
+    def render_requestors(self, value, record):
+        from YSE_App.services.followup_requests import format_requestors
 
-        comments = Log.objects.filter(transient_followup__id=value)
-        comment_list = []
-        for c in comments:
-            comment_list += [c.comment]
-        if len(comment_list): return '; '.join(comment_list)
-        else: return ''
+        return format_requestors(record)
 
+    def render_comment(self, value, record):
+        from YSE_App.services.followup_requests import format_comments
+
+        return format_comments(record)
 
     def order_recent_mag(self, queryset, is_descending):
 
@@ -1322,7 +1329,7 @@ SELECT pd.mag
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag',
                   'rise_time','set_time','moon_angle','transient_status_string',
-                  'created_by')
+                  'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
         attrs = {
             'th' : {
@@ -1340,7 +1347,7 @@ SELECT pd.mag
             "order": [[ 2, "desc" ]],
         }
 
-        
+
 
 class YSEObsNightTable(tables.Table):
 

@@ -292,9 +292,10 @@ def filter_transient_followups_for_user(queryset: QuerySet, user: User) -> Query
         is_public=False,
         requested_by=user,
     )
+    child_requestor = scoped.filter(requests__requestor=user)
     legacy_ids = _legacy_public_followup_ids(user)
     legacy = scoped.filter(pk__in=legacy_ids) if legacy_ids else scoped.none()
-    return (by_audience | creator_only | legacy).distinct()
+    return (by_audience | creator_only | child_requestor | legacy).distinct()
 
 
 def followup_visible_to_user(user: User, followup) -> bool:
@@ -305,6 +306,8 @@ def followup_visible_to_user(user: User, followup) -> bool:
     transient_id = getattr(followup, "transient_id", None)
     if transient_id is not None and not user_can_view_transient(user, transient_id):
         return False
+    if followup.requests.filter(requestor=user).exists():
+        return True
     if not user_can_see_linked_followup_resource(user, followup):
         return False
     if object_has_groups(followup):

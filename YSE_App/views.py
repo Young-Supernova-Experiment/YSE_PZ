@@ -1213,6 +1213,7 @@ def _transient_detail_defer_enabled():
 
 
 def _load_transient_followups(transient_id, user):
+    from YSE_App.services.followup_requests import format_comments, format_requestors
     from YSE_App.services.visibility import filter_transient_followups_for_user
 
     followups = list(
@@ -1233,20 +1234,14 @@ def _load_transient_followups(transient_id, user):
                     queryset=TransientObservationTask.objects.select_related(
                         'instrument_config', 'status'
                     ),
-                )
+                ),
+                'requests__requestor',
             ),
             user,
         )
     )
     if not followups:
         return followups
-    followup_ids = [f.id for f in followups]
-    comments_by_followup = {}
-    for log_row in Log.objects.filter(
-        transient_followup_id__in=followup_ids
-    ).values('transient_followup_id', 'comment'):
-        fid = log_row['transient_followup_id']
-        comments_by_followup.setdefault(fid, []).append(log_row['comment'])
 
     for followup in followups:
         followup.observation_set = list(followup.transientobservationtask_set.all())
@@ -1256,9 +1251,8 @@ def _load_transient_followups(transient_id, user):
             followup.resource = followup.too_resource
         elif followup.queued_resource:
             followup.resource = followup.queued_resource
-        comment_list = comments_by_followup.get(followup.id, [])
-        if comment_list:
-            followup.comment = '; '.join(comment_list)
+        followup.requestors = format_requestors(followup)
+        followup.comment = format_comments(followup)
     return followups
 
 
