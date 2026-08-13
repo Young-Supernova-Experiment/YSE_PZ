@@ -53,7 +53,16 @@ class TransientFollowupForm(ModelForm):
         required=False)
     valid_start = forms.DateTimeField(required=False)
     valid_stop = forms.DateTimeField(required=False)
-    comment = forms.CharField(required=False)
+    comment = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'autocomplete': 'off'}),
+    )
+    priority = forms.FloatField(
+        initial=4.0,
+        min_value=1.0,
+        max_value=5.0,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'min': '1.0', 'max': '5.0'}),
+    )
 
     def __init__(self, *args, user=None, transient_id=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -206,8 +215,7 @@ class TransientFollowupForm(ModelForm):
             'comment',
             'valid_start',
             'valid_stop',
-            'spec_priority',
-            'phot_priority',
+            'priority',
             'offset_star_ra',
             'offset_star_dec',
             'offset_north',

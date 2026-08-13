@@ -76,13 +76,23 @@ class ChromeSmokeTests(TestCase):
         self.assertEqual(html.count(">Public</span>"), 1)
         self.assertIn("sec-group-a", html)
         self.assertIn("sec-group-b", html)
-        self.assertNotIn('id="id_audience_groups_%s"' % group_public.pk, html)
-        self.assertNotRegex(html, r'id="id_is_public"[^>]*\bchecked\b')
-        self.assertRegex(
-            html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_a.pk
+        # CheckboxSelectMultiple ids are choice indices (id_audience_groups_1), not PKs.
+        self.assertNotIn(
+            'name="audience_groups" value="%s"' % group_public.pk, html
+        )
+        self.assertNotRegex(
+            html,
+            r'<input(?=[^>]*\bid="id_is_public")(?=[^>]*\bchecked\b)[^>]*>',
         )
         self.assertRegex(
-            html, r'id="id_audience_groups_%s"[^>]*\bchecked\b' % group_b.pk
+            html,
+            r'<input(?=[^>]*\bname="audience_groups")(?=[^>]*\bvalue="%s")(?=[^>]*\bchecked\b)[^>]*>'
+            % group_a.pk,
+        )
+        self.assertRegex(
+            html,
+            r'<input(?=[^>]*\bname="audience_groups")(?=[^>]*\bvalue="%s")(?=[^>]*\bchecked\b)[^>]*>'
+            % group_b.pk,
         )
 
     def test_transient_detail_chrome(self):
