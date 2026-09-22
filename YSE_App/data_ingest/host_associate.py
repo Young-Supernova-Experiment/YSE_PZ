@@ -3,13 +3,10 @@ from YSE_App.models.transient_models import *
 from YSE_App.common.alert import sendemail
 from django.conf import settings as djangoSettings
 
-import datetime
 import numpy as np
 import pandas as pd
 import os
 
-import sys
-import os
 import sys
 from astro_ghost.PS1QueryFunctions import getAllPostageStamps
 from astro_ghost.TNSQueryFunctions import getTNSSpectra
@@ -17,7 +14,6 @@ from astro_ghost.NEDQueryFunctions import getNEDSpectra
 from astro_ghost.ghostHelperFunctions import *
 from astropy.coordinates import SkyCoord
 from astropy import units as u
-import pandas as pd
 from datetime import datetime
 
 from astropy.io import ascii
