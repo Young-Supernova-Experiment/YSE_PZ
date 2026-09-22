@@ -77,8 +77,8 @@ Network and data-shaped errors are recorded in the `-v2` output.
 | `tns_updates_realtime.bash` | `TNS_uploads.TNS_recent_realtime` *(inferred)* | yes (network stubbed) |
 | `tags.bash` | `Apply_Tags.Tags` | yes |
 | `yse_obs.bash` | `YSE_observations.SurveyObs` | yes — XFAIL: `uploaddict` unbound when IMAP fails (follow-up bug) |
-| `yse_ingest.bash` | `QUB_data.YSE` *(inferred)* | yes — XFAIL until PR #165 (undefined names) |
-| `qub_ingest.bash` | `QUB_data.QUB` | yes — XFAIL until PR #165 |
+| `yse_ingest.bash` | `QUB_data.YSE` *(inferred)* | yes |
+| `qub_ingest.bash` | `QUB_data.QUB` | yes |
 | `forcedphot.bash` | `YSE_Forced_Phot.ForcedPhot` | yes (IPP stubbed) |
 | `tns_updates.bash` (twice daily) | `TNS_uploads.TNS_updates` | yes |
 | `tns_ignore_updates.bash` (weekly) | `TNS_uploads.TNS_Ignore_updates` | yes |
@@ -89,12 +89,12 @@ Network and data-shaped errors are recorded in the `-v2` output.
 | `forcedphot_daily.bash` | `YSE_Forced_Phot.ForcedPhotUpdate` *(inferred)* | yes |
 | `tns_latest_webform.bash` | `TNS_uploads.TNS_emails` *(inferred; TNS web-form emails)* | yes (IMAP stubbed) |
 | `yse_fields_webform.bash` | script *(inferred)* | **manual** |
-| `gaia_lc.bash` (hourly) | `Gaia_LC.GaiaLC` | yes — XFAIL until PR #165 |
+| `gaia_lc.bash` (hourly) | `Gaia_LC.GaiaLC` | yes |
 | `ztf_forcedphot.bash` | `ZTF_Forced_Phot_Cron.ForcedPhot` | yes |
 | `yse_dbbackup.bash` / `yse_crons_clean_backups.bash` (nightly) | shell scripts (mysqldump + rm) | **manual**: not django_cron, need the prod DB host and backup volume |
 | `decam_ingest.bash` (commented out) | `DECam_upload.DECam` | yes (still in `CRON_CLASSES`) |
 | `yse_setting_fields.bash` | script *(inferred)* | **manual** |
-| `yse_updates_stack.bash` | `QUB_data.YSE_Stack` *(inferred)* | yes — XFAIL until PR #165 |
+| `yse_updates_stack.bash` | `QUB_data.YSE_Stack` *(inferred)* | yes |
 | `new_lowz.bash` | not in `CRON_CLASSES` *(inferred: a query/notification script)* | **manual** |
 | — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE`, `PS1_cutouts.YSE`, `host_associate.YSE`, `PS1_PhotoZ.YSE`, `Query_ZTF.AntaresZTF`, `QUB_data.YSE_Weekly`, `rapid.rapid_classify_cron`, `PhotometryUploadExample.PhotometryUploads`, `TNS_uploads.UpdateGHOST` | import + `do()` smoke; `Photo_Z`/`SDSS_Photo_Z` are skipped when `SciServer` is not installed in the web image |
 

@@ -63,17 +63,9 @@ SKIP_DO: dict = {}
 
 # Known-broken crons: a crash here is recorded as XFAIL (and an XPASS once fixed)
 # instead of failing CI, with the fix or follow-up that tracks it.
-# PR #165 (fix/undefined-names-and-lint) adds the missing imports these modules
-# reference (getTransientHosts/calc_photoz, astropy Time, queue/threading/
-# OrderedDict/mastrequests); until it merges into experimental they can NameError.
-_PR165 = "undefined name until PR #165 merges"
+# The undefined-name crashes in TNS_uploads/Gaia_LC/QUB_data were fixed by PR #165,
+# which is now on experimental, so those entries are gone.
 EXPECTED_CRASHES = {
-    "YSE_App.data_ingest.TNS_uploads.UpdateGHOST": _PR165,
-    "YSE_App.data_ingest.Gaia_LC.GaiaLC": _PR165,
-    "YSE_App.data_ingest.QUB_data.QUB": _PR165,
-    "YSE_App.data_ingest.QUB_data.YSE": _PR165,
-    "YSE_App.data_ingest.QUB_data.YSE_Stack": _PR165,
-    "YSE_App.data_ingest.QUB_data.YSE_Weekly": _PR165,
     # do() reads `uploaddict` after the try block even when process_emails()
     # raised, so any IMAP failure ends in UnboundLocalError. Follow-up bug.
     "YSE_App.data_ingest.YSE_observations.SurveyObs": "uploaddict unbound when the IMAP fetch fails (follow-up)",
