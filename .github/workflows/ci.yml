@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop, astrofoley-patch-1]
+    branches: [master, develop, experimental]
   pull_request:
-    branches: [main, master, develop, perf/progressive-loading]
+    branches: [master, develop, experimental]
 
 jobs:
   docker-test:
