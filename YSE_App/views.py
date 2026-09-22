@@ -758,10 +758,14 @@ def too_requests(request, telescope, pi_name):
         filter(begin_date_valid__lte=nowdate).filter(end_date_valid__gte=nowdate).select_related()
     if pi_name != 'None':
         too_resource = too_resource.filter(principal_investigator__name = pi_name)
-    
-    follow_requests = TransientFollowup.objects.filter(too_resource = too_resource[0]).\
-        filter(valid_start__lte = too_resource[0].end_date_valid).\
-        filter(valid_stop__gte = too_resource[0].begin_date_valid).\
+    # evaluate once; an empty result is a 404, not a 500
+    too_resource = too_resource.first()
+    if too_resource is None:
+        raise Http404('No active ToO resource found for this telescope/PI')
+
+    follow_requests = TransientFollowup.objects.filter(too_resource = too_resource).\
+        filter(valid_start__lte = too_resource.end_date_valid).\
+        filter(valid_stop__gte = too_resource.begin_date_valid).\
         filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).select_related()
 
     followuptransientfilter = FollowupFilter(
@@ -772,8 +776,8 @@ def too_requests(request, telescope, pi_name):
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
     location = EarthLocation.from_geodetic(
-        too_resource[0].telescope.longitude*u.deg,too_resource[0].telescope.latitude*u.deg,
-        too_resource[0].telescope.elevation*u.m)
+        too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
+        too_resource.telescope.elevation*u.m)
     time = Time(str(nowdate).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
@@ -795,7 +799,7 @@ def too_requests(request, telescope, pi_name):
         'follow_requests': follow_requests,
         'telescope':telescope.replace('_',' '),
         'obs_date':nowdate.isoformat().split('T')[0],
-        'too_resource':too_resource[0],
+        'too_resource':too_resource,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
     return render(request, 'YSE_App/too_requests.html', context)
@@ -1048,13 +1052,17 @@ def observing_night(request, telescope, obs_date, pi_name):
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).filter(resource__telescope__name = telescope.replace('_',' ')).select_related()
     if pi_name != 'None':
         classical_obs_date = classical_obs_date.filter(resource__principal_investigator__name = pi_name)
-    
-    #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).\
-    #    filter(valid_start__lte = classical_obs_date[0].obs_date).\
-    #    filter(valid_stop__gte = classical_obs_date[0].obs_date).select_related()
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).\
-        filter(valid_start__lte = classical_obs_date[0].resource.begin_date_valid).\
-        filter(valid_stop__gte = classical_obs_date[0].resource.end_date_valid).select_related()
+    # evaluate once; an empty result is a 404, not a 500
+    classical_obs_date = classical_obs_date.first()
+    if classical_obs_date is None:
+        raise Http404('No classical observing date found for this telescope/date/PI')
+
+    #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+    #    filter(valid_start__lte = classical_obs_date.obs_date).\
+    #    filter(valid_stop__gte = classical_obs_date.obs_date).select_related()
+    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+        filter(valid_start__lte = classical_obs_date.resource.begin_date_valid).\
+        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).select_related()
 
     followuptransientfilter = FollowupFilter(request.GET, queryset=follow_requests,prefix=telescope)
         
@@ -1063,9 +1071,9 @@ def observing_night(request, telescope, obs_date, pi_name):
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
     location = EarthLocation.from_geodetic(
-        classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-        classical_obs_date[0].resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date[0].obs_date).split('+')[0], format='iso')
+        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+        classical_obs_date.resource.telescope.elevation*u.m)
+    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
     sunset = tel.sun_set_time(time,which="previous").isot.split('T')[-1][:-7]
@@ -1086,7 +1094,7 @@ def observing_night(request, telescope, obs_date, pi_name):
         'follow_requests': follow_requests,
         'telescope':telescope.replace('_',' '),
         'obs_date':obs_date,
-        'classical_obs_date':classical_obs_date[0],
+        'classical_obs_date':classical_obs_date,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
     return render(request, 'YSE_App/observing_night.html', context)
