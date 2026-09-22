@@ -195,7 +195,7 @@ class SurveyObs(CronJobBase):
 
 			try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
 			except: print(r.text)
-		except exception as e: print(e)
+		except Exception as e: print(e)
 		print("upload finished.")
 		
 	def add_options(self, parser=None, usage=None, config=None):

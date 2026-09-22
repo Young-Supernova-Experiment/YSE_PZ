@@ -9,7 +9,7 @@ import numpy as np
 from YSE_App.common.utilities import *
 from itertools import chain
 from django.db import connection,connections
-from django.db.models import FloatField,ExpressionWrapper
+from django.db.models import FloatField
 
 def makeRegistrar():
     registry = {}

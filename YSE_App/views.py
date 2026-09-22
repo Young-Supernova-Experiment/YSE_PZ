@@ -39,13 +39,11 @@ from . import view_utils
 import datetime
 from datetime import timedelta
 import pytz
-from pytz import timezone
 from .serializers import *
 from django.core import serializers
 import os
 from .data import PhotometryService, SpectraService, ObservingResourceService
 import json
-import time
 import dateutil.parser
 from astroplan import moon_illumination
 from astropy.time import Time
@@ -68,7 +66,6 @@ from .table_utils import (
 )
 from .queries.yse_python_queries import *
 from .queries import yse_python_queries
-import django_tables2 as tables
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt

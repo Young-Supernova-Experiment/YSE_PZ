@@ -239,11 +239,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     ys.options = args
 
-    if 'hi': #try:
+    try:
 
         ys.main()
         
-    else: #except Exception as e:
+    except Exception as e:
         print(e)
         nsn = 0
         smtpserver = "%s:%s" % (ys.options.SMTP_HOST, ys.options.SMTP_PORT)

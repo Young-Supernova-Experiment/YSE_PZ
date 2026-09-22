@@ -25,14 +25,17 @@ import dateutil
 from django.db.models import Q,F
 from YSE_App.models import Transient, TransientTag, TransientPhotData, TransientPhotometry, TransientSpectrum
 import sys
+import queue
+import threading
+from collections import OrderedDict
 from tendo import singleton
+from YSE_App.util.TNS_Synopsis import mastrequests
 
 ### new antares search for ZTF matches
 from antares_client.search import cone_search
 
 from string import ascii_lowercase
 import itertools
-from YSE_App.common.utilities import getRADecBox
 
 def iter_all_strings():
     for size in itertools.count(1):
@@ -371,7 +374,7 @@ class QUB(CronJobBase):
                 if 'pscamera' in l.keys():
                     if l['pscamera'] == 'GPC1': gpc1photometrydict['photdata']['%s_%i'%(mjd_to_date(l['mjd_obs']),j)] = phot_upload_dict
                     elif l['pscamera'] == 'GPC2': gpc2photometrydict['photdata']['%s_%i'%(mjd_to_date(l['mjd_obs']),j)] = phot_upload_dict
-                    else: raise RuntimeError(f"unknown camera! {lf['pscamera']}")
+                    else: raise RuntimeError(f"unknown camera! {l['pscamera']}")
                 else:
                     gpc1photometrydict['photdata']['%s_%i'%(mjd_to_date(l['mjd_obs']),j)] = phot_upload_dict
 
@@ -866,7 +869,7 @@ class YSE(CronJobBase):
                 if 'pscamera' in l.keys():
                     if l['pscamera'] == 'GPC1': gpc1photometrydict['photdata']['%s_%i'%(mjd_to_date(l['mjd_obs']),j)] = phot_upload_dict
                     elif l['pscamera'] == 'GPC2': gpc2photometrydict['photdata']['%s_%i'%(mjd_to_date(l['mjd_obs']),j)] = phot_upload_dict
-                    else: raise RuntimeError(f"unknown camera! {lf['pscamera']}")
+                    else: raise RuntimeError(f"unknown camera! {l['pscamera']}")
                 else:
                     gpc1photometrydict['photdata']['%s_%i'%(mjd_to_date(l['mjd_obs']),j)] = phot_upload_dict
 

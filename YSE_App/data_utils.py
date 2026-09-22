@@ -19,7 +19,6 @@ from .data import PhotometryService, SpectraService, ObservingResourceService
 from .serializers import *
 from rest_framework.request import Request
 from django.contrib.auth.decorators import login_required, permission_required
-import json
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.parsers import JSONParser
@@ -45,7 +44,6 @@ from .common.collaboration_groups import (
     collaboration_groups_from_photometry_upload,
     normalize_collaboration_group_names,
 )
-from .common.utilities import getRADecBox
 from django.db.models import Q
 from .queries.yse_python_queries import *
 from .queries import yse_python_queries
