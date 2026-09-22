@@ -167,7 +167,17 @@ def dashboard(request):
     defer = _main_dashboard_defer_enabled()
     for title, statusname in _DASHBOARD_STATUS_SECTIONS:
         if defer and statusname != 'New':
-            transient_categories.append((None, title, statusname.lower(), None))
+            # Table comes from /dashboard/section/<status>/ via AJAX; still
+            # render the (query-free) filter form so the section keeps its
+            # search box like the synchronous sections and production.
+            deferred_filter = TransientFilter(
+                request.GET,
+                queryset=Transient.objects.none(),
+                prefix=statusname.lower(),
+            )
+            transient_categories.append(
+                (None, title, statusname.lower(), deferred_filter)
+            )
             continue
         transient_categories.append(
             _dashboard_section_tuple(request, title, statusname, status_by_name)
