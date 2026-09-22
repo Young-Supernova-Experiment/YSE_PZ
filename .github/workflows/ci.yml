@@ -2,11 +2,32 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop, astrofoley-patch-1]
+    branches: [master, develop, experimental]
   pull_request:
-    branches: [main, master, develop, experimental, perf/progressive-loading]
+    branches: [master, develop, experimental]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Undefined names, redefinitions, literal comparisons, duplicate dict keys
+        run: |
+          ruff check --select F821,F811,F632,F601 \
+            --exclude YSE_App/static,YSE_App/migrations,docker/web_image_history,YSE_App/util,YSE_App/common/getGWevents.py \
+            .
+
   docker-test:
     runs-on: ubuntu-latest
     timeout-minutes: 45

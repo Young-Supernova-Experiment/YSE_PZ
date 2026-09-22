@@ -126,8 +126,8 @@ class YSE_PA:
             for d in data:
                 if d['transient_name'] in transients_goodcell:
                     transients_best += [d['transient_name']]
-                    transients_ra += [d['transient_ra']]
-                    transients_dec += [d['transient_dec']]
+                    transients_best_ra += [d['transient_ra']]
+                    transients_best_dec += [d['transient_dec']]
                 elif d['transient_name'] in transients_all:
                     iTr = transients_all == d['transient_name']
                     if status_all[iTr][0] == 'Interesting':

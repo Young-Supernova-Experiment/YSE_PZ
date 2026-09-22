@@ -25,7 +25,6 @@ from astropy.coordinates import ICRS, Galactic, FK4, FK5
 from astropy.time import Time
 import coreapi
 from urllib.parse import quote,unquote
-import requests
 from requests.auth import HTTPBasicAuth
 import struct
 import threading
@@ -63,7 +62,6 @@ except ImportError:
     associate_sample = None
     HAS_ASTRO_PROST = False
 
-import os
 from tendo import singleton
 
 ### new antares search for ZTF matches
@@ -1761,7 +1759,13 @@ class UpdateGHOST(CronJobBase):
         # no email hook on this one for now
         me = singleton.SingleInstance(flavor_id="6")
 
-        
+        from astro_ghost.ghostHelperFunctions import getTransientHosts
+        try:
+            from astro_ghost.photoz_helper import calc_photoz
+            is_photoz = True
+        except ImportError:
+            is_photoz = False
+
         from YSE_App.models import Transient,User,Host
         transients = Transient.objects.filter(
             modified_date__gt=datetime.now()-timedelta(days=5),

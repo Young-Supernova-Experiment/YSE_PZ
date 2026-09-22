@@ -12,7 +12,7 @@ from django.contrib.auth.decorators import login_required, permission_required
 from django.db import models, connection, reset_queries
 from django.db.models import Prefetch
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import render, get_object_or_404, render
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.generic import TemplateView
 
@@ -480,7 +480,6 @@ class Finder(TemplateView):
         import os
         from .util import mkFinderChart
 
-        from django.templatetags.static import static
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
         from matplotlib.figure import Figure
     
