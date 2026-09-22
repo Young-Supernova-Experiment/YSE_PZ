@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from YSE_App.forms import TransientFollowupForm
 from YSE_App.models import (
+    ClassicalResource,
     FollowupStatus,
     TransientFollowup,
     TransientFollowupRequest,
@@ -26,6 +27,8 @@ from YSE_App.services.visibility import (
 )
 from YSE_App.tests.fixtures_minimal import (
     attach_synthetic_photometry,
+    audit_fields,
+    create_instrument_stack,
     create_minimal_transient,
     create_test_user,
 )
@@ -50,6 +53,19 @@ class FollowupRequestTests(TestCase):
         )
         self.now = timezone.now()
         self.stop = self.now + timedelta(days=7)
+        # The HTTP form requires a linked observing resource. An ungrouped
+        # resource is visible to every user; creator_only permits an empty
+        # audience, so the form posts below need no audience_groups.
+        _obs_group, instrument, _band = create_instrument_stack(
+            self.user, obs_group_name="fureq-resource"
+        )
+        self.resource = ClassicalResource.objects.create(
+            telescope=instrument.telescope,
+            begin_date_valid=self.now - timedelta(days=1),
+            end_date_valid=self.stop,
+            creator_only=True,
+            **audit_fields(self.user),
+        )
 
     def _create(self, user, *, status=None, priority=DEFAULT_PRIORITY, comment="", **kwargs):
         return create_or_attach_request(
@@ -170,8 +186,7 @@ class FollowupRequestTests(TestCase):
             reverse("add_transient_followup"),
             {
                 "status": self.requested.id,
-                "valid_start": self.now.strftime("%Y-%m-%d %H:%M:%S"),
-                "valid_stop": self.stop.strftime("%Y-%m-%d %H:%M:%S"),
+                "classical_resource": self.resource.id,
                 "priority": 4.0,
                 "comment": "native post",
                 "transient": self.transient.id,
@@ -187,8 +202,7 @@ class FollowupRequestTests(TestCase):
         client.force_login(self.user)
         payload = {
             "status": self.requested.id,
-            "valid_start": self.now.strftime("%Y-%m-%d %H:%M:%S"),
-            "valid_stop": self.stop.strftime("%Y-%m-%d %H:%M:%S"),
+            "classical_resource": self.resource.id,
             "priority": 4.0,
             "comment": "ajax one",
             "transient": self.transient.id,
