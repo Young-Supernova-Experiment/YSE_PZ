@@ -20,12 +20,10 @@ astroquery==0.4.6
 astrorapid==0.2.16
 astunparse==1.6.3
 attrs==21.2.0
-auditlog==0.0.5
 backcall==0.2.0
 backports.zoneinfo==0.2.1
 beautifulsoup4==4.6.0
 bokeh==2.4.2
-bs4==0.0.1
 bson==0.5.10
 cachetools==4.2.2
 casjobs==0.0.2
@@ -52,7 +50,6 @@ django-cron==0.5.1
 django-el-pagination==3.3.0
 django-filter==2.4.0
 django-jsonfield==1.4.1
-django-rest-framework==0.1.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
@@ -74,7 +71,6 @@ httpie==1.0.3
 httplib2==0.31.0
 idna==3.11
 imbalanced-learn==0.8.0
-imblearn==0.0
 iminuit==2.6.1
 importlib-metadata==8.5.0
 importlib-resources==6.4.0
@@ -157,7 +153,6 @@ SecretStorage==2.3.1
 semantic-version==2.10.0
 sfdmap==0.1.1
 six==1.15.0
-sklearn==0.0
 sncosmo==2.8.0
 specutils==1.16.0
 sqlparse==0.4.2
