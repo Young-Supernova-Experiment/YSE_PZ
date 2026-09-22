@@ -36,6 +36,7 @@ jobs:
               echo "python=/data/yse_pz/YSE_PZ_experimental/venv/bin/python" >> "$GITHUB_OUTPUT"
               # Project venv is writable by the runner — refresh deps each deploy
               echo "install_deps=true" >> "$GITHUB_OUTPUT"
+              echo "smoke_url=https://ziggy.ucolick.org/yse_experimental/login/" >> "$GITHUB_OUTPUT"
               ;;
             develop)
               echo "dir=/data/yse_pz/YSE_PZ_test" >> "$GITHUB_OUTPUT"
@@ -45,6 +46,7 @@ jobs:
               # Shared env is not writable by the runner; passwordless sudo is
               # only available for systemctl (not pip). Keep deps ops-managed.
               echo "install_deps=false" >> "$GITHUB_OUTPUT"
+              echo "smoke_url=https://ziggy.ucolick.org/yse_test/login/" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported deploy branch: $BRANCH" >&2
@@ -71,6 +73,10 @@ jobs:
             echo "Skipping pip install (shared interpreter; not writable by runner)"
           fi
 
+          # Fail here, before touching the DB or restarting Apache, if the
+          # freshly checked-out code does not even import / configure.
+          "$PYTHON" manage.py check
+
           "$PYTHON" manage.py migrate --noinput --skip-checks
 
           # Writes into this stack's STATIC_ROOT. Apache must Alias that URL
@@ -78,3 +84,9 @@ jobs:
           "$PYTHON" manage.py collectstatic --noinput
 
           sudo systemctl restart apache2
+
+      - name: Smoke test login page
+        run: |
+          URL="${{ steps.target.outputs.smoke_url }}"
+          echo "Smoke-testing $URL"
+          curl -fsS --retry 5 --retry-delay 3 -o /dev/null "$URL"
