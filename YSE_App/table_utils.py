@@ -1125,10 +1125,10 @@ class ObsNightFollowupTable(tables.Table):
         #self.base_columns['status'].verbose_name = 'Followup Status'
 
         location = EarthLocation.from_geodetic(
-            classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-            classical_obs_date[0].resource.telescope.elevation*u.m)
+            classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+            classical_obs_date.resource.telescope.elevation*u.m)
         self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(classical_obs_date[0].obs_date).split()[0])
+        self.tme = Time(str(classical_obs_date.obs_date).split()[0])
 
     def render_rise_time(self, value):
         sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
@@ -1262,8 +1262,8 @@ class ToOFollowupTable(tables.Table):
         super().__init__(*args, **kwargs)
 
         location = EarthLocation.from_geodetic(
-            too_resource[0].telescope.longitude*u.deg,too_resource[0].telescope.latitude*u.deg,
-            too_resource[0].telescope.elevation*u.m)
+            too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
+            too_resource.telescope.elevation*u.m)
         self.tel = Observer(location=location, timezone="UTC")
         self.tme = Time(str(datetime.datetime.now()).split()[0])
 
