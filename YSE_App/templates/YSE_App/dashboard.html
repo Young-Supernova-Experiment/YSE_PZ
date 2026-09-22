@@ -58,7 +58,7 @@
 <script type='text/javascript'>
 {% if main_dashboard_defer %}
 $(document).ready(function() {
-  // Forward the page query string (e.g. following-sort=..., following-page=...,
+  // Forward the page query string (e.g. followingsort=..., followingpage=...,
   // following-ex=...) so django-tables2 sorting, pagination and the filter form
   // keep working on sections loaded by AJAX, not only on the synchronous New table.
   function sectionUrl($slot) {

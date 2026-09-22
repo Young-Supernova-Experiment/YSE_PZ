@@ -8,8 +8,8 @@ Covers two regressions Ryan Foley found on yse_test (develop vs production):
   ``Transient.recent_magdate()`` produced on production.
 * "dashboard sorting only works on the new table": deferred status sections were
   fetched from ``/dashboard/section/<status>/`` without the page query string,
-  so ``<prefix>-sort`` / ``<prefix>-page`` / ``<prefix>-ex`` never reached the
-  fragment view.
+  so ``<prefix>sort`` / ``<prefix>page`` (django-tables2) and ``<prefix>-ex``
+  (django-filter) never reached the fragment view.
 """
 
 import datetime
@@ -69,7 +69,7 @@ class DashboardDeferredSectionTests(TestCase):
         self.client.force_login(self.user)
 
     def test_shell_forwards_query_string_to_deferred_sections(self):
-        response = self.client.get('/dashboard/?following-sort=-ra_string')
+        response = self.client.get('/dashboard/?followingsort=-ra_string')
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
         self.assertIn('mdash-section-loading', body)
@@ -86,18 +86,18 @@ class DashboardDeferredSectionTests(TestCase):
 
     def test_section_fragment_applies_sort_param(self):
         # seed_dashboard_transients: ra = 10.00 (…-0) and 10.01 (…-1).
-        asc = self.client.get('/dashboard/section/following/?following-sort=ra_string')
+        asc = self.client.get('/dashboard/section/following/?followingsort=ra_string')
         self.assertEqual(asc.status_code, 200)
         asc_body = asc.content.decode()
         self.assertLess(
             asc_body.index('perf-following-0'), asc_body.index('perf-following-1')
         )
 
-        desc = self.client.get('/dashboard/section/following/?following-sort=-ra_string')
+        desc = self.client.get('/dashboard/section/following/?followingsort=-ra_string')
         self.assertEqual(desc.status_code, 200)
         desc_body = desc.content.decode()
         self.assertLess(
             desc_body.index('perf-following-1'), desc_body.index('perf-following-0')
         )
         # Header link toggles back to ascending using the section prefix.
-        self.assertIn('following-sort=ra_string', desc_body)
+        self.assertIn('followingsort=ra_string', desc_body)
