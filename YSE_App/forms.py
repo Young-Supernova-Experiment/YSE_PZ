@@ -57,7 +57,10 @@ class TransientFollowupForm(ModelForm):
         required=False,
         widget=forms.TextInput(attrs={'autocomplete': 'off'}),
     )
+    # Optional: the view falls back to DEFAULT_PRIORITY (4.0) when omitted so
+    # legacy clients/tests that do not post a priority still succeed.
     priority = forms.FloatField(
+        required=False,
         initial=4.0,
         min_value=1.0,
         max_value=5.0,
