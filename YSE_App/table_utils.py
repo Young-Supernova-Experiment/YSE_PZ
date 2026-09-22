@@ -39,6 +39,24 @@ class MagnitudeColumn(tables.Column):
         return format_magnitude(value)
 
 
+class LastObsDateColumn(tables.Column):
+    """Dashboard 'Last Obs. Date' column rendered as MM/DD/YYYY.
+
+    ``annotate_dashboard_transient_fields`` supplies a raw datetime via a
+    Subquery, whereas ``Transient.recent_magdate()`` (used on un-annotated
+    querysets and on production before the annotation) returns a string that
+    is already ``strftime('%m/%d/%Y')``-formatted. Format the datetime here so
+    both paths render the same way.
+    """
+
+    DATE_FORMAT = '%m/%d/%Y'
+
+    def render(self, value):
+        if hasattr(value, 'strftime'):
+            return value.strftime(self.DATE_FORMAT)
+        return value
+
+
 class TransientTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
@@ -51,7 +69,7 @@ class TransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -165,7 +183,7 @@ class FieldTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -287,7 +305,7 @@ class AdjustFieldTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -410,7 +428,7 @@ class YSETransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -574,7 +592,7 @@ class YSEFullTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -723,7 +741,7 @@ class YSERisingTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -883,7 +901,7 @@ class NewTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')

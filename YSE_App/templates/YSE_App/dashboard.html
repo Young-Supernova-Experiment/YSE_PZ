@@ -58,9 +58,21 @@
 <script type='text/javascript'>
 {% if main_dashboard_defer %}
 $(document).ready(function() {
+  // Forward the page query string (e.g. followingsort=..., followingpage=...,
+  // following-ex=...) so django-tables2 sorting, pagination and the filter form
+  // keep working on sections loaded by AJAX, not only on the synchronous New table.
+  function sectionUrl($slot) {
+    var url = $slot.data('url');
+    var search = window.location.search;
+    if (search && search.length > 1) {
+      url += (url.indexOf('?') >= 0 ? '&' : '?') + search.substring(1);
+    }
+    return url;
+  }
+
   $('.mdash-section-loading').each(function() {
     var $slot = $(this);
-    $.get($slot.data('url'), function(html) {
+    $.get(sectionUrl($slot), function(html) {
       $slot.replaceWith(html);
     }).fail(function() {
       $slot.html('<p class="text-danger">Failed to load section.</p>');
