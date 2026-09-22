@@ -6,13 +6,18 @@ Two layers:
 1. ``test_cron_classes_import_and_are_well_formed``: every dotted path in
    ``settings.CRON_CLASSES`` imports, is a ``django_cron.CronJobBase`` subclass,
    and has a ``Schedule`` plus a ``do`` method (what ``manage.py runcrons`` needs).
-   A missing *third-party* module (e.g. SciServer, TensorFlow) is reported, not
-   failed: the CI web image does not ship every optional science dependency.
+   An import that fails for *environment* reasons is reported, not failed: a
+   missing or broken third-party package (SciServer; TensorFlow whose protobuf
+   pin is incompatible in the web image), a network fetch at import time
+   (astro_ghost), or a DB row read at import. Only a crash-class exception
+   raised by the cron module's own code (or an ImportError naming a repo
+   module) fails the inventory. See ``_import_failure_reason``.
 
 2. ``test_cron_do_does_not_crash_on_its_own_code``: ``do()`` is invoked for each
    cron with all outbound I/O stubbed (HTTP, IMAP, SMTP, shell, tendo singleton,
-   ``time.sleep``) and a per-cron alarm, in a temp cwd, against the empty test DB.
-   Any network call raises ``ConnectionError`` so the cron takes its error path.
+   ``time.sleep``, the SFD dust map) and a per-cron alarm, in a temp cwd, against
+   the empty test DB. Any network call raises ``ConnectionError`` so the cron
+   takes its error path.
    The test fails only for the "would crash on every run" class of bug --
    NameError / AttributeError / TypeError / ImportError / SyntaxError raised from
    the cron's own code, or the same signatures printed by a cron that swallows
@@ -33,12 +38,19 @@ import signal
 import sys
 import tempfile
 import threading
+import traceback
+from typing import Optional
 from unittest import mock
 
 from django.conf import settings
 from django.test import TestCase
 
+import YSE_App
 from YSE_App.tests.fixtures_minimal import create_test_user, ensure_transient_statuses
+
+# Repo checkout root (parent of the YSE_App package): frames under it are "our code".
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(YSE_App.__file__)))
+_IMPORT_STMT_RE = re.compile(r"^\s*(from\s+\S+\s+import\b|import\s)")
 
 CRASH_EXCEPTIONS = (NameError, AttributeError, TypeError, ImportError, SyntaxError)
 
@@ -69,6 +81,16 @@ EXPECTED_CRASHES = {
     # do() reads `uploaddict` after the try block even when process_emails()
     # raised, so any IMAP failure ends in UnboundLocalError. Follow-up bug.
     "YSE_App.data_ingest.YSE_observations.SurveyObs": "uploaddict unbound when the IMAP fetch fails (follow-up)",
+    # TNS_uploads.search()/get() swallow any requests exception and return
+    # `[None, 'Error message ...']` instead of a Response; GetRecentEvents()
+    # then reads `response.status_code` (TNS_uploads.py:825; same pattern at
+    # 842/863/878/1069) -> AttributeError: 'list' object has no attribute
+    # 'status_code'. TNS_recent/TNS_updates wrap the call in try/except and
+    # email the error; TNS_recent_realtime.do() has that try/except commented
+    # out, so every TNS outage crashes this cron. Follow-up bug.
+    "YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime": (
+        "search()/get() return a list on error and GetRecentEvents reads .status_code (follow-up)"
+    ),
 }
 
 
@@ -98,14 +120,80 @@ def _import_cron(dotted: str):
     return getattr(module, class_name)
 
 
-def _third_party_import_error(exc: BaseException) -> bool:
-    """ImportError naming a package outside this repo (optional science dependency)."""
-    if not isinstance(exc, ImportError):
+def _is_repo_file(filename: str) -> bool:
+    if not filename:
         return False
-    name = getattr(exc, "name", None) or ""
-    if not name or name.startswith("YSE_App") or name.startswith("YSE_PZ"):
+    path = os.path.abspath(filename)
+    if "site-packages" in path or "dist-packages" in path:
         return False
-    return True
+    return path.startswith(_REPO_ROOT + os.sep)
+
+
+def _import_failure_reason(exc: BaseException) -> Optional[str]:
+    """
+    Classify a failed import of a CRON_CLASSES entry.
+
+    Returns a short reason when the failure is *environmental* -- the cron is then
+    reported as skipped -- or ``None`` when it is the cron module's own bug and
+    must fail the test.
+
+    Environmental: an ImportError naming a package outside this repo (optional
+    science dependency); any non-crash-class exception (dust map data missing,
+    a network fetch or a DB lookup at import time); a SyntaxError in a
+    dependency's file; a crash-class exception raised beneath an ``import``
+    statement in repo code (a dependency such as TensorFlow/protobuf that is
+    installed but broken in this image) or with no repo frame at all.
+
+    Own bug: an ImportError naming a YSE_App/YSE_PZ module, a SyntaxError in a
+    repo file, or a crash-class exception whose innermost repo frame is ordinary
+    module-level code.
+    """
+    text = str(exc).strip()
+    label = f"{type(exc).__name__}: {text.splitlines()[0] if text else ''}"
+    if isinstance(exc, ImportError):
+        name = getattr(exc, "name", None) or ""
+        if name.startswith("YSE_App") or name.startswith("YSE_PZ"):
+            return None
+        if name:
+            return f"missing optional dependency {name!r}"
+    if not isinstance(exc, CRASH_EXCEPTIONS):
+        return f"import needs data/network/DB not available here: {label}"
+    if isinstance(exc, SyntaxError):
+        # The broken file is not on the traceback; SyntaxError names it itself.
+        return None if _is_repo_file(getattr(exc, "filename", "") or "") else f"raised inside a dependency: {label}"
+    repo_frames = [f for f in traceback.extract_tb(exc.__traceback__) if _is_repo_file(f.filename)]
+    if not repo_frames:
+        return f"raised inside a dependency: {label}"
+    if _IMPORT_STMT_RE.match(repo_frames[-1].line or ""):
+        return f"dependency failed to import: {label}"
+    return None
+
+
+def _load_cron(dotted: str):
+    """Return ``(cls, skip_reason, failure)``; exactly one of the three is set."""
+    try:
+        with _sandbox():
+            return _import_cron(dotted), None, None
+    except Exception as e:  # noqa: BLE001 - classified below
+        reason = _import_failure_reason(e)
+        if reason is not None:
+            return None, reason, None
+        return None, None, f"{dotted}: import failed: {type(e).__name__}: {e}"
+
+
+class _FakeSFDQuery:
+    """Stand-in for ``dustmaps.sfd.SFDQuery``: the web image ships no SFD map data.
+
+    QUB_data / Query_ZTF / DECam_upload build one at import time and only ever
+    call it as ``sfd(skycoord) * 0.86`` on a single coordinate, so a zero E(B-V)
+    keeps them on their normal path.
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        return 0.0
 
 
 @contextlib.contextmanager
@@ -134,6 +222,12 @@ def _sandbox():
         import tendo.singleton as _singleton  # noqa: F401
 
         patches.append(mock.patch("tendo.singleton.SingleInstance", return_value=mock.Mock()))
+    except Exception:
+        pass
+    try:
+        import dustmaps.sfd as _sfd  # noqa: F401
+
+        patches.append(mock.patch("dustmaps.sfd.SFDQuery", _FakeSFDQuery))
     except Exception:
         pass
     with contextlib.ExitStack() as stack:
@@ -169,21 +263,25 @@ def _run_do(cron_cls):
 
 
 class CronClassInventoryTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        # PS1_cutouts does `User.objects.get(username='admin')` at import time.
+        cls.admin = create_test_user("admin", is_staff=True, is_superuser=True)
+
     def test_cron_classes_import_and_are_well_formed(self):
         from django_cron import CronJobBase, Schedule
 
         self.assertGreater(len(settings.CRON_CLASSES), 0)
         problems = []
-        optional_missing = []
+        unavailable = []
         seen_codes = {}
         for dotted in settings.CRON_CLASSES:
-            try:
-                cls = _import_cron(dotted)
-            except Exception as e:  # noqa: BLE001
-                if _third_party_import_error(e):
-                    optional_missing.append(f"{dotted}: missing optional dependency {e.name!r}")
-                    continue
-                problems.append(f"{dotted}: import failed: {type(e).__name__}: {e}")
+            cls, skip_reason, failure = _load_cron(dotted)
+            if failure:
+                problems.append(failure)
+                continue
+            if skip_reason:
+                unavailable.append(f"{dotted}: {skip_reason}")
                 continue
             if not (isinstance(cls, type) and issubclass(cls, CronJobBase)):
                 problems.append(f"{dotted}: not a CronJobBase subclass")
@@ -205,9 +303,9 @@ class CronClassInventoryTests(TestCase):
             print("\n[cron-smoke] WARNING duplicate django_cron codes:")
             for code, paths in duplicates.items():
                 print(f"  {code}: {', '.join(paths)}")
-        if optional_missing:
-            print("\n[cron-smoke] crons skipped, optional dependency not installed:")
-            for line in optional_missing:
+        if unavailable:
+            print("\n[cron-smoke] crons not importable in this environment (skipped):")
+            for line in unavailable:
                 print("  " + line)
         self.assertFalse(problems, "\n".join(problems))
 
@@ -230,13 +328,13 @@ class CronDoSmokeTests(TestCase):
                     if dotted in SKIP_DO:
                         report.append(f"SKIP  {dotted}: {SKIP_DO[dotted]}")
                         continue
-                    try:
-                        cron_cls = _import_cron(dotted)
-                    except Exception as e:  # noqa: BLE001
-                        if _third_party_import_error(e):
-                            report.append(f"SKIP  {dotted}: optional dependency {e.name!r} not installed")
-                            continue
-                        failures.append(f"{dotted}: import failed: {type(e).__name__}: {e}")
+                    cron_cls, skip_reason, failure = _load_cron(dotted)
+                    if failure:
+                        failures.append(failure)
+                        report.append(f"FAIL  {failure}")
+                        continue
+                    if skip_reason:
+                        report.append(f"SKIP  {dotted}: {skip_reason}")
                         continue
 
                     with _sandbox():

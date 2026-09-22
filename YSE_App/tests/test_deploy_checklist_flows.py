@@ -333,6 +333,9 @@ class DeployChecklistFlowTests(TestCase):
             "priority": 4.0,
             "comment": "checklist follow-up",
             "transient": self.transient.id,
+            # New follow-ups need an audience: the collaboration group(s) that
+            # can see the linked resource (the form rejects an empty selection).
+            "audience_groups": [self.yse_group.id],
         }
         with mock.patch(TESS_OBS_PATCH_TARGET, return_value=False):
             response = self.client.post(
@@ -610,7 +613,9 @@ class DeployChecklistFlowTests(TestCase):
             )
         self.assertEqual(shell.status_code, 200)
         self.assertEqual(section.status_code, 200)
-        self.assertContains(section, query.title)
+        # The shell renders each saved query's box (title); the AJAX section
+        # fragment is only the table body for that query.
+        self.assertContains(shell, query.title)
         self.assertIn(self.transient.slug, transient_slugs_in_order(section.content.decode()))
         self.assertEqual(summary.status_code, 200)
         self.assertContains(summary, self.transient.name)

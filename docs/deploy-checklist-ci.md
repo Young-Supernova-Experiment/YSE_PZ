@@ -67,24 +67,36 @@ the script name and `settings.CRON_CLASSES` where marked *(inferred)*.
 
 `test_cron_smoke` (a) imports every `CRON_CLASSES` entry and checks it is a
 `CronJobBase` with a `Schedule`, `code` and `do()`; (b) calls `do()` with HTTP,
-IMAP, SMTP, shell, `tendo` singleton and `time.sleep` stubbed, in a temp cwd, with a
-per-cron alarm. Only crash-class errors from the cron's own code fail the test
-(NameError/AttributeError/TypeError/ImportError/SyntaxError, raised or logged).
-Network and data-shaped errors are recorded in the `-v2` output.
+IMAP, SMTP, shell, `tendo` singleton, `time.sleep` and the SFD dust map
+(`dustmaps.sfd.SFDQuery`, whose data file the web image does not ship) stubbed, in
+a temp cwd, with a per-cron alarm. Only crash-class errors from the cron's own code
+fail the test (NameError/AttributeError/TypeError/ImportError/SyntaxError, raised
+or logged). Network and data-shaped errors are recorded in the `-v2` output.
+
+An entry whose *import* fails for environment reasons is reported as skipped, not
+failed: a missing or broken third-party package (`SciServer`; TensorFlow, whose
+generated protobuf code is incompatible with the `protobuf==4.25.3` pin in the web
+image, so `Photo_Z`, `SDSS_Photo_Z`, `PS1_PhotoZ` and `rapid_classify` never
+import there), a network fetch at import time (`astro_ghost` downloads the VO
+cone-search registry, so `host_associate` and `DECam_upload` cannot import with the
+network stubbed), or a DB row read at import (`PS1_cutouts` does
+`User.objects.get(username='admin')`; the test seeds that user). Only a
+crash-class exception raised by the cron module's own code, or an `ImportError`
+naming a repo module, fails the inventory.
 
 | Crontab script | Class (`CRON_CLASSES`) | Exercised in CI |
 | --- | --- | --- |
-| `tns_updates_realtime.bash` | `TNS_uploads.TNS_recent_realtime` *(inferred)* | yes (network stubbed) |
+| `tns_updates_realtime.bash` | `TNS_uploads.TNS_recent_realtime` *(inferred)* | yes — XFAIL: `search()`/`get()` return a list on any request error and `GetRecentEvents` reads `.status_code` (`AttributeError`); this cron's try/except is commented out (follow-up bug) |
 | `tags.bash` | `Apply_Tags.Tags` | yes |
 | `yse_obs.bash` | `YSE_observations.SurveyObs` | yes — XFAIL: `uploaddict` unbound when IMAP fails (follow-up bug) |
-| `yse_ingest.bash` | `QUB_data.YSE` *(inferred)* | yes |
-| `qub_ingest.bash` | `QUB_data.QUB` | yes |
+| `yse_ingest.bash` | `QUB_data.YSE` *(inferred)* | yes (dust map stubbed) |
+| `qub_ingest.bash` | `QUB_data.QUB` | yes (dust map stubbed) |
 | `forcedphot.bash` | `YSE_Forced_Phot.ForcedPhot` | yes (IPP stubbed) |
 | `tns_updates.bash` (twice daily) | `TNS_uploads.TNS_updates` | yes |
 | `tns_ignore_updates.bash` (weekly) | `TNS_uploads.TNS_Ignore_updates` | yes |
 | `yse_fields_new.bash` (twice daily) | not a `CRON_CLASSES` entry: `YSE_App/yse_utils/get_yse_obsfields.py`-style script posting to `/add_yse_survey_fields/` *(inferred)* | script **manual**; endpoint covered by `test_add_survey_field_api_creates_field_and_msb` |
 | `check_yse_obs.bash` | not a `CRON_CLASSES` entry (script) *(inferred)* | **manual** |
-| `yse_duplicates.bash` | `QUB_data.CheckDuplicates` *(inferred)* | yes |
+| `yse_duplicates.bash` | `QUB_data.CheckDuplicates` *(inferred)* | yes (dust map stubbed) |
 | `tns_lastday_updates.bash` (8 h) | `TNS_uploads.TNS_recent` *(inferred)* | yes |
 | `forcedphot_daily.bash` | `YSE_Forced_Phot.ForcedPhotUpdate` *(inferred)* | yes |
 | `tns_latest_webform.bash` | `TNS_uploads.TNS_emails` *(inferred; TNS web-form emails)* | yes (IMAP stubbed) |
@@ -92,17 +104,33 @@ Network and data-shaped errors are recorded in the `-v2` output.
 | `gaia_lc.bash` (hourly) | `Gaia_LC.GaiaLC` | yes |
 | `ztf_forcedphot.bash` | `ZTF_Forced_Phot_Cron.ForcedPhot` | yes |
 | `yse_dbbackup.bash` / `yse_crons_clean_backups.bash` (nightly) | shell scripts (mysqldump + rm) | **manual**: not django_cron, need the prod DB host and backup volume |
-| `decam_ingest.bash` (commented out) | `DECam_upload.DECam` | yes (still in `CRON_CLASSES`) |
+| `decam_ingest.bash` (commented out) | `DECam_upload.DECam` | import only, skipped in CI: `astro_ghost` fetches the VO cone-search registry at import (still in `CRON_CLASSES`) |
 | `yse_setting_fields.bash` | script *(inferred)* | **manual** |
-| `yse_updates_stack.bash` | `QUB_data.YSE_Stack` *(inferred)* | yes |
+| `yse_updates_stack.bash` | `QUB_data.YSE_Stack` *(inferred)* | yes (dust map stubbed) |
 | `new_lowz.bash` | not in `CRON_CLASSES` *(inferred: a query/notification script)* | **manual** |
-| — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE`, `PS1_cutouts.YSE`, `host_associate.YSE`, `PS1_PhotoZ.YSE`, `Query_ZTF.AntaresZTF`, `QUB_data.YSE_Weekly`, `rapid.rapid_classify_cron`, `PhotometryUploadExample.PhotometryUploads`, `TNS_uploads.UpdateGHOST` | import + `do()` smoke; `Photo_Z`/`SDSS_Photo_Z` are skipped when `SciServer` is not installed in the web image |
+| — (no crontab line) | `PS1_cutouts.YSE`, `Query_ZTF.AntaresZTF`, `QUB_data.YSE_Weekly`, `PhotometryUploadExample.PhotometryUploads`, `TNS_uploads.UpdateGHOST` | import + `do()` smoke (`Query_ZTF`/`QUB_data` with the dust map stubbed) |
+| — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE`, `PS1_PhotoZ.YSE`, `rapid.rapid_classify_cron` | skipped in CI: TensorFlow does not import in the web image (`TypeError: Descriptors cannot be created directly`, protobuf pin); `Photo_Z`/`SDSS_Photo_Z` also need `SciServer` |
+| — (no crontab line) | `host_associate.YSE` | skipped in CI: `astro_ghost` fetches the VO cone-search registry at import |
 
-Known follow-ups surfaced by the smoke test (reported in the `-v2` output, not
-failures): duplicate django_cron `code` values (`QUB_data.YSE_Weekly` reuses
-`QUB_data.YSE`'s; `ZTF_Forced_Phot_Cron.ForcedPhot` reuses
-`YSE_Forced_Phot.ForcedPhot`'s), which makes django_cron share one run history
-between two jobs.
+Known follow-ups surfaced by the smoke test (XFAIL or reported in the `-v2`
+output, not failures):
+
+- `TNS_uploads.search()` / `get()` catch every exception and return
+  `[None, 'Error message ...']`; the callers (`GetRecentEvents`,
+  `GetRecentMissingEvents`, `GetAndUploadAllData`) read `response.status_code`
+  and crash with `AttributeError`. `TNS_recent_realtime.do()` has no try/except
+  around the call, so any TNS outage kills that cron (XFAIL).
+- `YSE_observations.SurveyObs.do()` reads `uploaddict` after the try block, so an
+  IMAP failure ends in `UnboundLocalError` (XFAIL).
+- Duplicate django_cron `code` values (`QUB_data.YSE_Weekly` reuses
+  `QUB_data.YSE`'s; `ZTF_Forced_Phot_Cron.ForcedPhot` reuses
+  `YSE_Forced_Phot.ForcedPhot`'s), which makes django_cron share one run history
+  between two jobs.
+- The web image cannot import TensorFlow (`protobuf==4.25.3` vs the TF 2.13
+  generated code), so the four TensorFlow crons are untestable there; either pin
+  `protobuf<4` or set `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`.
+- `PS1_cutouts` queries the `admin` user at import time; `runcrons` for that class
+  crashes on any DB without that user.
 
 ## Manual-only summary
 
