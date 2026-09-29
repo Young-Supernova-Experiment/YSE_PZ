@@ -41,12 +41,9 @@ from .common.legend_layout import (
     GLYPH_HEIGHT as LEGEND_GLYPH_HEIGHT,
     GLYPH_WIDTH as LEGEND_GLYPH_WIDTH,
     LABEL_STANDOFF as LEGEND_LABEL_STANDOFF,
-    PADDING as LEGEND_PADDING,
-    SPACING as LEGEND_SPACING,
-    MAX_COLUMNS as LEGEND_MAX_COLUMNS,
-    legend_column_count,
-    legend_column_grid,
-    legend_grid_height_px,
+    legend_block_height_px,
+    legend_column_blocks,
+    legend_column_margin,
     legend_label_width_px,
     requested_plot_width,
 )
@@ -902,54 +899,55 @@ def _requested_plot_width(request, default):
 
 
 def _add_legend_grid(ax, legend_items, plot_width):
-    """Lay ``legend_items`` out below ``ax``, one column per instrument (#226).
+    """Lay ``legend_items`` out below ``ax``, one column per instrument (#226, #372).
 
     ``legend_items`` are ``(label, renderers, column)`` in legend order;
     consecutive items with the same ``column`` key form one column that
-    reads down (``PS1 g`` over ``PS1 r`` over ``PS1 i`` ...).  Bokeh 2.4.2
-    has no ``Legend.ncols``, so each row is a horizontal ``Legend`` whose
-    labels are padded to the longest label so the columns align, with an
-    empty item where a shorter column has no entry.  How many columns sit
-    side by side comes from :func:`legend_column_count` (documented in
-    ``YSE_App/common/legend_layout.py``); further instruments start on the
-    row below.  Returns the number of rows so the caller can size the plot
-    with :func:`legend_grid_height_px`.
+    reads down (``PS1 g`` over ``PS1 r`` over ``PS1 i`` ...).  Every column
+    is its own vertical ``Legend`` added ``below`` the plot, as wide as its
+    own longest label, at the x offset :func:`legend_column_blocks` packs it
+    to; a new block of columns starts under the previous one only when the
+    next column would not fit ``plot_width``.  A column legend's margin
+    collapses its side panel so all columns of a block share one top edge,
+    and an empty legend after each block reserves the block's height (see
+    ``YSE_App/common/legend_layout.py``).  Returns the height in pixels the
+    legend adds below the plot so the caller can size the figure.
     """
     from bokeh.models import LegendItem
 
-    labels = [label for label, _renderers, _column in legend_items]
     columns = [
         [(label, renderers) for label, renderers, _column in items]
         for _column, items in group_consecutive(legend_items, key=lambda item: item[2])
     ]
-    ncols = legend_column_count(
-        labels, plot_width, max_columns=min(LEGEND_MAX_COLUMNS, max(1, len(columns))),
+    blocks = legend_column_blocks([[label for label, _r in column] for column in columns], plot_width)
+    common = dict(
+        click_policy='hide',
+        label_height=LEGEND_GLYPH_HEIGHT,
+        glyph_width=LEGEND_GLYPH_WIDTH,
+        glyph_height=LEGEND_GLYPH_HEIGHT,
+        label_standoff=LEGEND_LABEL_STANDOFF,
+        spacing=0,
+        padding=0,
+        border_line_color=None,
     )
-    label_width = legend_label_width_px(labels)
-    rows = legend_column_grid(columns, ncols)
-    for row in rows:
-        items = [
-            LegendItem(label=cell[0], renderers=cell[1]) if cell is not None
-            else LegendItem(label='', renderers=[])
-            for cell in row
-        ]
-        legend = Legend(
-            items=items,
-            orientation='horizontal',
-            click_policy='hide',
-            location='top_left',
-            label_width=label_width,
-            label_height=LEGEND_GLYPH_HEIGHT,
-            glyph_width=LEGEND_GLYPH_WIDTH,
-            glyph_height=LEGEND_GLYPH_HEIGHT,
-            label_standoff=LEGEND_LABEL_STANDOFF,
-            spacing=LEGEND_SPACING,
-            padding=LEGEND_PADDING,
-            margin=0,
-            border_line_color=None,
-        )
-        ax.add_layout(legend, 'below')
-    return len(rows)
+    height = 0
+    for block in blocks:
+        for index, x in block:
+            column = columns[index]
+            margin = legend_column_margin(len(column))
+            ax.add_layout(Legend(
+                items=[LegendItem(label=label, renderers=renderers) for label, renderers in column],
+                orientation='vertical',
+                location=(x, 2 * margin),
+                label_width=legend_label_width_px(label for label, _r in column),
+                margin=margin,
+                **common,
+            ), 'below')
+        block_height = legend_block_height_px(max(len(columns[index]) for index, _x in block))
+        # no items: draws nothing, its panel is 2 * margin tall
+        ax.add_layout(Legend(items=[], margin=block_height // 2, **common), 'below')
+        height += block_height
+    return height
 
 
 @login_required
@@ -1421,7 +1419,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
-    legend_nrows = _add_legend_grid(ax, legend_it, plot_width)
+    legend_height = _add_legend_grid(ax, legend_it, plot_width)
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
@@ -1443,7 +1441,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     #ax.y_range=Range1d(np.max(mags[mags != None])+0.25,np.min(mags[mags != None])-0.5)
     ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 400 + legend_grid_height_px(legend_nrows)
+    ax.plot_height = 400 + legend_height
     ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
@@ -1748,7 +1746,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     hline = Span(location=0, dimension='width', line_color='black',
                  line_width=3)
     ax.add_layout(hline)
-    legend_nrows = _add_legend_grid(ax, legend_it, plot_width)
+    legend_height = _add_legend_grid(ax, legend_it, plot_width)
     
 
     
@@ -1769,7 +1767,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ax.extra_x_ranges = {"dateax": Range1d(np.min(mjd)-10,np.max(mjd)+10)}
         ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 200 + legend_grid_height_px(legend_nrows)
+    ax.plot_height = 200 + legend_height
     ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
