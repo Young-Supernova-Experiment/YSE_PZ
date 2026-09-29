@@ -48,6 +48,7 @@ from .common.legend_layout import (
 from .common.utilities import date_to_mjd
 from .services.visibility import group_access_plot_cache_token
 from .services import bazin as bazin_fits
+from .services import phot_points
 
 import copy
 import functools
@@ -1185,6 +1186,10 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     return _bokeh_ajax_response(ax, "my plot")
 
 
+def _limit_or_nan(limit):
+    return np.nan if limit is None else limit
+
+
 @login_required
 def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     _load_heavy_plot_stack()
@@ -1227,12 +1232,6 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ).select_related('instrument', 'instrument__telescope')
     }
 
-    fluxes = np.array([p.flux for p in phot_rows], dtype=object)
-    flux_errs = np.array([p.flux_err for p in phot_rows], dtype=object)
-    flux_zpts = np.array(
-        [p.flux_zero_point if p.flux_zero_point is not None else 27.5 for p in phot_rows],
-        dtype=float,
-    )
     mags = np.array([p.mag for p in phot_rows], dtype=object)
     mag_errs = np.array([p.mag_err for p in phot_rows], dtype=object)
     disc_points = np.array([p.discovery_point for p in phot_rows], dtype=bool)
@@ -1245,8 +1244,18 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     instrument_name = np.array([band_lookup[b].instrument.name for b in band])
     disp_symbol = np.array([band_lookup[b].disp_symbol for b in band])
     disp_color = np.array([band_lookup[b].disp_color for b in band])
-    mag_errs_tmp = mag_errs.copy()
-    mag_errs_tmp[mag_errs == None] = 0.01
+    # Detection / upper-limit classification shared with the stored
+    # statistics (services.phot_points, #368): the triangles this plot draws
+    # are the limits the Photometry statistics block counts.
+    is_det = np.array(
+        [phot_points.is_detection(p.mag, p.mag_err, p.flux, p.flux_err) for p in phot_rows],
+        dtype=bool,
+    )
+    ulim_mags = np.array(
+        [_limit_or_nan(phot_points.limiting_mag(p.flux, p.flux_err, p.flux_zero_point)) for p in phot_rows],
+        dtype=float,
+    )
+    is_ulim = np.isfinite(ulim_mags)
 
     colorlist = ['#8dd3c7','#bebada','#fb8072','#80b1d3','#fdb462','#b3de69','#fccde5','#d9d9d9']
     TOOLTIPS = [
@@ -1301,17 +1310,12 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
                 if 'bessell' in bandpassdict[bandkey]: zpsys = np.append(zpsys,['Vega']*len(mag_errs[iBand]))
                 else: zpsys = np.append(zpsys,['AB']*len(mag_errs[iBand]))
 
-        iPlot = (band_name == bn) & (instrument_name == inn) & (mags != None) & \
-                (mag_errs != None) & ((mag_errs_tmp <= 0.36) | (fluxes == None) | (flux_errs == None))
-        iPlotUlimFlux = (band_name == bn) & (instrument_name == inn) & (fluxes != None) & (flux_errs != None) & (flux_errs != 0)
-        iPlotUlimFlux2 = fluxes[iPlotUlimFlux]/flux_errs[iPlotUlimFlux] < 3
-        mags_ulim = -2.5*np.log10((fluxes[iPlotUlimFlux][iPlotUlimFlux2] + \
-            3*flux_errs[iPlotUlimFlux][iPlotUlimFlux2]).astype(float)) + flux_zpts[iPlotUlimFlux][iPlotUlimFlux2]
-        iPlotUlimFlux3 = mags_ulim == mags_ulim
-        upperlimmag = np.append(upperlimmag,mags_ulim[iPlotUlimFlux3])
-        upperlimmjd = np.append(upperlimmjd,mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist())
-        
-        
+        iPlot = (band_name == bn) & (instrument_name == inn) & is_det
+        iUlim = (band_name == bn) & (instrument_name == inn) & is_ulim
+        mags_ulim = ulim_mags[iUlim]
+        upperlimmag = np.append(upperlimmag,mags_ulim)
+        upperlimmjd = np.append(upperlimmjd,mjds[iUlim].tolist())
+
         source = ColumnDataSource(data=dict(x=mjds[iPlot].tolist(),
                                             y=mags[iPlot].tolist(),
                                             date=obs_dates_str[iPlot].tolist(),
@@ -1326,15 +1330,15 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
                              tooltips=TOOLTIPS,toggleable=False)
         ax.add_tools(g1_hover)
 
-        ulim_x = mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3]
-        ulim_y = mags_ulim[iPlotUlimFlux3]
+        ulim_x = mjds[iUlim]
+        ulim_y = mags_ulim
         p_ulim = None
         if len(ulim_x):
             source = ColumnDataSource(data=dict(x=ulim_x.tolist(),
                                                 y=ulim_y.tolist(),
-                                                date=obs_dates_str[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist(),
-                                                data_quality=data_quality[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist(),
-                                                magsys=mag_sys[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist(),
+                                                date=obs_dates_str[iUlim].tolist(),
+                                                data_quality=data_quality[iUlim].tolist(),
+                                                magsys=mag_sys[iUlim].tolist(),
                                                 telescope=[tel_label]*len(ulim_x),
                                                 filter=[short_filter]*len(ulim_x)))
 
