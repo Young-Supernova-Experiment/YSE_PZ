@@ -1443,7 +1443,7 @@ class YSE_Weekly(CronJobBase):
     RUN_EVERY_MINS = 30
 
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
-    code = 'YSE_App.data_ingest.QUB_data.YSE'
+    code = 'YSE_App.data_ingest.QUB_data.YSE_Weekly'
 
     def do(self):
 

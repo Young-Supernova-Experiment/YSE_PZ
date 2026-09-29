@@ -820,13 +820,17 @@ class processTNS:
         search_obj=[("ra",""), ("dec",""), ("radius",""), ("units",""),
                     ("objname",""), ("internal_name",""),("public_timestamp",datemin)]
 
-        response=search(self.tnsapi, search_obj, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-        count = 0
-        while response.status_code == 429 and count < 5:
-            print('TNS request failed.  Waiting 60 seconds to try again...')
-            time.sleep(60)
+        try:
             response=search(self.tnsapi, search_obj, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-            count += 1
+            count = 0
+            while response.status_code == 429 and count < 5:
+                print('TNS request failed.  Waiting 60 seconds to try again...')
+                time.sleep(60)
+                response=search(self.tnsapi, search_obj, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+                count += 1
+        except TNSRequestError as e:
+            print('TNS search failed: %s'%e)
+            return 0
         json_data = format_to_json(response.text)
 
         objs,ras,decs = [],[],[]
@@ -838,11 +842,15 @@ class processTNS:
                             ("photometry","0"),
                             ("spectra","0")]
 
-            response_single=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-            while response_single.status_code == 429:
-                print('TNS request failed.  Waiting 60 seconds to try again...')
-                time.sleep(60)
+            try:
                 response_single=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+                while response_single.status_code == 429:
+                    print('TNS request failed.  Waiting 60 seconds to try again...')
+                    time.sleep(60)
+                    response_single=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+            except TNSRequestError as e:
+                print('TNS get failed for %s: %s'%(jd['objname'],e))
+                continue
 
             json_data_single = format_to_json(response_single.text)
 
@@ -859,11 +867,15 @@ class processTNS:
         datemin = (datetime.now() - timedelta(days=ndays)).isoformat() #strftime(date_format)
         search_obj=[("ra",""), ("dec",""), ("radius",""), ("units",""),
                     ("objname",""), ("internal_name",""),("public_timestamp",datemin)]
-        response=search(self.tnsapi, search_obj, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-        if response.status_code == 429:
-            print('TNS request failed.  Waiting 60 seconds to try again...')
-            time.sleep(60)
+        try:
             response=search(self.tnsapi, search_obj, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+            if response.status_code == 429:
+                print('TNS request failed.  Waiting 60 seconds to try again...')
+                time.sleep(60)
+                response=search(self.tnsapi, search_obj, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+        except TNSRequestError as e:
+            print('TNS search failed: %s'%e)
+            return 0
         json_data = format_to_json(response.text)
 
         objs,ras,decs = [],[],[]
@@ -874,11 +886,15 @@ class processTNS:
                              ("spectra","0")]
 
             
-            response_single=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-            if response_single.status_code == 429:
-                print('TNS request failed.  Waiting 60 seconds to try again...')
-                time.sleep(60)
+            try:
                 response_single=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+                if response_single.status_code == 429:
+                    print('TNS request failed.  Waiting 60 seconds to try again...')
+                    time.sleep(60)
+                    response_single=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+            except TNSRequestError as e:
+                print('TNS get failed for %s: %s'%(jd['objname'],e))
+                continue
 
             json_data_single = format_to_json(response_single.text)
             objs.append(json_data_single['data']['objname'])
@@ -1065,12 +1081,18 @@ class processTNS:
                                     ("spectra","1")]
 
 
-                    response=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-                    if response.status_code == 429:
-                        print('TNS failed!  waiting 60 seconds...')
-                        time.sleep(60)
+                    try:
                         response=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
-                        
+                        if response.status_code == 429:
+                            print('TNS failed!  waiting 60 seconds...')
+                            time.sleep(60)
+                            response=get(self.tnsapi, TNSGetSingle, self.tnsapikey, self.tns_bot_id, self.tns_bot_name, getattr(self,'tns_marker_type','bot'))
+                    except TNSRequestError as e:
+                        # no TNS data for this object; proceed as if doTNS were off for it
+                        print('TNS get failed for %s: %s'%(objs[j],e))
+                        json_data += [None]
+                        continue
+
                     json_data += [format_to_json(response.text)]
                     total_objs += 1
                 else:
@@ -1282,6 +1304,9 @@ def format_to_json(source):
     #result=json.dumps(parsed,indent=4)
     return parsed #result
 
+class TNSRequestError(Exception):
+    """Raised by search()/get() when the TNS request itself fails (no Response)."""
+
 # function for search obj
 def search(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
   try:
@@ -1298,7 +1323,7 @@ def search(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # return response
     return response
   except Exception as e:
-    return [None,'Error message : \n'+str(e)]
+    raise TNSRequestError('Error message : \n'+str(e)) from e
 
 # function for get obj
 def get(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
@@ -1316,7 +1341,7 @@ def get(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # return response
     return response
   except Exception as e:
-    return [None,'Error message : \n'+str(e)]
+    raise TNSRequestError('Error message : \n'+str(e)) from e
 
 def get_file(url,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
   try:
@@ -1732,16 +1757,16 @@ class TNS_recent_realtime(CronJobBase):
             sys.exit(1)
 
 
-        #try:
-        tnsproc.noupdatestatus = True
-        nsn = tnsproc.GetRecentEvents(ndays=tnsproc.tns_fastupdates_nminutes/60./24.)
-        #except Exception as e:
-        #    print("Sending error email")
-        #    exc_type, exc_obj, exc_tb = sys.exc_info()
-        #    nsn = 0
-        #    sendemail(from_addr, options.dbemail, subject,
-        #              html_msg%(e,exc_tb.tb_lineno),
-        #              options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
+        try:
+            tnsproc.noupdatestatus = True
+            nsn = tnsproc.GetRecentEvents(ndays=tnsproc.tns_fastupdates_nminutes/60./24.)
+        except Exception as e:
+            print("Sending error email")
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            nsn = 0
+            sendemail(from_addr, options.dbemail, subject,
+                      html_msg%(e,exc_tb.tb_lineno),
+                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
 
         print('TNS -> YSE_PZ took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
 
