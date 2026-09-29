@@ -91,7 +91,6 @@ _BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up'
 TELESCOPE_SHORT_LABELS = (
     (('ztf',), 'ZTF'),
     (('swift', 'uvot'), 'Swift'),
-    (('lsst', 'rubin'), 'Rubin'),
     (('gpc1', 'ps1', 'pan-starrs', 'panstarrs'), 'PS1'),
     (('swope',), 'Swope'),
     (('acam', 'atlas'), 'ATLAS'),
@@ -101,6 +100,7 @@ TELESCOPE_SHORT_LABELS = (
     (('sta1600', 'soar'), 'SOAR'),
     (('ptf',), 'PTF'),
     (('hst', 'acs', 'wfc3'), 'HST'),
+    (('lsst', 'rubin', 'simonyi'), 'LSST'),
 )
 
 # Instrument / telescope name substrings -> Bokeh glyph.
@@ -116,7 +116,7 @@ TELESCOPE_SYMBOL_RULES = (
     (('ptf',), 'cross'),
     (('swift', 'uvot'), 'diamond'),
     (('hst', 'wfc3', 'acs'), 'square'),
-    (('lsst', 'rubin'), 'plus'),
+    (('lsst', 'rubin', 'simonyi'), 'plus'),
 )
 
 _FALLBACK_COLORS = ('#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9')
@@ -273,7 +273,6 @@ def telescope_symbol_groups_for_display() -> list[dict]:
     """Human-readable telescope -> symbol groups."""
     labels = {
         'diamond': 'ZTF, Swift/UVOT',
-        'plus': 'Rubin / LSST',
         'square': 'PS1 (GPC1), HST',
         'circle': 'Swope',
         'asterisk': 'ATLAS (ACAM)',
@@ -282,6 +281,7 @@ def telescope_symbol_groups_for_display() -> list[dict]:
         'star': 'DECam (ACP)',
         'triangle': 'SOAR / STA1600 (default fallback)',
         'cross': 'PTF',
+        'plus': 'LSST (Rubin LSSTCam)',
     }
     seen = {}
     for _patterns, symbol in TELESCOPE_SYMBOL_RULES:

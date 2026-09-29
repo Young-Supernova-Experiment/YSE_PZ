@@ -201,7 +201,8 @@ class LegendOrderingAndColourTests(TestCase):
         self.assertEqual(telescope_display_name("GPC1", "Pan-STARRS1"), "PS1")
         self.assertEqual(telescope_display_name("Thacher-Cam", "Thacher"), "Thacher")
         self.assertEqual(telescope_display_name("UVOT", "Swift"), "Swift")
-        self.assertEqual(telescope_display_name("LSSTCam", "Rubin"), "Rubin")
+        self.assertEqual(telescope_display_name("LSSTCam", "Simonyi Survey Telescope"), "LSST")
+        self.assertEqual(telescope_display_name("LSSTCam", None), "LSST")
 
     def test_sort_key_orders_by_telescope_then_wavelength(self):
         labels = [
@@ -225,6 +226,15 @@ class LegendOrderingAndColourTests(TestCase):
     def test_lsst_bands_share_the_family_colours(self):
         for filt in "ugrizy":
             self.assertEqual(band_display_color(f"{filt}-LSST"), FILTER_COLORS[filt], filt)
+            self.assertEqual(band_display_color(filt, None), FILTER_COLORS[filt], filt)
+            self.assertEqual(band_display_color(f"lsst{filt}"), FILTER_COLORS[filt], filt)
+
+    def test_lsstcam_series_sort_by_wavelength(self):
+        ordered = sorted(
+            "yzirgu",
+            key=lambda band: legend_sort_key(band, instrument_name="LSSTCam", telescope_name="Simonyi Survey Telescope"),
+        )
+        self.assertEqual("".join(ordered), "ugrizy")
 
     def test_unknown_filter_colour_does_not_depend_on_plot_order(self):
         self.assertEqual(band_display_color("J", fallback_index=0), band_display_color("J", fallback_index=5))

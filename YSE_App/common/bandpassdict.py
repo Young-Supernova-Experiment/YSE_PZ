@@ -104,6 +104,12 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: GPC2 - i': 'sdssi',
 				'Band: ZTF-Cam - g': 'sdssg',
 				'Band: ZTF-Cam - r': 'sdssr',
-				'Band: ZTF-Cam - i': 'sdssi'}
+				'Band: ZTF-Cam - i': 'sdssi',
+				'Band: LSSTCam - u': 'lsstu',
+				'Band: LSSTCam - g': 'lsstg',
+				'Band: LSSTCam - r': 'lsstr',
+				'Band: LSSTCam - i': 'lssti',
+				'Band: LSSTCam - z': 'lsstz',
+				'Band: LSSTCam - y': 'lssty'}
 #				'Band: Gaia-Photometric - Other-'}
 
