@@ -12,14 +12,15 @@
 		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
 	</div></div>
 	{% endif %}
-	<div class="row">
-		<div class="col-lg-6 col-12">
-			<div class="box box-default box-solid">
-				<div class="box-header with-border"><strong>Channels</strong></div>
-				<div class="box-body">
-					<form method="post" action="{% url 'notification_preferences' %}">
-						{% csrf_token %}
-						{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+	<form method="post" action="{% url 'notification_preferences' %}" id="yse-notification-preferences">
+		{% csrf_token %}
+		{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+		<div class="row">
+			<div class="col-lg-5 col-12">
+				<div class="box box-default box-solid">
+					<div class="box-header with-border"><strong>Channels</strong></div>
+					<div class="box-body">
+						<p class="text-muted small">Master switches. A notification reaches a channel only when the channel is on here <em>and</em> for its kind below.</p>
 						<div class="form-group form-check">
 							{{ form.in_app }}
 							<label class="form-check-label" for="{{ form.in_app.id_for_label }}">In-app: show notifications in the <a href="{% url 'notification_list' %}">list</a> and the navbar badge</label>
@@ -34,12 +35,45 @@
 							{% if form.slack_webhook_url.errors %}<div class="text-danger small">{{ form.slack_webhook_url.errors }}</div>{% endif %}
 							<small class="form-text text-muted">Each notification is posted there as text.{% if not slack_enabled %} Slack delivery is disabled on this server.{% endif %}</small>
 						</div>
+					</div>
+				</div>
+			</div>
+			<div class="col-lg-7 col-12">
+				<div class="box box-default box-solid">
+					<div class="box-header with-border"><strong>What to receive, and where</strong></div>
+					<div class="box-body p-0">
+						<table class="table table-sm mb-0 yse-pref-matrix">
+							<thead>
+								<tr>
+									<th>Kind</th>
+									{% for channel, label in channel_labels %}<th class="text-center yse-pref-channel-{{ channel }}">{{ label }}</th>{% endfor %}
+								</tr>
+							</thead>
+							<tbody>
+								{% for group, label, description, cells in matrix_rows %}
+								<tr data-group="{{ group }}">
+									<td>
+										<strong>{{ label }}</strong>
+										<div class="text-muted small">{{ description }}</div>
+									</td>
+									{% for channel, field in cells %}
+									<td class="text-center align-middle">
+										<label class="sr-only" for="{{ field.id_for_label }}">{{ field.label }}</label>
+										{{ field }}
+									</td>
+									{% endfor %}
+								</tr>
+								{% endfor %}
+							</tbody>
+						</table>
+					</div>
+					<div class="box-footer">
 						<button type="submit" class="btn btn-primary">Save</button>
 						<a class="btn btn-outline-secondary" href="{% url 'notification_list' %}">Back to notifications</a>
-					</form>
+					</div>
 				</div>
 			</div>
 		</div>
-	</div>
+	</form>
 </section>
 {% endblock %}
