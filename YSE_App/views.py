@@ -2400,9 +2400,13 @@ class SearchResultsView(TemplateView):
         if per_page not in SEARCH_PER_PAGE_CHOICES:
             per_page = SEARCH_PER_PAGE_CHOICES[0]
 
-        table = SearchTransientTable(
-            filterset.qs, prefix='', exclude=() if cone else ('separation',),
-        )
+        excluded = () if cone else ('separation',)
+        annotation_column = filterset.annotation_column_spec
+        if annotation_column is None:
+            excluded = excluded + ('annotation_value',)
+        table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
+        if annotation_column is not None:
+            table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
         RequestConfig(self.request, paginate={'per_page': per_page}).configure(table)
 
         visible = {name for _, names in FIELD_GROUPS for name in names}
@@ -2438,6 +2442,7 @@ class SearchResultsView(TemplateView):
             'carried_params': carried,
             'active_chips': chips,
             'cone': cone,
+            'annotation_column': filterset.annotation_column_label,
             'table': table,
             'result_count': table.page.paginator.count if hasattr(table, 'page') else None,
             'per_page': per_page,

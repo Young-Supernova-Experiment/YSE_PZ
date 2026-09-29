@@ -308,6 +308,56 @@ class AnalysisResultFileAdmin(admin.ModelAdmin):
 	raw_id_fields = ("run",)
 
 
+# --- Transient annotations (#317) ----------------------------------------------
+from YSE_App.models.annotation_models import TransientAnnotation, TransientAnnotationValue  # noqa: E402
+
+
+class TransientAnnotationForm(forms.ModelForm):
+	data = forms.JSONField(required=False, initial=dict, widget=forms.Textarea(attrs={"rows": 8, "cols": 80}))
+
+	class Meta:
+		model = TransientAnnotation
+		exclude = ("created_by", "modified_by")
+
+	def clean_data(self):
+		value = self.cleaned_data.get("data")
+		if value in (None, ""):
+			return {}
+		if not isinstance(value, dict):
+			raise forms.ValidationError("Annotation data must be a JSON object.")
+		return value
+
+
+class TransientAnnotationValueInline(admin.TabularInline):
+	model = TransientAnnotationValue
+	extra = 0
+	can_delete = False
+	fields = ("key", "value_text", "value_num")
+	readonly_fields = fields
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(TransientAnnotation)
+class TransientAnnotationAdmin(admin.ModelAdmin):
+	form = TransientAnnotationForm
+	list_display = ("transient", "origin", "verdict", "service", "modified_by", "modified_date")
+	list_filter = ("origin", "service")
+	search_fields = ("transient__name", "origin")
+	raw_id_fields = ("transient", "run")
+	filter_horizontal = ("groups",)
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+	inlines = (TransientAnnotationValueInline,)
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+		obj.sync_values()
+
+
 # --- Background job queue (#263) and notifications (#266) -------------------
 from django.utils import timezone as _tz  # noqa: E402
 

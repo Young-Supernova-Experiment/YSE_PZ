@@ -26,4 +26,5 @@ from YSE_App.serializers.allocation_serializers import *
 from YSE_App.serializers.collaboration_serializers import *
 from YSE_App.serializers.sharing_serializers import *
 from YSE_App.serializers.instrument_log_serializers import *
+from YSE_App.serializers.annotation_serializers import *
 from YSE_App.serializers.analysis_serializers import *

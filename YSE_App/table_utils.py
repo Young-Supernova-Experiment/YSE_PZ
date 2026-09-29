@@ -443,13 +443,17 @@ class SearchTransientTable(TransientTable):
     def render_separation(self, value):
         return '%.1f' % (float(value) * 3600.0)
 
+    # #319: one annotation ``origin.key`` per row (``annotate_annotation_column``); excluded unless asked for.
+    annotation_value = tables.Column(accessor='annotation_value', verbose_name='Annotation', orderable=True,
+                                     order_by=('annotation_value_num', 'annotation_value'), default='-')
+
     def order_separation(self, queryset, is_descending):
         return (stable_order_by(queryset, 'separation', is_descending), True)
 
     class Meta(TransientTable.Meta):
         fields = ('name_string', 'separation', 'ra_string', 'dec_string', 'disc_date_string', 'recent_mag',
                   'recent_magdate', 'peak_mag', 'mw_ebv', 'obs_group', 'best_spec_class', 'best_redshift',
-                  'status_string')
+                  'annotation_value', 'status_string')
         sequence = fields
         attrs = dict(TransientTable.Meta.attrs, id='search_transient_tbl')
 

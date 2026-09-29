@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('YSE_App', '0020_analysis_services'),
+        ('YSE_App', '0021_annotations'),
     ]
 
     operations = [
