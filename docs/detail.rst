@@ -42,6 +42,11 @@ galaxy name, coordinates, and photometric redshift are also included
 though host galaxy matching could be improved.  External links on
 the right-hand side direct to the TNS page, Simbad, other archival results,
 and ZTF data through a `MARS <https://mars.lco.global/>`_ cone search.
+The **Observability** button under the coordinates opens
+``/observability/<id>/``: tonight's altitude and airmass curve, twilight
+bands and Moon at every telescope in the database, with a table of the
+hours each site can observe the transient and a date picker for other
+nights (see ``docs/observability.md``).
 
 .. image:: _static/yse_pz_detailsummary.png
 
@@ -54,6 +59,16 @@ photometry and a gzipped spectra file, with the "Download All Data"
 button providing a JSON dictionary with every associated piece of
 data in the database for a given transient.  Spectra can also be
 uploaded directly to YSE-PZ through the web form.
+
+The light-curve legend has one column per instrument, read top to
+bottom, in the order PS1/2, DECam, Swope, LSST, ZTF, ATLAS, Swift and
+then any other instrument alphabetically; within a column the bands run
+from bluest to reddest by effective wavelength, with bands of unknown
+wavelength last.  As many instrument columns sit side by side as the
+plot width allows, and further instruments continue on the rows below.
+Clicking a legend entry hides that series (points, error bars and upper
+limits).  The order lives in ``YSE_App/common/band_order.py`` and the
+column arithmetic in ``YSE_App/common/legend_layout.py``.
 
 On the bottom right, the "Tags" area allows users to apply tags
 that identify a transient with a certain label.  Querying on tags
