@@ -32,14 +32,13 @@ legacy parameter names ``created_date_gte``, ``status_in``, ``tag_in``,
 ``peak_mag_lte`` ... keep working) and the search page.
 """
 
-import datetime
 import math
 import re
 
 import django_filters
 from django import forms
 from django.core.exceptions import ValidationError
-from django.db.models import Exists, F, FloatField, OuterRef, Q, Value
+from django.db.models import DateTimeField, Exists, F, FloatField, Func, OuterRef, Q, Value
 from django.db.models.functions import (
     Abs,
     ACos,
@@ -79,6 +78,8 @@ __all__ = [
     'annotate_gal_b',
     'annotate_best_redshift',
     'annotate_separation',
+    'UtcNowMinusSeconds',
+    'NowMjd',
     'cone_q',
     'parse_coordinate_pair',
     'parse_quick_search',
@@ -265,6 +266,52 @@ def _rows_visible_to(qs, user):
         return qs
     names = list(user.groups.values_list('name', flat=True)) if user.is_authenticated else []
     return qs.filter(Q(groups__isnull=True) | Q(groups__name__in=names))
+
+
+class UtcNowMinusSeconds(Func):
+    """``now - seconds`` evaluated by the database, so saved SQL stays relative.
+
+    The relative-time filters (``days_since_disc_max``, ``days_since_last_det_max``)
+    used to compare against ``timezone.now()`` from Python; a search saved as an
+    Explorer query (``services/search_queries.py``) would then freeze that
+    instant. ``UTC_TIMESTAMP()`` on MySQL and ``datetime('now')`` on sqlite are
+    both UTC, which is how ``DateTimeField`` values are stored.
+    """
+
+    output_field = DateTimeField()
+
+    def __init__(self, seconds):
+        self.seconds = int(round(float(seconds)))
+        super().__init__()
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return '(UTC_TIMESTAMP() - INTERVAL %d SECOND)' % self.seconds, []
+
+    def as_mysql(self, compiler, connection, **extra_context):
+        return self.as_sql(compiler, connection, **extra_context)
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        return "datetime('now', '-%d seconds')" % self.seconds, []
+
+
+class NowMjd(Func):
+    """The current MJD, evaluated by the database (see ``UtcNowMinusSeconds``)."""
+
+    output_field = FloatField()
+
+    def __init__(self):
+        super().__init__()
+
+    def as_sql(self, compiler, connection, **extra_context):
+        # UNIX_TIMESTAMP() with no argument is epoch seconds, independent of the
+        # session time zone; 40587 is the MJD of 1970-01-01.
+        return '(UNIX_TIMESTAMP() / 86400.0 + 40587.0)', []
+
+    def as_mysql(self, compiler, connection, **extra_context):
+        return self.as_sql(compiler, connection, **extra_context)
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        return "(julianday('now') - 2400000.5)", []
 
 
 def _now_mjd():
@@ -540,10 +587,10 @@ class TransientSearchFilterSet(django_filters.FilterSet):
 
     # --- time ----------------------------------------------------------
     def filter_days_since_disc_max(self, qs, name, value):
-        return qs.filter(disc_date__gte=timezone.now() - datetime.timedelta(days=float(value)))
+        return qs.filter(disc_date__gte=UtcNowMinusSeconds(float(value) * 86400.0))
 
     def filter_days_since_last_det_max(self, qs, name, value):
-        return qs.filter(photstat__last_detected_mjd__gte=_now_mjd() - float(value))
+        return qs.filter(photstat__last_detected_mjd__gte=NowMjd() - _float(value))
 
     # --- classification ------------------------------------------------
     def filter_classification(self, qs, name, value):

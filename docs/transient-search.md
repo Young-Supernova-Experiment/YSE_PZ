@@ -90,12 +90,41 @@ backfill in `docs/photstat.md` not yet run) never matches them.
 * Non-staff users of the API still go through `filter_transients_by_user_access` before the filters
   (unchanged from before this work).
 
+## Saving a search as an SQL query (personal dashboard)
+
+The "Save as SQL query" button on the search page (and `POST /api/transients/save_search/`) turns the
+current filters into a django-sql-explorer `Query`, the same kind of saved query the personal dashboard,
+Summary View and the bulk photometry download already use:
+
+* `YSE_App/services/search_queries.py::compiled_search` compiles the FilterSet's queryset for the
+  `explorer` connection (`values('name')`, ordering kept) and inlines the parameters as SQL literals
+  (`sql_literal`: numbers bare, strings single-quoted, backslashes doubled only on MySQL, datetimes as the
+  backend's UTC text). The statement is one `SELECT YSE_App_transient.name FROM ... WHERE ... ORDER BY ...`
+  that passes `dashboard_sql_is_supported`; the tests run it on the `explorer` connection (sqlite and
+  docker MySQL) and check it returns exactly the rows the ORM returns, in the same order.
+* Relative-time filters (`days_since_disc_max`, `days_since_last_det_max`) compile to database time
+  (`UTC_TIMESTAMP() - INTERVAL n SECOND`, `UNIX_TIMESTAMP()/86400 + 40587`; `datetime('now', ...)` and
+  `julianday('now')` on sqlite), so a saved "last detected within 5 days" keeps moving. Every other value
+  is frozen as typed. Filters that depend on who saves (`has_spectrum` for a non-staff user,
+  `visible_to_group`) bake that user's group membership into the SQL.
+* The modal asks for a title (suggested from the active filters; must be unique, because Summary View
+  and the download look queries up by title), has an "Add to my personal dashboard" box (checked by
+  default; creates the `UserQuery` row, once) and shows the SQL that will be saved. The description of
+  the `Query` lists the filters and the shareable search URL. A search that does not validate (an
+  unknown status, a cone with only RA) cannot be saved and the modal says why.
+* After saving, the page confirms with the title, a link to the query in the Query Explorer (staff, who
+  may edit queries there) and to the dashboard section. Anyone can pick the query in "Add Dashboard
+  Query" on their own dashboard.
+* API: `POST /api/transients/save_search/` with `title`, optional `add_to_dashboard` and either
+  `params` (JSON object, list values for multi-selects) or `query_string`; returns `query_id`,
+  `explorer_url`, `sql`, `user_query_id`, `dashboard_url`; 400 with the reason otherwise.
+
 ## Not in this change (rest of #284)
 
 * Stored `gal_b` / `gal_l` columns with an index and backfill (#286): the expression form above is
   used until production `EXPLAIN` data says otherwise; no migration ships here.
-* "Save this search" as a personal-dashboard `UserQuery` (needs a way to store the filter dict;
-  `python_query` is a 64-character callable name), bulk actions on results and CSV export (#287).
+* Bulk actions on results (status change, tag, photometry download) and CSV export (#287); saving a
+  search is covered above.
 * Annotation-origin filters (#319, after #317).
 
 ## Tests
