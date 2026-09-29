@@ -1,0 +1,228 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<section class="content-header">
+	<h1>Observability of <a href="{% url 'transient_detail' transient.slug %}">{{ transient.name }}</a>
+		<small class="text-muted">{{ transient.CoordString.0 }} {{ transient.CoordString.1 }} &middot; night of {{ night_iso }}</small>
+	</h1>
+</section>
+{% endblock %}
+
+{% block content %}
+<section class="content yse-observability" id="yse-observability"
+	data-url="{{ data_url }}" data-date="{{ night_iso }}" data-mine="{% if mine %}1{% else %}0{% endif %}"
+	data-observable-alt="{{ observable_alt }}">
+	{% if date_error %}<div class="alert alert-warning">{{ date_error }}</div>{% endif %}
+	<div class="row">
+		<div class="col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border d-flex align-items-center flex-wrap">
+					<form method="get" class="form-inline mb-0" id="obs-night-form">
+						<label class="mr-2 mb-0" for="obs-date"><strong>Night of</strong></label>
+						<a class="btn btn-sm btn-outline-secondary mr-1" href="?date={{ prev_night }}{% if mine %}&mine=1{% endif %}" title="previous night">&laquo;</a>
+						<input type="date" class="form-control form-control-sm" id="obs-date" name="date" value="{{ night_iso }}">
+						<a class="btn btn-sm btn-outline-secondary ml-1" href="?date={{ next_night }}{% if mine %}&mine=1{% endif %}" title="next night">&raquo;</a>
+						<a class="btn btn-sm btn-outline-secondary ml-2" href="?date={{ tonight }}{% if mine %}&mine=1{% endif %}">Tonight</a>
+						<div class="form-check ml-3">
+							<input class="form-check-input" type="checkbox" id="obs-mine" name="mine" value="1"{% if mine %} checked{% endif %}>
+							<label class="form-check-label" for="obs-mine">Only telescopes my groups have time on</label>
+						</div>
+					</form>
+					<span class="ml-auto text-muted small" id="obs-status">Loading {{ telescopes|length }} telescope{{ telescopes|length|pluralize }}&hellip;</span>
+				</div>
+				<div class="box-body">
+					<p class="text-muted small mb-2">
+						The evening date is the telescope's local date. Shading: day, civil, nautical and astronomical twilight; dark is the astronomical night.
+						The dotted line is {{ observable_alt }}&deg; altitude (airmass 2); <em>hours observable</em> counts the dark hours above it.
+						Dashed grey is the Moon's altitude. Times are UT. Computed with astroplan; positions are geometric (no refraction).
+					</p>
+					{% if not telescopes %}
+					<div class="alert alert-info mb-0">No telescope with coordinates matches{% if mine %} your groups' allocations or observing resources; untick the box to see every telescope{% endif %}.</div>
+					{% endif %}
+					<div class="table-responsive">
+						<table class="table table-sm table-hover mb-0" id="obs-summary">
+							<thead>
+								<tr>
+									<th data-sort="name">Telescope</th>
+									<th data-sort="hours_observable" class="text-right" title="Dark hours above {{ observable_alt }} degrees">Hours observable <span class="obs-sort-mark">&#9660;</span></th>
+									<th data-sort="hours_dark" class="text-right" title="Astronomical night length">Dark hours</th>
+									<th data-sort="max_alt" class="text-right">Best altitude</th>
+									<th data-sort="min_airmass" class="text-right">Min airmass</th>
+									<th data-sort="rise_30" class="text-right" title="First time above {{ observable_alt }} degrees">Rise {{ observable_alt }}&deg;</th>
+									<th data-sort="transit" class="text-right">Transit</th>
+									<th data-sort="set_30" class="text-right" title="Last time above {{ observable_alt }} degrees">Set {{ observable_alt }}&deg;</th>
+									<th data-sort="moon_sep" class="text-right" title="Mean angular distance from the Moon during the night">Moon sep.</th>
+									<th data-sort="moon_illum" class="text-right">Moon illum.</th>
+									<th data-sort="dark_start" class="text-right" title="Astronomical twilight, evening to morning">Dark (UT)</th>
+								</tr>
+							</thead>
+							<tbody>
+								{% for tel in telescopes %}
+								<tr id="obs_row_{{ tel.id }}" data-telescope="{{ tel.id }}" data-name="{{ tel.name }}" class="obs-pending">
+									<td><a href="#obs_cell_{{ tel.id }}">{{ tel.name }}</a>{% if tel.observatory %} <small class="text-muted">{{ tel.observatory.name }}</small>{% endif %}</td>
+									<td class="text-right obs-hours" colspan="10"><span class="text-muted">computing&hellip;</span></td>
+								</tr>
+								{% endfor %}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<div class="row" id="obs-grid">
+		{% for tel in telescopes %}
+		<div class="col-xl-3 col-lg-4 col-md-6 col-12 mb-3 obs-cell" id="obs_cell_{{ tel.id }}" data-telescope="{{ tel.id }}" data-hours="-1">
+			<div class="box box-default mb-0">
+				<div class="box-body p-1 obs-plot" id="obs_plot_{{ tel.id }}" style="min-height: 230px;">
+					<div class="text-muted small p-2">{{ tel.name }}: computing&hellip;</div>
+				</div>
+			</div>
+		</div>
+		{% endfor %}
+	</div>
+</section>
+<script type="text/javascript" src="{% static 'YSE_App/bokeh-2.4.2.min.js' %}"></script>
+<script type="text/javascript">
+(function () {
+	"use strict";
+	var root = document.getElementById("yse-observability");
+	if (!root) { return; }
+	var dataUrl = root.getAttribute("data-url"), night = root.getAttribute("data-date"), mine = root.getAttribute("data-mine");
+	var form = document.getElementById("obs-night-form");
+	form.addEventListener("submit", function (ev) {
+		ev.preventDefault();
+		var params = new URLSearchParams();
+		params.set("date", document.getElementById("obs-date").value || night);
+		if (document.getElementById("obs-mine").checked) { params.set("mine", "1"); }
+		window.location.search = "?" + params.toString();
+	});
+	document.getElementById("obs-date").addEventListener("change", function () { form.dispatchEvent(new Event("submit", {cancelable: true})); });
+	document.getElementById("obs-mine").addEventListener("change", function () { form.dispatchEvent(new Event("submit", {cancelable: true})); });
+
+	var rows = Array.prototype.slice.call(document.querySelectorAll("#obs-summary tbody tr[data-telescope]"));
+	var status = document.getElementById("obs-status");
+	var pending = rows.length, failed = 0;
+	var results = {};
+	var sortKey = "hours_observable", sortDesc = true;
+
+	function hm(iso) { return iso ? iso.slice(11, 16) : "—"; }
+	function num(v, digits) { return (v === null || v === undefined) ? "—" : Number(v).toFixed(digits); }
+	function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\x22/g, "&quot;"); }
+
+	function fillRow(payload) {
+		var s = payload.summary, n = payload.night, row = document.getElementById("obs_row_" + payload.telescope.id);
+		if (!row) { return; }
+		row.classList.remove("obs-pending", "obs-failed");
+		var cls = s.hours_observable > 0 ? (s.hours_observable >= 2 ? "text-success" : "") : "text-muted";
+		var note = s.never_rises ? " <span class=\"badge badge-secondary\">never rises</span>" : (s.always_observable ? " <span class=\"badge badge-success\">all night</span>" : "");
+		row.innerHTML =
+			"<td><a href=\"#obs_cell_" + payload.telescope.id + "\">" + esc(payload.telescope.name) + "</a>" +
+			(payload.telescope.observatory ? " <small class=\"text-muted\">" + esc(payload.telescope.observatory) + "</small>" : "") + note +
+			(n.note ? " <i class=\"fa fa-exclamation-triangle text-warning\" title=\"" + esc(n.note) + "\"></i>" : "") + "</td>" +
+			"<td class=\"text-right " + cls + "\"><strong>" + num(s.hours_observable, 1) + "</strong></td>" +
+			"<td class=\"text-right\">" + num(s.hours_dark, 1) + "</td>" +
+			"<td class=\"text-right\">" + (s.max_alt > 0 ? num(s.max_alt, 0) + "&deg;" : "below horizon") + "</td>" +
+			"<td class=\"text-right\">" + num(s.min_airmass, 2) + "</td>" +
+			"<td class=\"text-right\" title=\"" + (s.rise_30_before_window ? "already above {{ observable_alt }} degrees when the window opens" : "") + "\">" + (s.rise_30_before_window ? "&le; " : "") + hm(s.rise_30) + "</td>" +
+			"<td class=\"text-right\">" + hm(s.transit) + "</td>" +
+			"<td class=\"text-right\" title=\"" + (s.set_30_after_window ? "still above {{ observable_alt }} degrees when the window closes" : "") + "\">" + (s.set_30_after_window ? "&ge; " : "") + hm(s.set_30) + "</td>" +
+			"<td class=\"text-right\">" + num(s.moon_sep, 0) + "&deg;</td>" +
+			"<td class=\"text-right\">" + (s.moon_illum === null ? "—" : Math.round(s.moon_illum * 100) + "%") + "</td>" +
+			"<td class=\"text-right\">" + hm(n.dark_start) + "–" + hm(n.dark_end) + "</td>";
+		var cell = document.getElementById("obs_cell_" + payload.telescope.id);
+		if (cell) { cell.setAttribute("data-hours", s.hours_observable); }
+	}
+
+	function failRow(telId, message) {
+		var row = document.getElementById("obs_row_" + telId);
+		if (row) {
+			row.classList.remove("obs-pending"); row.classList.add("obs-failed");
+			row.cells[1].innerHTML = "<span class=\"text-danger\">" + esc(message) + "</span> <a href=\"#\" class=\"obs-retry\" data-telescope=\"" + telId + "\">Retry</a>";
+		}
+		var plot = document.getElementById("obs_plot_" + telId);
+		if (plot) { plot.innerHTML = "<div class=\"text-danger small p-2\">" + esc(message) + "</div>"; }
+	}
+
+	function value(payload, key) {
+		if (key === "name") { return payload.telescope.name.toLowerCase(); }
+		if (key === "dark_start") { return payload.night.dark_start || ""; }
+		var v = payload.summary[key];
+		if (v === null || v === undefined) { return sortDesc ? -Infinity : Infinity; }
+		return v;
+	}
+
+	function resort() {
+		var tbody = document.querySelector("#obs-summary tbody"), grid = document.getElementById("obs-grid");
+		var done = rows.filter(function (r) { return results[r.getAttribute("data-telescope")]; });
+		var rest = rows.filter(function (r) { return !results[r.getAttribute("data-telescope")]; });
+		done.sort(function (a, b) {
+			var va = value(results[a.getAttribute("data-telescope")], sortKey), vb = value(results[b.getAttribute("data-telescope")], sortKey);
+			if (va < vb) { return sortDesc ? 1 : -1; }
+			if (va > vb) { return sortDesc ? -1 : 1; }
+			return a.getAttribute("data-name").localeCompare(b.getAttribute("data-name"));
+		});
+		done.concat(rest).forEach(function (r) {
+			tbody.appendChild(r);
+			var cell = document.getElementById("obs_cell_" + r.getAttribute("data-telescope"));
+			if (cell) { grid.appendChild(cell); }
+		});
+		document.querySelectorAll("#obs-summary th .obs-sort-mark").forEach(function (m) { m.remove(); });
+		var th = document.querySelector("#obs-summary th[data-sort=\"" + sortKey + "\"]");
+		if (th) { th.insertAdjacentHTML("beforeend", " <span class=\"obs-sort-mark\">" + (sortDesc ? "&#9660;" : "&#9650;") + "</span>"); }
+	}
+
+	document.querySelectorAll("#obs-summary th[data-sort]").forEach(function (th) {
+		th.style.cursor = "pointer";
+		th.addEventListener("click", function () {
+			var key = th.getAttribute("data-sort");
+			if (key === sortKey) { sortDesc = !sortDesc; } else { sortKey = key; sortDesc = (key !== "name" && key !== "min_airmass" && key !== "rise_30" && key !== "transit" && key !== "set_30" && key !== "dark_start"); }
+			resort();
+		});
+	});
+
+	function updateStatus() {
+		if (pending > 0) { status.textContent = "Computing " + pending + " of " + rows.length + " telescopes…"; return; }
+		var best = rows.map(function (r) { return results[r.getAttribute("data-telescope")]; }).filter(Boolean)
+			.sort(function (a, b) { return b.summary.hours_observable - a.summary.hours_observable; })[0];
+		status.textContent = (failed ? failed + " lookup" + (failed > 1 ? "s" : "") + " failed. " : "") +
+			(best ? "Best: " + best.telescope.name + " (" + best.summary.hours_observable.toFixed(1) + " h)" : "");
+	}
+
+	function load(telId) {
+		var plot = document.getElementById("obs_plot_" + telId);
+		fetch(dataUrl + "?date=" + encodeURIComponent(night) + "&telescope=" + telId + (mine === "1" ? "&mine=1" : ""),
+			{credentials: "same-origin", headers: {"Accept": "application/json"}})
+			.then(function (r) { if (!r.ok) { throw new Error("HTTP " + r.status); } return r.json(); })
+			.then(function (data) {
+				var payload = data.results && data.results[0];
+				if (!payload) { throw new Error("no answer for this telescope"); }
+				results[telId] = payload;
+				fillRow(payload);
+				if (plot) {
+					plot.innerHTML = "";
+					if (payload.plot && window.Bokeh) { window.Bokeh.embed.embed_item(payload.plot, "obs_plot_" + telId); }
+				}
+			})
+			.catch(function (err) { failed += 1; failRow(telId, "lookup failed (" + err.message + ")"); })
+			.then(function () { pending -= 1; resort(); updateStatus(); });
+	}
+
+	document.addEventListener("click", function (ev) {
+		var a = ev.target.closest ? ev.target.closest("a.obs-retry") : null;
+		if (!a) { return; }
+		ev.preventDefault();
+		var telId = a.getAttribute("data-telescope");
+		failed = Math.max(0, failed - 1); pending += 1;
+		var row = document.getElementById("obs_row_" + telId);
+		if (row) { row.cells[1].innerHTML = "<span class=\"text-muted\">computing…</span>"; }
+		updateStatus();
+		load(telId);
+	});
+
+	rows.forEach(function (r) { load(r.getAttribute("data-telescope")); });
+	updateStatus();
+})();
+</script>
+{% endblock %}
