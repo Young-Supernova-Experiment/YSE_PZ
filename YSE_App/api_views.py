@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from rest_framework import generics
 from YSE_App.common import custom_viewsets
+from django.core.exceptions import PermissionDenied
+from django.db.models import Q
 from rest_framework.reverse import reverse
 
 from .models import *
@@ -415,6 +417,54 @@ class QueuedResourceViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     def get_queryset(self):
         allowed_resource = ObservingResourceService.GetAuthorizedQueuedResource_ByUser(self.request.user)
         return allowed_resource
+
+class AllocationViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Allocations the user may see (#305): staff see all, others the active ones open to them; writes are staff-only."""
+
+    serializer_class = AllocationSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.allocations import allocations_for_user
+
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return Allocation.objects.select_related("telescope", "instrument", "principal_investigator", "credential")
+        return allocations_for_user(user, facility_only=False)
+
+    def _staff_only(self):
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser):
+            raise PermissionDenied({"message": "Only staff may create or edit allocations."})
+
+    def perform_create(self, serializer):
+        self._staff_only()
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._staff_only()
+        super().perform_update(serializer)
+
+
+class FacilityRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """Facility requests (#299), read-only; ``?transient=<id>``, ``?allocation=<id>``, ``?state=`` filters."""
+
+    serializer_class = FacilityRequestSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.allocations import allocations_for_user
+
+        qs = FacilityRequest.objects.select_related("allocation", "transient", "submitted_by", "run")
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser):
+            qs = qs.filter(Q(submitted_by=user) | Q(allocation__in=allocations_for_user(user, facility_only=False)))
+        for key in ("transient", "allocation", "state"):
+            value = self.request.query_params.get(key)
+            if value:
+                qs = qs.filter(**{key if key == "state" else key + "_id": value})
+        return qs.distinct()
+
 
 ### `ClassicalResource` Filter Set ###
 class ClassicalResourceFilter(django_filters.FilterSet):

@@ -26,3 +26,4 @@ from YSE_App.models.credential_models import EncryptedCredential
 from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
 from YSE_App.models.job_models import *
 from YSE_App.models.notification_models import *
+from YSE_App.models.allocation_models import Allocation, FacilityRequest

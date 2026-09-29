@@ -462,6 +462,13 @@ JOB_HANDLER_MODULES = [
     m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
 ]
 
+# Facility APIs (#298): extra adapter modules (comma-separated) and the HTTP
+# timeout for submissions / status polls (docs/facility-apis.md).
+FACILITY_API_MODULES = [
+    m.strip() for m in config.get('site_settings', 'FACILITY_API_MODULES', fallback='').split(',') if m.strip()
+]
+FACILITY_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'FACILITY_HTTP_TIMEOUT_SECONDS', fallback=30)
+
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
 # (the senders it replaced, alert.py and the comment-mention emails, sent
 # unconditionally); NOTIFICATION_EMAIL_ENABLED in settings.ini or env
