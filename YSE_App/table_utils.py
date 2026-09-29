@@ -12,7 +12,6 @@ from django.db import models
 from .data import PhotometryService
 import time
 import django_filters
-import itertools
 from astropy.coordinates import get_moon, SkyCoord
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -1481,24 +1480,56 @@ def annotate_dashboard_transient_fields(qs):
     )
 
 
-def annotate_with_disc_mag(qs):
+def annotate_search_fields(qs):
+    """
+    Aliases for the search box: plain FK lookups instead of Min() aggregates.
 
-    all_phot = TransientPhotometry.objects.values('transient')#.filter(transient__in = queryset)
-    phot_ids = all_phot.values('id')
-
-    phot_data_query = Q(transientphotometry__id__in=phot_ids)
-    disc_query = Q(transientphotometry__transientphotdata__discovery_point = 1)
-
-    qs = qs.annotate(
-        disc_mag=Min('transientphotometry__transientphotdata__mag',filter=phot_data_query & disc_query),
+    The old annotate_with_disc_mag() wrapped every alias in Min(), which forced a
+    GROUP BY over the whole transient table (and a HAVING for each LIKE). disc_mag
+    is the only value that needs a subquery; the rest are single-valued joins.
+    """
+    disc_mag_sq = (
+        TransientPhotData.objects.filter(
+            photometry__transient=OuterRef('pk'),
+            discovery_point=1,
+            mag__isnull=False,
+        )
+        .order_by('mag')
+        .values('mag')[:1]
+    )
+    return qs.annotate(
+        disc_mag=Subquery(disc_mag_sq),
+        obs_group_name=F('obs_group__name'),
+        host_redshift=F('host__redshift'),
+        spec_class=F('best_spec_class__name'),
+        status_name=F('status__name'),
     )
 
-    qs = qs.annotate(
-        obs_group_name=Min('obs_group__name'),
-        host_redshift=Min('host__redshift'),
-        spec_class=Min('best_spec_class__name'),
-        status_name=Min('status__name'))
-    return qs
+
+# Backwards-compatible name (callers outside this module).
+annotate_with_disc_mag = annotate_search_fields
+
+
+def filter_tokens_any_field(qs, search_fields, value):
+    """
+    Every whitespace token must icontains-match at least one of search_fields.
+
+    Replaces itertools.permutations(search_fields, n_tokens), which produced
+    fields!/(fields-n)! AND-groups OR'd together (720 groups for 3 tokens over 10
+    fields). This is one WHERE with n_tokens * len(search_fields) LIKE clauses, so
+    the SQL shape and query count do not depend on the number of tokens. Any
+    match the old expansion found is also a match here (it is a superset).
+    """
+    tokens = value.split()
+    if not tokens:
+        return qs
+    q_total = Q()
+    for token in tokens:
+        q_token = Q()
+        for field in search_fields:
+            q_token |= Q(**{field + '__icontains': token})
+        q_total &= q_token
+    return qs.filter(q_total)
 
 class TransientFilter(django_filters.FilterSet):
 
@@ -1516,24 +1547,8 @@ class TransientFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-
-            qs = annotate_with_disc_mag(qs)
-
-            q_parts = value.split()
-
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = annotate_search_fields(qs)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 class RisingTransientFilter(django_filters.FilterSet):
@@ -1563,24 +1578,8 @@ class RisingTransientFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-
-            qs = annotate_with_disc_mag(qs)
-
-            q_parts = value.split()
-
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = annotate_search_fields(qs)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 class FollowupFilter(django_filters.FilterSet):
@@ -1594,20 +1593,7 @@ class FollowupFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-            q_parts = value.split()
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 class ObsNightFollowupFilter(django_filters.FilterSet):
@@ -1621,20 +1607,7 @@ class ObsNightFollowupFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-            q_parts = value.split()
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 
