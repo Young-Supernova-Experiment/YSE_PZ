@@ -180,6 +180,12 @@
 							<p>Service Runs</p>
 						</a>
 					</li>
+					<li class="nav-item">
+						<a href="{% url 'allocations' %}" class="nav-link{% if url_name == 'allocations' or url_name == 'allocation_create' or url_name == 'allocation_edit' %} active{% endif %}">
+							<i class="nav-icon fa fa-clock-o"></i>
+							<p>Allocations</p>
+						</a>
+					</li>
 					{% endif %}
 
 					<li class="nav-header yse-nav-docs">Docs</li>

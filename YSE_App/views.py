@@ -1369,6 +1369,9 @@ def _transient_followup_form_context(request, transient_obj):
         'too_resource_form': ToOResourceForm(),
         'automated_spectrum_form': AutomatedSpectrumRequest(),
     }
+    from YSE_App.allocation_views import facility_panel_context
+
+    ctx.update(facility_panel_context(request.user, transient_obj))
     if transient_followup_form.fields["valid_start"].initial:
         ctx['followup_initial_dates'] = (
             transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
@@ -1710,6 +1713,10 @@ def transient_detail(request, slug):
             'transients_near_host':transients_near_host,
             'transient_detail_defer': defer_detail,
         }
+        if not defer_detail:
+            # Facility-request panel (#300) is part of the follow-up tab when it is rendered inline.
+            context.update({k: v for k, v in followup_form_ctx.items()
+                            if k in ('facility_allocations', 'facility_requests')})
 
         if not defer_detail and transient_followup_form.fields["valid_start"].initial:
             context['followup_initial_dates'] = \

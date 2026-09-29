@@ -1,0 +1,123 @@
+{# "Submit to facility" panel on the follow-up tab (#300). Needs facility_allocations / facility_requests from allocation_views.facility_panel_context. #}
+<div class="box box-primary box-solid" id="facility_request_box">
+	<div class="box-header with-border">
+		<h3 class="box-title">Submit to facility</h3>
+	</div>
+	<div class="box-body">
+		{% if facility_allocations %}
+		<form id="facility_request_form" action="{% url 'transient_facility_submit' transient.id %}" method="post" autocomplete="off">
+			{% csrf_token %}
+			<div class="row">
+				<div class="col-md-6 col-12">
+					<div class="form-group">
+						<label for="facility_allocation">Allocation</label>
+						<select class="form-control" id="facility_allocation" name="allocation">
+							{% for opt in facility_allocations %}
+							<option value="{{ opt.allocation.id }}" data-schema='{{ opt.schema_json|escape }}' data-facility="{{ opt.facility.slug }}" data-hours="{{ opt.hours_remaining }}">{{ opt.allocation.name }} &mdash; {{ opt.allocation.telescope.name }} ({{ opt.facility.name }}, {{ opt.hours_remaining|floatformat:1 }} h left)</option>
+							{% endfor %}
+						</select>
+					</div>
+				</div>
+			</div>
+			<div class="row" id="facility_fields"></div>
+			<div class="row">
+				<div class="col-12">
+					<div class="text-danger small" id="facility_request_error" hidden></div>
+					<button type="submit" class="btn btn-primary" id="facility_submit_btn">Submit request</button>
+					<span class="text-muted small ml-2">The request is queued and sent by the job runner; its state appears below.</span>
+				</div>
+			</div>
+		</form>
+		{% else %}
+		<p class="text-muted mb-0">No active allocation with a facility API is open to you.{% if user.is_staff %} <a href="{% url 'allocations' %}">Manage allocations</a>.{% endif %}</p>
+		{% endif %}
+		<div id="facility_requests_slot" class="mt-3" data-url="{% url 'transient_facility_requests_fragment' transient.id %}">
+			{% include "YSE_App/transient_detail_facility_requests.html" %}
+		</div>
+	</div>
+</div>
+<script>
+(function() {
+	var $box = $('#facility_request_box');
+	if (!$box.length) { return; }
+	var csrftoken = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || $box.find('input[name=csrfmiddlewaretoken]').val();
+	var actionUrlTemplate = "{% url 'facility_request_action' 0 %}";
+
+	function fieldHtml(f) {
+		var id = 'fr_' + f.name, value = f.default === null || f.default === undefined ? '' : f.default;
+		var req = f.required ? ' required' : '';
+		var html = '<div class="col-md-4 col-sm-6 col-12"><div class="form-group"><label for="' + id + '">' + $('<span>').text(f.label).html() + (f.required ? ' *' : '') + '</label>';
+		if (f.type === 'choice') {
+			html += '<select class="form-control facility-param" id="' + id + '" data-name="' + f.name + '" data-type="' + f.type + '">';
+			(f.choices || []).forEach(function(c) { html += '<option value="' + $('<span>').text(c[0]).html() + '"' + (String(c[0]) === String(value) ? ' selected' : '') + '>' + $('<span>').text(c[1]).html() + '</option>'; });
+			html += '</select>';
+		} else if (f.type === 'boolean') {
+			html += '<select class="form-control facility-param" id="' + id + '" data-name="' + f.name + '" data-type="' + f.type + '"><option value="false"' + (!value ? ' selected' : '') + '>no</option><option value="true"' + (value ? ' selected' : '') + '>yes</option></select>';
+		} else {
+			var t = (f.type === 'number' || f.type === 'integer') ? 'number' : (f.type === 'datetime' ? 'datetime-local' : 'text');
+			if (f.type === 'list' && Array.isArray(value)) { value = value.join(','); }
+			if (f.type === 'datetime' && value) { value = String(value).slice(0, 16); }
+			html += '<input class="form-control facility-param" type="' + t + '" id="' + id + '" data-name="' + f.name + '" data-type="' + f.type + '" value="' + $('<span>').text(value).html() + '"' + (t === 'number' ? ' step="any"' : '') + req + '>';
+		}
+		if (f.help) { html += '<small class="form-text text-muted">' + $('<span>').text(f.help).html() + '</small>'; }
+		return html + '</div></div>';
+	}
+	function renderFields() {
+		var $opt = $('#facility_allocation option:selected');
+		var schema = [];
+		try { schema = JSON.parse($opt.attr('data-schema') || '[]'); } catch (e) { schema = []; }
+		$('#facility_fields').html(schema.map(fieldHtml).join(''));
+	}
+	function collectParams() {
+		var params = {};
+		$('#facility_fields .facility-param').each(function() {
+			var $el = $(this), name = $el.data('name'), type = $el.data('type'), v = $el.val();
+			if (v === '' || v === null) { return; }
+			if (type === 'number' || type === 'integer') { v = Number(v); }
+			else if (type === 'boolean') { v = (v === 'true'); }
+			else if (type === 'list') { v = String(v).split(',').map(function(s) { return s.trim(); }).filter(Boolean); }
+			params[name] = v;
+		});
+		return params;
+	}
+	function reloadRequests() {
+		var $slot = $('#facility_requests_slot');
+		$.get($slot.data('url')).done(function(html) { $slot.html(html); });
+	}
+	function showError(msg) {
+		var $e = $('#facility_request_error');
+		if (msg) { $e.text(msg).removeAttr('hidden'); } else { $e.text('').attr('hidden', 'hidden'); }
+	}
+	$box.on('change', '#facility_allocation', renderFields);
+	$box.on('submit', '#facility_request_form', function(e) {
+		e.preventDefault();
+		showError('');
+		var $btn = $('#facility_submit_btn').prop('disabled', true);
+		$.ajax({
+			url: this.action, method: 'POST', contentType: 'application/json', headers: { 'X-CSRFToken': csrftoken },
+			data: JSON.stringify({ allocation: $('#facility_allocation').val(), parameters: collectParams() })
+		}).done(function(data) {
+			reloadRequests();
+		}).fail(function(xhr) {
+			var data = xhr.responseJSON || {};
+			var msg = data.error || ('Request failed (' + xhr.status + ')');
+			if (data.errors) { msg = Object.keys(data.errors).map(function(k) { return k + ': ' + data.errors[k]; }).join('; '); }
+			showError(msg);
+		}).always(function() { $btn.prop('disabled', false); });
+	});
+	$box.on('click', '[data-fr-action]', function() {
+		var $b = $(this), id = $b.closest('tr').data('request-id'), action = $b.data('fr-action');
+		if (action === 'cancel' && !window.confirm('Cancel this facility request?')) { return; }
+		$b.prop('disabled', true);
+		$.ajax({
+			url: actionUrlTemplate.replace('/0/', '/' + id + '/'), method: 'POST', contentType: 'application/json',
+			headers: { 'X-CSRFToken': csrftoken }, data: JSON.stringify({ action: action })
+		}).done(reloadRequests).fail(function(xhr) {
+			var data = xhr.responseJSON || {};
+			window.alert(data.error || ('Action failed (' + xhr.status + ')'));
+			$b.prop('disabled', false);
+		});
+	});
+	renderFields();
+})();
+</script>
