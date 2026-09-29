@@ -20,6 +20,13 @@ PERF_STATIC_DIR = Path(__file__).resolve().parents[1] / "static" / "YSE_App" / "
 METRICS_HISTORY_PATH = PERF_STATIC_DIR / "metrics_history.json"
 
 PRIMARY_PAGE_KEYS = ("main_dashboard", "personal_dashboard", "transient_detail")
+# Saved-query benchmarks (YSE_App/perf/mag_limited.py); plotted separately from
+# the primary pages because they run seconds, not tens of milliseconds.
+MAG_LIMITED_KEYS = (
+    "mag_limited_sample_sql",
+    "personal_dashboard_mag_limited_cold",
+    "personal_dashboard_mag_limited_warm",
+)
 
 
 def _ensure_perf_dir() -> Path:
@@ -309,4 +316,39 @@ def write_trend_plots() -> List[Path]:
     fig.savefig(path, dpi=120)
     plt.close(fig)
     written.append(path)
+
+    ml_path = _write_mag_limited_trend(runs, indices, labels, out_dir, plt)
+    if ml_path is not None:
+        written.append(ml_path)
     return written
+
+
+def _write_mag_limited_trend(runs, indices, labels, out_dir: Path, plt) -> Optional[Path]:
+    """One chart for the magnitude-limited sample query (raw SQL + dashboard section)."""
+    series = {}
+    for key in MAG_LIMITED_KEYS:
+        xs, ys = [], []
+        for i, run in enumerate(runs):
+            page = run.get("pages", {}).get(key)
+            if page:
+                xs.append(indices[i])
+                ys.append(page["ttfb_ms"] / 1000.0)
+        if ys:
+            series[key] = (xs, ys)
+    if not series:
+        return None
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for key, (xs, ys) in series.items():
+        ax.plot(xs, ys, marker="o", label=key)
+    shown = sorted({x for xs, _ in series.values() for x in xs})
+    ax.set_xticks(shown)
+    ax.set_xticklabels([labels[indices.index(x)] for x in shown], rotation=45, ha="right")
+    ax.set_ylabel("Time (s)")
+    ax.set_xlabel("Iteration")
+    ax.set_title("YSE Magnitude-Limited Sample (min mag < 18.6) vs iteration")
+    ax.legend()
+    fig.tight_layout()
+    path = out_dir / "trend_mag_limited_sample.png"
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return path

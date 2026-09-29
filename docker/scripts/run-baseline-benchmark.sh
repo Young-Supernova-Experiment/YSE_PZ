@@ -35,6 +35,7 @@ done
 docker exec ysepz_web_container python3 manage.py test \
   YSE_App.tests.test_performance \
   YSE_App.tests.test_page_load_regression \
+  YSE_App.tests.test_mag_limited_query_regression \
   --noinput -v2
 
 docker exec ysepz_web_container python3 manage.py record_perf_benchmark --label "$LABEL"
