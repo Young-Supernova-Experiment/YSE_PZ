@@ -1228,18 +1228,30 @@ def download_target_list(request, telescope, obs_date):
     tel = Observer(location=location, timezone="UTC")
 
     
+    # Bazin-extrapolated magnitude at local midnight of the night (#225), one
+    # photometry query for the whole list; blank when no band has a usable fit.
+    from YSE_App.common.filter_display import display_filter_label
+    from YSE_App.services.bazin import extrapolated_mags, local_midnight_mjd
+
+    follow_requests = list(follow_requests)
+    observatory = classical_obs_date.resource.telescope.observatory
+    night_mjd = local_midnight_mjd(classical_obs_date.obs_date, observatory.utc_offset if observatory else 0)
+    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests], night_mjd)
+
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     for f in follow_requests:
         comments = format_comments(f)
+        bazin = bazin_mags.get(f.transient_id)
+        bazin_str = "bazin_mag = %.2f %s " % (bazin[0], display_filter_label(bazin[1])) if bazin else ""
         if f.transient.recent_mag():
-            content += "%s  %s %s 2000 mag = %.2f comment = %s\n"%(
+            content += "%s  %s %s 2000 mag = %.2f %scomment = %s\n"%(
                 f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),
-                f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()),comments)
+                f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()),bazin_str,comments)
 
         else:
-            content += "%s  %s %s 2000 comment = %s\n"%(
+            content += "%s  %s %s 2000 %scomment = %s\n"%(
                 f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),
-                f.transient.CoordString()[1].replace(':',' '),comments)
+                f.transient.CoordString()[1].replace(':',' '),bazin_str,comments)
             
     response = HttpResponse(content, content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_%s.txt'%(telescope,obs_date)

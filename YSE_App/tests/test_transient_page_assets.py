@@ -253,6 +253,18 @@ class TransientPageAssetsTests(TestCase):
                 for path in sorted(endpoints):
                     self._assert_endpoint_loads(path, f"defer={defer}")
 
+    def test_bazin_fit_endpoint_is_referenced_and_loads(self):
+        """The Show Bazin Fit button's endpoint (#225) is in the page and answers 200 with either flag."""
+        for defer in (True, False):
+            with self.subTest(defer=defer):
+                html = self._detail_html(defer)
+                self.assertIn('id="bazinplot"', html)
+                for flag in (0, 1):
+                    path = reverse("bazinplot", args=[self.transient.id, flag])
+                    self.assertIn(path, html, f"defer={defer}: {path} not referenced by the page")
+                    self._assert_endpoint_loads(path, f"defer={defer}")
+                    self.assertEqual(self.client.get(path).status_code, 200)
+
     def test_deferred_loader_targets_exist_and_load(self):
         """Each yseLoadDetailFragment(key, url, '#id') call names a container in the page."""
         html = self._detail_html(defer=True)

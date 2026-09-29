@@ -189,6 +189,7 @@ urlpatterns = [
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),
     re_path(r'^salt2plot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2plot, name='salt2plot'),
+    re_path(r'^bazinplot/(?P<transient_id>[0-9]+)/(?P<bazinfit>[0-1]+)/$', view_utils.bazinplot, name='bazinplot'),
     re_path(r'^salt2fluxplot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2fluxplot, name='salt2fluxplot'),
     re_path(r'^spectrumplot/(?P<transient_id>[0-9]+)/$', view_utils.spectrumplot, name='spectrumplot'),
     re_path(r'^spectrumplot_summary/(?P<transient_id>[0-9]+)/$', view_utils.spectrumplot_summary, name='spectrumplot_summary'),

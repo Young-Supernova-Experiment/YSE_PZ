@@ -1,0 +1,586 @@
+"""Bazin light-curve fits (#225): the pure fitter, the detail-page overlay and the scheduling column.
+
+``YSE_App/services/bazin.py`` fits a Bazin curve per band in flux space and
+extrapolates it to a chosen MJD.  These tests pin:
+
+* the fitter recovers a synthetic Bazin curve with noise and its
+  extrapolated magnitude, and returns ``None`` for too few points, a fitter
+  failure or unphysical parameters;
+* the magnitude conversion (non-positive flux has no magnitude) and the
+  observing-night epoch (local midnight of the night's date);
+* ``bazinplot/<id>/1/`` overlays the fit (solid fitted span, dashed
+  extrapolation, one ``Bazin fit`` legend entry) and ``.../0/`` is the
+  cached plain plot; the detail page carries the button in both defer modes;
+* ``ObsNightFollowupTable`` / ``ToOFollowupTable`` render ``Bazin Mag``
+  (``18.71 r``), blank without a fit, with a query count that does not grow
+  with rows; ``download_target_list`` carries the same value.
+"""
+
+import datetime
+import math
+from unittest import mock
+
+import numpy as np
+from django.core.cache import cache
+from django.db import connection
+from django.test import Client, TestCase
+from django.test.utils import CaptureQueriesContext
+from django.urls import reverse
+from django.utils import timezone
+
+from YSE_App import view_utils
+from YSE_App.models import (
+    ClassicalNightType,
+    ClassicalObservingDate,
+    ClassicalResource,
+    DataQuality,
+    FollowupStatus,
+    Instrument,
+    Observatory,
+    PhotometricBand,
+    Telescope,
+    ToOResource,
+    TransientPhotData,
+    TransientPhotometry,
+)
+from YSE_App.services import bazin
+from YSE_App.services.followup_requests import create_or_attach_request
+from YSE_App.tests.fixtures_minimal import (
+    attach_synthetic_photometry,
+    audit_fields,
+    create_instrument_stack,
+    create_minimal_transient,
+    create_test_user,
+)
+from YSE_App.tests.test_lightcurve_legend import bokeh_doc_from_html, legend_grid
+
+TRUTH = (2000.0, 60012.0, 25.0, 4.0, 50.0)  # A, t0, tau_fall, tau_rise, B
+
+
+def synthetic_curve(n=15, step=3.0, start=60000.0, truth=TRUTH, noise=0.05, seed=3):
+    """(mjd, mag, magerr) sampled from a Bazin curve with Gaussian magnitude noise."""
+    rng = np.random.default_rng(seed)
+    mjd = start + step * np.arange(n)
+    mag = bazin.flux_to_mag(bazin.bazin_flux(mjd, *truth))
+    magerr = np.full(n, noise)
+    if noise:
+        mag = mag + rng.normal(0, noise, n)
+    return mjd, mag, magerr
+
+
+def attach_bazin_photometry(user, transient, *, band, n_points=12, mjd_start=None,
+                            flagged_first=False, with_upper_limit=False):
+    """Bazin-shaped detections in ``band`` ending about now, plus optional junk rows."""
+    audit = audit_fields(user)
+    photometry = TransientPhotometry.objects.create(
+        transient=transient, instrument=band.instrument, obs_group=transient.obs_group, **audit
+    )
+    now_mjd = bazin.datetime_to_mjd(timezone.now())
+    if mjd_start is None:
+        mjd_start = now_mjd - 3.0 * n_points  # last point ~today
+    truth = (TRUTH[0], mjd_start + 12.0, TRUTH[2], TRUTH[3], TRUTH[4])
+    mjd, mag, magerr = synthetic_curve(n=n_points, start=mjd_start, truth=truth, noise=0.0)
+    rows = []
+    for i, (m, y, e) in enumerate(zip(mjd, mag, magerr)):
+        rows.append(TransientPhotData(
+            photometry=photometry, band=band,
+            obs_date=bazin._MJD_EPOCH + datetime.timedelta(days=float(m)),
+            mag=float(y), mag_err=float(e), discovery_point=(i == 0), **audit,
+        ))
+    if with_upper_limit:  # flux/flux_err < 3 and no mag: never a detection
+        rows.append(TransientPhotData(
+            photometry=photometry, band=band,
+            obs_date=bazin._MJD_EPOCH + datetime.timedelta(days=float(mjd[0]) - 4),
+            mag=None, mag_err=None, flux=10.0, flux_err=20.0, flux_zero_point=27.5, **audit,
+        ))
+    TransientPhotData.objects.bulk_create(rows)
+    if flagged_first:
+        bad, _ = DataQuality.objects.get_or_create(name="Bad", defaults=audit)
+        first = TransientPhotData.objects.filter(photometry=photometry, mag__isnull=False).order_by("obs_date").first()
+        first.mag = 10.0  # wildly off: only harmless if the fit ignores it
+        first.save()
+        first.data_quality.add(bad)
+    return photometry, truth
+
+
+# ------------------------------------------------------------------ pure helpers
+
+
+class BazinModelTests(TestCase):
+    def test_fit_recovers_synthetic_curve_and_extrapolated_mag(self):
+        mjd, mag, magerr = synthetic_curve()
+        fit = bazin.fit_bazin(mjd, mag, magerr)
+        self.assertIsNotNone(fit)
+        A, t0, tau_fall, tau_rise, B = fit.params
+        self.assertAlmostEqual(t0, TRUTH[1], delta=2.0)
+        self.assertAlmostEqual(tau_fall, TRUTH[2], delta=5.0)
+        self.assertAlmostEqual(tau_rise, TRUTH[3], delta=1.5)
+        self.assertGreater(A, 0)
+        self.assertEqual(fit.n_points, 15)
+        self.assertEqual(fit.dof, 10)
+        self.assertLess(fit.reduced_chi2, 5.0)
+        truth_mag = bazin.flux_to_mag(bazin.bazin_flux(TRUTH[1] + 20, *TRUTH))
+        self.assertAlmostEqual(fit.mag_at(TRUTH[1] + 20), truth_mag, delta=0.05)
+        # noiseless curve: parameters essentially exact
+        exact = bazin.fit_bazin(*synthetic_curve(noise=0.0))
+        for got, want in zip(exact.params, TRUTH):
+            self.assertAlmostEqual(got, want, delta=abs(want) * 0.01 + 0.01)
+
+    def test_rejections(self):
+        mjd, mag, magerr = synthetic_curve()
+        self.assertIsNone(bazin.fit_bazin(mjd[:4], mag[:4], magerr[:4]))
+        self.assertIsNone(bazin.fit_bazin(mjd, np.full_like(mag, np.nan), magerr))
+        self.assertIsNone(bazin.fit_bazin(np.full_like(mjd, 60000.0), mag, magerr))
+        self.assertIsNone(bazin.fit_bazin([], [], []))
+        with mock.patch("scipy.optimize.curve_fit", side_effect=RuntimeError("no convergence")):
+            self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
+        bad = (np.array([-1.0, 60012.0, 25.0, 4.0, 0.0]), np.eye(5))
+        with mock.patch("scipy.optimize.curve_fit", return_value=bad):
+            self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
+        nan = (np.array([1.0, np.nan, 25.0, 4.0, 0.0]), np.eye(5))
+        with mock.patch("scipy.optimize.curve_fit", return_value=nan):
+            self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
+
+    def test_fit_is_bounded_and_capped(self):
+        mjd, mag, magerr = synthetic_curve()
+        with mock.patch("scipy.optimize.curve_fit", wraps=__import__("scipy.optimize", fromlist=["curve_fit"]).curve_fit) as cf:
+            bazin.fit_bazin(mjd, mag, magerr)
+        kwargs = cf.call_args.kwargs
+        lower, upper = kwargs["bounds"]
+        self.assertEqual(kwargs["max_nfev"], bazin.MAX_NFEV)
+        self.assertEqual((lower[3], upper[3]), bazin.TAU_RISE_BOUNDS)
+        self.assertEqual((lower[2], upper[2]), bazin.TAU_FALL_BOUNDS)
+        self.assertEqual(lower[1], mjd.min() - bazin.T0_PAD_DAYS)
+        self.assertEqual(upper[1], mjd.max() + bazin.T0_PAD_DAYS)
+        self.assertEqual(lower[0], 0.0)
+        p0 = kwargs["p0"]
+        self.assertEqual(p0[1], mjd[np.argmin(mag)])  # brightest point = max flux
+        self.assertEqual(p0[2:], [30.0, 10.0, 0.0])
+
+    def test_mag_conversion(self):
+        self.assertAlmostEqual(bazin.flux_to_mag(1.0), 27.5)
+        self.assertAlmostEqual(float(bazin.mag_to_flux(27.5)), 1.0)
+        self.assertIsNone(bazin.flux_to_mag(0.0))
+        self.assertIsNone(bazin.flux_to_mag(-3.0))
+        arr = bazin.flux_to_mag(np.array([1.0, 0.0, -1.0]))
+        self.assertAlmostEqual(arr[0], 27.5)
+        self.assertTrue(np.isnan(arr[1]) and np.isnan(arr[2]))
+        self.assertAlmostEqual(float(bazin.flux_err_from_mag_err(100.0, 0.1)), 100 * 0.1 * 0.4 * math.log(10))
+        # a fit whose curve drops below zero flux has no magnitude out there
+        faint = bazin.BazinFit(params=(100.0, 60000.0, 10.0, 2.0, -20.0), cov=(), chi2=0.0, dof=1,
+                               n_points=6, mjd_min=59990.0, mjd_max=60010.0)
+        self.assertAlmostEqual(bazin.bazin_mag_at(faint, 60000.0), bazin.flux_to_mag(30.0))
+        self.assertIsNone(bazin.bazin_mag_at(faint, 60200.0))
+        self.assertIsNone(bazin.bazin_mag_at(None, 60000.0))
+
+    def test_usable_detection_rule(self):
+        self.assertTrue(bazin.is_usable_detection(18.0, 0.1))
+        self.assertTrue(bazin.is_usable_detection(18.0, 0.5))  # no flux info: kept, like the plot
+        self.assertFalse(bazin.is_usable_detection(18.0, 0.5, flux=10.0, flux_err=5.0))
+        self.assertTrue(bazin.is_usable_detection(18.0, 0.36, flux=10.0, flux_err=5.0))
+        self.assertFalse(bazin.is_usable_detection(None, 0.1))
+        self.assertFalse(bazin.is_usable_detection(18.0, None))
+        self.assertFalse(bazin.is_usable_detection(18.0, 0.1, flagged=True))
+        self.assertFalse(bazin.is_usable_detection(float("nan"), 0.1))
+
+    def test_local_midnight_mjd(self):
+        night = datetime.datetime(2026, 9, 29, 0, 0, tzinfo=datetime.timezone.utc)
+        day = bazin.datetime_to_mjd(night)
+        self.assertAlmostEqual(bazin.local_midnight_mjd(night, -10), day + 1 + 10 / 24)  # Hawaii
+        self.assertAlmostEqual(bazin.local_midnight_mjd(night, -4), day + 1 + 4 / 24)  # Chile
+        self.assertAlmostEqual(bazin.local_midnight_mjd(night, 8), day + 16 / 24)  # east
+        self.assertAlmostEqual(bazin.local_midnight_mjd(night.date(), None), day + 1)
+        self.assertAlmostEqual(bazin.datetime_to_mjd(datetime.datetime(1858, 11, 17)), 0.0)
+        self.assertAlmostEqual(bazin.datetime_to_mjd(datetime.datetime(2000, 1, 1, 12)), 51544.5)
+
+    def test_pick_prefers_named_band_then_most_recent(self):
+        early = bazin.fit_bazin(*synthetic_curve(start=60000.0, noise=0.0))
+        late = bazin.fit_bazin(*synthetic_curve(start=60010.0, noise=0.0))
+        fits = {"g": early, "r": late}
+        self.assertEqual(bazin.pick_extrapolated_mag(fits, 60050.0)[1], "r")
+        self.assertEqual(bazin.pick_extrapolated_mag(fits, 60050.0, ["g"])[1], "g")
+        self.assertEqual(bazin.pick_extrapolated_mag(fits, 60050.0, ["z"])[1], "r")
+        self.assertIsNone(bazin.pick_extrapolated_mag({}, 60050.0))
+        # a band whose extrapolation has no flux is skipped for the next one
+        faint = bazin.BazinFit(params=(100.0, 60030.0, 10.0, 2.0, -50.0), cov=(), chi2=0.0, dof=1,
+                               n_points=6, mjd_min=60020.0, mjd_max=60060.0)
+        self.assertEqual(bazin.pick_extrapolated_mag({"g": early, "i": faint}, 60300.0)[1], "g")
+
+    def test_plot_grid_spans_lead_in_and_extrapolation(self):
+        fit = bazin.fit_bazin(*synthetic_curve(noise=0.0))
+        fitted, extrapolated = bazin.bazin_plot_grid(fit, today_mjd=60100.0)
+        self.assertAlmostEqual(fitted[0], fit.mjd_min - bazin.GRID_LEAD_DAYS)
+        self.assertAlmostEqual(fitted[-1], fit.mjd_max)
+        self.assertAlmostEqual(extrapolated[0], fit.mjd_max)
+        self.assertAlmostEqual(extrapolated[-1], 60100.0 + bazin.EXTRAPOLATION_DAYS)
+        _fitted, past = bazin.bazin_plot_grid(fit, today_mjd=59000.0)  # data newer than "today"
+        self.assertAlmostEqual(past[-1], fit.mjd_max + bazin.EXTRAPOLATION_DAYS)
+
+    def test_fit_bands_skips_short_and_failed_bands(self):
+        mjd, mag, magerr = synthetic_curve(noise=0.0)
+        fits = bazin.fit_bands({
+            "r": list(zip(mjd, mag, magerr)),
+            "g": list(zip(mjd[:3], mag[:3], magerr[:3])),
+        })
+        self.assertEqual(set(fits), {"r"})
+
+
+# ------------------------------------------------------------- database layer
+
+
+class BazinDatabaseTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("bazin_db_user")
+        cls.transient = create_minimal_transient(cls.user, name="2026bazindb")
+        cls.obs_group, instrument, cls.r_band = create_instrument_stack(cls.user, obs_group_name="bazin-db")
+        audit = audit_fields(cls.user)
+        cls.g_band = PhotometricBand.objects.create(
+            name="g", instrument=instrument, disp_color="#00ff00", disp_symbol="circle", **audit
+        )
+        cls.i_band = PhotometricBand.objects.create(
+            name="i", instrument=instrument, disp_color="#0000ff", disp_symbol="circle", **audit
+        )
+        _phot, cls.r_truth = attach_bazin_photometry(
+            cls.user, cls.transient, band=cls.r_band, n_points=12, flagged_first=True, with_upper_limit=True
+        )
+        # g: fitted too, but its last detection is older than r's
+        _phot, cls.g_truth = attach_bazin_photometry(
+            cls.user, cls.transient, band=cls.g_band, n_points=10,
+            mjd_start=bazin.datetime_to_mjd(timezone.now()) - 60.0,
+        )
+        # i: too few detections for a fit
+        attach_bazin_photometry(cls.user, cls.transient, band=cls.i_band, n_points=3)
+        cls.empty = create_minimal_transient(cls.user, name="2026bazinempty")
+
+    def setUp(self):
+        cache.clear()
+
+    def test_detections_exclude_flags_and_limits_and_take_one_query(self):
+        with CaptureQueriesContext(connection) as ctx:
+            found = bazin.detections_by_transient([self.transient.id, self.empty.id, None])
+        self.assertEqual(len(ctx.captured_queries), 1)
+        self.assertEqual(set(found), {self.transient.id})
+        bands = found[self.transient.id]["bands"]
+        self.assertEqual({name for name, _pts in bands.values()}, {"r-bazin-db", "g", "i"})
+        self.assertEqual(len(bands[self.r_band.id][1]), 11)  # 12 - flagged point; limit never counted
+        self.assertEqual(len(bands[self.g_band.id][1]), 10)
+        self.assertEqual(len(bands[self.i_band.id][1]), 3)
+        self.assertRegex(found[self.transient.id]["token"], r"^24:\d{4}-")
+        self.assertEqual(bazin.detections_by_transient([]), {})
+
+    def test_fits_for_transients_uses_most_recent_band_and_caches(self):
+        with mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+            fits = bazin.fits_for_transients([self.transient.id, self.empty.id])
+            self.assertEqual(fitter.call_count, 2)  # r and g; i is too short
+            self.assertEqual(set(fits[self.transient.id]), {self.r_band.id, self.g_band.id})
+            self.assertEqual(fits.get(self.empty.id, {}), {})
+            again = bazin.fits_for_transients([self.transient.id])
+            self.assertEqual(fitter.call_count, 2)  # served from the cache
+        self.assertEqual(again[self.transient.id][self.r_band.id][1].params,
+                         fits[self.transient.id][self.r_band.id][1].params)
+
+        now = bazin.datetime_to_mjd(timezone.now())
+        picked = bazin.extrapolated_mag(self.transient, now + 3.0)
+        mag, band_name = picked
+        self.assertEqual(band_name, "r-bazin-db")
+        truth = bazin.flux_to_mag(bazin.bazin_flux(now + 3.0, *self.r_truth))
+        self.assertAlmostEqual(mag, truth, delta=0.05)
+        self.assertEqual(bazin.extrapolated_mag(self.transient, now, ["g"])[1], "g")
+        self.assertIsNone(bazin.extrapolated_mag(self.empty, now))
+        self.assertEqual(bazin.extrapolated_mags([self.empty.id], now), {})
+
+    def test_new_photometry_invalidates_the_cached_fit(self):
+        with mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+            bazin.fits_for_transients([self.transient.id])
+            before = fitter.call_count
+            photometry = TransientPhotometry.objects.filter(transient=self.transient).first()
+            TransientPhotData.objects.create(
+                photometry=photometry, band=self.i_band, obs_date=timezone.now(),
+                mag=19.0, mag_err=0.1, **audit_fields(self.user),
+            )
+            bazin.fits_for_transients([self.transient.id])
+            self.assertGreater(fitter.call_count, before)
+
+    def test_cache_outage_does_not_break_fits(self):
+        with mock.patch.object(cache, "get_many", side_effect=RuntimeError("redis down")), \
+             mock.patch.object(cache, "set_many", side_effect=RuntimeError("redis down")):
+            fits = bazin.fits_for_transients([self.transient.id])
+        self.assertIn(self.r_band.id, fits[self.transient.id])
+
+
+# ------------------------------------------------------------- detail page
+
+
+class BazinPlotViewTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("bazin_view_user", is_staff=True)
+        cls.transient = create_minimal_transient(cls.user, name="2026bazinplot")
+        _group, _instrument, band = create_instrument_stack(cls.user, obs_group_name="bazin-plot")
+        attach_bazin_photometry(cls.user, cls.transient, band=band, n_points=12, with_upper_limit=True)
+        cls.short = create_minimal_transient(cls.user, name="2026bazinshort")
+        attach_synthetic_photometry(cls.user, cls.short, n_points=3)
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+        cache.clear()
+
+    def _doc(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        return response, bokeh_doc_from_html(response.content.decode())
+
+    @staticmethod
+    def _lines(doc):
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        lines = []
+        for ref in refs.values():
+            if ref["type"] == "GlyphRenderer":
+                glyph = refs[ref["attributes"]["glyph"]["id"]]
+                if glyph["type"] == "Line":
+                    lines.append(glyph["attributes"])
+        return lines
+
+    def test_overlay_adds_dashed_extrapolation_and_one_legend_entry(self):
+        with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}):
+            _plain, plain_doc = self._doc(reverse("bazinplot", args=[self.transient.id, 0]))
+            response, doc = self._doc(reverse("bazinplot", args=[self.transient.id, 1]))
+        labels = [label for row in legend_grid(doc) for label in row]
+        self.assertIn(view_utils.BAZIN_LEGEND_LABEL, labels)
+        self.assertTrue(labels[-1].startswith("today ("))
+        plain_labels = [label for row in legend_grid(plain_doc) for label in row]
+        self.assertNotIn(view_utils.BAZIN_LEGEND_LABEL, plain_labels)
+        dashed = [line for line in self._lines(doc) if line.get("line_dash") == [6]]
+        def width(line):
+            value = line.get("line_width")
+            return value.get("value") if isinstance(value, dict) else value
+        solid_fit = [line for line in self._lines(doc) if width(line) == 2 and line.get("line_dash") != [6]]
+        self.assertEqual(len(dashed), 1)
+        self.assertEqual(len(solid_fit), 1)
+        self.assertEqual(len([l for l in self._lines(plain_doc) if l.get("line_dash") == [6]]), 0)
+        body = response.content.decode()
+        self.assertIn("Bazin fit (dashed = extrapolated)", body)
+        self.assertIn("today", body)
+        self.assertNotIn(view_utils.BAZIN_FIT_UNAVAILABLE_TEXT, body)
+        # x range reaches the end of the extrapolation (today + 15 d)
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        plot = refs[doc["roots"]["root_ids"][0]]["attributes"]
+        x_end = refs[plot["x_range"]["id"]]["attributes"]["end"]
+        today = bazin.datetime_to_mjd(datetime.datetime.utcnow())
+        self.assertGreaterEqual(x_end, today + bazin.EXTRAPOLATION_DAYS - 1)
+        refs_plain = {ref["id"]: ref for ref in plain_doc["roots"]["references"]}
+        plain_plot = refs_plain[plain_doc["roots"]["root_ids"][0]]["attributes"]
+        plain_x_end = refs_plain[plain_plot["x_range"]["id"]]["attributes"]["end"]
+        self.assertGreater(x_end, plain_x_end)
+
+    def test_overlay_hides_with_the_band_in_the_legend(self):
+        with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}):
+            _response, doc = self._doc(reverse("bazinplot", args=[self.transient.id, 1]))
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        callbacks = [ref for ref in refs.values() if ref["type"] == "CustomJS"]
+        followers = sum(len(cb["attributes"]["args"]["followers"]) for cb in callbacks)
+        # error bars + upper limit from the plot, solid + dashed fit from the overlay
+        self.assertEqual(followers, 4)
+
+    def test_too_few_points_notes_unavailable_fit(self):
+        with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}):
+            response = self.client.get(reverse("bazinplot", args=[self.short.id, 1]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(view_utils.BAZIN_FIT_UNAVAILABLE_TEXT, response.content.decode())
+
+    def test_fitter_failure_does_not_break_the_plot(self):
+        with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}), \
+             mock.patch.object(bazin, "fit_bazin", return_value=None):
+            response = self.client.get(reverse("bazinplot", args=[self.transient.id, 1]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(view_utils.BAZIN_FIT_UNAVAILABLE_TEXT, response.content.decode())
+
+    def test_zero_flag_is_the_cached_plain_plot_and_one_flag_is_cached_separately(self):
+        plain_url = reverse("lightcurveplot_detail", args=[self.transient.id]) + "?w=800"
+        off_url = reverse("bazinplot", args=[self.transient.id, 0]) + "?w=800"
+        on_url = reverse("bazinplot", args=[self.transient.id, 1]) + "?w=800"
+        with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "1"}):
+            plain = self.client.get(plain_url).content
+            with CaptureQueriesContext(connection) as ctx:
+                off = self.client.get(off_url).content
+            self.assertEqual(off, plain)  # served from the plot cache
+            self.assertLessEqual(len(ctx.captured_queries), 4)  # session/user + cache token, no photometry
+            with mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+                on = self.client.get(on_url).content
+                self.assertEqual(fitter.call_count, 1)
+                on_again = self.client.get(on_url).content
+                self.assertEqual(fitter.call_count, 1)  # cached under its own key
+            self.assertEqual(on, on_again)
+            self.assertNotEqual(on, plain)
+            self.assertIn(view_utils.BAZIN_LEGEND_LABEL, on.decode())
+
+    def test_detail_page_has_the_button_in_both_defer_modes(self):
+        for defer in ("1", "0"):
+            with self.subTest(defer=defer), mock.patch.dict("os.environ", {"YSE_TRANSIENT_DETAIL_DEFER": defer}):
+                response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+                self.assertEqual(response.status_code, 200)
+                html = response.content.decode()
+                self.assertIn('id="bazinplot"', html)
+                self.assertIn("Show Bazin Fit", html)
+                self.assertIn("Show SALT3 Fit", html)
+                self.assertLess(html.index('id="salt2plot"'), html.index('id="bazinplot"'))
+                self.assertIn(reverse("bazinplot", args=[self.transient.id, 1]), html)
+                self.assertIn(reverse("bazinplot", args=[self.transient.id, 0]), html)
+                self.assertIn("$('.plotBazin').on('click'", html)
+
+
+# ------------------------------------------------------------ scheduling table
+
+
+class BazinTableTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("bazin_table_user")
+        audit = audit_fields(cls.user)
+        cls.obs_date = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        cls.obs_group, instrument, cls.band = create_instrument_stack(cls.user, obs_group_name="bazin-night")
+        observatory = instrument.telescope.observatory
+        observatory.utc_offset = -10
+        observatory.save()
+        night_type, _ = ClassicalNightType.objects.get_or_create(name="Full", defaults=audit)
+        cls.resource = ClassicalResource.objects.create(
+            telescope=instrument.telescope,
+            begin_date_valid=cls.obs_date - datetime.timedelta(days=3),
+            end_date_valid=cls.obs_date + datetime.timedelta(days=3),
+            **audit,
+        )
+        cls.night = ClassicalObservingDate.objects.create(
+            resource=cls.resource, night_type=night_type, obs_date=cls.obs_date, **audit
+        )
+        cls.too = ToOResource.objects.create(
+            telescope=instrument.telescope,
+            begin_date_valid=cls.obs_date - datetime.timedelta(days=3),
+            end_date_valid=cls.obs_date + datetime.timedelta(days=3),
+            **audit,
+        )
+        status, _ = FollowupStatus.objects.get_or_create(name="Requested", defaults=audit)
+        cls.transients, cls.truths = [], {}
+        for i in range(6):
+            t = create_minimal_transient(cls.user, name=f"bznight{i}", ra=10.0 + i, dec=-5.0 + i)
+            if i < 4:
+                _phot, truth = attach_bazin_photometry(cls.user, t, band=cls.band, n_points=10 + i)
+                cls.truths[t.id] = truth
+            elif i == 4:
+                attach_synthetic_photometry(cls.user, t, n_points=2)  # recent mag, no fit
+            for resource_kw in ({"classical_resource": cls.resource}, {"too_resource": cls.too}):
+                create_or_attach_request(
+                    cls.user, t, status=status,
+                    valid_start=cls.obs_date - datetime.timedelta(days=4),
+                    valid_stop=cls.obs_date + datetime.timedelta(days=4),
+                    comment="bazin", **resource_kw,
+                )
+            cls.transients.append(t)
+
+    def setUp(self):
+        cache.clear()
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _night_qs(self, n=None):
+        ids = [t.id for t in self.transients[: n or len(self.transients)]]
+        return self.resource.transientfollowup_set.filter(transient_id__in=ids).select_related("transient")
+
+    def test_column_renders_mag_and_band_at_local_midnight(self):
+        from YSE_App.table_utils import ObsNightFollowupTable
+
+        table = ObsNightFollowupTable(self._night_qs(), classical_obs_date=self.night)
+        cells = {row.record.transient_id: row.get_cell("bazin_mag") for row in table.rows}
+        night_mjd = bazin.local_midnight_mjd(self.obs_date, -10)
+        self.assertAlmostEqual(table._bazin_mjd, night_mjd)
+        for t in self.transients[:4]:
+            expected = bazin.flux_to_mag(bazin.bazin_flux(night_mjd, *self.truths[t.id]))
+            mag_str, band = cells[t.id].split()
+            self.assertEqual(band, "r")  # 'r-bazin-night' shortened like the plot legend
+            self.assertAlmostEqual(float(mag_str), expected, delta=0.05)
+        self.assertEqual(cells[self.transients[4].id], "")
+        self.assertEqual(cells[self.transients[5].id], "")
+        header = [str(col.header) for col in table.columns]
+        self.assertIn("Bazin Mag @ Night", header)
+        self.assertEqual(header.index("Bazin Mag @ Night"), header.index("Recent Mag") + 1)
+        self.assertFalse(table.columns["bazin_mag"].orderable)
+
+    def test_too_table_extrapolates_to_now(self):
+        from YSE_App.table_utils import ToOFollowupTable
+
+        qs = self.too.transientfollowup_set.select_related("transient")
+        table = ToOFollowupTable(qs, too_resource=self.too)
+        now = bazin.datetime_to_mjd(timezone.now())
+        self.assertAlmostEqual(table._bazin_mjd, now, delta=1 / 24)
+        cells = {row.record.transient_id: row.get_cell("bazin_mag") for row in table.rows}
+        t = self.transients[0]
+        expected = bazin.flux_to_mag(bazin.bazin_flux(now, *self.truths[t.id]))
+        self.assertAlmostEqual(float(cells[t.id].split()[0]), expected, delta=0.05)
+        self.assertIn("Bazin Mag Now", [str(col.header) for col in table.columns])
+
+    def test_query_count_is_flat_in_rows_and_fits_run_once_per_transient(self):
+        from YSE_App.table_utils import ObsNightFollowupTable
+
+        def render(n):
+            cache.clear()
+            with CaptureQueriesContext(connection) as ctx, \
+                 mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+                table = ObsNightFollowupTable(self._night_qs(n), classical_obs_date=self.night)
+                cells = [row.get_cell("bazin_mag") for row in table.rows]
+            self.assertEqual(len(cells), n)
+            return len(ctx.captured_queries), fitter.call_count
+
+        q2, fits2 = render(2)
+        q6, fits6 = render(6)
+        self.assertEqual(q2, q6)
+        self.assertEqual(fits2, 2)
+        self.assertEqual(fits6, 4)  # one fit per transient with enough detections
+
+    def test_observing_night_page_shows_the_column(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        url = reverse(
+            "observing_night",
+            kwargs={
+                "telescope": self.resource.telescope.name.replace(" ", "_"),
+                "obs_date": self.obs_date.strftime("%Y-%m-%d"),
+                "pi_name": "None",
+            },
+        )
+        with iers_offline():
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn("Bazin Mag @ Night", html)
+        night_mjd = bazin.local_midnight_mjd(self.obs_date, -10)
+        t = self.transients[0]
+        expected = bazin.flux_to_mag(bazin.bazin_flux(night_mjd, *self.truths[t.id]))
+        self.assertIn("%.2f r" % expected, html)
+
+    def test_download_target_list_carries_the_bazin_mag(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        url = reverse(
+            "download_target_list",
+            kwargs={
+                "telescope": self.resource.telescope.name.replace(" ", "_"),
+                "obs_date": self.obs_date.strftime("%Y-%m-%d"),
+            },
+        )
+        with iers_offline(), mock.patch.object(
+                bazin, "detections_by_transient", wraps=bazin.detections_by_transient) as detections:
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(detections.call_count, 1)  # one photometry query for the whole list
+        body = response.content.decode()
+        night_mjd = bazin.local_midnight_mjd(self.obs_date, -10)
+        for t in self.transients[:4]:
+            expected = bazin.flux_to_mag(bazin.bazin_flux(night_mjd, *self.truths[t.id]))
+            line = next(line for line in body.splitlines() if line.startswith(t.name))
+            self.assertIn("mag = %.2f bazin_mag = %.2f r comment = bazin" % (float(t.recent_mag()), expected), line)
+        no_fit = next(line for line in body.splitlines() if line.startswith(self.transients[4].name))
+        self.assertNotIn("bazin_mag", no_fit)
+        self.assertIn("mag = %.2f comment = bazin" % float(self.transients[4].recent_mag()), no_fit)
+        no_phot = next(line for line in body.splitlines() if line.startswith(self.transients[5].name))
+        self.assertIn("2000 comment = bazin", no_phot)
