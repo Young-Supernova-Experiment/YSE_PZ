@@ -4,8 +4,9 @@ On Ziggy the experimental database recorded 0005-0007 as applied while the
 columns they add were never created, so the 0008 data migration crashed on
 ``hostfollowup.is_public``. This command introspects the real tables, compares
 them with what each migration should have produced, and either unrecords fake
-applications / drops half-applied 0008 artifacts (``--apply``) or hands off to a
-human when the state is ambiguous. Default is a dry run.
+applications, drops the empty ManyToMany join tables a fake application left
+behind, drops half-applied 0008 artifacts (``--apply``), or hands off to a human
+when the state is ambiguous. Default is a dry run.
 """
 
 from __future__ import annotations
@@ -69,7 +70,8 @@ EXPECTED: Dict[str, Expected] = {
     ),
 }
 
-CONSISTENT, UNRECORD, DROP, HANDOFF = "consistent", "unrecord", "drop", "handoff"
+CONSISTENT, RESET, UNRECORD, DROP, HANDOFF = "consistent", "reset", "unrecord", "drop", "handoff"
+APPLY_ORDER = (RESET, UNRECORD, DROP)
 
 
 @dataclass
@@ -80,11 +82,13 @@ class Plan:
     drop_sql: List[str] = field(default_factory=list)
 
 
-def plan_migration(name, recorded, exists, quote=lambda n: f"`{n}`"):
+def plan_migration(name, recorded, exists, quote=lambda n: f"`{n}`", row_count=None):
     """Decide what to do for one migration.
 
     ``exists`` maps each Artifact of ``EXPECTED[name]`` to whether it is in the
-    live schema. Returns a Plan; never touches the database.
+    live schema. ``row_count(table)`` is only called for tables a recorded
+    migration left behind on an otherwise pre-migration schema (M2M join
+    tables); without it that state is a HANDOFF. Returns a Plan.
     """
     spec = EXPECTED[name]
     adds = [a for a in spec.artifacts if a.present]
@@ -104,6 +108,15 @@ def plan_migration(name, recorded, exists, quote=lambda n: f"`{n}`"):
             plan.status = UNRECORD
         return plan
     # Mixed state from here on.
+    if recorded and row_count is not None and all(a.present and not a.column for a in ran):
+        # Only (M2M join) tables exist; if they are empty nothing is lost by
+        # dropping them and letting the migration really run.
+        counts = {a: row_count(a.table) for a in ran}
+        plan.detail += [f"table {a.table} has {n} rows" for a, n in counts.items()]
+        if not any(counts.values()):
+            plan.status = RESET
+            plan.drop_sql = [f"DROP TABLE {quote(a.table)}" for a in ran]
+            return plan
     if recorded or not spec.cleanup_ok or any(not exists[a] for a in removes):
         plan.status = HANDOFF
         plan.detail.append(f"inspect with: manage.py sqlmigrate {APP} {name}")
@@ -147,7 +160,13 @@ class Command(BaseCommand):
         recorder = MigrationRecorder(connection)
         applied = {n for app, n in recorder.applied_migrations() if app == APP}
         exists = snapshot_schema(connection)
-        plans = [plan_migration(n, n in applied, exists, connection.ops.quote_name)
+
+        def row_count(table):
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) FROM {connection.ops.quote_name(table)}")
+                return cursor.fetchone()[0]
+
+        plans = [plan_migration(n, n in applied, exists, connection.ops.quote_name, row_count)
                  for n in EXPECTED]
 
         out = self.stdout.write
@@ -157,10 +176,11 @@ class Command(BaseCommand):
             for line in p.detail:
                 out(f"    {line}")
             for sql in p.drop_sql:
-                out(f"    SQL: {sql};")
+                out(f"    will run: {sql};")
 
         handoff = [p for p in plans if p.status == HANDOFF]
-        todo = [p for p in plans if p.status in (UNRECORD, DROP)]
+        todo = sorted((p for p in plans if p.status in APPLY_ORDER),
+                      key=lambda p: APPLY_ORDER.index(p.status))
         out("")
         if handoff:
             raise CommandError(
@@ -169,15 +189,27 @@ class Command(BaseCommand):
         if not todo:
             out(self.style.SUCCESS("Schema and django_migrations agree: nothing to do."))
             return
+        actions = {RESET: "drop empty group tables and unrecord",
+                   UNRECORD: "unrecord from django_migrations", DROP: "drop partial artifacts"}
         for p in todo:
-            action = "unrecord from django_migrations" if p.status == UNRECORD else "drop partial artifacts"
-            out(f"PLAN  {p.name}: {action}")
+            out(f"PLAN  {p.name}: {actions[p.status]}")
         if not options["apply"]:
             out("\nDry run only. Re-run with --apply --yes to execute the plan.")
             return
         if not options["yes"] and input("Type 'yes' to execute the plan: ").strip() != "yes":
             raise CommandError("Aborted.")
 
+        def drop(p, cursor):
+            for sql in p.drop_sql:
+                cursor.execute(sql)  # MySQL DDL autocommits; not transactional
+                out(f"executed {sql}")
+
+        with connection.cursor() as cursor:
+            for p in todo:
+                if p.status == RESET:  # unrecord only once the tables are really gone
+                    drop(p, cursor)
+                    recorder.record_unapplied(APP, p.name)
+                    out(f"unrecorded {APP}.{p.name}")
         with transaction.atomic(using=connection.alias):
             for p in todo:
                 if p.status == UNRECORD:
@@ -185,9 +217,8 @@ class Command(BaseCommand):
                     out(f"unrecorded {APP}.{p.name}")
         with connection.cursor() as cursor:
             for p in todo:
-                for sql in p.drop_sql:
-                    cursor.execute(sql)  # MySQL DDL autocommits; not transactional
-                    out(f"executed {sql}")
+                if p.status == DROP:
+                    drop(p, cursor)
         out(self.style.SUCCESS(
             "\nDone. Now run:\n    manage.py migrate --noinput --skip-checks\n"
             "(or re-run the failed Deploy Stack workflow, which does the same)."))
