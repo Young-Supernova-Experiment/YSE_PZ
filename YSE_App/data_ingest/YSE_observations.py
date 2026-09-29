@@ -64,6 +64,7 @@ class SurveyObs(CronJobBase):
 	def do(self):
 		parser = self.add_options(usage='')
 		options,  args = parser.parse_known_args()
+		uploaddict = None
 		try:
 			config = configparser.ConfigParser()
 			config.read("%s/settings.ini"%djangoSettings.PROJECT_DIR)

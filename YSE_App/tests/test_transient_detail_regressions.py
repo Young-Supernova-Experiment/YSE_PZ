@@ -115,3 +115,31 @@ class TransientDetailRegressionTests(TestCase):
         self.assertIn("Plot all on Summary tab", html)
         for spec in self.spectra:
             self.assertIn(f'class="specPlotChange" spec_plot-id="{spec.id}"', html)
+
+
+class TransientSummaryTabRegressionTests(TestCase):
+    """transient_summary_individual.html had the same li.active/a.active pair (#171)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("summary_tab_regression_user")
+        cls.transient = create_minimal_transient(
+            cls.user, name="2026summarytabfix", status_name="New"
+        )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def test_summary_tab_marks_active_on_the_link_only(self):
+        url = reverse("transient_summary", kwargs={"status_or_query_name": "New"})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8", errors="replace")
+        self.assertIn(self.transient.name, html)
+        self.assertIn(
+            f'<li class="nav-item"><a class="nav-link active" href="#summary_tab_{self.transient.id}" '
+            'data-toggle="tab">Summary</a></li>',
+            html,
+        )
+        self.assertNotIn('class="nav-item active"', html)

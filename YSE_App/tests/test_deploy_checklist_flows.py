@@ -26,6 +26,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 import YSE_App.views as views_module
+from YSE_App.forms import OncallForm, SurveyFieldForm, SurveyObsForm
 from YSE_App.models import (
     ClassicalObservingDate,
     ClassicalResource,
@@ -468,15 +469,55 @@ class DeployChecklistFlowTests(TestCase):
     # ------------------------------------------------------------- on-call
 
     def test_oncall_schedule_entry_shows_on_calendar(self):
-        """OncallForm's user field is built at import time from the YSE group, so the
-        form POST cannot be exercised on a fresh DB; the model + page are."""
-        entry = YSEOnCallDate.objects.create(
-            on_call_date=utc_days_from_now(2, hour=0), **audit_fields(self.user)
+        """POST the on-call form (a YSE-group user + a UT date range) the way the
+        calendar page does, then check the entries and the calendar page."""
+        start = utc_days_from_now(2, hour=0)
+        n_before = YSEOnCallDate.objects.count()
+        response = self.client.post(
+            reverse("add_oncall_observer"),
+            {
+                "user": self.user.id,
+                "valid_start": fmt_dt(start),
+                "valid_stop": fmt_dt(start + datetime.timedelta(days=2)),
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
         )
-        entry.user.add(self.user)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["message"], "Successfully submitted form data.")
+        # one YSEOnCallDate per night in [valid_start, valid_stop)
+        self.assertEqual(YSEOnCallDate.objects.count(), n_before + 2)
+        for entry in YSEOnCallDate.objects.order_by("-id")[:2]:
+            self.assertIn(self.user, entry.user.all())
+            self.assertEqual(entry.created_by_id, self.user.id)
+
         response = self.client.get(reverse("yse_oncall_calendar"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.user.username)
+
+    def test_oncall_form_rejects_missing_user_instead_of_500(self):
+        n_before = YSEOnCallDate.objects.count()
+        start = utc_days_from_now(2, hour=0)
+        response = self.client.post(
+            reverse("add_oncall_observer"),
+            {"valid_start": fmt_dt(start), "valid_stop": fmt_dt(start + datetime.timedelta(days=1))},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("user", response.json())
+        self.assertEqual(YSEOnCallDate.objects.count(), n_before)
+
+    def test_oncall_form_user_choices_follow_yse_group_membership(self):
+        """The user list is evaluated per form instance, not at import time."""
+        newcomer = create_test_user("checklist_oncall_newcomer")
+        self.assertNotIn(newcomer, OncallForm().fields["user"].queryset)
+        newcomer.groups.add(self.yse_group)
+        form = OncallForm()
+        self.assertIn(newcomer, form.fields["user"].queryset)
+        self.assertIn(self.user, form.fields["user"].queryset)
+        self.assertEqual(
+            form.fields["user"].initial,
+            form.fields["user"].queryset.order_by("username").first(),
+        )
 
     # ---------------------------------------------------------- survey fields
 
@@ -514,6 +555,86 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(field.instrument.name, "GPC1")
         msb = SurveyFieldMSB.objects.get(name="998")
         self.assertIn(field, msb.survey_fields.all())
+
+    def test_add_survey_field_form_creates_field_and_requested_observations(self):
+        """POST the observing-night 'Add Pan-STARRS Survey Field' form."""
+        _yse_obs_group, _ps1, gpc1, _bands = self._survey_stack()
+        self.assertEqual(SurveyFieldForm().fields["instrument"].initial, gpc1)
+        start = utc_days_from_now(3, hour=0)
+        with iers_offline():
+            response = self.client.post(
+                reverse("add_survey_field"),
+                {
+                    "field_id": "997.C",
+                    "cadence": 3,
+                    "ztf_field_id": "997",
+                    "instrument": gpc1.id,
+                    "coord": "03:20:00 +12:00:00",
+                    "valid_start": fmt_dt(start),
+                    "valid_stop": fmt_dt(start + datetime.timedelta(days=6)),
+                },
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["message"], "Successfully submitted form data.")
+        field = SurveyField.objects.get(field_id="997.C")
+        self.assertEqual(field.instrument_id, gpc1.id)
+        self.assertEqual(field.obs_group.name, "YSE")
+        self.assertEqual(field.created_by_id, self.user.id)
+        self.assertAlmostEqual(field.ra_cen, 50.0, places=3)
+        self.assertAlmostEqual(field.dec_cen, 12.0, places=3)
+        # one visit per cadence step over the 6-day window, two bands per visit
+        obs = SurveyObservation.objects.filter(survey_field=field)
+        self.assertEqual(obs.count(), 4)
+        self.assertEqual({o.status.name for o in obs}, {"Requested"})
+        self.assertTrue({o.photometric_band.name for o in obs} <= {"g", "r", "i", "z"})
+
+    def test_add_survey_obs_form_schedules_observations_for_msb(self):
+        """POST the observing-night 'Add Pan-STARRS Survey Observation' form."""
+        yse_obs_group, _ps1, gpc1, _bands = self._survey_stack()
+        audit = audit_fields(self.user)
+        field = SurveyField.objects.create(
+            obs_group=yse_obs_group,
+            field_id="996.A",
+            cadence=3,
+            instrument=gpc1,
+            ztf_field_id="996",
+            active=True,
+            ra_cen=60.0,
+            dec_cen=-3.0,
+            width_deg=3.3,
+            height_deg=3.3,
+            **audit,
+        )
+        msb = SurveyFieldMSB.objects.create(obs_group=yse_obs_group, name="996", active=True, **audit)
+        msb.survey_fields.add(field)
+
+        # choices come from the current database, not from import time
+        form = SurveyObsForm()
+        self.assertIn(("996", "996"), form.fields["ztf_field_id"].choices)
+        self.assertEqual(form.fields["ztf_field_id"].initial, [form.fields["ztf_field_id"].choices[0][0]])
+
+        with iers_offline():
+            response = self.client.post(
+                reverse("add_survey_obs"),
+                {
+                    "survey_obs_date": fmt_dt(utc_days_from_now(1, hour=0)),
+                    "ztf_field_id": ["996"],
+                    "instrument": ["GPC1"],
+                    "priority": 2,
+                },
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["message"], "Successfully submitted form data.")
+        obs = SurveyObservation.objects.filter(survey_field=field)
+        self.assertEqual(obs.count(), 2)
+        self.assertEqual({o.priority for o in obs}, {2})
+        self.assertEqual({o.status.name for o in obs}, {"Requested"})
+        self.assertEqual({o.created_by_id for o in obs}, {self.user.id})
+        bands = {o.photometric_band.name for o in obs}
+        self.assertEqual(len(bands), 2)
+        self.assertTrue(bands <= {"g", "r", "i", "z"})
 
     def test_survey_obs_schedule_and_ingest_observation_record(self):
         yse_obs_group, _ps1, gpc1, bands = self._survey_stack()

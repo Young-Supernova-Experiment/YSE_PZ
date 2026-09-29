@@ -10,10 +10,11 @@ Two layers:
    missing or broken third-party package (SciServer; TensorFlow whose protobuf
    pin is incompatible in the web image -- fixed by the protobuf==3.20.3 pin,
    issue #183, but the classifier stays so images built with the old pin still
-   report a skip rather than a failure), a network fetch at import time
-   (astro_ghost), or a DB row read at import. Only a crash-class exception
-   raised by the cron module's own code (or an ImportError naming a repo
-   module) fails the inventory. See ``_import_failure_reason``.
+   report a skip rather than a failure) or a network fetch inside a dependency.
+   A crash-class exception or a DB row lookup (``ObjectDoesNotExist``) raised by
+   the cron module's own module-level code, or an ImportError naming a repo
+   module, fails the inventory (#182). Every cron's ``code`` must be unique
+   (#188). See ``_import_failure_reason``.
 
 2. ``test_cron_do_does_not_crash_on_its_own_code``: ``do()`` is invoked for each
    cron with all outbound I/O stubbed (HTTP, IMAP, SMTP, shell, tendo singleton,
@@ -77,23 +78,11 @@ SKIP_DO: dict = {}
 
 # Known-broken crons: a crash here is recorded as XFAIL (and an XPASS once fixed)
 # instead of failing CI, with the fix or follow-up that tracks it.
-# The undefined-name crashes in TNS_uploads/Gaia_LC/QUB_data were fixed by PR #165,
-# which is now on experimental, so those entries are gone.
-EXPECTED_CRASHES = {
-    # do() reads `uploaddict` after the try block even when process_emails()
-    # raised, so any IMAP failure ends in UnboundLocalError. Follow-up bug.
-    "YSE_App.data_ingest.YSE_observations.SurveyObs": "uploaddict unbound when the IMAP fetch fails (follow-up)",
-    # TNS_uploads.search()/get() swallow any requests exception and return
-    # `[None, 'Error message ...']` instead of a Response; GetRecentEvents()
-    # then reads `response.status_code` (TNS_uploads.py:825; same pattern at
-    # 842/863/878/1069) -> AttributeError: 'list' object has no attribute
-    # 'status_code'. TNS_recent/TNS_updates wrap the call in try/except and
-    # email the error; TNS_recent_realtime.do() has that try/except commented
-    # out, so every TNS outage crashes this cron. Follow-up bug.
-    "YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime": (
-        "search()/get() return a list on error and GetRecentEvents reads .status_code (follow-up)"
-    ),
-}
+# Empty today. The undefined-name crashes in TNS_uploads/Gaia_LC/QUB_data were
+# fixed by PR #165; SurveyObs (`uploaddict` unbound after an IMAP failure, #181)
+# and TNS_recent_realtime (search()/get() returned a list on error and callers
+# read `.status_code`, #180) are fixed and now asserted to run cleanly.
+EXPECTED_CRASHES: dict = {}
 
 
 class _CronTimeout(BaseException):
@@ -140,18 +129,21 @@ def _import_failure_reason(exc: BaseException) -> Optional[str]:
     must fail the test.
 
     Environmental: an ImportError naming a package outside this repo (optional
-    science dependency); any non-crash-class exception (dust map data missing,
-    a network fetch or a DB lookup at import time); a SyntaxError in a
-    dependency's file; a crash-class exception raised beneath an ``import``
-    statement in repo code (a dependency such as TensorFlow/protobuf that is
-    installed but broken in this image; see issue #183 for the protobuf pin
-    that caused ``TypeError: Descriptors cannot be created directly``) or with
-    no repo frame at all.
+    science dependency); any non-crash-class exception other than a DB row
+    lookup (dust map data missing, a network fetch inside a dependency at import
+    time); a SyntaxError in a dependency's file; a crash-class exception raised
+    beneath an ``import`` statement in repo code (a dependency such as
+    TensorFlow/protobuf that is installed but broken in this image; see issue
+    #183 for the protobuf pin that caused ``TypeError: Descriptors cannot be
+    created directly``) or with no repo frame at all.
 
     Own bug: an ImportError naming a YSE_App/YSE_PZ module, a SyntaxError in a
-    repo file, or a crash-class exception whose innermost repo frame is ordinary
-    module-level code.
+    repo file, or a crash-class exception or ``ObjectDoesNotExist`` (a DB row
+    read at import, #182) whose innermost repo frame is ordinary module-level
+    code.
     """
+    from django.core.exceptions import ObjectDoesNotExist
+
     text = str(exc).strip()
     label = f"{type(exc).__name__}: {text.splitlines()[0] if text else ''}"
     if isinstance(exc, ImportError):
@@ -160,8 +152,8 @@ def _import_failure_reason(exc: BaseException) -> Optional[str]:
             return None
         if name:
             return f"missing optional dependency {name!r}"
-    if not isinstance(exc, CRASH_EXCEPTIONS):
-        return f"import needs data/network/DB not available here: {label}"
+    if not isinstance(exc, CRASH_EXCEPTIONS + (ObjectDoesNotExist,)):
+        return f"import needs data/network not available here: {label}"
     if isinstance(exc, SyntaxError):
         # The broken file is not on the traceback; SyntaxError names it itself.
         return None if _is_repo_file(getattr(exc, "filename", "") or "") else f"raised inside a dependency: {label}"
@@ -269,7 +261,9 @@ def _run_do(cron_cls):
 class CronClassInventoryTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        # PS1_cutouts does `User.objects.get(username='admin')` at import time.
+        # Kept so a cron that reads the DB at import is exercised rather than
+        # skipped; PS1_cutouts' admin lookup itself is lazy since #182 (see
+        # PS1CutoutsLazyAdminTests).
         cls.admin = create_test_user("admin", is_staff=True, is_superuser=True)
 
     def test_cron_classes_import_and_are_well_formed(self):
@@ -301,12 +295,9 @@ class CronClassInventoryTests(TestCase):
                 seen_codes.setdefault(code, []).append(dotted)
 
         duplicates = {c: paths for c, paths in seen_codes.items() if len(paths) > 1}
-        if duplicates:
-            # Shared codes make django_cron treat two jobs as one run history;
-            # reported here (visible in -v2 output) and tracked as a follow-up.
-            print("\n[cron-smoke] WARNING duplicate django_cron codes:")
-            for code, paths in duplicates.items():
-                print(f"  {code}: {', '.join(paths)}")
+        for code, paths in duplicates.items():
+            # Shared codes make django_cron treat two jobs as one run history (#188).
+            problems.append(f"duplicate django_cron code {code!r}: {', '.join(paths)}")
         if unavailable:
             print("\n[cron-smoke] crons not importable in this environment (skipped):")
             for line in unavailable:
@@ -376,3 +367,57 @@ class CronDoSmokeTests(TestCase):
         for line in report:
             print("  " + line)
         self.assertFalse(failures, "\n".join(failures))
+
+
+def _import_module_or_skip(testcase, module_path: str):
+    """Import a cron module; skip the test when it needs a dependency this image lacks."""
+    try:
+        with _sandbox():
+            return importlib.import_module(module_path)
+    except Exception as e:  # noqa: BLE001 - classified below
+        reason = _import_failure_reason(e)
+        if reason is None:
+            raise
+        testcase.skipTest(f"{module_path}: {reason}")
+
+
+class TNSRequestHelperTests(TestCase):
+    """#180: search()/get() raise TNSRequestError instead of returning a list."""
+
+    ARGS = ("https://tns.example/api", [("objname", "2024abc")], "key", "1", "bot")
+
+    def test_search_and_get_raise_when_the_request_fails(self):
+        TNS_uploads = _import_module_or_skip(self, "YSE_App.data_ingest.TNS_uploads")
+        with mock.patch.object(TNS_uploads.requests, "post", side_effect=OSError("cron-smoke: no network")):
+            with self.assertRaises(TNS_uploads.TNSRequestError):
+                TNS_uploads.search(*self.ARGS)
+            with self.assertRaises(TNS_uploads.TNSRequestError):
+                TNS_uploads.get(*self.ARGS)
+
+    def test_recent_event_lookups_return_zero_when_the_search_fails(self):
+        TNS_uploads = _import_module_or_skip(self, "YSE_App.data_ingest.TNS_uploads")
+        proc = TNS_uploads.processTNS()
+        proc.tnsapi, proc.tnsapikey, proc.tns_bot_id, proc.tns_bot_name = self.ARGS[0], "key", "1", "bot"
+        proc.redohost = False
+        failing = mock.Mock(side_effect=TNS_uploads.TNSRequestError("Error message : \nboom"))
+        with mock.patch.object(TNS_uploads, "search", failing), mock.patch("time.sleep"):
+            self.assertEqual(proc.GetRecentEvents(ndays=1), 0)
+            self.assertEqual(proc.GetRecentMissingEvents(ndays=1), 0)
+        self.assertEqual(failing.call_count, 2)
+
+
+class PS1CutoutsLazyAdminTests(TestCase):
+    """#182: importing PS1_cutouts must not look up the 'admin' user."""
+
+    def test_import_does_not_query_the_admin_user(self):
+        from django.contrib.auth.models import User
+
+        self.assertFalse(User.objects.filter(username="admin").exists())
+        module_path = "YSE_App.data_ingest.PS1_cutouts"
+        cached = sys.modules.pop(module_path, None)
+        try:
+            module = _import_module_or_skip(self, module_path)
+            self.assertFalse(hasattr(module, "user"), "PS1_cutouts still binds `user` at module scope")
+        finally:
+            if cached is not None:
+                sys.modules[module_path] = cached
