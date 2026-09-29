@@ -60,6 +60,13 @@ URL is the whole state of a search, so it can be pasted into Slack.
 Photometry filters read the stat row, so a transient without one (no unflagged points, or the
 backfill in `docs/photstat.md` not yet run) never matches them.
 
+### Annotations (#319)
+
+`annotation_origin`, `annotation_key`, `annotation_value_eq`, `annotation_value_min`,
+`annotation_value_max` and `annotation_column` (an `origin.key` shown as an extra, sortable
+results column). They read the indexed `TransientAnnotationValue` side table, or the `Transient`
+column itself for `annotation_origin=legacy`. Details in `docs/annotations.md`.
+
 ## How it stays one query
 
 * Cone: `getRADecBox` gives an RA/Dec bounding box (wrap-safe at RA 0/360, RA unconstrained when a pole

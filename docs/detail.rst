@@ -108,6 +108,17 @@ timeout/caching behaviour.
 
 .. image:: _static/yse_pz_detailarchival.png
 
+Annotations Tab
+---------------
+
+Structured key/value annotations per origin (Gaia DR3, WISE and quasar
+catalogue checks, broker scores, ``user:<name>`` notes), each with an
+expandable JSON view, the verdict (``stellar`` / ``AGN-like`` / ``clean``)
+and Check / Rerun buttons for staff. ``stellar`` and ``AGN-like`` verdicts
+also appear as badges next to the status on the Summary tab. See
+``docs/annotations.md`` for the model, the API, the checks and the
+search filters.
+
 Comments (Summary tab)
 ----------------------
 
