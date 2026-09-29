@@ -292,6 +292,7 @@ router.register(r'surveyobservations', api_views.SurveyObservationViewSet)
 router.register(r'transientphotometry', api_views.TransientPhotometryViewSet, basename='transientphotometry')
 router.register(r'hostphotometry', api_views.HostPhotometryViewSet, basename='hostphotometry')
 router.register(r'transientphotdata', api_views.TransientPhotDataViewSet, basename='transientphotdata')
+router.register(r'transientphotstats', api_views.TransientPhotStatViewSet, basename='transientphotstat')
 router.register(r'hostphotdata', api_views.HostPhotDataViewSet, basename='hostphotdata')
 
 router.register(r'transientimages', api_views.TransientImageViewSet)
