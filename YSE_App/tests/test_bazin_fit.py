@@ -1,11 +1,16 @@
-"""Bazin light-curve fits (#225): the pure fitter, the detail-page overlay and the scheduling column.
+"""Bazin light-curve fits (#225, joint fit #336): the fitter, the detail-page overlay and the scheduling column.
 
-``YSE_App/services/bazin.py`` fits a Bazin curve per band in flux space and
-extrapolates it to a chosen MJD.  These tests pin:
+``YSE_App/services/bazin.py`` fits a Bazin curve to every band of a
+transient at once in flux space, with per-band shape parameters tied by a
+wavelength-correlated prior, and extrapolates it to a chosen MJD.  These
+tests pin:
 
 * the fitter recovers a synthetic Bazin curve with noise and its
   extrapolated magnitude, and returns ``None`` for too few points, a fitter
   failure or unphysical parameters;
+* the joint fit recovers wavelength-smooth shape parameters across bands, a
+  band with three points borrows its neighbours' shape and keeps fading
+  after peak, and a declining-only band does not settle on a plateau;
 * the magnitude conversion (non-positive flux has no magnitude) and the
   observing-night epoch (local midnight of the night's date);
 * ``bazinplot/<id>/1/`` overlays the fit (solid fitted span, dashed
@@ -132,30 +137,60 @@ class BazinModelTests(TestCase):
         self.assertIsNone(bazin.fit_bazin(mjd, np.full_like(mag, np.nan), magerr))
         self.assertIsNone(bazin.fit_bazin(np.full_like(mjd, 60000.0), mag, magerr))
         self.assertIsNone(bazin.fit_bazin([], [], []))
-        with mock.patch("scipy.optimize.curve_fit", side_effect=RuntimeError("no convergence")):
-            self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
-        bad = (np.array([-1.0, 60012.0, 25.0, 4.0, 0.0]), np.eye(5))
-        with mock.patch("scipy.optimize.curve_fit", return_value=bad):
-            self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
-        nan = (np.array([1.0, np.nan, 25.0, 4.0, 0.0]), np.eye(5))
-        with mock.patch("scipy.optimize.curve_fit", return_value=nan):
+        with mock.patch("scipy.optimize.least_squares", side_effect=ValueError("synthetic failure")):
+            self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))  # joint and shared solves both fail
+        # x = [A, B, t0, log tau_rise, log tau_fall]: a zero amplitude or a NaN drops the band
+        for x in (np.array([0.0, 0.0, 60012.0, 0.6, 1.4]), np.array([1.0, 0.0, np.nan, 0.6, 1.4])):
+            result = mock.MagicMock(status=1, x=x, jac=np.eye(5))
+            with mock.patch("scipy.optimize.least_squares", return_value=result):
+                self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
+        failed = mock.MagicMock(status=-1, x=np.array([1.0, 0.0, 60012.0, 0.6, 1.4]), jac=np.eye(5))
+        with mock.patch("scipy.optimize.least_squares", return_value=failed):
             self.assertIsNone(bazin.fit_bazin(mjd, mag, magerr))
 
     def test_fit_is_bounded_and_capped(self):
         mjd, mag, magerr = synthetic_curve()
-        with mock.patch("scipy.optimize.curve_fit", wraps=__import__("scipy.optimize", fromlist=["curve_fit"]).curve_fit) as cf:
-            bazin.fit_bazin(mjd, mag, magerr)
-        kwargs = cf.call_args.kwargs
+        real = __import__("scipy.optimize", fromlist=["least_squares"]).least_squares
+        with mock.patch("scipy.optimize.least_squares", wraps=real) as ls:
+            fit = bazin.fit_bazin(mjd, mag, magerr)
+        self.assertEqual(ls.call_count, 1)  # the joint solve succeeded; no shared fallback
+        self.assertEqual(fit.method, "joint")
+        args, kwargs = ls.call_args
         lower, upper = kwargs["bounds"]
         self.assertEqual(kwargs["max_nfev"], bazin.MAX_NFEV)
-        self.assertEqual((lower[3], upper[3]), bazin.TAU_RISE_BOUNDS)
-        self.assertEqual((lower[2], upper[2]), bazin.TAU_FALL_BOUNDS)
-        self.assertEqual(lower[1], mjd.min() - bazin.T0_PAD_DAYS)
-        self.assertEqual(upper[1], mjd.max() + bazin.T0_PAD_DAYS)
+        # x = [A, B, t0, log10 tau_rise, log10 tau_fall] for one band
         self.assertEqual(lower[0], 0.0)
-        p0 = kwargs["p0"]
-        self.assertEqual(p0[1], mjd[np.argmin(mag)])  # brightest point = max flux
-        self.assertEqual(p0[2:], [30.0, 10.0, 0.0])
+        peak = float(bazin.mag_to_flux(mag).max())
+        self.assertEqual((lower[1], upper[1]), (0.0, bazin.B_MAX_FRACTION * peak))
+        self.assertEqual((lower[2], upper[2]), (mjd.min() - bazin.T0_PAD_DAYS, mjd.max() + bazin.T0_PAD_DAYS))
+        self.assertAlmostEqual(10 ** lower[3], bazin.TAU_RISE_BOUNDS[0])
+        self.assertAlmostEqual(10 ** upper[3], bazin.TAU_RISE_BOUNDS[1])
+        self.assertAlmostEqual(10 ** lower[4], bazin.TAU_FALL_BOUNDS[0])
+        self.assertAlmostEqual(10 ** upper[4], bazin.TAU_FALL_BOUNDS[1])
+        x0 = args[1]
+        self.assertEqual(x0[2], mjd[np.argmin(mag)])  # brightest point = max flux
+        self.assertAlmostEqual(10 ** x0[3], 10.0)
+        self.assertAlmostEqual(10 ** x0[4], 30.0)
+
+    def test_shared_shape_fallback_when_the_joint_solve_fails(self):
+        mjd, mag, magerr = synthetic_curve()
+        real = __import__("scipy.optimize", fromlist=["least_squares"]).least_squares
+        calls = []
+
+        def flaky(fun, x0, **kwargs):
+            calls.append(len(x0))
+            if len(calls) == 1:
+                raise ValueError("joint solve blew up")
+            return real(fun, x0, **kwargs)
+
+        points = {"g": list(zip(mjd, mag, magerr)), "r": list(zip(mjd + 1, mag + 0.1, magerr))}
+        with mock.patch("scipy.optimize.least_squares", side_effect=flaky):
+            fits = bazin.fit_bazin_joint(points, {"g": 4770.0, "r": 6230.0})
+        self.assertEqual(calls, [10, 7])  # 2 bands: 5 params each, then 2 x (A, B) + one shared shape
+        self.assertEqual(set(fits), {"g", "r"})
+        self.assertTrue(all(fit.method == "shared" for fit in fits.values()))
+        self.assertAlmostEqual(fits["g"].params[1], fits["r"].params[1])  # same t0
+        self.assertAlmostEqual(fits["g"].params[2], fits["r"].params[2])  # same tau_fall
 
     def test_mag_conversion(self):
         self.assertAlmostEqual(bazin.flux_to_mag(1.0), 27.5)
@@ -216,13 +251,124 @@ class BazinModelTests(TestCase):
         _fitted, past = bazin.bazin_plot_grid(fit, today_mjd=59000.0)  # data newer than "today"
         self.assertAlmostEqual(past[-1], fit.mjd_max + bazin.EXTRAPOLATION_DAYS)
 
-    def test_fit_bands_skips_short_and_failed_bands(self):
+    def test_fit_bands_keeps_short_bands_and_needs_five_points_in_total(self):
         mjd, mag, magerr = synthetic_curve(noise=0.0)
         fits = bazin.fit_bands({
             "r": list(zip(mjd, mag, magerr)),
             "g": list(zip(mjd[:3], mag[:3], magerr[:3])),
+            "empty": [],
         })
-        self.assertEqual(set(fits), {"r"})
+        self.assertEqual(set(fits), {"r", "g"})  # the 3-point band borrows r's shape
+        self.assertEqual(fits["g"].n_points, 3)
+        self.assertEqual(bazin.fit_bands({"g": list(zip(mjd[:2], mag[:2], magerr[:2])),
+                                          "r": list(zip(mjd[:2], mag[:2], magerr[:2]))}), {})
+        self.assertEqual(bazin.fit_bands({}), {})
+
+
+# ------------------------------------------------------------- joint fit (#336)
+
+
+LAMBDA = {"g": 4770.0, "r": 6230.0, "i": 7630.0, "z": 9050.0}
+
+
+def smooth_truth(band, t0=60012.0):
+    """Bazin parameters that vary smoothly with log wavelength (redder = slower)."""
+    dl = math.log10(LAMBDA[band]) - math.log10(LAMBDA["g"])
+    return (2000.0 * (1 - 0.3 * dl), t0 + 4 * dl, 20.0 * (1 + 1.5 * dl), 4.0 * (1 + 0.8 * dl), 0.0)
+
+
+def band_points(band, mjd, noise=0.04, seed=5):
+    rng = np.random.default_rng(seed)
+    mag = bazin.flux_to_mag(bazin.bazin_flux(mjd, *smooth_truth(band))) + rng.normal(0, noise, len(mjd))
+    return list(zip(mjd, mag, np.full(len(mjd), noise)))
+
+
+def truth_mag(band, mjd):
+    return bazin.flux_to_mag(bazin.bazin_flux(mjd, *smooth_truth(band)))
+
+
+class BazinJointFitTests(TestCase):
+    def test_wavelength_lookup_by_alias_family_and_default(self):
+        from YSE_App.common.filter_display import DEFAULT_EFFECTIVE_WAVELENGTH_AA, band_effective_wavelength
+
+        self.assertEqual(band_effective_wavelength("g"), 4770.0)
+        self.assertEqual(band_effective_wavelength("r-ZTF"), 6440.0)
+        self.assertEqual(band_effective_wavelength("orange-ATLAS"), 6790.0)
+        self.assertEqual(band_effective_wavelength("y-LSST"), 9710.0)
+        self.assertEqual(band_effective_wavelength("UVW2"), 2030.0)
+        self.assertEqual(band_effective_wavelength("r-bazin-db"), 6230.0)  # family fallback
+        self.assertEqual(band_effective_wavelength("H"), 16620.0)
+        self.assertEqual(band_effective_wavelength("Q-unknown"), DEFAULT_EFFECTIVE_WAVELENGTH_AA)
+        self.assertEqual(band_effective_wavelength(None), DEFAULT_EFFECTIVE_WAVELENGTH_AA)
+
+    def test_shape_correlation_is_strong_for_neighbours_and_floored_for_distant_bands(self):
+        gr = bazin.shape_correlation(LAMBDA["g"], LAMBDA["r"])
+        ri = bazin.shape_correlation(LAMBDA["r"], LAMBDA["i"])
+        uy = bazin.shape_correlation(3560.0, 9620.0)
+        self.assertGreater(ri, gr)
+        self.assertGreater(gr, 0.5)
+        self.assertEqual(uy, bazin.CORRELATION_FLOOR)
+        self.assertEqual(bazin.shape_correlation(6000.0, 6000.0), 1.0)
+        self.assertEqual(bazin.shape_correlation(None, 6000.0), bazin.CORRELATION_FLOOR)
+
+    def test_joint_fit_recovers_wavelength_smooth_shapes(self):
+        mjd = 60000.0 + 3.0 * np.arange(15)
+        fits = bazin.fit_bazin_joint({b: band_points(b, mjd) for b in LAMBDA}, LAMBDA)
+        self.assertEqual(set(fits), set(LAMBDA))
+        for band, fit in fits.items():
+            A, t0, tau_fall, tau_rise, B = fit.params
+            tA, tt0, tfall, trise, _tB = smooth_truth(band)
+            self.assertEqual(fit.method, "joint")
+            self.assertAlmostEqual(t0, tt0, delta=1.5, msg=band)
+            self.assertAlmostEqual(tau_fall, tfall, delta=0.15 * tfall, msg=band)
+            self.assertAlmostEqual(tau_rise, trise, delta=0.2 * trise, msg=band)
+            self.assertLess(B, bazin.B_MAX_FRACTION * A)
+            for dt in (10, 25, 40):
+                self.assertAlmostEqual(fit.mag_at(tt0 + dt), truth_mag(band, tt0 + dt), delta=0.15, msg=band)
+        # redder bands fall slower, as in the truth
+        self.assertLess(fits["g"].params[2], fits["z"].params[2])
+
+    def test_three_point_band_borrows_shape_and_keeps_fading(self):
+        mjd = 60000.0 + 3.0 * np.arange(15)
+        fits = bazin.fit_bazin_joint(
+            {"r": band_points("r", mjd), "g": band_points("g", np.array([60006.0, 60009.0, 60012.0]))}, LAMBDA
+        )
+        g = fits["g"]
+        self.assertEqual(g.n_points, 3)
+        peak = smooth_truth("g")[1]
+        mags = [g.mag_at(peak + dt) for dt in (10, 20, 30, 40)]
+        # no plateau: each further 10 d is at least 0.3 mag fainter
+        for earlier, later in zip(mags, mags[1:]):
+            self.assertGreater(later - earlier, 0.3)
+        for dt, mag in zip((10, 20, 30, 40), mags):
+            self.assertAlmostEqual(mag, truth_mag("g", peak + dt), delta=0.5)
+        self.assertLess(g.params[4], 1e-6 * g.params[0])  # baseline pinned for a band with < 3 points
+
+    def test_declining_only_band_does_not_plateau(self):
+        """2025aarm-like: one band seen only on the decline sits on its neighbour's tail."""
+        mjd = 60000.0 + 3.0 * np.arange(15)
+        fits = bazin.fit_bazin_joint(
+            {"r": band_points("r", mjd), "i": band_points("i", np.array([60020.0, 60024.0, 60028.0, 60032.0]))}, LAMBDA
+        )
+        i = fits["i"]
+        peak = smooth_truth("i")[1]
+        mags = [i.mag_at(peak + dt) for dt in (20, 40, 60, 80)]
+        for earlier, later in zip(mags, mags[1:]):
+            self.assertGreater(later - earlier, 0.5)  # keeps fading at ~0.04 mag/d
+        for dt, mag in zip((20, 40, 60, 80), mags):
+            self.assertAlmostEqual(mag, truth_mag("i", peak + dt), delta=0.5)
+        self.assertLess(i.params[4], 0.01 * i.params[0])  # baseline ~0
+        # even alone, the bounded baseline stops the tail from flattening at the last point
+        alone = bazin.fit_bazin_joint(
+            {"i": band_points("i", np.array([60020.0, 60024.0, 60028.0, 60032.0, 60036.0]))}, LAMBDA
+        )["i"]
+        self.assertGreater(alone.mag_at(peak + 80) - alone.mag_at(peak + 40), 1.0)
+
+    def test_unknown_wavelengths_fall_back_to_the_default(self):
+        mjd = 60000.0 + 3.0 * np.arange(12)
+        fits = bazin.fit_bazin_joint({"a": band_points("g", mjd), "b": band_points("r", mjd)})
+        self.assertEqual(set(fits), {"a", "b"})
+        self.assertAlmostEqual(fits["a"].params[1], fits["b"].params[1], delta=1.0)
 
 
 # ------------------------------------------------------------- database layer
@@ -270,28 +416,35 @@ class BazinDatabaseTests(TestCase):
         self.assertEqual(bazin.detections_by_transient([]), {})
 
     def test_fits_for_transients_uses_most_recent_band_and_caches(self):
-        with mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+        with mock.patch.object(bazin, "fit_bazin_joint", wraps=bazin.fit_bazin_joint) as fitter:
             fits = bazin.fits_for_transients([self.transient.id, self.empty.id])
-            self.assertEqual(fitter.call_count, 2)  # r and g; i is too short
-            self.assertEqual(set(fits[self.transient.id]), {self.r_band.id, self.g_band.id})
+            self.assertEqual(fitter.call_count, 1)  # one joint solve for the transient
+            # r, g and the 3-point i band (which borrows its shape) all get a fit
+            self.assertEqual(set(fits[self.transient.id]), {self.r_band.id, self.g_band.id, self.i_band.id})
+            wavelengths = fitter.call_args.args[1]
+            self.assertEqual(wavelengths[self.r_band.id], 6230.0)  # 'r-bazin-db' -> r family
+            self.assertEqual(wavelengths[self.g_band.id], 4770.0)
             self.assertEqual(fits.get(self.empty.id, {}), {})
             again = bazin.fits_for_transients([self.transient.id])
-            self.assertEqual(fitter.call_count, 2)  # served from the cache
+            self.assertEqual(fitter.call_count, 1)  # served from the cache
         self.assertEqual(again[self.transient.id][self.r_band.id][1].params,
                          fits[self.transient.id][self.r_band.id][1].params)
 
         now = bazin.datetime_to_mjd(timezone.now())
+        # the 3-point i band ends today too and now has a (borrowed-shape) fit, so it is
+        # the most recently observed fitted band; r is available by preference
         picked = bazin.extrapolated_mag(self.transient, now + 3.0)
-        mag, band_name = picked
+        self.assertEqual(picked[1], "i")
+        mag, band_name = bazin.extrapolated_mag(self.transient, now + 3.0, ["r-bazin-db"])
         self.assertEqual(band_name, "r-bazin-db")
         truth = bazin.flux_to_mag(bazin.bazin_flux(now + 3.0, *self.r_truth))
-        self.assertAlmostEqual(mag, truth, delta=0.05)
+        self.assertAlmostEqual(mag, truth, delta=0.1)
         self.assertEqual(bazin.extrapolated_mag(self.transient, now, ["g"])[1], "g")
         self.assertIsNone(bazin.extrapolated_mag(self.empty, now))
         self.assertEqual(bazin.extrapolated_mags([self.empty.id], now), {})
 
     def test_new_photometry_invalidates_the_cached_fit(self):
-        with mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+        with mock.patch.object(bazin, "fit_bazin_joint", wraps=bazin.fit_bazin_joint) as fitter:
             bazin.fits_for_transients([self.transient.id])
             before = fitter.call_count
             photometry = TransientPhotometry.objects.filter(transient=self.transient).first()
@@ -392,7 +545,7 @@ class BazinPlotViewTests(TestCase):
 
     def test_fitter_failure_does_not_break_the_plot(self):
         with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}), \
-             mock.patch.object(bazin, "fit_bazin", return_value=None):
+             mock.patch.object(bazin, "fit_bazin_joint", return_value={}):
             response = self.client.get(reverse("bazinplot", args=[self.transient.id, 1]))
         self.assertEqual(response.status_code, 200)
         self.assertIn(view_utils.BAZIN_FIT_UNAVAILABLE_TEXT, response.content.decode())
@@ -407,7 +560,7 @@ class BazinPlotViewTests(TestCase):
                 off = self.client.get(off_url).content
             self.assertEqual(off, plain)  # served from the plot cache
             self.assertLessEqual(len(ctx.captured_queries), 4)  # session/user + cache token, no photometry
-            with mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+            with mock.patch.object(bazin, "fit_bazin_joint", wraps=bazin.fit_bazin_joint) as fitter:
                 on = self.client.get(on_url).content
                 self.assertEqual(fitter.call_count, 1)
                 on_again = self.client.get(on_url).content
@@ -525,7 +678,7 @@ class BazinTableTests(TestCase):
         def render(n):
             cache.clear()
             with CaptureQueriesContext(connection) as ctx, \
-                 mock.patch.object(bazin, "fit_bazin", wraps=bazin.fit_bazin) as fitter:
+                 mock.patch.object(bazin, "fit_bazin_joint", wraps=bazin.fit_bazin_joint) as fitter:
                 table = ObsNightFollowupTable(self._night_qs(n), classical_obs_date=self.night)
                 cells = [row.get_cell("bazin_mag") for row in table.rows]
             self.assertEqual(len(cells), n)
@@ -535,7 +688,7 @@ class BazinTableTests(TestCase):
         q6, fits6 = render(6)
         self.assertEqual(q2, q6)
         self.assertEqual(fits2, 2)
-        self.assertEqual(fits6, 4)  # one fit per transient with enough detections
+        self.assertEqual(fits6, 5)  # one joint solve per transient with detections (the 2-point one yields {})
 
     def test_observing_night_page_shows_the_column(self):
         from YSE_App.tests.deploy_checklist_helpers import iers_offline
