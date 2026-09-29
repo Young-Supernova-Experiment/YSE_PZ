@@ -1,5 +1,6 @@
 """settings.py: SECRET_KEY, ALLOWED_HOSTS, DB TLS and the cache backend come from env / settings.ini."""
 
+import base64
 import importlib
 import os
 import sys
@@ -54,6 +55,11 @@ _BASE_INI = textwrap.dedent(
 )
 
 
+# With IS_DEBUG False a CREDENTIALS_KEY is required too (#264); tests of other
+# production-only settings append this to site_extra.
+_CREDENTIALS_SECTION = "\n[secrets]\ncredentials_key: " + base64.urlsafe_b64encode(b"0" * 32).decode()
+
+
 def _load_settings(*, debug, site_extra="", database_extra="", env=None):
     """Import a private copy of YSE_PZ/settings.py against a scratch settings.ini."""
     src = os.path.join(os.path.dirname(live_settings.__file__), "settings.py")
@@ -93,11 +99,11 @@ class SecretKeyTests(SimpleTestCase):
         self.assertIn("DJANGO_SECRET_KEY", str(ctx.exception))
 
     def test_production_reads_ini_key(self):
-        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file")
+        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file" + _CREDENTIALS_SECTION)
         self.assertEqual(mod.SECRET_KEY, "from-the-ini-file")
 
     def test_env_wins_over_ini(self):
-        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file",
+        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file" + _CREDENTIALS_SECTION,
                              env={"DJANGO_SECRET_KEY": "from-the-env"})
         self.assertEqual(mod.SECRET_KEY, "from-the-env")
 
