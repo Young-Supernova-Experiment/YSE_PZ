@@ -1,11 +1,11 @@
 """Light-curve legend layout, ordering and colours (#226, #91, #249, #250, #251).
 
-The legend below each Bokeh light curve is laid out in columns whose count
-depends on the longest label, series are ordered by telescope family and
-filter wavelength regardless of which bands have data, and clicking a legend
-entry hides the whole series.  These tests build a transient with many
-instrument+band series of varying label length and inspect the Bokeh
-document the views embed.
+The legend below each Bokeh light curve has one column per instrument that
+reads down (PS1/2, DECam, Swope, LSST, ZTF, ATLAS, Swift, then the rest),
+bands bluest to reddest within a column, as many columns side by side as
+the longest label lets fit, and clicking a legend entry hides the whole
+series.  These tests build a transient with many instrument+band series of
+varying label length and inspect the Bokeh document the views embed.
 """
 
 import datetime
@@ -18,16 +18,18 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from YSE_App.common.band_order import legend_sort_key
 from YSE_App.common.filter_display import (
     FILTER_COLORS,
     band_display_color,
-    legend_sort_key,
     telescope_display_name,
 )
 from YSE_App.common.legend_layout import (
     MAX_COLUMNS,
     ROW_HEIGHT_PX,
     legend_column_count,
+    legend_column_grid,
+    legend_grid_height_px,
     legend_height_px,
     legend_label_width_px,
     legend_row_count,
@@ -59,6 +61,13 @@ SERIES = (
     ("ATLAS", "ACAM1", ["cyan-ATLAS", "orange-ATLAS"]),
     ("Thacher", "Thacher-Cam", ["H", "J"]),
 )
+# Every instrument group the legend orders explicitly, plus one "other".
+SERIES_ALL_GROUPS = (
+    ("Swift", "UVOT", ["V", "B", "U", "UVW1", "UVM2", "UVW2"]),
+    ("Thacher", "Thacher-Cam", ["H", "J"]),
+    ("Blanco", "DECam", ["z-DECam", "g-DECam", "r-DECam", "i-DECam"]),
+    ("Simonyi Survey Telescope", "LSSTCam", ["y-LSST", "u-LSST", "g-LSST"]),
+) + SERIES
 
 _FILE_HTML_JSON_RE = re.compile(r'<script type="application/json" id="[^"]+">(.*?)</script>', re.S)
 _COMPONENTS_JSON_RE = re.compile(r"const docs_json = '(.*?)';\n", re.S)
@@ -128,7 +137,7 @@ def legends_in_doc(doc):
 
 
 def legend_grid(doc):
-    """[[label, ...], ...]: one list per legend row, in document order."""
+    """[[label, ...], ...]: one list per legend row, in document order ('' = blank cell)."""
     refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
     plot = refs[doc["roots"]["root_ids"][0]]
     rows = []
@@ -141,6 +150,17 @@ def legend_grid(doc):
     return rows
 
 
+def legend_columns(grid):
+    """Columns of a single-block grid (every instrument fits side by side), blanks dropped."""
+    width = max(len(row) for row in grid)
+    return [[row[c] for row in grid if len(row) > c and row[c]] for c in range(width)]
+
+
+def legend_series(grid):
+    """Series in reading order: down each column of a single-block grid."""
+    return [label for column in legend_columns(grid) for label in column]
+
+
 class LegendLayoutRuleTests(TestCase):
     """Pure arithmetic of YSE_App/common/legend_layout.py."""
 
@@ -150,7 +170,7 @@ class LegendLayoutRuleTests(TestCase):
 
     def test_medium_labels_fewer_columns(self):
         # 12 chars: entry = 20 + 5 + 84 + 6 = 115 px -> 362 // 115 = 3 columns at 400 px,
-        # 4 at 500 px and 6 (the cap) at 800 px
+        # 4 at 500 px and 6 at 800 px
         self.assertEqual(legend_column_count(["ATLAS orange"] * 19, 400), 3)
         self.assertEqual(legend_column_count(["ATLAS orange"] * 19, 500), 4)
         self.assertEqual(legend_column_count(["ATLAS orange"] * 19, 800), 6)
@@ -180,6 +200,14 @@ class LegendLayoutRuleTests(TestCase):
         self.assertEqual(legend_row_count(0, 3), 0)
         self.assertEqual(legend_height_px(7, 3), 3 * ROW_HEIGHT_PX)
 
+    def test_column_grid_reads_down_and_wraps_extra_instruments(self):
+        columns = [["PS1 g", "PS1 r", "PS1 i"], ["ZTF g", "ZTF r"], ["ATLAS g"], ["today"]]
+        self.assertEqual(
+            legend_column_grid(columns, 3, placeholder=""),
+            [["PS1 g", "ZTF g", "ATLAS g"], ["PS1 r", "ZTF r", ""], ["PS1 i", "", ""], ["today"]],
+        )
+        self.assertEqual(legend_grid_height_px(4), 4 * ROW_HEIGHT_PX)
+
     def test_label_width_is_longest_label(self):
         self.assertEqual(legend_label_width_px(["ab", "abcd"]), 4 * 7)
 
@@ -204,7 +232,7 @@ class LegendOrderingAndColourTests(TestCase):
         self.assertEqual(telescope_display_name("LSSTCam", "Simonyi Survey Telescope"), "LSST")
         self.assertEqual(telescope_display_name("LSSTCam", None), "LSST")
 
-    def test_sort_key_orders_by_telescope_then_wavelength(self):
+    def test_sort_key_orders_by_instrument_group_then_wavelength(self):
         labels = [
             ("r-ZTF", "ZTF-Cam", "Palomar 48"),
             ("g", "GPC1", "Pan-STARRS1"),
@@ -218,9 +246,10 @@ class LegendOrderingAndColourTests(TestCase):
             labels,
             key=lambda item: legend_sort_key(item[0], instrument_name=item[1], telescope_name=item[2]),
         )
+        # PS1/2 before ZTF before ATLAS; w (6080 A) sits between g and z
         self.assertEqual(
             [band for band, _i, _t in ordered],
-            ["cyan-ATLAS", "orange-ATLAS", "g", "z", "w", "g-ZTF", "r-ZTF"],
+            ["g", "w", "z", "g-ZTF", "r-ZTF", "cyan-ATLAS", "orange-ATLAS"],
         )
 
     def test_lsst_bands_share_the_family_colours(self):
@@ -246,6 +275,7 @@ class LightcurveLegendRenderTests(TestCase):
     def setUpTestData(cls):
         cls.user = create_test_user("lc_legend_user", is_staff=True)
         cls.transient = seed_many_band_transient(cls.user)
+        cls.all_groups = seed_many_band_transient(cls.user, name="lc-legend-groups", series=SERIES_ALL_GROUPS)
         # Same bands, only a subset with data, different creation order.
         cls.subset = seed_many_band_transient(
             cls.user, name="lc-legend-subset",
@@ -274,32 +304,50 @@ class LightcurveLegendRenderTests(TestCase):
         refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
         return refs[doc["roots"]["root_ids"][0]]["attributes"]
 
-    def test_detail_legend_is_a_grid_of_horizontal_rows(self):
-        grid = legend_grid(self._doc("lightcurveplot_detail"))
-        labels = [label for row in grid for label in row]
+    def test_detail_legend_reads_down_one_column_per_instrument(self):
+        doc = self._doc("lightcurveplot_detail")
+        grid = legend_grid(doc)
+        labels = [label for row in grid for label in row if label]
         # 16 series + today
         self.assertEqual(len(labels), 17)
-        # longest label 'today (NNNNN)' = 13 chars -> the 400 px default fits 2 columns
-        expected_cols = legend_column_count(labels, 400)
-        self.assertEqual(expected_cols, 2)
-        self.assertEqual(len(grid[0]), expected_cols)
-        self.assertEqual(len(grid), legend_row_count(len(labels), expected_cols))
-        self.assertTrue(labels[-1].startswith("today ("))
-        doc = self._doc("lightcurveplot_detail")
+        # longest label 'today (NNNNN)' = 13 chars -> the 400 px default fits 2 columns,
+        # so the six columns (PS1, Swope, ZTF, ATLAS, Thacher, today) come in three blocks
+        self.assertEqual(legend_column_count(labels, 400), 2)
+        self.assertEqual([len(row) for row in grid], [2] * 11)
+        self.assertEqual(grid[0], ["PS1 g", "Swope u"])
+        self.assertEqual(grid[2], ["PS1 r", "Swope V"])
+        self.assertEqual(grid[5], ["PS1 y", ""])
+        self.assertEqual(grid[6], ["ZTF g", "ATLAS g"])
+        self.assertEqual(grid[8], ["ZTF i", ""])
+        self.assertEqual(grid[9][0], "Thacher J")
+        self.assertTrue(grid[9][1].startswith("today ("))
+        self.assertEqual(grid[10], ["Thacher H", ""])
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
         for legend in legends_in_doc(doc):
             attrs = legend["attributes"]
             self.assertEqual(attrs["orientation"], "horizontal")
             self.assertEqual(attrs["click_policy"], "hide")
             self.assertEqual(attrs["label_width"], legend_label_width_px(labels))
+            for item in attrs["items"]:
+                item_attrs = refs[item["id"]]["attributes"]
+                if item_attrs["label"]["value"] == "":
+                    # blank cell: nothing to click
+                    self.assertEqual(item_attrs.get("renderers", []), [])
+                else:
+                    self.assertEqual(len(item_attrs["renderers"]), 1)
 
     def test_page_width_query_sets_columns_and_plot_width(self):
-        for width, expected_cols, expected_width in ((657, 4, 640), (1000, 6, 1000), ("junk", 2, 400)):
+        # 640 px fits 4 of the 6 columns (PS1..ATLAS over 6 rows, Thacher + today
+        # over 2); 1000 px fits all 6 side by side; a bad ?w= falls back to 400.
+        for width, expected_cols, expected_rows, expected_width in (
+            (657, 4, 8, 640), (1000, 6, 6, 1000), ("junk", 2, 11, 400),
+        ):
             with self.subTest(width=width):
                 doc = self._doc("lightcurveplot_detail", width=width)
                 grid = legend_grid(doc)
                 self.assertEqual(len(grid[0]), expected_cols)
+                self.assertEqual(len(grid), expected_rows)
                 self.assertEqual(self._plot_attrs(doc)["width"], expected_width)
-                self.assertEqual(len(grid), legend_row_count(17, expected_cols))
 
     def test_width_query_is_part_of_the_plot_cache_key(self):
         url = reverse("lightcurveplot_detail", args=[self.transient.id])
@@ -310,22 +358,44 @@ class LightcurveLegendRenderTests(TestCase):
         self.assertNotEqual(narrow, wide)
         self.assertEqual(narrow, narrow_again)
 
-    def test_detail_legend_order_is_telescope_then_wavelength(self):
-        labels = [label for row in legend_grid(self._doc("lightcurveplot_detail")) for label in row]
-        self.assertEqual(labels[:-1], [
-            "ATLAS g", "ATLAS r",
-            "PS1 g", "PS1 r", "PS1 i", "PS1 z", "PS1 y", "PS1 w",
-            "Swope u", "Swope B", "Swope V",
-            "Thacher H", "Thacher J",
-            "ZTF g", "ZTF r", "ZTF i",
+    def test_detail_legend_order_is_instrument_group_then_wavelength(self):
+        grid = legend_grid(self._doc("lightcurveplot_detail", width=1000))
+        columns = legend_columns(grid)
+        self.assertEqual(columns[:-1], [
+            ["PS1 g", "PS1 w", "PS1 r", "PS1 i", "PS1 z", "PS1 y"],
+            ["Swope u", "Swope B", "Swope V"],
+            ["ZTF g", "ZTF r", "ZTF i"],
+            ["ATLAS g", "ATLAS r"],
+            ["Thacher J", "Thacher H"],
         ])
+        self.assertEqual(len(columns[-1]), 1)
+        self.assertTrue(columns[-1][0].startswith("today ("))
+
+    def test_all_instrument_groups_follow_the_requested_order(self):
+        # 1600 px fits every column: PS1/2, DECam, Swope, LSST, ZTF, ATLAS, Swift, other, markers
+        grid = legend_grid(self._doc("lightcurveplot_detail", self.all_groups, width=1600))
+        self.assertEqual(len(grid), 6)
+        self.assertEqual(
+            grid[0][:-1],
+            ["PS1 g", "DECam g", "Swope u", "LSST u", "ZTF g", "ATLAS g", "Swift UVW2", "Thacher J"],
+        )
+        columns = legend_columns(grid)
+        self.assertEqual(columns[1], ["DECam g", "DECam r", "DECam i", "DECam z"])
+        self.assertEqual(columns[3], ["LSST u", "LSST g", "LSST y"])
+        self.assertEqual(columns[6], ["Swift UVW2", "Swift UVM2", "Swift UVW1", "Swift u", "Swift B", "Swift V"])
+        # the same order in the flux and summary plots
+        for view in ("lightcurveplot_flux", "lightcurveplot_summary"):
+            with self.subTest(view=view):
+                series = legend_series(legend_grid(self._doc(view, self.all_groups, width=1600)))
+                self.assertEqual(series[:8], ["PS1 g", "PS1 w", "PS1 r", "PS1 i", "PS1 z", "PS1 y", "DECam g", "DECam r"])
+                self.assertEqual(series[13:16], ["LSST u", "LSST g", "LSST y"])
 
     def test_subset_transient_keeps_relative_order_and_colours(self):
-        full = self._doc("lightcurveplot_detail")
-        subset = self._doc("lightcurveplot_detail", self.subset)
-        full_labels = [l for row in legend_grid(full) for l in row][:-1]
-        subset_labels = [l for row in legend_grid(subset) for l in row][:-1]
-        self.assertEqual(subset_labels, ["ATLAS r", "PS1 g", "PS1 z", "ZTF g", "ZTF r"])
+        full = self._doc("lightcurveplot_detail", width=1000)
+        subset = self._doc("lightcurveplot_detail", self.subset, width=1000)
+        full_labels = legend_series(legend_grid(full))[:-1]
+        subset_labels = legend_series(legend_grid(subset))[:-1]
+        self.assertEqual(subset_labels, ["PS1 g", "PS1 z", "ZTF g", "ZTF r", "ATLAS r"])
         self.assertEqual(
             subset_labels, [label for label in full_labels if label in subset_labels]
         )
@@ -339,8 +409,9 @@ class LightcurveLegendRenderTests(TestCase):
         for legend in legends_in_doc(doc):
             for item in legend["attributes"]["items"]:
                 item_ref = refs[item["id"]]
-                if item_ref["attributes"]["label"]["value"].startswith("today"):
-                    continue  # default (black) line colour is not serialised
+                label = item_ref["attributes"]["label"]["value"]
+                if label == "" or label.startswith("today"):
+                    continue  # blank cell / default (black) line colour is not serialised
                 renderer = refs[item_ref["attributes"]["renderers"][0]["id"]]
                 glyph = refs[renderer["attributes"]["glyph"]["id"]]["attributes"]
                 colour = next(
@@ -382,14 +453,24 @@ class LightcurveLegendRenderTests(TestCase):
         self.assertTrue(all(glyph["attributes"]["size"]["value"] == 7 for glyph in ulims))
 
     def test_flux_and_summary_plots_use_the_grid_too(self):
-        for view in ("lightcurveplot_flux", "lightcurveplot_summary"):
+        # flux: 5 instruments + today, 13-char label -> 2 columns at 400 px;
+        # summary: no today entry, 'Thacher H' (9 chars) -> 4 columns at 500 px.
+        for view, first_row, n_columns in (
+            ("lightcurveplot_flux", ["PS1 g", "Swope u"], 6),
+            ("lightcurveplot_summary", ["PS1 g", "Swope u", "ZTF g", "ATLAS g"], 5),
+        ):
             with self.subTest(view=view):
                 grid = legend_grid(self._doc(view))
                 self.assertGreater(len(grid), 1, view)
-                labels = [label for row in grid for label in row]
-                self.assertEqual(labels[:2], ["ATLAS g", "ATLAS r"])
-                self.assertEqual(len(grid[0]), legend_column_count(labels, 500 if "summary" in view else 400))
-                self.assertEqual(len(legend_grid(self._doc(view, width=900))[0]), MAX_COLUMNS)
+                self.assertEqual(grid[0], first_row)
+                labels = [label for row in grid for label in row if label]
+                self.assertEqual(
+                    len(grid[0]),
+                    legend_column_count(labels, 500 if "summary" in view else 400, max_columns=n_columns),
+                )
+                # wide enough: one column per instrument, never more
+                self.assertEqual(len(legend_grid(self._doc(view, width=900))[0]), n_columns)
+                self.assertLessEqual(n_columns, MAX_COLUMNS)
 
     def test_detail_page_renders_with_plot_in_both_defer_modes(self):
         for defer in ("1", "0"):

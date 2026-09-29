@@ -60,6 +60,16 @@ button providing a JSON dictionary with every associated piece of
 data in the database for a given transient.  Spectra can also be
 uploaded directly to YSE-PZ through the web form.
 
+The light-curve legend has one column per instrument, read top to
+bottom, in the order PS1/2, DECam, Swope, LSST, ZTF, ATLAS, Swift and
+then any other instrument alphabetically; within a column the bands run
+from bluest to reddest by effective wavelength, with bands of unknown
+wavelength last.  As many instrument columns sit side by side as the
+plot width allows, and further instruments continue on the rows below.
+Clicking a legend entry hides that series (points, error bars and upper
+limits).  The order lives in ``YSE_App/common/band_order.py`` and the
+column arithmetic in ``YSE_App/common/legend_layout.py``.
+
 On the bottom right, the "Tags" area allows users to apply tags
 that identify a transient with a certain label.  Querying on tags
 later can be done either through the `Search by tags <http://127.0.0.1:8000/transient_tags/>`_ link on the left-hand
