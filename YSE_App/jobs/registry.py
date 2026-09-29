@@ -28,7 +28,7 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 # Modules whose import registers the handlers the application itself ships.
-DEFAULT_HANDLER_MODULES = ("YSE_App.services.notify",)
+DEFAULT_HANDLER_MODULES = ("YSE_App.services.notify", "YSE_App.brokers.jobs")
 
 _registry: Dict[str, "Handler"] = {}
 _lock = threading.Lock()
