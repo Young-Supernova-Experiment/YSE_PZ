@@ -1512,7 +1512,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     tstart = time.time()
 
     plot_width = _requested_plot_width(request, 400)
-    transient = Transient.objects.get(pk=transient_id)
+    transient = get_object_or_404(Transient, pk=transient_id)
     photdata = (
         get_all_phot_for_transient(request.user, transient_id)
         .select_related(
@@ -1832,6 +1832,54 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
     return f'<p class="text-muted yse-plot-empty">{text}</p>'
 
 
+def _spectra_for_plot(dbspectra):
+    """Turn TransientSpectrum rows into plottable dicts, skipping empty ones.
+
+    Returns ``(spectra, n_without_points)``: spectra whose ``transientspecdata_set``
+    is empty are counted instead of plotted, so a transient whose spectra were
+    registered without wavelength/flux rows gets the empty-state message rather
+    than a traceback (#343). Each spectrum is resampled to at most
+    ``MAX_SPEC_DISPLAY_PIXELS`` points.
+    """
+    spectra = []
+    n_without_points = 0
+    for spectrum in dbspectra:
+        spec_data = list(spectrum.transientspecdata_set.all())
+        wave = np.array([s.wavelength for s in spec_data])
+        flux = np.array([s.flux for s in spec_data])
+        if wave.size == 0 or flux.size == 0:
+            n_without_points += 1
+            continue
+
+        sort_idx = np.argsort(wave)
+        wave = wave[sort_idx]
+        flux = flux[sort_idx]
+
+        n_display = min(MAX_SPEC_DISPLAY_PIXELS, max(2, wave.size))
+        wave_interp = np.linspace(np.min(wave), np.max(wave), n_display)
+        flux_interp = np.interp(wave_interp, wave, flux)
+
+        spectra.append({
+            'wave': wave_interp,
+            'flux': flux_interp,
+            'mjd': date_to_mjd(spectrum.obs_date.isoformat().split('+')[0]),
+            'label': f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}',
+        })
+    return spectra, n_without_points
+
+
+def _normalized_plot_flux(flux, offset):
+    """Scale ``flux`` onto the 5th-95th percentile range and stack it at ``offset``."""
+    n_pix = len(flux)
+    sort_flux = np.sort(flux)
+    minval = sort_flux[round(n_pix * 0.05)] * 0.5
+    maxval = sort_flux[round(n_pix * 0.95)] * 1.1
+    scale = maxval - minval
+    if scale == 0:
+        scale = 1.0
+    return (flux - minval) / scale + offset
+
+
 @login_required
 def spectrumplot(request, transient_id):
     cache_key = None
@@ -1851,30 +1899,7 @@ def spectrumplot(request, transient_id):
         Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
     )
     
-    spectra = []
-    n_without_points = 0
-    for spectrum in dbspectra:
-        spec_data = list(spectrum.transientspecdata_set.all())
-        wave = np.array([s.wavelength for s in spec_data])
-        flux = np.array([s.flux for s in spec_data])
-        if wave.size == 0 or flux.size == 0:
-            n_without_points += 1
-            continue
-        
-        sort_idx = np.argsort(wave)
-        wave = wave[sort_idx]
-        flux = flux[sort_idx]
-        
-        n_display = min(MAX_SPEC_DISPLAY_PIXELS, max(2, wave.size))
-        wave_interp = np.linspace(np.min(wave), np.max(wave), n_display)
-        flux_interp = np.interp(wave_interp, wave, flux)
-        
-        spectra.append({
-            'wave': wave_interp,
-            'flux': flux_interp,
-            'mjd': date_to_mjd(spectrum.obs_date.isoformat().split('+')[0]),
-            'label': f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}',
-        })
+    spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
         return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
 
@@ -1893,19 +1918,7 @@ def spectrumplot(request, transient_id):
     legend_items = []
     
     for spec, color, offset in zip(spectra, colors, offsets):
-        flux = spec['flux']
-        n_pix = len(flux)
-        sort_flux = np.sort(flux)
-        minval = sort_flux[round(n_pix * 0.05)] * 0.5
-        maxval = sort_flux[round(n_pix * 0.95)] * 1.1
-        scale = maxval - minval
-        if scale == 0:
-            scale = 1.0
-        
-        # Normalize flux
-        norm_flux = (flux - minval) / scale + offset
-        
-        # Plot line
+        norm_flux = _normalized_plot_flux(spec['flux'], offset)
         p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2)
         legend_items.append((spec['label'], [p]))
     
@@ -1928,80 +1941,49 @@ def spectrumplot(request, transient_id):
 
 @login_required
 def spectrumplot_summary(request, transient_id):
-    _load_heavy_plot_stack()
     transient = get_object_or_404(Transient, pk=transient_id)
-    dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True).select_related()
-    spectra = {}
+    dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
+        request.user, transient_id, includeBadData=True
+    ).select_related('instrument').prefetch_related(
+        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
+    )
 
-    if not len(dbspectra):
-        return django.http.HttpResponse('')
+    spectra, n_without_points = _spectra_for_plot(dbspectra)
+    if not spectra:
+        if n_without_points == 0:
+            # The summary card stays blank for a transient without spectra.
+            return django.http.HttpResponse('')
+        # Same empty state as spectrumplot instead of an UnboundLocalError (#343).
+        return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
 
-    
-    dates = []
-    for i,spectrum in enumerate(dbspectra):
-        spec = TransientSpecData.objects.filter(spectrum=spectrum)
+    _load_heavy_plot_stack()
 
-        wave = list(spec.values_list('wavelength',flat=True))
-        flux = list(spec.values_list('flux',flat=True))
-
-        #figure is a function in the bokeh module
-        #HELLO
-        #wave,flux = [],[]
-        #for s in spec:
-        #   wave += [s.wavelength]
-        #   flux += [s.flux]
-        flux = np.array(flux)[np.argsort(wave)]
-        wave = np.sort(wave)
-            
-        spec = Table([wave,flux],names=['wave','flux'])         
-        spectra[i] = spec
-        spectra[i].mjd = date_to_mjd(spectrum.obs_date.isoformat().split('+')[0])
-        n_pix = len(wave)
-        sort_flux = np.sort(flux)
-
-        if len(flux):
-            minval = sort_flux[round(n_pix*0.05)]
-            maxval = sort_flux[round(n_pix*0.95)]
-            minval = minval*0.5
-            maxval = maxval*1.1
-            scale = maxval - minval
-            spectra[i].minval = minval
-            spectra[i].maxval = maxval
-            spectra[i].scale  = scale
-
-        dates.append(spectra[i].mjd)
-
-    dates = np.array(dates)
-    temp = np.argsort(-dates)
-    temp2 = np.argsort(dates)
-    offset = np.empty_like(temp)
-    offset[temp] = np.arange(len(dates))
-    ax=figure(plot_width=240,plot_height=240,sizing_mode='stretch_width',y_range=(-0.15, len(dbspectra)+0.15))
-
+    # Newest spectrum at the top of the stack, legend in date order.
+    dates = np.array([spec['mjd'] for spec in spectra])
+    offsets = np.argsort(np.argsort(-dates))
+    ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width',
+                y_range=(-0.15, len(spectra) + 0.15))
 
     colors = itertools.cycle(palette)
-    legend_it = [None]*len(dbspectra)
-    for i,color in zip(range(len(dbspectra)),colors):
-        spectra[i].offset = offset[i]
+    legend_it = [None] * len(spectra)
+    for spec, color, offset in zip(spectra, colors, offsets):
+        norm_flux = _normalized_plot_flux(spec['flux'], offset)
+        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2)
+        legend_it[len(spectra) - 1 - offset] = (spec['label'], [p])
 
-        if len(spectra[i]['flux']):
-            p = ax.line(spectra[i]['wave'], (spectra[i]['flux']-spectra[i].minval)/spectra[i].scale + spectra[i].offset,
-                        color=color,muted_alpha=0.2)
-        legend_it[np.where(temp2 == i)[0][0]] = ('%s - %s'%(dbspectra[i].instrument.name,dbspectra[i].obs_date.strftime('%Y-%m-%d')), [p])
-    
     legend = Legend(items=legend_it, location="bottom_right")
-    legend.click_policy="mute"
+    legend.click_policy = "mute"
     legend.label_height = 1
     legend.glyph_height = 20
-    ax.add_layout(legend) #, 'right')
+    ax.add_layout(legend)
 
-    ax.plot_height = 200 #150+30*len(dbspectra)
+    ax.plot_height = 200
     ax.plot_width = 400
-    
+
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
-    g = file_html(ax,CDN,"spectrum plot")
-    return HttpResponse(g.replace('width: 90%','width: 100%'))
+    g = file_html(ax, CDN, "spectrum plot")
+    return HttpResponse(g.replace('width: 90%', 'width: 100%'))
 
 
 #def spectrumplot(request, transient_id):
@@ -2043,10 +2025,6 @@ def spectrumplot_summary(request, transient_id):
 def spectrumplotsingle(request, transient_id, spec_id):
     _load_heavy_plot_stack()
     
-    #transient_id = request.GET.get('transient_id')
-    #spec_id = request.GET.get('spec_id')
-    
-    print(transient_id,spec_id)
     transient = get_object_or_404(Transient, pk=transient_id)
     spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True)
     spectrum = spectra.filter(id=spec_id)
