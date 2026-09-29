@@ -780,6 +780,7 @@
                     "{% url 'transient_detail_summary_spectra_tools_fragment' transient.id %}",
                     '#summary_spectra_tools'
                 );
+                if (window.yseLoadSummaryCard) { window.yseLoadSummaryCard(); }
                 {% if has_gw_candidate_tag %}
                 yseLoadDetailFragment(
                     'gw',
@@ -2437,6 +2438,77 @@
         });
     </script>
 
+    <script>
+        /* AI summary card (#295, #296): loads the card fragment, drives Generate / Edit /
+           History / opt-in, and polls while a summariser run is active. */
+        var yseSummaryPollTimer = null;
+        var yseSummaryBound = false;
+        function yseLoadSummaryCard(force) {
+            var $c = $('#ai_summary_container');
+            if (!$c.length) { return $.Deferred().resolve().promise(); }
+            if (force && window.yseDetailFragmentsLoaded) {
+                delete window.yseDetailFragmentsLoaded['ai_summary'];
+            }
+            if (yseSummaryPollTimer) {
+                clearTimeout(yseSummaryPollTimer);
+                yseSummaryPollTimer = null;
+            }
+            return window.yseLoadDetailFragment('ai_summary', $c.data('fragment-url'), '#ai_summary_container').then(yseSummaryInit);
+        }
+        window.yseLoadSummaryCard = yseLoadSummaryCard;
+        function yseSummaryInit() {
+            var $body = $('#yse_ai_summary_body');
+            var active = $body.data('active');
+            if (active === 1 || active === '1') {
+                var seconds = parseInt($body.data('poll-seconds'), 10) || 3;
+                yseSummaryPollTimer = setTimeout(function() { yseLoadSummaryCard(true); }, seconds * 1000);
+            }
+            if (yseSummaryBound) { return; }
+            yseSummaryBound = true;
+            var $c = $('#ai_summary_container');
+            function fail(xhr) {
+                var msg = 'Request failed.';
+                if (xhr && xhr.responseJSON && xhr.responseJSON.error) { msg = xhr.responseJSON.error; }
+                else if (xhr && xhr.status) { msg = 'Request failed (HTTP ' + xhr.status + ').'; }
+                $('#ai_summary_error').text(msg);
+            }
+            function post(url, data) {
+                return $.ajax({ url: url, method: 'POST', data: data,
+                                headers: { 'X-CSRFToken': $('input[name=csrfmiddlewaretoken]').first().val() || getCookie('csrftoken') } });
+            }
+            function getCookie(name) {
+                var m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+                return m ? m.pop() : '';
+            }
+            $c.on('click', '[data-summary-action]', function() {
+                var $btn = $(this);
+                var action = $btn.data('summary-action');
+                $('#ai_summary_error').text('');
+                if (action === 'generate') {
+                    $btn.prop('disabled', true);
+                    post($c.data('generate-url'), {}).done(function() { yseLoadSummaryCard(true); }).fail(function(xhr) {
+                        $btn.prop('disabled', false); fail(xhr);
+                    });
+                } else if (action === 'edit') {
+                    $('#ai_summary_view').hide(); $('#ai_summary_history').hide(); $('#ai_summary_editor').show();
+                    $('#ai_summary_textarea').focus();
+                } else if (action === 'cancel') {
+                    $('#ai_summary_editor').hide(); $('#ai_summary_view').show();
+                } else if (action === 'save') {
+                    $btn.prop('disabled', true);
+                    post($c.data('edit-url'), { text: $('#ai_summary_textarea').val() }).done(function() {
+                        yseLoadSummaryCard(true);
+                    }).fail(function(xhr) { $btn.prop('disabled', false); $('#ai_summary_editor').hide(); $('#ai_summary_view').show(); fail(xhr); });
+                } else if (action === 'history') {
+                    $('#ai_summary_history').toggle();
+                }
+            });
+            $c.on('change', '#ai_summary_optin', function() {
+                var enabled = $(this).is(':checked') ? '1' : '0';
+                post($c.data('optin-url'), { enabled: enabled }).done(function() { yseLoadSummaryCard(true); }).fail(fail);
+            });
+        }
+    </script>
     <script>
         /* Annotations tab (#317, #318): the fragment is HTML; this loads it, drives the
            Check / Rerun / delete buttons, polls while a check runs, and keeps the tab

@@ -350,7 +350,8 @@ def annotate_open_interest_count(qs):
 
 class TransientTable(tables.Table):
 
-    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
+    # The first line of the AI/human summary (#295) as the link's tooltip.
+    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\"{% if record.summary %} title=\"{{ record.summary_first_line }}\" class=\"yse-has-summary\"{% endif %}>{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
     favorite = tables.TemplateColumn(FAVORITE_STAR_TEMPLATE, verbose_name='Fav.', orderable=False,
                                      attrs={'td': {'class': 'yse-fav-cell'}, 'th': {'class': 'yse-fav-cell'}})

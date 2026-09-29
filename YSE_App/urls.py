@@ -19,7 +19,7 @@ from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
-    feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views,
+    feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
@@ -141,6 +141,17 @@ urlpatterns = [
             annotation_views.transient_annotation_run, name='transient_annotation_run'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_delete/$',
             annotation_views.transient_annotation_delete, name='transient_annotation_delete'),
+    # AI summary card (#295, #296): fragment and actions for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_fragment/$',
+            summary_views.transient_summary_fragment, name='transient_detail_summary_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_generate/$',
+            summary_views.transient_summary_generate, name='transient_summary_generate'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_edit/$',
+            summary_views.transient_summary_edit, name='transient_summary_edit'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_optin/$',
+            summary_views.transient_summary_optin, name='transient_summary_optin'),
+    # Natural-language search over the summaries (#297).
+    re_path(r'^summary_search/$', summary_views.summary_search, name='summary_search'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -461,6 +472,7 @@ api_url_patterns = [
         api_views.TransientCommentListCreate.as_view(),
         name='api-transient-comments',
     ),
+    re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
     re_path(r'^api/', include(router.urls)),
     re_path(r'^api/schema/$', schema_view),
     re_path(

@@ -129,6 +129,20 @@ also appear as badges next to the status on the Summary tab. See
 ``docs/annotations.md`` for the model, the API, the checks and the
 search filters.
 
+Summary card (Summary tab)
+--------------------------
+
+A short current summary of the transient (what it is, redshift,
+classification, what has been done, open questions) at the top of the
+Summary tab's right-hand column. Anyone who can see the transient may
+**Edit** it; users who ticked *Enable AI summaries for me* (and whom the
+``ai_summary`` service's groups allow) get **Generate / Regenerate**, which
+writes it from the transient's public comments, classes, spectra,
+follow-ups and photometry through the configured provider. Every version is
+kept in **History** with its provenance. **Search summaries** (also the
+*Ask the summaries* box in the header) ranks all transients by how well
+their summary matches a natural-language query. See ``docs/ai-summaries.md``.
+
 Comments (Summary tab)
 ----------------------
 

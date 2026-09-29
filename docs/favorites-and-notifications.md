@@ -77,7 +77,7 @@ column indexes the templates rely on are unchanged.
 
 ## Operator steps
 
-* `manage.py migrate` (migration `0024_favorites_slack_dm`: the `YSE_App_userfavoritetransient` table and
+* `manage.py migrate` (migration `0025_favorites_slack_dm`: the `YSE_App_userfavoritetransient` table and
   `notificationpreference.slack_user_id`) runs in the deploy workflow; nothing to do by hand.
 * Optional: `FAVORITE_ACTIVITY_BATCH_MINUTES = 60` under `[site_settings]` in `settings.ini` to change
   the batching window.

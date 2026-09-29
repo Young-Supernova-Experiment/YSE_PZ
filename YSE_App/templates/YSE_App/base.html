@@ -58,6 +58,10 @@
 			<label class="sr-only" for="yse-header-search-q">Search by transient name or coordinates</label>
 			<input id="yse-header-search-q" class="form-control form-control-sm" name="q" type="search" placeholder="Name or coord. search" aria-label="Search by transient name or coordinates">
 		</form>
+		<form class="form-inline yse-header-search yse-header-summary-search ml-2" action="{% url 'summary_search' %}" method="get" role="search" title="Natural-language search over the transient summaries">
+			<label class="sr-only" for="yse-header-summary-q">Search the transient summaries</label>
+			<input id="yse-header-summary-q" class="form-control form-control-sm" name="q" type="search" placeholder="Ask the summaries…" aria-label="Search the transient summaries">
+		</form>
 		<ul class="navbar-nav ml-auto">
 			<li class="nav-item">
 				<button type="button" class="btn btn-sm btn-outline-light yse-theme-toggle" id="yse-theme-toggle" aria-pressed="false">Light mode</button>

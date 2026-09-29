@@ -769,6 +769,107 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
             'dashboard_url': request.build_absolute_uri(reverse('personaldashboard')),
         }, status=status.HTTP_201_CREATED)
 
+    # --- AI summaries (#295, #296) -------------------------------------------------
+    def _summary_transient(self, request, pk):
+        from YSE_App.services import summaries as summaries_svc
+
+        transient = self.get_object()
+        if not summaries_svc.can_view(request.user, transient):
+            raise Http404("no such transient")
+        return transient
+
+    def _summary_payload(self, transient):
+        from YSE_App.services import summaries as summaries_svc
+
+        version = summaries_svc.current_version(transient)
+        run = summaries_svc.latest_run(transient)
+        return {
+            'transient': transient.pk,
+            'transient_name': transient.name,
+            'summary': transient.summary or '',
+            'summary_modified': transient.summary_modified,
+            'current': TransientSummaryVersionSerializer(version).data if version is not None else None,
+            'history': TransientSummaryVersionSerializer(summaries_svc.history(transient), many=True).data,
+            'run': {'uuid': str(run.uuid), 'status': run.status, 'error': run.error,
+                    'finished_at': run.finished_at} if run is not None else None,
+        }
+
+    @action(detail=True, methods=['get', 'patch', 'put'], url_path='summary')
+    def summary(self, request, pk=None):
+        """``GET`` the summary with its history; ``PATCH {text}`` stores a human version (#295)."""
+        from YSE_App.services import summaries as summaries_svc
+
+        transient = self._summary_transient(request, pk)
+        if request.method == 'GET':
+            return Response(self._summary_payload(transient))
+        if not summaries_svc.can_edit(request.user, transient):
+            raise PermissionDenied("you may not edit this summary")
+        body = TransientSummaryWriteSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            summaries_svc.set_summary(transient, body.validated_data['text'], request.user,
+                                      source=summaries_svc.SOURCE_HUMAN)
+        except summaries_svc.SummaryError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self._summary_payload(transient))
+
+    @action(detail=True, methods=['post'], url_path='summary/generate')
+    def summary_generate(self, request, pk=None):
+        """Queue a summariser run (#296): 403 without the opt-in / group, 409 while one runs, 429 at the cap."""
+        from YSE_App.services import external_services as runs_svc
+        from YSE_App.services import summaries as summaries_svc
+
+        transient = self._summary_transient(request, pk)
+        service = summaries_svc.service_row()
+        if service is None:
+            return Response({'detail': 'the AI summary service is not registered or is disabled'},
+                            status=status.HTTP_404_NOT_FOUND)
+        if not summaries_svc.can_generate(request.user, transient, service):
+            raise PermissionDenied("AI summaries are not enabled for you (opt in on a transient page) or your groups")
+        if summaries_svc.active_run(transient) is not None:
+            return Response({'detail': 'a summary is already being generated'}, status=status.HTTP_409_CONFLICT)
+        try:
+            run = summaries_svc.request_summary(transient, request.user, service=service)
+        except runs_svc.RunLimitExceeded as exc:
+            return Response({'detail': str(exc), 'limit': exc.limit}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except (runs_svc.ServiceDisabled, summaries_svc.SummaryError) as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        run = ExternalServiceRun.objects.get(pk=run.pk)
+        return Response({'run': str(run.uuid), 'status': run.status, 'error': run.error},
+                        status=status.HTTP_202_ACCEPTED)
+
+
+class SummarySearchAPIView(generics.GenericAPIView):
+    """``GET /api/summary_search/?q=...&limit=N``: transients ranked by their summary (#297)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        from YSE_App.services import summaries as summaries_svc
+
+        try:
+            limit = int(request.GET.get('limit', 0) or 0)
+        except (TypeError, ValueError):
+            limit = 0
+        result = summaries_svc.search_summaries(request.GET.get('q', ''), request.user, limit=limit or None)
+        return Response({
+            'query': result['query'],
+            'mode': result['mode'],
+            'model': result['model'],
+            'results': [{
+                'transient': r['transient'].pk,
+                'name': r['transient'].name,
+                'slug': r['transient'].slug,
+                'status': str(r['transient'].status),
+                'spec_class': str(r['transient'].best_spec_class) if r['transient'].best_spec_class_id else None,
+                'redshift': r['transient'].redshift,
+                'score': r['score'],
+                'snippet': r['snippet'],
+                'summary_modified': r['transient'].summary_modified,
+            } for r in result['results']],
+        })
+
+
 ### `TransientPhotStat` (per-transient photometry statistics, #268) ###
 class TransientPhotStatFilter(django_filters.FilterSet):
     transient_name = django_filters.CharFilter(field_name="transient__name")

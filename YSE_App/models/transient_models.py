@@ -81,6 +81,10 @@ class Transient(BaseModel):
 	has_spitzer = models.BooleanField(null=True, blank=True)
 	has_chandra = models.BooleanField(null=True, blank=True)
 
+	# AI summary (#295): the current text; every version is a TransientSummaryHistory row.
+	summary = models.TextField(null=True, blank=True)
+	summary_modified = models.DateTimeField(null=True, blank=True, editable=False)
+
 	class Meta:
 		# Dashboard/search hot paths (#248): name lookups from saved queries,
 		# ORDER BY disc_date per status bucket, Explorer ORDER BY modified_date,
@@ -208,6 +212,12 @@ class Transient(BaseModel):
 		date_format = '%m/%d/%Y %H:%M:%S %Z'
 		mod_date = self.modified_date.astimezone(timezone('US/Pacific'))
 		return mod_date.strftime(date_format)
+
+	@property
+	def summary_first_line(self):
+		"""First line of the AI/human summary (table tooltips, #295)."""
+		from YSE_App.models.summary_models import first_line
+		return first_line(self.summary)
 
 	def disc_date_string(self):
 		date_format = '%m/%d/%Y'
