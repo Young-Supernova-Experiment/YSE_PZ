@@ -478,6 +478,9 @@ class YseHomeQueryCountTests(TestCase):
         for i in range(12):
             t = create_minimal_transient(cls.user, name=f"p6home{i}", ra=40.0 + i, dec=5.0 + i)
             t.tags.add(tag)
+            # distinct discovery dates, newest first: the tables order by -disc_date and
+            # a 10-row page of 12 all-NULL dates is whichever ten MySQL feels like
+            Transient.objects.filter(pk=t.pk).update(disc_date=now - datetime.timedelta(days=i))
             attach_synthetic_photometry(cls.user, t, n_points=2)
             _request_followup(cls.user, t, resource=cls.night.resource,
                               classical_resource=cls.night.resource, comment=f"note {i}")
