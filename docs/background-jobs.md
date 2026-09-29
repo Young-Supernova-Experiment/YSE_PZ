@@ -255,7 +255,7 @@ are now filled from the existing `[SMTP_provider]` block (`SMTP_HOST`,
 ```sh
 cd /data/yse_pz/YSE_PZ            # the stack's checkout
 git pull
-python manage.py migrate YSE_App  # 0012_job_queue_notifications (tables), 0013 (NotificationPreference.kinds)
+python manage.py migrate YSE_App  # 0012_job_queue_notifications (tables), 0013_credentials_external_services, 0014 (NotificationPreference.kinds)
 python manage.py check
 python manage.py run_jobs --status
 ```

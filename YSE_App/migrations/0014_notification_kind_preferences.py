@@ -7,7 +7,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('YSE_App', '0012_job_queue_notifications'),
+        ('YSE_App', '0013_credentials_external_services'),
     ]
 
     operations = [
