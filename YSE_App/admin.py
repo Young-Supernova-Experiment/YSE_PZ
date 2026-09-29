@@ -285,3 +285,42 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
 		return bool(obj.slack_webhook_url)
 	has_slack_webhook.boolean = True
 	has_slack_webhook.short_description = "slack"
+
+# --- Allocations and facility requests (#303, #298) -----------------------------
+from YSE_App.models.allocation_models import Allocation, FacilityRequest  # noqa: E402
+
+
+@admin.register(Allocation)
+class AllocationAdmin(admin.ModelAdmin):
+	list_display = ("name", "telescope", "instrument", "principal_investigator", "facility", "credential",
+	                "hours_used", "hours_allocated", "start_date", "end_date", "is_active")
+	list_filter = ("facility", "is_active", "telescope")
+	search_fields = ("name", "proposal_id", "telescope__name", "notes")
+	filter_horizontal = ("groups",)
+	raw_id_fields = ("credential",)
+	readonly_fields = ("service", "created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+		from YSE_App.services.allocations import ensure_service
+
+		ensure_service(obj, request.user)
+
+
+@admin.register(FacilityRequest)
+class FacilityRequestAdmin(admin.ModelAdmin):
+	list_display = ("id", "transient", "allocation", "state", "external_id", "submitted_by", "submitted_at",
+	                "hours_charged", "charged_at")
+	list_filter = ("state", "allocation__facility", "allocation")
+	search_fields = ("transient__name", "external_id", "allocation__name")
+	raw_id_fields = ("transient", "followup", "run")
+	readonly_fields = ("charged_at", "created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
