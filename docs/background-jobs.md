@@ -199,7 +199,7 @@ step; moving them onto `notify()` is the next part of #266 / #320.
 ```sh
 cd /data/yse_pz/YSE_PZ            # the stack's checkout
 git pull
-python manage.py migrate YSE_App  # 0011_job_queue_notifications: YSE_App_job, YSE_App_notification, YSE_App_notificationpreference
+python manage.py migrate YSE_App  # 0012_job_queue_notifications: YSE_App_job, YSE_App_notification, YSE_App_notificationpreference
 python manage.py check
 python manage.py run_jobs --status
 ```

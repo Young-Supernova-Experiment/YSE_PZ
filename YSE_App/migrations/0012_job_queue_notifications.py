@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('YSE_App', '0010_dashboard_indexes'),
+        ('YSE_App', '0011_transientphotstat'),
     ]
 
     operations = [
