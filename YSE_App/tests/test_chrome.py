@@ -1,6 +1,5 @@
 """Chrome redesign smokes: header search, skip link, night theme, nav groups (#123–#130)."""
 
-from unittest.mock import patch
 
 from django.contrib.auth.models import Group
 from django.test import Client, TestCase
@@ -14,8 +13,7 @@ class ChromeSmokeTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = create_test_user("chrome_user")
-        with patch("YSE_App.models.transient_models.tess_obs", return_value=False):
-            cls.transient = create_minimal_transient(cls.user, name="chrome-sn")
+        cls.transient = create_minimal_transient(cls.user, name="chrome-sn")
 
     def setUp(self):
         self.client = Client()
