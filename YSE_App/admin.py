@@ -357,3 +357,80 @@ class FacilityRequestAdmin(admin.ModelAdmin):
 			obj.created_by = request.user
 		obj.modified_by = request.user
 		super().save_model(request, obj, form, change)
+
+# --- Sharing services (#324, #325) ----------------------------------------------
+from YSE_App.models.sharing_models import AutoPublisher, SharingService, SharingSubmission  # noqa: E402
+
+
+class SharingServiceAdminForm(forms.ModelForm):
+	class Meta:
+		model = SharingService
+		fields = "__all__"
+
+	def clean_config(self):
+		value = self.cleaned_data.get("config")
+		if value in (None, ""):
+			return {}
+		if not isinstance(value, dict):
+			raise forms.ValidationError("config must be a JSON object")
+		return value
+
+
+@admin.register(SharingService)
+class SharingServiceAdmin(admin.ModelAdmin):
+	form = SharingServiceAdminForm
+	list_display = ("name", "slug", "kind", "tns_group_id", "credential", "testing", "enabled")
+	list_filter = ("kind", "testing", "enabled")
+	search_fields = ("name", "slug", "tns_group_name", "description")
+	filter_horizontal = ("allowed_instruments", "allowed_obs_groups", "groups")
+	raw_id_fields = ("credential",)
+	prepopulated_fields = {"slug": ("name",)}
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(SharingSubmission)
+class SharingSubmissionAdmin(admin.ModelAdmin):
+	list_display = ("id", "service", "transient", "kind", "status", "tns_name", "external_id", "attempts",
+					"created_by", "created_date", "finished_at")
+	list_filter = ("status", "kind", "service")
+	search_fields = ("transient__name", "tns_name", "external_id", "error")
+	raw_id_fields = ("transient", "job", "auto_publisher")
+	readonly_fields = ("payload", "response", "error", "attempts", "external_id", "tns_name", "submitted_at",
+					   "finished_at", "created_by", "created_date", "modified_by", "modified_date")
+	date_hierarchy = "created_date"
+	actions = ("retry_submissions",)
+	list_select_related = ("service", "transient", "created_by")
+
+	def retry_submissions(self, request, queryset):
+		from YSE_App.sharing.tns import retry_submission
+
+		n = 0
+		for submission in queryset:
+			if submission.can_retry:
+				retry_submission(submission, request.user)
+				n += 1
+		self.message_user(request, "%d submission(s) queued again." % n)
+	retry_submissions.short_description = "Retry failed / rejected submissions"
+
+
+@admin.register(AutoPublisher)
+class AutoPublisherAdmin(admin.ModelAdmin):
+	list_display = ("name", "service", "group", "kind", "tns_enabled", "hermes_enabled", "enabled", "last_run_at")
+	list_filter = ("service", "kind", "enabled", "tns_enabled", "hermes_enabled")
+	search_fields = ("name", "group__name")
+	readonly_fields = ("last_run_at", "created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+		from YSE_App.sharing.autopublish import reset_cache
+
+		reset_cache()

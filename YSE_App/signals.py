@@ -14,6 +14,10 @@ from YSE_App.common.db_time_cap import cap_explorer_connection
 import YSE_App.services.external_services  # noqa: E402,F401
 # ... and the facility runner + poll job (#298) so every process can execute facility submissions.
 import YSE_App.services.facility_requests  # noqa: E402,F401
+# ... and the sharing handlers (#326, #327): sharing.submit / poll / tns_retrieval / autopublish_sweep.
+import YSE_App.sharing.handlers  # noqa: E402,F401
+from YSE_App.models.transient_models import Transient
+from YSE_App.sharing.autopublish import on_transient_saved
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 
@@ -21,6 +25,9 @@ User = get_user_model()
 
 # Saved Explorer SQL runs under a statement time cap (#233).
 connection_created.connect(cap_explorer_connection, dispatch_uid="yse_cap_explorer_connection")
+
+# Auto-publisher rules (#325) look at every saved transient; a no-op unless a rule is enabled.
+post_save.connect(on_transient_saved, sender=Transient, dispatch_uid="yse_sharing_autopublish")
 
 
 @receiver(post_save, sender=User, dispatch_uid="yse_ensure_user_public_group")
