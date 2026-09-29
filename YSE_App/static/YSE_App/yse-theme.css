@@ -873,3 +873,19 @@ body.yse-theme #calendar {
 body.yse-theme .fc-view-container .fc-row {
   min-height: 0 !important;
 }
+
+/* FullCalendar 3: today's cell keeps its light highlight (#fcf8e3) in both
+   themes, so the date number must not inherit the night text colour. */
+html[data-yse-theme="dark"] body.yse-theme .fc-unthemed td.fc-today,
+html[data-yse-theme="dark"] body.yse-theme .fc-unthemed td.fc-today .fc-day-number {
+  color: #111;
+}
+
+/* Run/event labels are <a>; keep body.yse-theme a (link colour) from
+   recolouring them and make them black on the light event backgrounds. */
+body.yse-theme .fc-event,
+body.yse-theme .fc-event:hover,
+body.yse-theme .fc-event .fc-title,
+body.yse-theme .fc-event .fc-time {
+  color: #111;
+}
