@@ -33,7 +33,9 @@ from YSE_App.models import (
 from YSE_App.tests.fixtures_minimal import audit_fields
 
 CHECKLIST_PASSWORD = "deploy-checklist-pass"
-TESS_OBS_PATCH_TARGET = "YSE_App.models.transient_models.tess_obs"
+# Transient post_save no longer calls tess_obs (#239); the cron does. Kept so the
+# checklist flows still guard against any future HEASARC call in the request path.
+TESS_OBS_PATCH_TARGET = "YSE_App.common.tess_obs.tess_obs"
 
 _SLUG_LINK_RE = re.compile(r"/transient_detail/([^/\"'#?]+)/")
 

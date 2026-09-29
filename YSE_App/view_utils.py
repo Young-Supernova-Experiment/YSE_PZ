@@ -2,7 +2,7 @@
 
 import multiprocessing as mp
 try: mp.set_start_method('fork')
-except: pass
+except (RuntimeError, ValueError): pass  # already set, or platform without fork
 from multiprocessing import Process, Queue
 
 import django
@@ -1999,7 +1999,7 @@ def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
 
     if target_set_time:
         try: settime = target_set_time.isot.split('T')[-1]
-        except: settime = None
+        except (AttributeError, ValueError): settime = None
     else: 
         settime = None
 
@@ -2028,7 +2028,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
 
     if target_rise_time:
         try: risetime = target_rise_time.isot.split('T')[-1]
-        except: risetime = None
+        except (AttributeError, ValueError): risetime = None
     else: 
         risetime = None
 
@@ -2107,7 +2107,7 @@ def tonight_rise_time(request,transient_id,too_id):
 
     if target_rise_time:
         try: returnstarttime = target_rise_time.isot.split('T')[-1]
-        except: returnstarttime = None
+        except (AttributeError, ValueError): returnstarttime = None
     else: returnstarttime = None
 
     risedict = {'rise_time':returnstarttime}
@@ -2132,7 +2132,7 @@ def tonight_set_time(request,transient_id,too_id):
 
     if target_set_time:
         try: returnstarttime = target_set_time.isot.split('T')[-1]
-        except: returnstarttime = None
+        except (AttributeError, ValueError): returnstarttime = None
     else: returnstarttime = None
 
     setdict = {'set_time':returnstarttime}
@@ -2159,7 +2159,8 @@ def get_ps1_image(request,transient_id):
     ps1url = ("http://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
     try:
         response = requests.get(url=ps1url,timeout=5)
-    except:
+    except requests.RequestException as exc:
+        logger.warning("PS1 cutout request failed for transient %s: %s", transient_id, exc)
         return(JsonResponse({"jpegurl":"","msg":"timeout"}))
     response_text = response.content.decode('utf-8')
     if "<td><img src=" in response.content.decode('utf-8'):

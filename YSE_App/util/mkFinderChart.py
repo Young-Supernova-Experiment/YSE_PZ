@@ -14,6 +14,20 @@ from photutils import CircularAperture,aperture_photometry
 import pylab as plt
 import time
 import urllib.request
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _remove_quietly(*paths):
+	"""Delete scratch files; a missing file is fine, anything else is logged."""
+	for path in paths:
+		try:
+			os.remove(path)
+		except FileNotFoundError:
+			pass
+		except OSError as exc:
+			logger.warning("could not remove %s: %s", path, exc)
 
 class finder():
 	def __init__(self):
@@ -75,7 +89,7 @@ class finder():
 
 		offdictlist = self.mkPlot(finderim,xpos,ypos,ra,dec,mag,raoff,
 								  decoff,outfile,PS1=PS1,ax=ax,saveImg=saveImg)
-		os.system('rm %s'%finderim)
+		_remove_quietly(finderim)
 
 		return(ax,offdictlist)
 		

@@ -45,6 +45,21 @@ directory run,
 
     cp YSE_PZ/public_settings.ini YSE_PZ/settings.ini
 
+Keys under ``[site_settings]`` worth knowing about before a production deploy
+(each has a safe default when absent):
+
+* ``IS_DEBUG`` -- ``True`` for local development. When ``False`` a real
+  ``SECRET_KEY`` must be set here or in the ``DJANGO_SECRET_KEY`` environment
+  variable; the ``<...>`` placeholder counts as unset and startup fails with
+  ``ImproperlyConfigured``.
+* ``ALLOWED_HOSTS`` -- comma-separated hosts the stack answers for, e.g.
+  ``ziggy.ucolick.org,localhost,127.0.0.1`` (or ``DJANGO_ALLOWED_HOSTS``).
+  Absent means every host is accepted.
+* ``EXPLORER_QUERY_MAX_EXECUTION_MS`` -- MySQL time cap for saved Explorer SQL
+  run on a dashboard cache miss (default 20000; 0 disables).
+* ``[database] SSL_DISABLED`` -- ``True`` (default) keeps TLS off for the
+  default MySQL connection; set ``False`` for a remote server that requires it.
+
 Environment file
 ----------------
 

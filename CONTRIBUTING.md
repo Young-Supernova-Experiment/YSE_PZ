@@ -123,7 +123,9 @@ For production or shared machines, prefer environment variables over committing 
 
 | Variable | Purpose |
 |----------|---------|
-| `DJANGO_SECRET_KEY` | Django `SECRET_KEY` |
+| `DJANGO_SECRET_KEY` | Django `SECRET_KEY`. Required (here or as `[site_settings] SECRET_KEY` in `settings.ini`) whenever `IS_DEBUG` is `False`; startup raises `ImproperlyConfigured` otherwise. With `IS_DEBUG: True` a fixed development key is used. |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated `ALLOWED_HOSTS` (or `[site_settings] ALLOWED_HOSTS`). Unset accepts every host, as before. |
+| `YSE_EXPLORER_MAX_EXECUTION_MS` | Time cap for saved Explorer SQL on a dashboard cache miss (or `[site_settings] EXPLORER_QUERY_MAX_EXECUTION_MS`; default 20000, MySQL only, 0 disables). |
 | `TNS_API_KEY` | TNS bot API key |
 | `TNS_DECAM_API_KEY` | DECam TNS bot key |
 | `SLACK_BOT_TOKEN` | TNS Slack notifications (`TNS_Bot.py`) |
