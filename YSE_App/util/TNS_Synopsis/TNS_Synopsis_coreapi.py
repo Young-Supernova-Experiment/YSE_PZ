@@ -26,6 +26,21 @@ import coreapi
 import wget
 from urllib.parse import unquote
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _remove_quietly(*paths):
+	"""Delete scratch files; a missing file is fine, anything else is logged."""
+	for path in paths:
+		try:
+			os.remove(path)
+		except FileNotFoundError:
+			pass
+		except OSError as exc:
+			logger.warning("could not remove %s: %s", path, exc)
+
 reg_obj = b"https://www.wis-tns.org/object/(\w+)"
 #reg_ra = b"\d{4}\w+\sRA[\=a-zA-Z\<\>\" ]+(\d{2}:\d{2}:\d{2}\.\d+)"
 #reg_dec = b"DEC[\=a-zA-Z\<\>\" ]+((?:\+|\-)\d{2}:\d{2}:\d{2}\.\d+)\,\s\w+"
@@ -1084,7 +1099,7 @@ class processTNS():
 							if len(specfiles):
 								sc = SkyCoord(ras[j].decode("utf-8"),decs[j].decode("utf-8"),FK5,unit=(u.hourangle,u.deg))
 								for s,si,so,sog in zip(specfiles,specinst,specobsdate,specobsgroup):
-									os.system('rm %s spec_tns_upload.txt'%s.split('/')[-1])
+									_remove_quietly(s.split('/')[-1], 'spec_tns_upload.txt')
 									dlfile = wget.download(unquote(s))
 									fout = open('spec_tns_upload.txt','w')
 									print('# wavelength flux',file=fout)
@@ -1101,7 +1116,7 @@ class processTNS():
 									print('uploading TNS spectrum...')
 									os.system('uploadTransientData.py -i %s --spectrum -e -s %s'%(
 										'spec_tns_upload.txt',self.settingsfile))
-									os.system('rm %s spec_tns_upload.txt'%s.split('/')[-1])
+									_remove_quietly(s.split('/')[-1], 'spec_tns_upload.txt')
 						except:
 							print('Error : couldn\'t get spectra!!!')
 

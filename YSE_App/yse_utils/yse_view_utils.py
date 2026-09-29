@@ -1,5 +1,5 @@
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
-import os,pdb,json,datetime,time,string,random,logging
+import os,json,datetime,time,string,random,logging
 from YSE_App.models import *
 
 from astropy import wcs

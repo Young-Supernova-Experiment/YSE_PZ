@@ -18,8 +18,11 @@ from astropy import coordinates
 import numpy as np
 from astroquery.irsa_dust import IrsaDust
 from datetime import timedelta
+import glob
 import json
+import logging
 import os
+import shutil
 from astropy.coordinates import SkyCoord, Angle
 from astropy.coordinates import ICRS, Galactic, FK4, FK5
 from astropy.time import Time
@@ -43,6 +46,34 @@ from YSE_App.common.collaboration_groups import (
     PUBLIC_COLLABORATION_GROUP_NAME,
     TNS_IMPORT_COLLABORATION_GROUPS,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _remove_quietly(*paths):
+    """Delete scratch files; a missing file is fine, anything else is logged."""
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("could not remove %s: %s", path, exc)
+
+
+def _remove_dated_ghost_dirs():
+    """Remove the transients_<YYYYMMDD>* scratch trees GHOST writes in the cwd."""
+    stamp = datetime.utcnow().isoformat().split('T')[0].replace('-', '')
+    for path in glob.glob('transients_%s*' % stamp):
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as exc:
+            logger.warning("could not remove %s: %s", path, exc)
+
+
 from YSE_App.data_ingest.tns_api_client import tns_marker_user_agent
 from django_cron import CronJobBase, Schedule
 from django.conf import settings as djangoSettings
@@ -499,7 +530,7 @@ class processTNS:
         for s,si,so,sog in zip(specfiles,specinst,specobsdate,specobsgroup):
             Spectrum = {}
             SpecData = {}
-            os.system('rm spec_tns_upload.txt')
+            _remove_quietly('spec_tns_upload.txt')
 
             try:
                 dlfileresp = get_file(s,self.tnsapikey,self.tns_bot_id,self.tns_bot_name,getattr(self,'tns_marker_type','bot'))
@@ -1806,7 +1837,7 @@ class UpdateGHOST(CronJobBase):
             ghost_zphot = calc_photoz(ghost_hosts[iNorth])
             ghost_hosts = pd.concat([ghost_zphot,ghost_hosts[iSouth]])
 
-        os.system(f"rm -r transients_{datetime.utcnow().isoformat().split('T')[0].replace('-','')}*")
+        _remove_dated_ghost_dirs()
 
         for i in ghost_hosts.index:
             t = Transient.objects.get(name=ghost_hosts['TransientName'][i])

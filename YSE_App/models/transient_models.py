@@ -6,9 +6,6 @@ from YSE_App.models.photometric_band_models import *
 from YSE_App.models.host_models import *
 from YSE_App.models.tag_models import *
 from YSE_App.common.utilities import GetSexigesimalString
-from YSE_App.common.alert import IsK2Pixel, SendTransientAlert
-from YSE_App.common.thacher_transient_search import thacher_transient_search
-from YSE_App.common.tess_obs import tess_obs
 from YSE_App.common.utilities import date_to_mjd
 from YSE_App import models as yse_models
 from django.dispatch import receiver
@@ -19,7 +16,10 @@ import astropy.coordinates as cd
 import astropy.units as u
 from YSE_App.models.survey_models import *
 import datetime
+import logging
 from auditlog.registry import auditlog
+
+logger = logging.getLogger(__name__)
 
 class Transient(BaseModel):
 
@@ -267,66 +267,19 @@ auditlog.register(Transient)
 
 @receiver(models.signals.post_save, sender=Transient)
 def execute_after_save(sender, instance, created, *args, **kwargs):
+	"""Log new transients.
 
-	tag_K2 = False
-
+	The TESS and Thacher footprint tags are applied by the
+	``YSE_App.data_ingest.Apply_Tags.Tags`` cron (every 8 h, transients created
+	in the last day), not here: this handler runs inside the web request or
+	ingest loop that created the transient, and the TESS lookup is a blocking
+	HTTP call to HEASARC (issue #239).
+	"""
 	if created:
-		print("Transient Created: %s" % instance.name)
-		print("Internal Survey: %s" % instance.internal_survey)
-
-		if tag_K2:
-			is_k2_C16_validated, C16_msg = IsK2Pixel(instance.ra, instance.dec, "16")
-			is_k2_C17_validated, C17_msg = IsK2Pixel(instance.ra, instance.dec, "17")
-			is_k2_C19_validated, C19_msg = IsK2Pixel(instance.ra, instance.dec, "19")
-
-			print("K2 C16 Val: %s; K2 Val Msg: %s" % (is_k2_C16_validated, C16_msg))
-			print("K2 C17 Val: %s; K2 Val Msg: %s" % (is_k2_C17_validated, C17_msg))
-			print("K2 C19 Val: %s; K2 Val Msg: %s" % (is_k2_C19_validated, C19_msg))
-
-			if is_k2_C16_validated:
-				k2c16tag = TransientTag.objects.get(name='K2 C16')
-				instance.k2_validated = True
-				instance.k2_msg = C16_msg
-				instance.tags.add(k2c16tag)
-			
-			elif is_k2_C17_validated:
-				k2c17tag = TransientTag.objects.get(name='K2 C17')
-				instance.k2_validated = True
-				instance.k2_msg = C17_msg
-				instance.tags.add(k2c17tag)
-
-			elif is_k2_C19_validated:
-				k2c19tag = TransientTag.objects.get(name='K2 C19')
-				instance.k2_validated = True
-				instance.k2_msg = C19_msg
-				instance.tags.add(k2c19tag)
-		tag_TESS,tag_Thacher = True,True #False,False
-		print('Checking TESS')
-		if tag_TESS and instance.disc_date:
-			TESSFlag = tess_obs(instance.ra,instance.dec,date_to_mjd(instance.disc_date)+2400000.5)
-			if TESSFlag:
-				try:
-					tesstag = TransientTag.objects.get(name='TESS')
-					instance.tags.add(tesstag)
-				except: pass
-		else:
-			TESSFlag = tess_obs(instance.ra,instance.dec,date_to_mjd(instance.modified_date)+2400000.5)
-			if TESSFlag:
-				try:
-					tesstag = TransientTag.objects.get(name='TESS')
-					instance.tags.add(tesstag)
-				except: pass
-
-		print('Checking Thacher')
-		if tag_Thacher and thacher_transient_search(instance.ra,instance.dec):
-			try:
-				thachertag = TransientTag.objects.get(name='Thacher')
-				instance.tags.add(thachertag)
-			except: pass
-		#if is_k2_C19_validated:
-		#	coord_string = GetSexigesimalString(instance.ra, instance.dec)
-		#	coord_string = instance.CoordString()
-		#	SendTransientAlert(instance.id, instance.name, coord_string[0], coord_string[1])
+		logger.info(
+			"Transient created: %s (internal survey: %s)",
+			instance.name, instance.internal_survey,
+		)
 
 # Alternate Host names?
 class AlternateTransientNames(BaseModel):

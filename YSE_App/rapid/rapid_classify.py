@@ -179,7 +179,6 @@ def do(debug=False):
 				photo_class = TransientClass.objects.filter(name = classdict[transient_class])
 
 			except Exception as e:
-				import pdb; pdb.set_trace()
 				print(f'Runtime Error: {e}')
 				raise RuntimeError(e)
 

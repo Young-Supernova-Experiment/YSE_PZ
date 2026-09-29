@@ -49,6 +49,7 @@ from astroplan import moon_illumination
 from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
+from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
 
 from .table_utils import (
     TransientTable,
@@ -228,9 +229,13 @@ def run_explorer_query_cached(query, timeout=3600):
     cache_key = explorer_query_cache_key(query.id)
     names = cache.get(cache_key)
     if names is None:
+        # The explorer connection is capped at EXPLORER_QUERY_MAX_EXECUTION_MS
+        # when it is opened (YSE_App.common.db_time_cap, #233); a capped run
+        # surfaces here as QueryTimeout naming the budget.
         cursor = connections['explorer'].cursor()
         try:
-            cursor.execute(query.sql.replace('%', '%%'), ())
+            with translate_query_timeout(explorer_cap_ms()):
+                cursor.execute(query.sql.replace('%', '%%'), ())
             names = [row[0] for row in cursor.fetchall()]
         finally:
             cursor.close()
