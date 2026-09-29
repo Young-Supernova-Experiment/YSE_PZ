@@ -125,9 +125,9 @@ manage.py run_jobs --worker-id ziggy-A
   full traceback in `error`.
 - **Logs**: the runner logs one line per job at INFO, retries at WARNING,
   final failures at ERROR, through the `YSE_App.jobs.runner` logger.
-- **Housekeeping**: finished rows are kept; delete old `done` rows from the
-  admin or with `Job.objects.filter(status="done", finished_at__lt=...).delete()`
-  once the table grows (a retention cron can follow).
+- **Housekeeping**: the `PruneNotifications` cron (daily, in `CRON_CLASSES`)
+  deletes finished jobs (`done` / `failed` / `cancelled`) older than
+  `JOB_RETENTION_DAYS` together with old notifications; see *Retention* below.
 
 ## Settings (`settings.ini` `[site_settings]`, all optional)
 
@@ -162,26 +162,86 @@ channel's outcome in `Notification.delivered` (`{"email": {"sent_at": ...}}`
 or `{"error": ..., "attempts": n}`), skips channels already sent on a retry,
 and raises `JobRetry` while any channel failed.
 
-Per-user switches live in `NotificationPreference` (`/notifications/preferences/`,
-also in the user menu): `in_app` (default on), `email` (default on; needs an
-account email and the site switch below), `slack_webhook_url` (optional; each
-notification is posted there as text). A user with `in_app` off but email on
-still gets a row, pre-marked read, so it never shows as unread.
+`html=` adds an HTML email body (stored in `Notification.payload["html"]`,
+sent as the `text/html` alternative of the plain `text`); `exclude=` lists
+users to skip, typically the actor.
 
-Endpoints: `/notifications/` (`?unread=1`, paginated), `/notifications/unread_count.json`
-(the badge), `POST /notifications/<id>/read/` (`follow=1` redirects to the
-notification's URL), `POST /notifications/read_all/`, `/notifications/preferences/`.
+### Preferences (per user, per kind)
+
+`NotificationPreference` (`/notifications/preferences/`, also in the user menu
+and linked from the personal dashboard) has three master switches, `in_app`
+(default on), `email` (default on; needs an account email and the site switch
+below) and `slack_webhook_url` (optional; each notification is posted there as
+text), and a matrix in `kinds` (JSON text) with one row per kind group and one
+column per channel. A channel is used only when the master switch *and* the
+group switch are on. A user with in-app off for a kind but email on still gets
+a row, pre-marked read, so it never shows as unread.
+
+| group | kinds | in-app | email | Slack |
+|---|---|---|---|---|
+| Comment mentions | `comment_mention` | on | on | on |
+| Follow-up requests and status | `followup_request`, `followup_status` | on | on | on |
+| Alerts | `alert`, `upload_error` | on | on | on |
+| System and jobs | `system`, `job_result` and any other kind | on | off | off |
+
+Code: `pref.allows(kind, channel)`, `pref.matrix()`, `pref.set_group_channels(group, email=False)`;
+`kind_group(kind)` maps a kind to its group (`YSE_App.models.notification_models`).
+
+### Senders
+
+Every application email goes through `notify()` (issue #320 / #69):
+
+| event | kind | recipients | module |
+|---|---|---|---|
+| `@username` in a transient comment | `comment_mention` | that user, if they may see the comment | `YSE_App.services.notifications` |
+| `@channel` in a comment | `comment_mention` | every active user who may see the comment | same |
+| `#instrument` in a comment (case-insensitive, punctuation ignored: `#Binospec`, `#gpc1`) | `comment_mention` | members of the groups (and the PI, matched by email) of every active `TelescopeResource` on that instrument's telescope, plus `UserTelescopeToFollow` followers | same; `payload["mentioned_instruments"]` |
+| new `TransientFollowup` (classical, ToO or queued resource) | `followup_request` | `UserTelescopeToFollow` followers of the telescope, not the requester | `YSE_App.services.followup_notices` (post_save receiver in `followup_models.py`) |
+| K2 transient alert (`alert.SendTransientAlert`) | `alert` | every active user except `admin` (SMS to on-call users unchanged) | `YSE_App.common.alert` |
+| data-upload failure in `data_utils` (`add_transient`, survey/GW/host uploads) | `upload_error` | the uploading account | `YSE_App.data_utils._notify_upload_failure` |
+
+The comment author is never notified about their own comment. The HTML
+bodies of the old emails are kept; the plain-text part is new. Comments are
+mirrored to Slack (`SLACK_ENABLED`) exactly as before. `alert.sendemail()` /
+`sendsms()` remain for the ingest scripts but use Django's mail backend now
+(no `smtplib`); their `login` / `password` / `smtpserver` arguments are ignored.
+
+The comment box on the transient page autocompletes `@` (users, `@channel`)
+and `#` (instruments) from `/notifications/mention_suggest.json?q=...`
+(`{"results": [{"type", "value", "label"}]}`; `type=user|instrument`, `limit`).
+
+Endpoints: `/notifications/` (`?unread=1`, `?kind=comment_mention`, paginated),
+`/notifications/unread_count.json` (the badge), `POST /notifications/<id>/read/`
+(`follow=1` redirects to the notification's URL), `POST /notifications/read_all/`,
+`/notifications/preferences/`, `/notifications/mention_suggest.json`.
 Admin: `/admin/YSE_App/notification/` (delivery column) and
 `/admin/YSE_App/notificationpreference/`.
 
+### Retention
+
+`YSE_App.services.notify.prune()` deletes read notifications older than
+`NOTIFICATION_RETENTION_DAYS`, unread ones older than
+`NOTIFICATION_UNREAD_RETENTION_DAYS` and finished job rows older than
+`JOB_RETENTION_DAYS` (0 disables that part). It runs three ways:
+
+- `YSE_App.data_ingest.Job_Queue.PruneNotifications`, in `CRON_CLASSES`, once
+  a day from the existing `manage.py runcrons` (no crontab change);
+- `manage.py prune_notifications [--dry-run] [--read-days N] [--unread-days N] [--job-days N]`;
+- the `notifications.prune` job kind (`enqueue("notifications.prune", {"job_days": 7})`).
+
 | key | default | meaning |
 |---|---|---|
-| `NOTIFICATION_EMAIL_ENABLED` | False | send notification emails through Django's mail backend (env `YSE_NOTIFICATION_EMAIL=1`). Off until `[SMTP_provider]` holds real credentials |
+| `NOTIFICATION_EMAIL_ENABLED` | on when `[SMTP_provider]` has real `SMTP_LOGIN` + `SMTP_PASSWORD` | send notification emails through Django's mail backend; settings.ini or env `YSE_NOTIFICATION_EMAIL=1` / `0` overrides |
 | `NOTIFICATION_SLACK_ENABLED` | True | honour per-user Slack webhook URLs |
 | `NOTIFICATION_SLACK_TIMEOUT_SECONDS` | 10 | webhook POST timeout |
 | `NOTIFICATION_EMAIL_SUBJECT_PREFIX` | `[YSE-PZ]` | prefix of every notification email subject |
 | `NOTIFICATION_BASE_URL` | `YSE_PUBLIC_BASE_URL` | absolute prefix for links in emails and Slack posts (env `YSE_NOTIFICATION_BASE_URL`) |
 | `NOTIFICATION_LIST_PAGE_SIZE` | 50 | rows per page on `/notifications/` |
+| `NOTIFICATION_RETENTION_DAYS` | 90 | read notifications older than this are pruned (0 keeps them) |
+| `NOTIFICATION_UNREAD_RETENTION_DAYS` | 365 | unread notifications older than this are pruned (0 keeps them) |
+| `JOB_RETENTION_DAYS` | 30 | finished job rows older than this are pruned (0 keeps them) |
+| `NOTIFICATION_PRUNE_CRON_ENABLED` | True | run the daily prune from `manage.py runcrons` |
+| `NOTIFICATION_PRUNE_CRON_MINUTES` | 1440 | django_cron interval of the prune |
 
 Django's mail settings (`EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`,
 `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, `DEFAULT_FROM_EMAIL`)
@@ -190,16 +250,12 @@ are now filled from the existing `[SMTP_provider]` block (`SMTP_HOST`,
 `SMTP_USE_TLS`, `EMAIL_BACKEND`, `SMTP_TIMEOUT_SECONDS`), the same account
 `YSE_App/common/alert.py` uses. A `<...>` placeholder counts as unset.
 
-The existing senders (`alert.py` transient alerts, comment-mention emails in
-`YSE_App/services/notifications.py`, follow-up notices) are unchanged in this
-step; moving them onto `notify()` is the next part of #266 / #320.
-
 ## Deploy checklist (Ziggy)
 
 ```sh
 cd /data/yse_pz/YSE_PZ            # the stack's checkout
 git pull
-python manage.py migrate YSE_App  # 0012_job_queue_notifications: YSE_App_job, YSE_App_notification, YSE_App_notificationpreference
+python manage.py migrate YSE_App  # 0012_job_queue_notifications (tables), 0013 (NotificationPreference.kinds)
 python manage.py check
 python manage.py run_jobs --status
 ```
@@ -207,8 +263,11 @@ python manage.py run_jobs --status
 Then either rely on the existing `runcrons` crontab line (nothing else to do,
 the `RunQueuedJobs` cron is on by default), add the per-minute crontab line
 above, or install the systemd unit and set `JOB_RUNNER_CRON_ENABLED: False`.
-To turn on email delivery once `[SMTP_provider]` is real:
-`NOTIFICATION_EMAIL_ENABLED: True` in settings.ini and reload Apache.
+Email delivery is on as soon as `[SMTP_provider]` holds real credentials
+(that is where the mention and follow-up emails came from before); set
+`NOTIFICATION_EMAIL_ENABLED: False` in settings.ini to keep a stack silent,
+and `python manage.py prune_notifications --dry-run` shows what the daily
+retention would delete.
 
 Smoke test after deploy (Django shell):
 

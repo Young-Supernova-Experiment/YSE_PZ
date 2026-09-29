@@ -23,22 +23,19 @@ from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.parsers import JSONParser
 from django.db.models import ForeignKey
-from .common.alert import sendemail
 
 
-def _smtp_configured():
-    host = getattr(djangoSettings, 'SMTP_HOST', '') or ''
-    return bool(host) and not str(host).strip().startswith('<')
-
-
-def _safe_sendemail(*args, **kwargs):
-    if not _smtp_configured():
-        print('SMTP not configured in settings.ini; skipping notification email')
-        return
+def _notify_upload_failure(user, subject, message):
+    """Upload-failure alert to the uploading user: ``upload_error`` notification (in-app, email per preference)."""
+    if user is None:
+        return []
     try:
-        sendemail(*args, **kwargs)
+        from YSE_App.services.notify import notify
+
+        return notify([user], message, "/dashboard/", "upload_error", subject=subject)
     except Exception as exc:
-        print(f'Email notification failed: {exc}')
+        print(f'Upload-failure notification failed: {exc}')
+        return []
 from .common.collaboration_groups import (
     apply_collaboration_groups_to_photometry,
     collaboration_groups_from_photometry_upload,
@@ -67,9 +64,6 @@ def add_yse_survey_fields(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "Survey Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload today's survey fields "
 
@@ -94,9 +88,7 @@ def add_yse_survey_fields(request):
                     print("Sending email to: %s" % user.username)
                     html_msg = "Alert : YSE_PZ Failed to upload survey obs "
                     html_msg += "\nError : %s value doesn\'t exist in SurveyField.%s FK relationship"
-                    sendemail(from_addr, user.email, subject,
-                              html_msg%(survey[surveykey],surveykey),
-                              djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                    _notify_upload_failure(user, subject, html_msg%(survey[surveykey],surveykey))
                     continue
 
                 surveydict[surveykey] = fk[0]
@@ -142,9 +134,6 @@ def add_yse_survey_obs(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "Survey Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload today's survey fields "
 
@@ -204,9 +193,7 @@ def add_yse_survey_obs(request):
                     print("Sending email to: %s" % user.username)
                     html_msg = "Alert : YSE_PZ Failed to upload survey obs "
                     html_msg += "\nError : %s value doesn\'t exist in SurveyObservation.%s FK relationship"
-                    sendemail(from_addr, user.email, subject,
-                              html_msg%(survey[surveykey],surveykey),
-                              djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                    _notify_upload_failure(user, subject, html_msg%(survey[surveykey],surveykey))
                     continue
 
                 surveydict[surveykey] = fk[0]
@@ -253,9 +240,6 @@ def add_transient(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 
@@ -299,9 +283,7 @@ def add_transient(request):
                         print("Sending email to: %s" % user.username)
                         html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                         html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
-                        _safe_sendemail(from_addr, user.email, subject,
-                                  html_msg%(transient['name'],transient[transientkey],transientkey),
-                                  djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                        _notify_upload_failure(user, subject, html_msg%(transient['name'],transient[transientkey],transientkey))
 
                     transientdict[transientkey] = fk[0]
 
@@ -426,8 +408,7 @@ def add_transient(request):
             print("Sending email to: %s" % user.username)
             html_msg = """Alert : YSE_PZ Failed to upload transient %s with error %s at line number %s"""
 
-            _safe_sendemail(from_addr, user.email, subject, html_msg%(transient['name'],e,exc_tb.tb_lineno),
-                      djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+            _notify_upload_failure(user, subject, html_msg%(transient['name'],e,exc_tb.tb_lineno))
             return JsonResponse(
                 {"message": f"Error uploading {transient['name']}: {e}"},
                 status=500,
@@ -535,9 +516,6 @@ def add_gw_candidate(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 
@@ -578,9 +556,7 @@ def add_gw_candidate(request):
                         print("Sending email to: %s" % user.username)
                         html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                         html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
-                        _safe_sendemail(from_addr, user.email, subject,
-                                  html_msg%(transient['name'],transient[transientkey],transientkey),
-                                  djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                        _notify_upload_failure(user, subject, html_msg%(transient['name'],transient[transientkey],transientkey))
 
                     transientdict[transientkey] = fk[0]
 
@@ -630,11 +606,7 @@ def add_gw_candidate(request):
             print('Transient %s failed!'%transient['name'])
             print("Sending email to: %s" % user.username)
             html_msg = "Alert : YSE_PZ Failed to upload transient %s with error %s"
-            sendemail(from_addr, user.email, subject, html_msg%(transient['name'],e),
-                      djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
-            # sending SMS is too scary for now
-            #sendsms(from_addr, phone_email, subject, txt_msg%transient['name'],
-            #        djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+            _notify_upload_failure(user, subject, html_msg%(transient['name'],e))
 
     return_dict = {"message":"success"}
 
@@ -655,17 +627,12 @@ def add_gw_candidate_util(gwdict,transient,user):
             fkmodel = GWCandidate._meta.get_field(gwkey).remote_field.model
             fk = fkmodel.objects.filter(name=gwdict[gwkey])
             if not len(fk):
-                # ready to send error emails
-                smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-                from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
                 subject = "TNS Transient Upload Failure"
                 html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 html_msg += "\nError : %s value doesn\'t exist in GWCandidate.%s FK relationship"
                 print("Sending email to: %s" % user.username)
-                sendemail(from_addr, user.email, subject,
-                          html_msg%(gwdict['name'],gwdict[gwkey],gwkey),
-                          djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                _notify_upload_failure(user, subject, html_msg%(gwdict['name'],gwdict[gwkey],gwkey))
 
             gwdict[gwkey] = fk[0]
 
@@ -692,17 +659,12 @@ def add_gw_candidate_util(gwdict,transient,user):
                     fk = fkmodel.objects.filter(name=gwdict['gwcandidateimage'][gwtopkey][gwkey])
 
                 if not len(fk):
-                    # ready to send error emails
-                    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-                    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
                     subject = "TNS Transient Upload Failure"
                     html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
                     html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
                     print("Sending email to: %s" % user.username)
-                    sendemail(from_addr, user.email, subject,
-                              html_msg%(gwdict['name'],gwdict['gwcandidateimage'][gwtopkey],gwdict['gwcandidateimage'][gwtopkey][gwkey]),
-                              djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                    _notify_upload_failure(user, subject, html_msg%(gwdict['name'],gwdict['gwcandidateimage'][gwtopkey],gwdict['gwcandidateimage'][gwtopkey][gwkey]))
 
                 dbgwimagedict[gwkey] = fk[0]
 
@@ -731,17 +693,12 @@ def add_transient_host_util(hostdict,transient,user):
             fkmodel = Host._meta.get_field(hostkey).remote_field.model
             fk = fkmodel.objects.filter(name=hostdict[hostkey])
             if not len(fk):
-                # ready to send error emails
-                smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-                from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
                 subject = "TNS Transient Upload Failure"
                 html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
                 print("Sending email to: %s" % user.username)
-                sendemail(from_addr, user.email, subject,
-                          html_msg%(transient['name'],transient[transientkey],transientkey),
-                          djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                _notify_upload_failure(user, subject, html_msg%(transient['name'],transient[transientkey],transientkey))
 
             hostdict[hostkey] = fk[0]
 

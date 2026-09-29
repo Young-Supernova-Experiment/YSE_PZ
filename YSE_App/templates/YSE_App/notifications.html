@@ -19,12 +19,23 @@
 		<div class="col-lg-9 col-12">
 			<div class="box box-default box-solid yse-notifications">
 				<div class="box-header with-border d-flex align-items-center">
-					<strong>{% if only_unread %}Unread{% else %}All{% endif %} notifications</strong>
+					<strong>{% if only_unread %}Unread{% else %}All{% endif %} notifications{% if kind %}: {{ kind_label }}{% endif %}</strong>
 					<div class="ml-auto">
+						{% if kind_choices|length > 1 or kind %}
+						<div class="btn-group btn-group-sm yse-notif-kind-filter">
+							<button type="button" class="btn btn-outline-secondary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Kind{% if kind %}: {{ kind_label }}{% endif %}</button>
+							<div class="dropdown-menu dropdown-menu-right">
+								<a class="dropdown-item{% if not kind %} active{% endif %}" href="{% url 'notification_list' %}?{% if only_unread %}unread=1{% endif %}">All kinds</a>
+								{% for value, label in kind_choices %}
+								<a class="dropdown-item{% if value == kind %} active{% endif %}" href="{% url 'notification_list' %}?kind={{ value }}{% if only_unread %}&unread=1{% endif %}">{{ label }}</a>
+								{% endfor %}
+							</div>
+						</div>
+						{% endif %}
 						{% if only_unread %}
-						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}">Show all</a>
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}?{% if kind %}kind={{ kind }}{% endif %}">Show all</a>
 						{% else %}
-						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}?unread=1">Unread only</a>
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}?unread=1{% if kind %}&kind={{ kind }}{% endif %}">Unread only</a>
 						{% endif %}
 						{% if unread_count %}
 						<form method="post" action="{% url 'notification_mark_all_read' %}" class="d-inline">
@@ -43,7 +54,7 @@
 							<div class="d-flex">
 								<div class="flex-grow-1">
 									{% if not n.read_at %}<span class="badge badge-warning mr-1">new</span>{% endif %}
-									<span class="badge badge-secondary mr-1">{{ n.kind }}</span>
+									<a class="badge badge-secondary mr-1 yse-notif-kind" href="{% url 'notification_list' %}?kind={{ n.kind }}" title="Only {{ n.kind_label }} notifications">{{ n.kind_label }}</a>
 									{% if n.subject %}<strong>{{ n.subject }}</strong><br>{% endif %}
 									<span class="yse-notification-text">{{ n.text|linebreaksbr }}</span>
 									<div class="text-muted small mt-1">
@@ -62,7 +73,7 @@
 									{% if not n.read_at %}
 									<form method="post" action="{% url 'notification_mark_read' n.id %}" class="d-inline">
 										{% csrf_token %}
-										{% if only_unread %}<input type="hidden" name="next" value="{% url 'notification_list' %}?unread=1">{% endif %}
+										{% if query_suffix %}<input type="hidden" name="next" value="{% url 'notification_list' %}?{{ query_suffix|slice:"1:" }}">{% endif %}
 										<button type="submit" class="btn btn-sm btn-outline-secondary">Mark read</button>
 									</form>
 									{% endif %}
@@ -77,9 +88,9 @@
 				</div>
 				{% if page.paginator.num_pages > 1 %}
 				<div class="box-footer">
-					{% if page.has_previous %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page.previous_page_number }}{% if only_unread %}&unread=1{% endif %}">Newer</a>{% endif %}
+					{% if page.has_previous %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page.previous_page_number }}{{ query_suffix }}">Newer</a>{% endif %}
 					<span class="text-muted small mx-2">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
-					{% if page.has_next %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page.next_page_number }}{% if only_unread %}&unread=1{% endif %}">Older</a>{% endif %}
+					{% if page.has_next %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page.next_page_number }}{{ query_suffix }}">Older</a>{% endif %}
 				</div>
 				{% endif %}
 			</div>
@@ -88,7 +99,8 @@
 			<div class="box box-default box-solid">
 				<div class="box-header with-border"><strong>Delivery</strong></div>
 				<div class="box-body small">
-					<p class="mb-1">Every notification appears here. Email{% if not email_enabled %} (not enabled on this server){% endif %} and Slack delivery follow your <a href="{% url 'notification_preferences' %}">preferences</a> and run from the background job queue.</p>
+					<p class="mb-1">Every notification appears here. Email{% if not email_enabled %} (not enabled on this server){% endif %} and Slack delivery follow your <a href="{% url 'notification_preferences' %}">preferences</a> (per kind and channel) and run from the background job queue.</p>
+					<p class="mb-0">Mention <code>@username</code>, <code>@channel</code> or <code>#instrument</code> in a transient comment to notify people.</p>
 				</div>
 			</div>
 		</div>

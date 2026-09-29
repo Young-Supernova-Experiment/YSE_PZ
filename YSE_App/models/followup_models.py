@@ -9,7 +9,6 @@ from YSE_App.models.telescope_resource_models import *
 from YSE_App.models.transient_models import *
 from YSE_App.models.host_models import *
 from YSE_App.models.profile_models import *
-from YSE_App.common.alert import SendFollowingNotice
 
 #class SimpleTransientSpecRequest(BaseModel):
 #	status = models.ForeignKey(FollowupStatus, on_delete=models.SET(get_sentinel_followupstatus))
@@ -104,14 +103,12 @@ class TransientFollowupRequest(BaseModel):
 
 @receiver(models.signals.post_save, sender=TransientFollowup)
 def execute_after_save(sender, instance, created, *args, **kwargs):
+	"""New follow-up: notify the users following its telescope (issue #69, via notify())."""
 
 	if created:
+		from YSE_App.services.followup_notices import notify_followup_created_safely
 
-		usertelescopes = UserTelescopeToFollow.objects.all()
-		for u in usertelescopes:
-			if instance.classical_resource and u.telescope.name == instance.classical_resource.telescope.name:
-				SendFollowingNotice(instance.id, instance.transient.name,
-									instance.classical_resource.telescope, u.profile)
+		notify_followup_created_safely(instance)
 	
 class HostFollowup(Followup):
 	### Entity relationships ###
