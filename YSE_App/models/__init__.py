@@ -25,3 +25,5 @@ from YSE_App.models.integration_models import *
 from YSE_App.models.json_text_field import JSONTextField
 from YSE_App.models.credential_models import EncryptedCredential
 from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
+from YSE_App.models.job_models import *
+from YSE_App.models.notification_models import *

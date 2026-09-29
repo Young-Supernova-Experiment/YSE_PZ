@@ -17,6 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
+from YSE_App import job_views, notification_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -246,6 +247,19 @@ urlpatterns = [
         view_utils.get_chandra_status, name='get_chandra_status'),
     re_path(r'^get_legacy_image/(?P<transient_id>[0-9]+)',
         view_utils.get_legacy_image, name='get_legacy_image'),
+
+    # Background job queue (#263) and notifications (#266)
+    re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
+    re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),
+    re_path(r'^notifications/$', notification_views.notification_list, name='notification_list'),
+    re_path(r'^notifications/unread_count\.json$', notification_views.notification_unread_count,
+            name='notification_unread_count'),
+    re_path(r'^notifications/(?P<notification_id>[0-9]+)/read/$', notification_views.notification_mark_read,
+            name='notification_mark_read'),
+    re_path(r'^notifications/read_all/$', notification_views.notification_mark_all_read,
+            name='notification_mark_all_read'),
+    re_path(r'^notifications/preferences/$', notification_views.notification_preferences,
+            name='notification_preferences'),
 
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),

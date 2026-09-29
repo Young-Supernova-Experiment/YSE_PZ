@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ('contenttypes', '0002_remove_content_type_name'),
         ('auth', '0012_alter_user_first_name_max_length'),
-        ('YSE_App', '0011_transientphotstat'),
+        ('YSE_App', '0012_job_queue_notifications'),
     ]
 
     operations = [
