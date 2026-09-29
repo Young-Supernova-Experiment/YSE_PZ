@@ -2,7 +2,7 @@ name: Verify Docker dev image build
 
 on:
   pull_request:
-    branches: [develop, main, master, astrofoley-patch-1]
+    branches: [master, develop, experimental]
     paths:
       - "docker/Dockerfile.web.dev"
       - "docker/requirements.web.dev"

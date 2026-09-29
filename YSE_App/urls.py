@@ -5,7 +5,7 @@ from django.contrib import admin
 from rest_framework.urlpatterns import format_suffix_patterns
 from rest_framework.routers import DefaultRouter
 from rest_framework.schemas import get_schema_view
-from django.urls import path, re_path, include
+from django.urls import re_path, include
 
 from . import views, view_utils, data_utils, table_utils, yse_views
 from . import api_views

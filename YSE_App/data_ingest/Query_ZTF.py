@@ -10,7 +10,6 @@ import imaplib
 import email
 from YSE_App.common.utilities import date_to_mjd
 from YSE_App.models.survey_models import *
-from django.conf import settings as djangoSettings
 import json
 import re
 import datetime

@@ -3,3 +3,7 @@
 # 1.2.x works on Python 3.8; needs libcurl4-openssl-dev in Dockerfile for astro-datalab/pycurl.
 astro-prost==1.2.13
 astro-datalab==2.22.1
+# TensorFlow 2.13.1's generated _pb2 modules fail with "Descriptors cannot be
+# created directly" under protobuf 4.x; pin 3.20.3 so the photo-z / rapid crons
+# import in the CI image (issue #183; matches requirements.txt).
+protobuf==3.20.3

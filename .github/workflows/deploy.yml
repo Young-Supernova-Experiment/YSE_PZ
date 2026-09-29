@@ -36,6 +36,7 @@ jobs:
               echo "python=/data/yse_pz/YSE_PZ_experimental/venv/bin/python" >> "$GITHUB_OUTPUT"
               # Project venv is writable by the runner — refresh deps each deploy
               echo "install_deps=true" >> "$GITHUB_OUTPUT"
+              echo "smoke_url=https://ziggy.ucolick.org/yse_experimental/login/" >> "$GITHUB_OUTPUT"
               ;;
             develop)
               echo "dir=/data/yse_pz/YSE_PZ_test" >> "$GITHUB_OUTPUT"
@@ -45,6 +46,7 @@ jobs:
               # Shared env is not writable by the runner; passwordless sudo is
               # only available for systemctl (not pip). Keep deps ops-managed.
               echo "install_deps=false" >> "$GITHUB_OUTPUT"
+              echo "smoke_url=https://ziggy.ucolick.org/yse_test/login/" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported deploy branch: $BRANCH" >&2
@@ -56,6 +58,11 @@ jobs:
       - name: Deploy Application
         run: |
           cd "${{ steps.target.outputs.dir }}"
+          # A person may have run git in this checkout by hand, leaving it owned
+          # by another Unix user; git then refuses to touch it. Trust this path
+          # and log both users so a permissions failure below is easy to read.
+          echo "runner user: $(id -un); checkout owner: $(stat -c %U .)"
+          git config --global --add safe.directory "$PWD"
           PYTHON="${{ steps.target.outputs.python }}"
 
           git fetch origin
@@ -65,15 +72,30 @@ jobs:
             "$PYTHON" -m pip install wheel
             "$PYTHON" -m pip install --no-build-isolation "extinction==0.4.2"
             "$PYTHON" -m pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
-            # Ziggy pips are often too old for --use-deprecated=legacy-resolver
-            "$PYTHON" -m pip install -r requirements.txt
+            # requirements.txt is a frozen snapshot of the venv, not a resolver-
+            # consistent set: astrorapid pins extinction==0.4 while sncosmo needs
+            # >=0.4.2, and several other pinned pairs disagree the same way, so a
+            # plain `-r` install ends in ResolutionImpossible (and Ziggy pip has
+            # no legacy resolver). Install exactly the pinned versions instead.
+            "$PYTHON" -m pip install --no-deps -r requirements.txt
           else
             echo "Skipping pip install (shared interpreter; not writable by runner)"
           fi
 
+          # Fail here, before touching the DB or restarting Apache, if the
+          # freshly checked-out code does not even import / configure.
+          "$PYTHON" manage.py check
+
           "$PYTHON" manage.py migrate --noinput --skip-checks
 
-          # Apache serves static from STATIC_ROOT; chrome/vendor CSS lands here.
+          # Writes into this stack's STATIC_ROOT. Apache must Alias that URL
+          # (prod: /static/, test: /test_static/, experimental: /experimental_static/).
           "$PYTHON" manage.py collectstatic --noinput
 
           sudo systemctl restart apache2
+
+      - name: Smoke test login page
+        run: |
+          URL="${{ steps.target.outputs.smoke_url }}"
+          echo "Smoke-testing $URL"
+          curl -fsS --retry 5 --retry-delay 3 -o /dev/null "$URL"

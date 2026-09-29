@@ -1,10 +1,15 @@
 """Group-based visibility for comments and shared helpers (issue #102)."""
 
+from datetime import timedelta
+
 from django.contrib.auth.models import Group, User
 from django.test import Client, TestCase
 from django.urls import reverse
-from YSE_App.models import Log, TransientFollowup, TransientPhotometry
+from django.utils import timezone
+
+from YSE_App.models import FollowupStatus, Log, TransientFollowup, TransientPhotometry
 from YSE_App.services.comments import create_transient_comment, transient_comment_queryset
+from YSE_App.services.followup_requests import create_or_attach_request
 from YSE_App.services.visibility import (
     filter_transient_comments_for_user,
     filter_transient_followups_for_user,
@@ -133,10 +138,6 @@ class GroupVisibilityTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def _create_followup(self, user, *, is_public=True, groups=None):
-        from YSE_App.models import FollowupStatus
-        from django.utils import timezone
-        from datetime import timedelta
-
         status, _ = FollowupStatus.objects.get_or_create(
             name="sec-test-requested",
             defaults={
@@ -194,3 +195,31 @@ class GroupVisibilityTests(TestCase):
         payload = response.json()
         results = payload.get("results", payload)
         self.assertEqual(len(results), 0)
+
+    def test_private_followup_visible_to_child_requestor(self):
+        self.user_b.groups.add(self.group_a)
+        status, _ = FollowupStatus.objects.get_or_create(
+            name="sec-test-requested",
+            defaults={"created_by": self.user_a, "modified_by": self.user_a},
+        )
+        now = timezone.now()
+        parent, _, _ = create_or_attach_request(
+            self.user_a,
+            self.transient,
+            status=status,
+            valid_start=now,
+            valid_stop=now + timedelta(days=7),
+            comment="owner",
+        )
+        parent.is_public = False
+        parent.save(update_fields=["is_public"])
+        create_or_attach_request(
+            self.user_b,
+            self.transient,
+            status=status,
+            valid_start=now,
+            valid_stop=now + timedelta(days=7),
+            comment="other user",
+        )
+        parent.refresh_from_db()
+        self.assertTrue(followup_visible_to_user(self.user_b, parent))

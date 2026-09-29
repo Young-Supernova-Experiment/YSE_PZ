@@ -20,6 +20,8 @@ from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
 from .common.magnitude_format import format_magnitude
+# Circular: table_utils is imported from yse_pa during views import, before
+# follow-up request helpers are safe to load. Import in render methods.
 rcParams['figure.figsize'] = (7,7)
 
 
@@ -37,6 +39,24 @@ class MagnitudeColumn(tables.Column):
         return format_magnitude(value)
 
 
+class LastObsDateColumn(tables.Column):
+    """Dashboard 'Last Obs. Date' column rendered as MM/DD/YYYY.
+
+    ``annotate_dashboard_transient_fields`` supplies a raw datetime via a
+    Subquery, whereas ``Transient.recent_magdate()`` (used on un-annotated
+    querysets and on production before the annotation) returns a string that
+    is already ``strftime('%m/%d/%Y')``-formatted. Format the datetime here so
+    both paths render the same way.
+    """
+
+    DATE_FORMAT = '%m/%d/%Y'
+
+    def render(self, value):
+        if hasattr(value, 'strftime'):
+            return value.strftime(self.DATE_FORMAT)
+        return value
+
+
 class TransientTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
@@ -49,7 +69,7 @@ class TransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -163,7 +183,7 @@ class FieldTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -285,7 +305,7 @@ class AdjustFieldTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -408,7 +428,7 @@ class YSETransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -495,13 +515,16 @@ class YSETransientTable(tables.Table):
         return ', '.join(np.unique(resource_list))
 
     def render_followup_comments(self, value):
-        qs = Log.objects.filter(transient_followup__transient__id=value).values_list('comment')
+        from YSE_App.services.followup_requests import format_comments
 
-        comment_list = []
-        for q in qs:
-            if q is not None: comment_list += [q]
-
-        return '; '.join(np.unique(comment_list))
+        comments = []
+        for followup in TransientFollowup.objects.filter(transient__id=value).prefetch_related(
+            'requests__requestor'
+        ):
+            text = format_comments(followup)
+            if text:
+                comments.append(text)
+        return '; '.join(comments)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -569,7 +592,7 @@ class YSEFullTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -718,7 +741,7 @@ class YSERisingTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -878,7 +901,7 @@ class NewTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -1079,8 +1102,9 @@ class ObsNightFollowupTable(tables.Table):
     rise_time = tables.Column(verbose_name='Rise Time (UT)',orderable=False,accessor='transient.CoordString')
     set_time = tables.Column(verbose_name='Set Time (UT)',orderable=False,accessor='transient.CoordString')
     moon_angle = tables.Column(verbose_name='Moon Angle',orderable=False,accessor='transient.CoordString')
-    created_by = tables.Column(verbose_name='Added By',orderable=True,accessor='created_by')
-    comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
+    requestors = tables.Column(verbose_name='Requestors',orderable=False,accessor='id')
+    priority = tables.Column(verbose_name='Priority',orderable=True,accessor='priority')
+    comment = tables.Column(verbose_name='Comments',orderable=False,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
@@ -1119,10 +1143,10 @@ class ObsNightFollowupTable(tables.Table):
         #self.base_columns['status'].verbose_name = 'Followup Status'
 
         location = EarthLocation.from_geodetic(
-            classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-            classical_obs_date[0].resource.telescope.elevation*u.m)
+            classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+            classical_obs_date.resource.telescope.elevation*u.m)
         self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(classical_obs_date[0].obs_date).split()[0])
+        self.tme = Time(str(classical_obs_date.obs_date).split()[0])
 
     def render_rise_time(self, value):
         sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
@@ -1154,15 +1178,15 @@ class ObsNightFollowupTable(tables.Table):
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
 
-    def render_comment(self, value):
+    def render_requestors(self, value, record):
+        from YSE_App.services.followup_requests import format_requestors
 
-        comments = Log.objects.filter(transient_followup__id=value)
-        comment_list = []
-        for c in comments:
-            comment_list += [c.comment]
-        if len(comment_list): return '; '.join(comment_list)
-        else: return ''
+        return format_requestors(record)
 
+    def render_comment(self, value, record):
+        from YSE_App.services.followup_requests import format_comments
+
+        return format_comments(record)
 
     def order_recent_mag(self, queryset, is_descending):
 
@@ -1186,7 +1210,7 @@ SELECT pd.mag
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag',
                   'rise_time','set_time','moon_angle','transient_status_string',
-                  'created_by')
+                  'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
         attrs = {
             'th' : {
@@ -1222,8 +1246,9 @@ class ToOFollowupTable(tables.Table):
     rise_time = tables.Column(verbose_name='Rise Time (UT)',orderable=False,accessor='transient.CoordString')
     set_time = tables.Column(verbose_name='Set Time (UT)',orderable=False,accessor='transient.CoordString')
     moon_angle = tables.Column(verbose_name='Moon Angle',orderable=False,accessor='transient.CoordString')
-    created_by = tables.Column(verbose_name='Added By',orderable=True,accessor='created_by')
-    comment = tables.Column(verbose_name='Comments',orderable=True,accessor='id')
+    requestors = tables.Column(verbose_name='Requestors',orderable=False,accessor='id')
+    priority = tables.Column(verbose_name='Priority',orderable=True,accessor='priority')
+    comment = tables.Column(verbose_name='Comments',orderable=False,accessor='id')
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
@@ -1255,8 +1280,8 @@ class ToOFollowupTable(tables.Table):
         super().__init__(*args, **kwargs)
 
         location = EarthLocation.from_geodetic(
-            too_resource[0].telescope.longitude*u.deg,too_resource[0].telescope.latitude*u.deg,
-            too_resource[0].telescope.elevation*u.m)
+            too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
+            too_resource.telescope.elevation*u.m)
         self.tel = Observer(location=location, timezone="UTC")
         self.tme = Time(str(datetime.datetime.now()).split()[0])
 
@@ -1290,15 +1315,15 @@ class ToOFollowupTable(tables.Table):
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
 
-    def render_comment(self, value):
+    def render_requestors(self, value, record):
+        from YSE_App.services.followup_requests import format_requestors
 
-        comments = Log.objects.filter(transient_followup__id=value)
-        comment_list = []
-        for c in comments:
-            comment_list += [c.comment]
-        if len(comment_list): return '; '.join(comment_list)
-        else: return ''
+        return format_requestors(record)
 
+    def render_comment(self, value, record):
+        from YSE_App.services.followup_requests import format_comments
+
+        return format_comments(record)
 
     def order_recent_mag(self, queryset, is_descending):
 
@@ -1322,7 +1347,7 @@ SELECT pd.mag
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag',
                   'rise_time','set_time','moon_angle','transient_status_string',
-                  'created_by')
+                  'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
         attrs = {
             'th' : {
@@ -1340,7 +1365,7 @@ SELECT pd.mag
             "order": [[ 2, "desc" ]],
         }
 
-        
+
 
 class YSEObsNightTable(tables.Table):
 

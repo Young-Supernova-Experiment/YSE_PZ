@@ -53,7 +53,19 @@ class TransientFollowupForm(ModelForm):
         required=False)
     valid_start = forms.DateTimeField(required=False)
     valid_stop = forms.DateTimeField(required=False)
-    comment = forms.CharField(required=False)
+    comment = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'autocomplete': 'off'}),
+    )
+    # Optional: the view falls back to DEFAULT_PRIORITY (4.0) when omitted so
+    # legacy clients/tests that do not post a priority still succeed.
+    priority = forms.FloatField(
+        required=False,
+        initial=4.0,
+        min_value=1.0,
+        max_value=5.0,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'min': '1.0', 'max': '5.0'}),
+    )
 
     def __init__(self, *args, user=None, transient_id=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -206,8 +218,7 @@ class TransientFollowupForm(ModelForm):
             'comment',
             'valid_start',
             'valid_stop',
-            'spec_priority',
-            'phot_priority',
+            'priority',
             'offset_star_ra',
             'offset_star_dec',
             'offset_north',
@@ -252,12 +263,18 @@ class SurveyFieldForm(ModelForm):
     valid_start = forms.DateTimeField()
     valid_stop = forms.DateTimeField()
     coord = forms.CharField()
-    qs = Instrument.objects.filter(name__startswith = 'GPC').select_related()
-    if len(qs):
-        instrument = forms.ModelChoiceField(
-            queryset=qs,
-            initial=qs[0],
-            required=False)
+    # The queryset is evaluated per request (not at import time), so a GPC
+    # instrument added after the process started is offered, and a fresh
+    # database does not silently fall back to the auto-generated model field.
+    instrument = forms.ModelChoiceField(
+        queryset=Instrument.objects.filter(name__startswith='GPC').order_by('name'),
+        required=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        first = self.fields['instrument'].queryset.first()
+        if first is not None:
+            self.fields['instrument'].initial = first
 
     class Meta:
         model = SurveyField
@@ -270,23 +287,33 @@ class SurveyObsForm(ModelForm):
 
     survey_obs_date = forms.DateTimeField()
 
-    qs = [(i['ztf_field_id'], i['ztf_field_id']) for i in SurveyField.objects.filter(~Q(obs_group__name='ZTF')).values('ztf_field_id').distinct().order_by('ztf_field_id')]
-
-    if len(qs):
-        ztf_field_id = forms.MultipleChoiceField(
-            choices=qs,
-            initial=qs[0],
-            required=True)
-    else:
-        ztf_field_id = forms.MultipleChoiceField(
-            choices=[],
-            required=True)
-
+    # Choices are filled in per request by __init__ (see ztf_field_choices);
+    # the view reads cleaned_data['ztf_field_id'] as a list of strings.
+    ztf_field_id = forms.MultipleChoiceField(
+        choices=[],
+        required=True)
 
     instrument = forms.MultipleChoiceField(
         choices=[['GPC1','GPC1'],['GPC2','GPC2']],
         initial=['GPC1','GPC1'],
         required=True)
+
+    @staticmethod
+    def ztf_field_choices():
+        """Distinct non-ZTF survey field ids, ordered, as (value, label) pairs."""
+        ids = (SurveyField.objects.filter(~Q(obs_group__name='ZTF'))
+               .exclude(ztf_field_id__isnull=True)
+               .exclude(ztf_field_id='')
+               .values_list('ztf_field_id', flat=True)
+               .distinct().order_by('ztf_field_id'))
+        return [(i, i) for i in ids]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = self.ztf_field_choices()
+        self.fields['ztf_field_id'].choices = choices
+        if choices:
+            self.fields['ztf_field_id'].initial = [choices[0][0]]
 
     class Meta:
         model = SurveyObservation
@@ -297,12 +324,20 @@ class OncallForm(ModelForm):
 
     valid_start = forms.DateTimeField()
     valid_stop = forms.DateTimeField()
-    qs = User.objects.all().filter(groups__name='YSE').filter(~Q(username='admin')).order_by('username')
-    if len(qs):
-        user = forms.ModelChoiceField(
-            queryset=qs,
-            initial=qs[0],
-            required=False)
+    # Evaluated per request: users added to the YSE group after start-up are
+    # offered, and on a fresh database the field still exists (the POST handler
+    # reads cleaned_data['user'], which used to raise KeyError there).
+    user = forms.ModelChoiceField(
+        queryset=(User.objects.filter(groups__name='YSE')
+                  .filter(~Q(username='admin'))
+                  .order_by('username')),
+        required=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        first = self.fields['user'].queryset.first()
+        if first is not None:
+            self.fields['user'].initial = first
 
     class Meta:
         model = YSEOnCallDate

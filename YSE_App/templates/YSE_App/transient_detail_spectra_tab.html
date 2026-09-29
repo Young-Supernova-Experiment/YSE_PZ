@@ -7,6 +7,7 @@
             <th>Instrument</th>
             <th>Telescope</th>
             <th>Redshift</th>
+            <th>Plot</th>
         </tr>
     </thead>
     <tbody>
@@ -16,6 +17,7 @@
             <td>{{ spec.instrument.name }}</td>
             <td>{{ spec.instrument.telescope.name }}</td>
             <td>{{ spec.redshift|default:"—" }}</td>
+            <td><a href="#" class="specPlotChange" spec_plot-id="{{ spec.id }}">Plot on Summary tab</a></td>
         </tr>
         {% endfor %}
     </tbody>

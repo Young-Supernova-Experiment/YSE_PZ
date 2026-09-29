@@ -41,8 +41,14 @@
 				</div>
 				<div class="col-6">
 					<div class="form-group">
+						<label>Priority (1.0 highest, 5.0 lowest)</label>
+						{% render_field form.priority class+="form-control" style+="width: 100%;" %}
+					</div>
+				</div>
+				<div class="col-6">
+					<div class="form-group">
 						<label>Comments</label>
-						{% render_field form.comment class+="form-control select2" style+="width: 100%;" %}
+						{% render_field form.comment class+="form-control" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">

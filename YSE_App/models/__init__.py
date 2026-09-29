@@ -2,6 +2,7 @@ from YSE_App.models.base import *
 from YSE_App.models.additional_info_models import *
 from YSE_App.models.enum_models import *
 from YSE_App.models.followup_models import *
+from YSE_App.models.followup_models import TransientFollowupRequest
 from YSE_App.models.host_models import *
 from YSE_App.models.instrument_models import *
 from YSE_App.models.log_models import *

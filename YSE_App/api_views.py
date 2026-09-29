@@ -1,9 +1,8 @@
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse
 from rest_framework import serializers, viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework import generics
-from rest_framework import viewsets
 from YSE_App.common import custom_viewsets
 from rest_framework.reverse import reverse
 

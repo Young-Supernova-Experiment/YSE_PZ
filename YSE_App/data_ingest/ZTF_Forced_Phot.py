@@ -557,7 +557,7 @@ class ZTF_Forced_Phot:
 
             # Open LC file and plot it
             if do_plot:
-                figure_file_name = plot_ztf_fp(downloaded_file_names[0], verbose=verbose)
+                figure_file_name = self.plot_ztf_fp(downloaded_file_names[0], verbose=verbose)
             else:
                 figure_file_name = None
 
@@ -683,7 +683,7 @@ class ZTF_Forced_Phot:
         # Don't go further if there were problems with arguments or inputs
         if run:
 
-            run_ztf_fp(**vars(args), verbose=True)
+            self.run_ztf_fp(**vars(args), verbose=True)
 
 
 if __name__ == "__main__":
