@@ -38,6 +38,8 @@ from django.test import TestCase, override_settings
 from YSE_App.perf.mag_limited import (
     BENCHMARK_KEY_SQL,
     BENCHMARK_KEYS,
+    FULL_N_POINTS,
+    FULL_N_TRANSIENTS,
     MAG_LIMITED_SAMPLE_SQL_M2M,
     MAG_LIMITED_SAMPLE_SQL_PRODUCTION,
     SUITE_N_POINTS,
@@ -88,6 +90,16 @@ class MagLimitedSampleSqlTests(TestCase):
         self.assertEqual(int(dataset["n_transients"]), SUITE_N_TRANSIENTS)
         self.assertEqual(int(dataset["n_points_per_transient"]), SUITE_N_POINTS)
 
+    def test_full_tier_reference_matches_full_dataset(self):
+        benchmarks = _load_benchmark_baselines()
+        dataset = benchmarks["full_tier"]["dataset"]
+        self.assertEqual(int(dataset["n_transients"]), FULL_N_TRANSIENTS)
+        self.assertEqual(int(dataset["n_points_per_transient"]), FULL_N_POINTS)
+        for key in BENCHMARK_KEYS:
+            self.assertGreater(
+                float(benchmarks["entries"][key]["full_tier_reference_ms"]), 0.0, key
+            )
+
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class MagLimitedSampleQueryRegressionTests(TestCase):
@@ -119,6 +131,13 @@ class MagLimitedSampleQueryRegressionTests(TestCase):
             f"({dataset.n_transients} transients, {dataset.n_photdata_rows} phot rows, "
             f"seeded in {dataset.seed_ms:.0f} ms)"
         )
+
+        # Timings go to the CI log so a baseline_ms can be recorded from them.
+        print(f"\nmag_limited gating tier {context}", flush=True)
+        for key in BENCHMARK_KEYS:
+            page = measured.get(key)
+            if page is not None:
+                print(f"{key}: {page.ttfb_ms:.1f} ms", flush=True)
 
         # (1) The query returns a list on the dashboard.
         self.assertIsNone(
