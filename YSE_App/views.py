@@ -298,7 +298,8 @@ def _personaldashboard_table_for_user_query(request, q):
                 )
                 return (table, q.query.title, prefix, transient_filter, q.id, 0)
             base_transients = annotate_dashboard_transient_fields(
-                Transient.objects.filter(name__in=cached_result).order_by('-disc_date')
+                # -pk breaks disc_date ties so LIMIT/OFFSET pages never overlap on MySQL
+                Transient.objects.filter(name__in=cached_result).order_by('-disc_date', '-pk')
             )
             prefix = _personaldashboard_sql_query_prefix(q.query.title)
             section_qs = base_transients.filter(name__in=cached_result)
@@ -362,7 +363,7 @@ def _personaldashboard_build_all_tables(request, queries):
         from YSE_App.services.visibility import filter_transients_by_user_access
 
         base_transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(name__in=all_transient_names).order_by('-disc_date')
+            Transient.objects.filter(name__in=all_transient_names).order_by('-disc_date', '-pk')
         )
         base_transients = filter_transients_by_user_access(
             request.user, base_transients

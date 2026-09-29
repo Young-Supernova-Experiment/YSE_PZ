@@ -32,6 +32,9 @@ TNS_INSTRUMENT_MAP: Dict[str, Dict[str, str]] = {
     "BlackGEM-Cam3": {"telescope": "BG3", "instrument": "BG-Cam3", "obs_group": "BlackGEM"},
     "BlackGEM-Cam2": {"telescope": "BG2", "instrument": "BG-Cam2", "obs_group": "BlackGEM"},
     "CFH12k": {"telescope": "CFHT", "instrument": "CFH12k", "obs_group": "PTF"},
+    # Rubin alerts ingested from ANTARES land on this instrument (Query_LSST); TNS
+    # is assumed to report the camera as "LSSTCam" (unverified until TNS carries Rubin points).
+    "LSSTCam": {"telescope": "Rubin Observatory / Simonyi Survey Telescope", "instrument": "LSSTCam", "obs_group": "LSST"},
     # Legacy ATLAS path in YSE DB (HKO ACAM1)
     "ACAM1": {"telescope": "ATLAS - HKO", "instrument": "ACAM1", "obs_group": "ATLAS"},
 }
