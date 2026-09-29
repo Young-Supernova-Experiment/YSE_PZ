@@ -31,6 +31,14 @@ from YSE_App.services import annotations as annotations_svc
 import YSE_App.services.summaries  # noqa: E402,F401
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
+# Favorite-transient activity (#323): comments, audited transient changes, spectra, follow-ups.
+from auditlog.models import LogEntry
+from django.contrib.contenttypes.models import ContentType
+from django.db.models.signals import pre_save
+from YSE_App.models.followup_models import TransientFollowup
+from YSE_App.models.log_models import Log
+from YSE_App.models.spectra_models import TransientSpectrum
+from YSE_App.services import favorites
 
 User = get_user_model()
 
@@ -120,3 +128,52 @@ def refresh_photstat_on_quality_flag(sender, instance, action, reverse, **kwargs
     if action not in ('post_add', 'post_remove', 'post_clear'):
         return
     photstat.schedule_recompute(_photdata_transient_id(instance), photometry_id=instance.photometry_id)
+
+
+# ---- favorite-transient activity (#323) ------------------------------------
+# Each handler is cheap when nobody starred the transient (one EXISTS query)
+# and never raises into the save that triggered it (``favorites._safely``).
+
+
+@receiver(post_save, sender=Log, dispatch_uid="yse_favorite_comment")
+def favorite_activity_on_comment(sender, instance, created, **kwargs):
+    if getattr(instance, '_favorites_defer', False):
+        return  # create_transient_comment records it once the audience groups are set
+    if created and instance.transient_id and not kwargs.get('raw'):
+        favorites._safely(favorites.on_comment, instance)
+
+
+@receiver(post_save, sender=LogEntry, dispatch_uid="yse_favorite_transient_changed")
+def favorite_activity_on_transient_change(sender, instance, created, **kwargs):
+    """Status / class / redshift changes come from the auditlog entry the Transient save writes."""
+    if not created or kwargs.get('raw') or instance.action != LogEntry.Action.UPDATE:
+        return
+    if instance.content_type_id != ContentType.objects.get_for_model(Transient).pk:
+        return
+    changes = instance.changes_dict
+    if not any(field in changes for field in favorites.WATCHED_TRANSIENT_FIELDS):
+        return
+    favorites._safely(favorites.on_transient_changed, instance.object_id, changes, actor=instance.actor)
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_favorite_spectrum")
+def favorite_activity_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get('raw'):
+        favorites._safely(favorites.on_spectrum, instance)
+
+
+@receiver(pre_save, sender=TransientFollowup, dispatch_uid="yse_favorite_followup_old_status")
+def remember_followup_status(sender, instance, **kwargs):
+    """Keep the stored status name so the post_save handler can tell a status change from another edit."""
+    instance._favorite_old_status = ""
+    if instance.pk and not kwargs.get('raw'):
+        old = TransientFollowup.objects.filter(pk=instance.pk).values_list('status__name', flat=True).first()
+        instance._favorite_old_status = old or ""
+
+
+@receiver(post_save, sender=TransientFollowup, dispatch_uid="yse_favorite_followup")
+def favorite_activity_on_followup(sender, instance, created, **kwargs):
+    if kwargs.get('raw'):
+        return
+    favorites._safely(favorites.on_followup, instance, created=created,
+                      old_status=getattr(instance, '_favorite_old_status', ''))

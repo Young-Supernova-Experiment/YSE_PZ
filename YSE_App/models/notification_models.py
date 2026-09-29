@@ -1,9 +1,10 @@
 """In-app notifications and per-user delivery preferences (issues #266, #320; part of #69).
 
 ``Notification`` is the record a user sees in the in-app list; delivery to
-other channels (email, Slack webhook) happens on the job queue and is
-recorded in ``delivered``. ``NotificationPreference`` holds the per-user
-channel switches (global ``in_app`` / ``email`` / Slack webhook) and, in
+other channels (email, Slack webhook, Slack DM) happens on the job queue and
+is recorded in ``delivered``. ``NotificationPreference`` holds the per-user
+channel switches (global ``in_app`` / ``email`` / Slack webhook / Slack
+member id for DMs, #321) and, in
 ``kinds``, a per-kind-group matrix (#321): each notification kind belongs to
 one of ``KIND_GROUPS`` and a channel is used only when both the global switch
 and the group's switch are on. A user without a row gets the defaults.
@@ -37,9 +38,13 @@ KIND_GROUPS = (
      "Paper interests registered on transients you work on; data access requests you can decide and "
      "decisions on your own requests.",
      ("interest", "data_access")),
+    ("favorite", "Favorite transients",
+     "Activity on transients you starred: comments, status / class / redshift changes, new spectra and "
+     "photometry, follow-up requests and their status (batched per transient).",
+     ("favorite_activity",)),
     ("system", "System and jobs",
      "Everything else: background-job results and site announcements.",
-     ("system", "job_result", "favorite_activity", "sharing_result")),
+     ("system", "job_result", "sharing_result")),
 )
 
 # Sensible defaults (#321): in-app on for every group; email on for mentions,
@@ -49,6 +54,7 @@ KIND_GROUP_DEFAULTS = {
     "followup": {"in_app": True, "email": True, "slack": True},
     "alert": {"in_app": True, "email": True, "slack": True},
     "collaboration": {"in_app": True, "email": True, "slack": True},
+    "favorite": {"in_app": True, "email": True, "slack": True},
     "system": {"in_app": True, "email": False, "slack": False},
 }
 
@@ -67,6 +73,11 @@ class NotificationPreference(models.Model):
     slack_webhook_url = models.URLField(
         max_length=500, blank=True, default="",
         help_text="Optional Slack incoming-webhook URL; each notification is posted there as text.",
+    )
+    slack_user_id = models.CharField(
+        max_length=32, blank=True, default="", db_index=True,
+        help_text="Slack member id (U…) for direct messages from the site's Slack app; looked up from the "
+                  "account email on the preferences page. Follows the Slack column of the matrix.",
     )
     kinds = JSONTextField(
         null=True, blank=True,
@@ -115,8 +126,8 @@ class NotificationPreference(models.Model):
         return bool(self.group_channels(kind_group(kind)).get(channel))
 
     def __str__(self):
-        return "NotificationPreference(%s: in_app=%s email=%s slack=%s)" % (
-            self.user.username, self.in_app, self.email, bool(self.slack_webhook_url))
+        return "NotificationPreference(%s: in_app=%s email=%s slack=%s dm=%s)" % (
+            self.user.username, self.in_app, self.email, bool(self.slack_webhook_url), bool(self.slack_user_id))
 
     @classmethod
     def for_user(cls, user):

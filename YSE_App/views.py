@@ -1766,8 +1766,11 @@ def transient_detail(request, slug):
 
         # "Working on this" interests box (#290) and the restricted-data hints (#293).
         from YSE_App.collaboration_views import collaboration_context
+        from YSE_App.services import favorites as favorites_svc
 
         context.update(collaboration_context(request, transient_obj))
+        # Star state for the header (#323): one aggregate query.
+        context['is_favorite'], context['favorite_count'] = favorites_svc.favorite_state(request.user, transient_id)
 
         if lastphotdata and firstphotdata:
             context['recent_mag'] = format_magnitude_with_error(

@@ -17,6 +17,15 @@
 {% block content %}
 <div class="yse-page-dashboard">
 
+<div class="box" id="yse-favorites-box">
+  <div class="box-header with-border">
+    <h3 class="box-title">My favorites <small><a href="{% url 'my_favorites' %}">all favorites</a></small></h3>
+  </div>
+  <div class="pdash-section-loading yse-favorites-loading" id="pdash-section-favorites" data-url="{% url 'my_favorites_section' %}">
+    <p><i class="fa fa-spinner fa-spin"></i> Loading favorites…</p>
+  </div>
+</div>
+
 {% if not transient_categories %}
   <div class="row">
     <div class="col-12">
@@ -162,7 +171,7 @@
 
 {% block scripts %}
 <script type='text/javascript'>
-{% if personal_dashboard_defer %}
+// Deferred sections: the saved-query boxes when deferring is on, the favorites box always (#323).
 $(document).ready(function() {
   function sectionUrl($slot) {
     var url = $slot.data('url');
@@ -187,7 +196,6 @@ $(document).ready(function() {
     });
   });
 });
-{% endif %}
 {% if anchor %}
 $(document).ready(function(){
     window.location = '#{{ anchor }}'

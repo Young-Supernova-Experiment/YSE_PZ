@@ -14,7 +14,7 @@ was copied, so there is no third-party notice to add.
 |---|---|
 | `TransientInterest` (alias `SourceInterest`) | `YSE_App/models/interest_models.py`: `transient`, `user`, optional `group` (collaboration the paper is under), `title` (the planned paper, unique per transient + user), `description`, `role` (lead / co-author / observer), `status` (planned, in_progress, submitted, published, withdrawn), `doi`, audit fields; `auditlog` registered |
 | service | `YSE_App/services/interests.py`: `register_interest`, `update_interest_status`, `interest_queryset`, `interests_for_user`, `open_interest_counts` |
-| pages | "Working on this" box on the summary tab (`templates/YSE_App/transient_detail/interests_panel.html`, next to the comments panel) with the **Register interest** form and per-row status links; `/my/interests/` (user menu) listing your interests with status / DOI editing |
+| pages | "Working on this" box on the summary tab (`templates/YSE_App/transient_detail/interests_panel.html`, next to the comments panel) with the **Register interest** form and per-row status links; `/my/interests/` (user menu) listing your interests with status / DOI editing; the **Papers** column (count of open interests, sortable) on every `TransientTable` and the `has_interest` search filter (see `favorites-and-notifications.md`) |
 | API | `/api/transientinterests/` (list, create, retrieve, update; `?transient=`, `?user=`, `?mine=1`, `?status=`, `?include_withdrawn=1`) |
 | admin | `TransientInterestAdmin` |
 

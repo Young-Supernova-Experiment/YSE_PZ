@@ -12,6 +12,7 @@
 		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
 	</div></div>
 	{% endif %}
+	<form method="post" action="{% url 'notification_slack_lookup' %}" id="yse-slack-lookup-form">{% csrf_token %}</form>
 	<form method="post" action="{% url 'notification_preferences' %}" id="yse-notification-preferences">
 		{% csrf_token %}
 		{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
@@ -34,6 +35,17 @@
 							{{ form.slack_webhook_url }}
 							{% if form.slack_webhook_url.errors %}<div class="text-danger small">{{ form.slack_webhook_url.errors }}</div>{% endif %}
 							<small class="form-text text-muted">Each notification is posted there as text.{% if not slack_enabled %} Slack delivery is disabled on this server.{% endif %}</small>
+						</div>
+						<div class="form-group yse-slack-dm">
+							<label for="{{ form.slack_user_id.id_for_label }}">Slack member id for direct messages (optional)</label>
+							<div class="input-group">
+								{{ form.slack_user_id }}
+								<div class="input-group-append">
+									<button type="submit" class="btn btn-outline-secondary" form="yse-slack-lookup-form" id="yse-slack-lookup-btn"{% if not slack_dm_enabled or not has_email %} disabled title="{% if not slack_dm_enabled %}Slack direct messages are not enabled on this server{% else %}Your account has no email address{% endif %}"{% endif %}>Look up from my email</button>
+								</div>
+							</div>
+							{% if form.slack_user_id.errors %}<div class="text-danger small">{{ form.slack_user_id.errors }}</div>{% endif %}
+							<small class="form-text text-muted">Notifications with Slack on in the matrix are sent to you as a DM from the site's Slack app{% if not slack_dm_enabled %} (not enabled on this server: no Slack bot token){% endif %}. The lookup uses your account email.</small>
 						</div>
 					</div>
 				</div>

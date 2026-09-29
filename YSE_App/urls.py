@@ -18,8 +18,8 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
 from YSE_App import (
-    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, feed_views,
-    instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
+    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
+    feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
@@ -337,6 +337,11 @@ urlpatterns = [
     re_path(r'^interests/(?P<interest_id>[0-9]+)/status/$', collaboration_views.interest_status,
             name='interest_status'),
     re_path(r'^my/interests/$', collaboration_views.my_interests, name='my_interests'),
+    # Favorite transients (#323)
+    re_path(r'^my/favorites/$', favorite_views.my_favorites, name='my_favorites'),
+    re_path(r'^my/favorites/section/$', favorite_views.my_favorites_section, name='my_favorites_section'),
+    re_path(r'^my/favorites/ids\.json$', favorite_views.favorite_ids, name='favorite_ids'),
+    re_path(r'^favorites/toggle/(?P<transient_id>[0-9]+)/$', favorite_views.favorite_toggle, name='favorite_toggle'),
     re_path(r'^data_access_requests/$', collaboration_views.data_access_requests, name='data_access_requests'),
     re_path(r'^data_access_requests/pending_count\.json$', collaboration_views.data_access_pending_count,
             name='data_access_pending_count'),
@@ -354,6 +359,8 @@ urlpatterns = [
             name='notification_mark_all_read'),
     re_path(r'^notifications/preferences/$', notification_views.notification_preferences,
             name='notification_preferences'),
+    re_path(r'^notifications/preferences/slack_lookup/$', notification_views.notification_slack_lookup,
+            name='notification_slack_lookup'),
     # Broker candidates (#276 / #279) and provider status (#272)
     re_path(r'^candidates/$', candidate_views.candidate_list, name='candidate_list'),
     re_path(r'^candidates/(?P<candidate_id>[0-9]+)/save/$', candidate_views.candidate_save, name='candidate_save'),
@@ -439,6 +446,8 @@ router.register(r'classicalobservingdates', api_views.ClassicalObservingDateView
 router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
 router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
 router.register(r'transientinterests', api_views.TransientInterestViewSet, basename='transientinterest')
+router.register(r'favorites', api_views.FavoriteTransientViewSet, basename='favorite')
+router.register(r'notifications', api_views.NotificationViewSet, basename='notification')
 router.register(r'dataaccessrequests', api_views.DataAccessRequestViewSet, basename='dataaccessrequest')
 router.register(r'instrumentlogs', api_views.InstrumentLogViewSet, basename='instrumentlog')
 router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')

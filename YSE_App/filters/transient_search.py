@@ -19,6 +19,9 @@ list was the reference; the SQL here is YSE-PZ's own):
 * **relations**: status, observation group, internal survey, tags (any /
   all), has spectrum, has follow-up (optionally in a status), has comment,
   has host, host redshift range, visible to one collaboration group;
+* **favorites** (#323) and **paper interests** (#290): only the transients
+  the requesting user starred (``favorites=true``), only those with an open
+  paper interest (``has_interest=true``);
 * **annotations** (#319): has an origin, has a key, a key's value equals /
   at least / at most (on the indexed ``TransientAnnotationValue`` side table;
   ``legacy.<column>`` reads the ``Transient`` column itself), and an optional
@@ -470,7 +473,8 @@ FIELD_GROUPS = (
                         'has_redshift', 'redshift_min', 'redshift_max')),
     ('Relations', ('status', 'obs_group', 'internal_survey', 'tags', 'tags_all',
                    'has_spectrum', 'has_followup', 'followup_status', 'has_comment',
-                   'has_host', 'host_redshift_min', 'host_redshift_max', 'visible_to_group')),
+                   'has_host', 'host_redshift_min', 'host_redshift_max', 'visible_to_group',
+                   'favorites', 'has_interest')),
     ('Annotations', ('annotation_origin', 'annotation_key', 'annotation_value_eq', 'annotation_value_min',
                      'annotation_value_max', 'annotation_column')),
 )
@@ -580,6 +584,10 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     host_redshift_max = _num('host__redshift', 'lte', 'Host redshift at most')
     visible_to_group = django_filters.CharFilter(method='filter_visible_to_group', label='Data visible to group')
 
+    # --- favorites (#323) and paper interests (#290) -----------------------
+    favorites = _bool('filter_favorites', 'My favorites only')
+    has_interest = _bool('filter_has_interest', 'Has open paper interest')
+
     # --- annotations (#319) ------------------------------------------------
     annotation_origin = django_filters.CharFilter(method='noop', label='Annotation origin',
                                                   widget=forms.TextInput(attrs={'placeholder': 'gaia_dr3, wise, quasar, legacy'}))
@@ -648,6 +656,26 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         if 'ordering' in cleaned:
             cleaned['ordering'] = ordering
         return super().filter_queryset(queryset)
+
+    # --- favorites (#323) and paper interests (#290) ----------------------
+    def filter_favorites(self, qs, name, value):
+        if value is None:
+            return qs
+        user = getattr(self.request, 'user', None)
+        if user is None or not getattr(user, 'is_authenticated', False):
+            return qs.none() if value else qs
+        from YSE_App.models.favorite_models import UserFavoriteTransient
+
+        mine = UserFavoriteTransient.objects.filter(user=user, transient=OuterRef('pk'))
+        return qs.filter(Exists(mine)) if value else qs.filter(~Exists(mine))
+
+    def filter_has_interest(self, qs, name, value):
+        if value is None:
+            return qs
+        from YSE_App.models.interest_models import TransientInterest
+
+        open_rows = TransientInterest.objects.filter(transient=OuterRef('pk'), status__in=TransientInterest.OPEN_STATUSES)
+        return qs.filter(Exists(open_rows)) if value else qs.filter(~Exists(open_rows))
 
     # --- annotations (#319) -----------------------------------------------
     @property
