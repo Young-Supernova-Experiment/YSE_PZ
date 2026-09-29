@@ -110,6 +110,12 @@ class TransientDetailRegressionTests(TestCase):
             self.assertIn(f'class="dropdown-item specPlotChange" spec_plot-id="{spec.id}"', html)
 
     def test_spectra_tab_fragment_offers_per_spectrum_plot(self):
+        # Only spectra that have points get a per-spectrum plot link.
+        for spec in self.spectra:
+            TransientSpecData.objects.create(
+                spectrum=spec, wavelength=4500.0, flux=1.0,
+                created_by=self.user, modified_by=self.user,
+            )
         response = self.client.get(self.spectra_tab_url)
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8", errors="replace")
@@ -287,3 +293,82 @@ class SpectrumPlotEmptyStateTests(TestCase):
         self.assertNotIn("yse-plot-empty", html)
         self.assertNotIn("on file", html)
         self.assertIn("<script", html)
+
+
+class SpectrumPlotSingleEmptyStateTests(TestCase):
+    """spectrumplotsingle returned '' for a spectrum without points, so picking
+    one from the dropdown blanked the pane with no explanation (#211)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("specplot_single_user")
+        cls.transient = create_minimal_transient(cls.user, name="2026specsingle")
+        cls.empty_spectrum = attach_synthetic_spectrum(cls.user, cls.transient)
+        cls.full_spectrum = attach_synthetic_spectrum(cls.user, cls.transient)
+        for i in range(20):
+            TransientSpecData.objects.create(
+                spectrum=cls.full_spectrum,
+                wavelength=4000 + 10 * i,
+                flux=1.0 + 0.1 * i,
+                created_by=cls.user,
+                modified_by=cls.user,
+            )
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _single_html(self, spec_id):
+        url = reverse("spectrumplotsingle", args=[self.transient.id, spec_id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode("utf-8", errors="replace")
+
+    def test_spectrum_without_points_says_so(self):
+        html = self._single_html(self.empty_spectrum.id)
+        self.assertIn("1 spectrum on file, but it has no wavelength/flux points to plot.", html)
+
+    def test_unknown_spectrum_says_not_on_file(self):
+        html = self._single_html(987654321)
+        self.assertIn("yse-plot-empty", html)
+        self.assertIn("not on file", html)
+
+    def test_spectrum_with_points_is_plotted(self):
+        html = self._single_html(self.full_spectrum.id)
+        self.assertNotIn("yse-plot-empty", html)
+        self.assertIn("<script", html)
+
+
+class SpectraTabPointCountTests(TestCase):
+    """The Spectra tab offered "Plot on Summary tab" for spectra that have no
+    TransientSpecData points (2026fov on yse_experimental): show the count."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("spectra_tab_points_user")
+        cls.transient = create_minimal_transient(cls.user, name="2026spectabpoints")
+        cls.empty_spectrum = attach_synthetic_spectrum(cls.user, cls.transient)
+        cls.full_spectrum = attach_synthetic_spectrum(cls.user, cls.transient)
+        for i in range(12):
+            TransientSpecData.objects.create(
+                spectrum=cls.full_spectrum,
+                wavelength=5000 + 10 * i,
+                flux=2.0,
+                created_by=cls.user,
+                modified_by=cls.user,
+            )
+
+    def test_tab_shows_point_counts_and_offers_plot_only_with_points(self):
+        client = Client()
+        client.force_login(self.user)
+        url = reverse("transient_detail_spectra_tab_fragment", args=[self.transient.id])
+        response = client.get(url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8", errors="replace")
+        self.assertIn("<th>Points</th>", html)
+        self.assertIn("<td>12</td>", html)
+        self.assertIn("<td>0</td>", html)
+        self.assertIn(f'spec_plot-id="{self.full_spectrum.id}"', html)
+        self.assertNotIn(f'spec_plot-id="{self.empty_spectrum.id}"', html)
+        self.assertIn("No data points to plot", html)
+        self.assertIn('spec_plot-id="all"', html)

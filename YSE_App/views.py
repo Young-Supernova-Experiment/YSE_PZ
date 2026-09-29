@@ -1409,7 +1409,17 @@ def transient_detail_gw_fragment(request, transient_id):
 @login_required
 def transient_detail_spectra_tab_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
-    spectra = _authorized_transient_spectra(request, transient_id)
+    spectra = list(_authorized_transient_spectra(request, transient_id))
+    # The plot needs TransientSpecData points, not just a TransientSpectrum
+    # row; show the count so a spectrum without points is visibly unplottable.
+    point_counts = dict(
+        TransientSpecData.objects.filter(spectrum_id__in=[s.id for s in spectra])
+        .values_list('spectrum_id')
+        .annotate(n=Count('id'))
+        .values_list('spectrum_id', 'n')
+    )
+    for spectrum in spectra:
+        spectrum.n_points = point_counts.get(spectrum.id, 0)
     return render(
         request,
         'YSE_App/transient_detail_spectra_tab.html',
