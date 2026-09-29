@@ -2,7 +2,8 @@
 Canonical filter colors (Swope / PS1 uBVgrizy) and telescope symbol shapes for LC plots.
 
 Filter names like r-ZTF, r-WFT, and Swope r map to the same color. Telescope families
-(ZTF, PS1, Swope, …) share a Bokeh marker shape regardless of filter.
+(ZTF, PS1, Swope, …) share a Bokeh marker shape regardless of filter.  The order
+of legend entries lives in ``YSE_App/common/band_order.py``.
 """
 
 from __future__ import annotations
@@ -80,11 +81,6 @@ FILTER_ALIASES = {
     'lssty': 'y',
 }
 
-# Blue-to-red order of the canonical filters; legend entries are sorted by it
-# so the same band always sits in the same place (#91).  ``w`` (PS1 wide,
-# g+r+i) goes last.
-FILTER_WAVELENGTH_ORDER = ('u', 'B', 'g', 'V', 'r', 'i', 'z', 'y', 'w')
-
 _BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
 
 # Effective wavelengths (Angstrom) for the joint Bazin fit (#225 follow-up):
@@ -113,6 +109,8 @@ FILTER_EFFECTIVE_WAVELENGTH_AA = {
     # Swift UVOT
     'uvw2': 2030.0, 'uvm2': 2230.0, 'uvw1': 2590.0, 'u-uvot': 3470.0, 'b-uvot': 4390.0, 'v-uvot': 5470.0,
     'uvw2-uvot': 2030.0, 'uvm2-uvot': 2230.0, 'uvw1-uvot': 2590.0,
+    # Gaia (G is broad, ~6700 A; without this the g- prefix would file it with SDSS g)
+    'g-gaia': 6730.0, 'bp-gaia': 5320.0, 'rp-gaia': 7970.0,
     # near-IR
     'j': 12350.0, 'h': 16620.0, 'k': 21590.0, 'ks': 21590.0,
 }
@@ -123,6 +121,8 @@ DEFAULT_EFFECTIVE_WAVELENGTH_AA = 6000.0
 TELESCOPE_SHORT_LABELS = (
     (('ztf',), 'ZTF'),
     (('swift', 'uvot'), 'Swift'),
+    # PS2 before PS1: 'pan-starrs' would otherwise claim Pan-STARRS2 rows.
+    (('gpc2', 'ps2', 'pan-starrs2', 'panstarrs2'), 'PS2'),
     (('gpc1', 'ps1', 'pan-starrs', 'panstarrs'), 'PS1'),
     (('swope',), 'Swope'),
     (('acam', 'atlas'), 'ATLAS'),
@@ -138,7 +138,7 @@ TELESCOPE_SHORT_LABELS = (
 # Instrument / telescope name substrings -> Bokeh glyph.
 TELESCOPE_SYMBOL_RULES = (
     (('ztf',), 'diamond'),
-    (('gpc1', 'ps1', 'pan-starrs', 'panstarrs'), 'square'),
+    (('gpc1', 'gpc2', 'ps1', 'ps2', 'pan-starrs', 'panstarrs'), 'square'),
     (('swope',), 'circle'),
     (('acam', 'atlas'), 'asterisk'),
     (('direct', 'p200'), 'hex'),
@@ -270,29 +270,6 @@ def plot_legend_label(
     return f'{tel} {filt}'
 
 
-def filter_sort_key(band_name: str | None) -> tuple:
-    """Blue-to-red sort key: canonical filters in FILTER_WAVELENGTH_ORDER, then the rest by name."""
-    canonical = normalize_filter_name(band_name)
-    if canonical in FILTER_WAVELENGTH_ORDER:
-        return (FILTER_WAVELENGTH_ORDER.index(canonical), '')
-    return (len(FILTER_WAVELENGTH_ORDER), (band_name or '').strip().lower())
-
-
-def legend_sort_key(
-    band_name: str | None,
-    *,
-    instrument_name: str | None = None,
-    telescope_name: str | None = None,
-) -> tuple:
-    """Order light-curve series by telescope family, then filter wavelength (#91).
-
-    Independent of which series have data on a given transient, so ``PS1 g``
-    always precedes ``PS1 r`` and every ZTF entry follows every PS1 entry.
-    """
-    tel = telescope_display_name(instrument_name, telescope_name)
-    return (tel.lower(), tel) + filter_sort_key(band_name)
-
-
 def filter_color_groups_for_display() -> list[dict]:
     """Human-readable color groups for docs / chat (filter family -> example names)."""
     groups = []
@@ -320,7 +297,7 @@ def telescope_symbol_groups_for_display() -> list[dict]:
     """Human-readable telescope -> symbol groups."""
     labels = {
         'diamond': 'ZTF, Swift/UVOT',
-        'square': 'PS1 (GPC1), HST',
+        'square': 'PS1 / PS2 (GPC1 / GPC2), HST',
         'circle': 'Swope',
         'asterisk': 'ATLAS (ACAM)',
         'hex': 'P200 Direct',
