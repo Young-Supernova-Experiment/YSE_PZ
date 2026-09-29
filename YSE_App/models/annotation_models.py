@@ -37,8 +37,9 @@ VERDICT_STELLAR = "stellar"
 VERDICT_AGN = "AGN-like"
 VERDICT_CLEAN = "clean"
 VERDICT_UNKNOWN = "unknown"
-# Verdicts that earn a badge on the Summary tab (#318).
-BADGE_VERDICTS = (VERDICT_STELLAR, VERDICT_AGN)
+VERDICT_MOVING = "moving object"  # minor-planet screening (#283)
+# Verdicts that earn a badge on the Summary tab (#318, #283).
+BADGE_VERDICTS = (VERDICT_STELLAR, VERDICT_AGN, VERDICT_MOVING)
 
 USER_ORIGIN_PREFIX = "user:"
 LEGACY_ORIGIN = "legacy"

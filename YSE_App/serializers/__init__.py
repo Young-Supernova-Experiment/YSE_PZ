@@ -29,3 +29,5 @@ from YSE_App.serializers.instrument_log_serializers import *
 from YSE_App.serializers.annotation_serializers import *
 from YSE_App.serializers.analysis_serializers import *
 from YSE_App.serializers.notification_serializers import *
+
+from .feed_serializers import *

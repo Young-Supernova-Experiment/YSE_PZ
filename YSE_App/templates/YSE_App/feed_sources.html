@@ -1,0 +1,133 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>External feeds <small class="text-muted">Hermes / SCiMMA, Einstein Probe, JPL Scout</small></h1>
+{% endblock %}
+
+{% block content %}
+{% if messages %}
+<div class="row"><div class="col-12">
+	{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+</div></div>
+{% endif %}
+<div class="row">
+	<div class="col-12">
+		<div class="card">
+			<div class="card-header">
+				<strong>Feed sources</strong>
+				<span class="text-muted ml-2">poll cron {% if poll_cron_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}
+				&middot; minor-planet screening: sweep {% if screen_cron_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %},
+				on create {% if screen_on_create %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</span>
+				{% if is_staff %}<a class="btn btn-sm btn-outline-secondary float-right" href="{% url 'admin:YSE_App_feedsource_add' %}">Add source</a>{% endif %}
+			</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-hover table-sm" id="feed_sources_tbl">
+					<thead>
+						<tr>
+							<th>Source</th>
+							<th>Kind</th>
+							<th>Topic</th>
+							<th>State</th>
+							<th>Last poll</th>
+							<th>Result</th>
+							<th>Candidates</th>
+							{% if is_staff %}<th></th>{% endif %}
+						</tr>
+					</thead>
+					<tbody>
+						{% for r in rows %}
+						<tr class="yse-feed-source" data-kind="{{ r.source.kind }}" data-status="{% if r.source.last_error %}error{% elif r.source.last_polled %}ok{% else %}never{% endif %}">
+							<td>
+								<strong>{{ r.source.name }}</strong><br>
+								<small class="text-muted"><code>{{ r.source.slug }}</code>{% if r.source.description %} &middot; {{ r.source.description|truncatechars:80 }}{% endif %}</small>
+							</td>
+							<td>{{ r.source.get_kind_display }}</td>
+							<td>{% if r.source.topic %}<code>{{ r.source.topic }}</code>{% else %}<span class="text-muted">-</span>{% endif %}</td>
+							<td>
+								{% if not r.source.enabled %}<span class="badge badge-secondary">disabled</span>
+								{% elif not r.available %}<span class="badge badge-danger" title="{{ r.unavailable_reason }}">unavailable</span>
+								{% elif r.polling %}<span class="badge badge-info">polling</span>
+								{% else %}<span class="badge badge-success">enabled</span>{% endif %}
+								{% if r.source.has_credential %}<i class="fa fa-key text-muted ml-1" title="credential attached"></i>{% endif %}
+								{% if r.can_consume %}<i class="fa fa-bolt text-muted ml-1" title="stream consumer available"></i>{% endif %}
+							</td>
+							<td>{% if r.source.last_polled %}{{ r.source.last_polled|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">never</span>{% endif %}</td>
+							<td>
+								{% if r.source.last_error %}<span class="text-danger" title="{{ r.source.last_error }}">{{ r.source.last_error|truncatechars:90 }}</span>
+								{% else %}{{ r.source.last_summary|default:"-" }}{% endif %}
+							</td>
+							<td>
+								<a href="{{ r.candidates_url }}">
+									<span class="badge badge-warning" title="new">{{ r.candidates_new }}</span>
+									<span class="badge badge-success" title="saved">{{ r.candidates_saved }}</span>
+									<span class="badge badge-secondary" title="rejected">{{ r.candidates_rejected }}</span>
+								</a>
+							</td>
+							{% if is_staff %}
+							<td class="text-nowrap">
+								<form method="post" action="{% url 'feed_source_poll' r.source.pk %}" class="d-inline">{% csrf_token %}
+									<button class="btn btn-xs btn-primary" type="submit"{% if r.polling or not r.available %} disabled{% endif %}>Poll now</button>
+								</form>
+								<a class="btn btn-xs btn-outline-secondary" href="{% url 'admin:YSE_App_feedsource_change' r.source.pk %}">edit</a>
+							</td>
+							{% endif %}
+						</tr>
+						{% empty %}
+						<tr><td colspan="8" class="text-muted">No feed sources configured{% if is_staff %}; add one in the <a href="{% url 'admin:YSE_App_feedsource_add' %}">admin</a>{% endif %}.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			<div class="card-footer text-muted">
+				Feed candidates appear on the <a href="{% url 'candidate_list' %}">Broker Candidates</a> page (broker <code>hermes</code>, <code>ep</code>, <code>scout</code>);
+				Hermes discovery reports are saved as transients by default. Minor-planet matches are the <code>minor_planet</code> annotation on the transient page.
+			</div>
+		</div>
+	</div>
+</div>
+<div class="row">
+	<div class="col-lg-5 col-12">
+		<div class="card">
+			<div class="card-header"><strong>Providers</strong></div>
+			<div class="card-body p-0">
+				<table class="table table-sm mb-0">
+					<tbody>
+						{% for p in providers %}
+						<tr>
+							<td><strong>{{ p.name }}</strong> <code>{{ p.slug }}</code></td>
+							<td>{% if p.available %}<span class="badge badge-success">available</span>{% else %}<span class="badge badge-danger" title="{{ p.unavailable_reason }}">unavailable</span>{% endif %}
+								{% if p.can_consume %}<span class="badge badge-light">stream</span>{% endif %}</td>
+							<td class="text-muted"><small>{{ p.description }}</small></td>
+						</tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+	<div class="col-lg-7 col-12">
+		<div class="card">
+			<div class="card-header"><strong>Recent feed jobs</strong> {% if is_staff %}<a class="float-right" href="{% url 'jobs_status' %}">queue</a>{% endif %}</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-sm mb-0" id="feed_jobs_tbl">
+					<thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>Created</th><th>Result</th></tr></thead>
+					<tbody>
+						{% for j in recent_jobs %}
+						<tr data-status="{{ j.status }}">
+							<td>{{ j.pk }}</td>
+							<td><code>{{ j.kind }}</code>{% if j.transient %} <a href="{% url 'transient_detail' j.transient.slug %}">{{ j.transient.name }}</a>{% endif %}</td>
+							<td><span class="badge badge-{% if j.status == 'succeeded' %}success{% elif j.status == 'failed' %}danger{% elif j.status == 'running' %}info{% else %}warning{% endif %}">{{ j.status }}</span></td>
+							<td>{{ j.created_at|date:"Y-m-d H:i" }}</td>
+							<td><small>{% if j.error %}<span class="text-danger">{{ j.error|truncatechars:100 }}</span>{% elif j.result.summary %}{{ j.result.summary }}{% elif j.result %}{{ j.result|truncatechars:100 }}{% else %}-{% endif %}</small></td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="5" class="text-muted">No feed jobs yet.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}

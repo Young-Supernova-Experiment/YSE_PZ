@@ -607,3 +607,48 @@ class AutoPublisherAdmin(admin.ModelAdmin):
 		from YSE_App.sharing.autopublish import reset_cache
 
 		reset_cache()
+
+
+# --- Feed sources (#280): Hermes / SCiMMA, Einstein Probe, JPL Scout ------------
+from YSE_App.models.feed_models import FeedSource  # noqa: E402
+
+
+class FeedSourceForm(forms.ModelForm):
+	config = forms.JSONField(required=False, initial=dict, widget=forms.Textarea(attrs={"rows": 6, "cols": 80}),
+							 help_text=FeedSource._meta.get_field("config").help_text)
+
+	class Meta:
+		model = FeedSource
+		exclude = ("created_by",)
+
+	def clean_config(self):
+		value = self.cleaned_data.get("config")
+		if value in (None, ""):
+			return {}
+		if not isinstance(value, dict):
+			raise forms.ValidationError("config must be a JSON object.")
+		return value
+
+
+@admin.register(FeedSource)
+class FeedSourceAdmin(admin.ModelAdmin):
+	form = FeedSourceForm
+	list_display = ("name", "kind", "topic", "enabled", "credential", "last_polled", "last_summary")
+	list_filter = ("kind", "enabled")
+	search_fields = ("name", "slug", "topic", "description")
+	prepopulated_fields = {"slug": ("name",)}
+	raw_id_fields = ("credential",)
+	readonly_fields = ("last_polled", "last_summary", "last_error", "created_by", "created_at", "updated_at")
+	fieldsets = (
+		(None, {"fields": ("name", "slug", "kind", "topic", "description", "enabled")}),
+		("Access", {"fields": ("credential", "config"),
+					"description": "Hermes: the credential holds hermes_token (REST) and optionally hop_username / "
+								   "hop_password (Kafka). Einstein Probe: client_id / client_secret for GCN Kafka, or "
+								   "config.url for a notice mirror. Scout: no credential. See docs/feeds-*.md."}),
+		("Bookkeeping", {"fields": ("last_polled", "last_summary", "last_error", "created_by", "created_at", "updated_at")}),
+	)
+
+	def save_model(self, request, obj, form, change):
+		if not change and not obj.created_by_id:
+			obj.created_by = request.user
+		super().save_model(request, obj, form, change)
