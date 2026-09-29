@@ -253,7 +253,7 @@
                                                 </tbody>
                                             </table>
                                             {% if photstat %}
-                                            <table class="table table-bordered table-sm" id="photstat-summary" title="Stored photometry statistics: detections are unflagged points with a magnitude; upper limits are -2.5 log10(flux + 3 flux_err) + zero point; rates are mag/day in the band of the first (rise) and last (decay) detection.">
+                                            <table class="table table-bordered table-sm" id="photstat-summary" title="Stored photometry statistics: detections are unflagged points with a magnitude; upper limits are -2.5 log10(flux + 3 flux_err) + zero point and count only before the first detection; rates are mag/day in the band of the first (rise) and last (decay) detection.">
                                                 <thead>
                                                     <tr>
                                                         <th colspan="2">Photometry statistics</th>
@@ -266,7 +266,7 @@
                                                     </tr>
                                                     <tr id="photstat-limits">
                                                         <td>Upper limits (deepest)</td>
-                                                        <td><strong>{{ photstat.num_limits_global }}</strong>{% if photstat.deepest_limit is not None %} (deepest {{ photstat.deepest_limit|floatformat:2 }} mag on {{ photstat.deepest_limit_date|date:"N j, Y" }}){% endif %}</td>
+                                                        <td><strong>{{ photstat.num_limits_global }}</strong>{% if photstat.has_detections %} pre-detection{% endif %}{% if photstat.deepest_limit is not None %} (deepest {{ photstat.deepest_limit|floatformat:2 }} mag{% if photstat.deepest_limit_band %} in {{ photstat.deepest_limit_band.name }}{% endif %} on {{ photstat.deepest_limit_date|date:"N j, Y" }}){% endif %}</td>
                                                     </tr>
                                                     <tr id="photstat-rise">
                                                         <td>Rise rate</td>
@@ -278,7 +278,7 @@
                                                     </tr>
                                                     <tr id="photstat-nondetection">
                                                         <td>Last non-detection before discovery</td>
-                                                        <td>{% if photstat.last_non_detection_mjd is not None and photstat.time_to_non_detection is not None %}{{ photstat.last_non_detection_date|date:"N j, Y, P" }} (MJD {{ photstat.last_non_detection_mjd|floatformat:2 }}){% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                                                        <td>{% if photstat.last_non_detection_mjd is not None and photstat.time_to_non_detection is not None %}{{ photstat.last_non_detection_date|date:"N j, Y, P" }} (MJD {{ photstat.last_non_detection_mjd|floatformat:2 }}{% if photstat.last_non_detection_band %}; {{ photstat.last_non_detection_band.name }}{% endif %}){% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
                                                     </tr>
                                                     <tr id="photstat-time-to-nondetection">
                                                         <td>Time to non-detection</td>

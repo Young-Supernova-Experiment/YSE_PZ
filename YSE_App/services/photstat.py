@@ -20,8 +20,17 @@ first detection: ``(first_mag - peak_mag) / (peak_mjd - first_mjd)`` with the
 peak in that band, ``None`` when the first detection is that band's peak.
 ``decay_rate`` uses the band of the last detection: ``(last_mag - peak_mag)
 / (last_mjd - peak_mjd)``, ``None`` when the last detection is the peak.
-``time_to_non_detection`` is ``first_detected_mjd`` minus the latest upper
-limit before it.
+Upper-limit statistics (``num_limits_global``, ``deepest_limit``,
+``last_non_detection``) use only the limits taken **before the first
+detection** (every limit when there is none); a non-detection during the
+decline is not a constraint on the explosion.  ``time_to_non_detection`` is
+``first_detected_mjd`` minus the latest such limit.  Each stored limit
+carries its band.
+
+``SCHEMA_VERSION`` is written into every row; bump it when the rules change
+so existing rows are recomputed (the fingerprint includes it, so the next
+signal or ``rebuild_photstats`` rewrites them, ``--stale-only`` visits only
+them, and the detail page refreshes a stale row when it is opened).
 
 Three ways to keep rows current:
 
@@ -62,6 +71,10 @@ from YSE_App.models.phot_stat_models import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 500
+
+# 1: #341 (all limits counted, no limit bands).  2: #349 (pre-detection
+# limits only, deepest_limit_band / last_non_detection_band, per-band limits).
+SCHEMA_VERSION = 2
 
 _local = threading.local()
 
@@ -134,11 +147,14 @@ class PhotStatValues:
     faintest_mag: Optional[float] = None
     deepest_limit: Optional[float] = None
     deepest_limit_mjd: Optional[float] = None
+    deepest_limit_band_id: Optional[int] = None
     last_non_detection_mjd: Optional[float] = None
+    last_non_detection_band_id: Optional[int] = None
     time_to_non_detection: Optional[float] = None
     rise_rate: Optional[float] = None
     decay_rate: Optional[float] = None
     per_band: Dict[str, dict] = field(default_factory=dict)
+    schema_version: int = SCHEMA_VERSION
 
     def fingerprint(self) -> str:
         payload = {k: v for k, v in self.__dict__.items()}
@@ -146,9 +162,27 @@ class PhotStatValues:
         return hashlib.sha1(text.encode('utf-8')).hexdigest()
 
 
+def _band_entry(per_band: Dict[str, dict], point: PhotPoint) -> dict:
+    key = str(point.band_id)
+    entry = per_band.get(key)
+    if entry is None:
+        entry = per_band[key] = {
+            'name': point.band_name or '',
+            'n_det': 0,
+            'peak_mag': None, 'peak_mjd': None,
+            'first_mag': None, 'first_mjd': None,
+            'last_mag': None, 'last_mjd': None,
+            'n_limits': 0,
+            'deepest_limit': None, 'deepest_limit_mjd': None,
+            'last_limit_mjd': None,
+        }
+    return entry
+
+
 def compute_stats(points: Iterable[PhotPoint]) -> PhotStatValues:
     """Statistics for ``points``; pure, no database access."""
     out = PhotStatValues()
+    per_band: Dict[str, dict] = {}
     detections: List[PhotPoint] = []
     limits: List[tuple] = []  # (mjd, limiting mag, point)
     for p in points:
@@ -180,18 +214,8 @@ def compute_stats(points: Iterable[PhotPoint]) -> PhotStatValues:
         out.mean_mag = sum(mags) / len(mags)
         out.faintest_mag = max(mags)
 
-        per_band: Dict[str, dict] = {}
         for d in detections:
-            key = str(d.band_id)
-            entry = per_band.get(key)
-            if entry is None:
-                entry = per_band[key] = {
-                    'name': d.band_name or '',
-                    'n_det': 0,
-                    'peak_mag': None, 'peak_mjd': None,
-                    'first_mag': None, 'first_mjd': None,
-                    'last_mag': None, 'last_mjd': None,
-                }
+            entry = _band_entry(per_band, d)
             entry['n_det'] += 1
             mag, mjd = float(d.mag), float(d.mjd)
             if entry['peak_mag'] is None or mag < entry['peak_mag']:
@@ -200,7 +224,6 @@ def compute_stats(points: Iterable[PhotPoint]) -> PhotStatValues:
                 entry['first_mag'], entry['first_mjd'] = mag, mjd
             if entry['last_mjd'] is None or mjd > entry['last_mjd']:
                 entry['last_mag'], entry['last_mjd'] = mag, mjd
-        out.per_band = per_band
 
         first_band = per_band[str(first.band_id)]
         if first_band['peak_mjd'] > out.first_detected_mjd:
@@ -213,22 +236,38 @@ def compute_stats(points: Iterable[PhotPoint]) -> PhotStatValues:
                 out.last_detected_mjd - last_band['peak_mjd']
             )
 
+    # Only limits before the first detection constrain the explosion; a
+    # non-detection during the decline is not "the deepest limit".
+    if out.first_detected_mjd is not None:
+        limits = [t for t in limits if t[0] < out.first_detected_mjd]
     if limits:
         out.num_limits_global = len(limits)
         deepest = max(limits, key=lambda t: (t[1], t[0]))
         out.deepest_limit, out.deepest_limit_mjd = deepest[1], deepest[0]
+        out.deepest_limit_band_id = deepest[2].band_id
+        last = max(limits, key=lambda t: t[0])
+        out.last_non_detection_mjd = last[0]
+        out.last_non_detection_band_id = last[2].band_id
         if out.first_detected_mjd is not None:
-            before = [t[0] for t in limits if t[0] < out.first_detected_mjd]
-            if before:
-                out.last_non_detection_mjd = max(before)
-                out.time_to_non_detection = out.first_detected_mjd - out.last_non_detection_mjd
-        else:
-            out.last_non_detection_mjd = max(t[0] for t in limits)
+            out.time_to_non_detection = out.first_detected_mjd - out.last_non_detection_mjd
+        for mjd, lim, p in limits:
+            entry = _band_entry(per_band, p)
+            entry['n_limits'] += 1
+            if entry['deepest_limit'] is None or lim > entry['deepest_limit']:
+                entry['deepest_limit'], entry['deepest_limit_mjd'] = lim, mjd
+            if entry['last_limit_mjd'] is None or mjd > entry['last_limit_mjd']:
+                entry['last_limit_mjd'] = mjd
 
+    out.per_band = per_band
     return out
 
 
 # --------------------------------------------------------------- database part
+
+
+def is_stale(stat: TransientPhotStat) -> bool:
+    """Whether ``stat`` was written under older rules (see ``SCHEMA_VERSION``)."""
+    return (stat.schema_version or 0) < SCHEMA_VERSION
 
 
 def _phot_rows(transient_ids: Sequence[int]):
@@ -263,15 +302,16 @@ def points_by_transient(transient_ids: Sequence[int]) -> Dict[int, List[PhotPoin
 def apply_values(stat: TransientPhotStat, values: PhotStatValues) -> bool:
     """Copy ``values`` onto ``stat``; returns whether anything changed."""
     new_hash = values.fingerprint()
-    if stat.pk is not None and stat.phot_hash == new_hash:
+    if stat.pk is not None and stat.phot_hash == new_hash and not is_stale(stat):
         return False
     for name in (
         'num_obs_global', 'num_det_global', 'num_limits_global', 'last_obs_mjd',
         'first_detected_mjd', 'first_detected_mag', 'first_detected_band_id',
         'last_detected_mjd', 'last_detected_mag', 'last_detected_band_id',
         'peak_mjd', 'peak_mag', 'peak_band_id', 'mean_mag', 'faintest_mag',
-        'deepest_limit', 'deepest_limit_mjd', 'last_non_detection_mjd',
-        'time_to_non_detection', 'rise_rate', 'decay_rate',
+        'deepest_limit', 'deepest_limit_mjd', 'deepest_limit_band_id',
+        'last_non_detection_mjd', 'last_non_detection_band_id',
+        'time_to_non_detection', 'rise_rate', 'decay_rate', 'schema_version',
     ):
         setattr(stat, name, getattr(values, name))
     stat.last_obs_date = mjd_to_datetime(values.last_obs_mjd)
@@ -304,7 +344,12 @@ def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPh
     return stat
 
 
-DISPLAY_RELATED = ('peak_band', 'first_detected_band', 'last_detected_band')
+DISPLAY_RELATED = (
+    'peak_band', 'first_detected_band', 'last_detected_band',
+    'deepest_limit_band', 'last_non_detection_band',
+)
+
+
 
 
 def stat_for_transient(transient_id: int, *, compute_missing: bool = True) -> Optional[TransientPhotStat]:
@@ -314,14 +359,26 @@ def stat_for_transient(transient_id: int, *, compute_missing: bool = True) -> Op
     has no row until ``rebuild_photstats`` runs (#345).  With
     ``compute_missing`` the row is then computed and stored on the spot, one
     pass over that transient's photometry, so the detail page never waits on
-    the backfill.  A failure is logged and gives ``None``: the caller renders
-    the block empty instead of failing the page.
+    the backfill; a row written under an older ``SCHEMA_VERSION`` is
+    recomputed the same way.  A failure is logged and gives ``None`` (or the
+    old row): the caller renders what it has instead of failing the page.
     """
     transient_id = int(transient_id)
     queryset = TransientPhotStat.objects.filter(transient_id=transient_id).select_related(*DISPLAY_RELATED)
     stat = queryset.first()
-    if stat is not None or not compute_missing:
+    if not compute_missing:
         return stat
+    if stat is not None:
+        if not is_stale(stat):
+            return stat
+        # Written under older rules (an integer compare, no photometry read
+        # for a current row): refresh it now, keep the old row on failure.
+        try:
+            recompute(transient_id)
+        except Exception:
+            logger.exception('photstat refresh failed for transient %s', transient_id)
+            return stat
+        return queryset.first()
     try:
         if compute_missing_stat(transient_id) is None:
             return None

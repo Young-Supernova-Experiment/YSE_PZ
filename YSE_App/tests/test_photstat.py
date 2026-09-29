@@ -7,8 +7,10 @@ rates, time to non-detection, per-band JSON), the ``rebuild_photstats``
 command, the incremental updates through the ``TransientPhotData`` signals
 and ``deferred_updates()``, the read-only API and the surfaces that show
 the stored values (detail-page summary block, computed on demand for a
-transient the backfill has not reached (#345), ``TransientTable`` Peak Mag
-column and its ordering).
+transient the backfill has not reached (#345) and refreshed for a row
+written under older rules (#349), ``TransientTable`` Peak Mag column and
+its ordering).  Upper-limit statistics count only limits before the first
+detection and carry their band (#349).
 """
 
 import datetime
@@ -95,6 +97,9 @@ class PhotStatFixture(TestCase):
             add_point(cls.photometry, cls.g, 60008.0, mag=18.6, mag_err=0.1, user=u)
             add_point(cls.photometry, cls.g, 60011.0, mag=17.8, mag_err=0.1, user=u)
             add_point(cls.photometry, cls.g, 60020.0, mag=18.9, mag_err=0.1, user=u)
+            # a limit after the first detection: deeper than all the others (24.49)
+            # but it does not count toward the limit statistics (#349)
+            add_point(cls.photometry, cls.r, 60015.0, flux=1.0, flux_err=5.0, zp=27.5, user=u)
             # flagged: would be the brightest and the latest if it counted
             add_point(cls.photometry, cls.r, 60030.0, mag=12.0, mag_err=0.1, bad=True, user=u)
             # an unflagged point with neither mag nor usable flux counts as an observation only
@@ -104,7 +109,7 @@ class PhotStatFixture(TestCase):
 class ComputeStatsTests(PhotStatFixture):
     def test_values_on_the_fixture(self):
         stat = TransientPhotStat.objects.get(transient=self.transient)
-        self.assertEqual(stat.num_obs_global, 12)  # 13 rows minus the flagged one
+        self.assertEqual(stat.num_obs_global, 13)  # 14 rows minus the flagged one
         self.assertEqual(stat.num_det_global, 8)
         self.assertEqual(stat.num_limits_global, 3)
         self.assertAlmostEqual(stat.first_detected_mjd, 60006.0)
@@ -127,8 +132,12 @@ class ComputeStatsTests(PhotStatFixture):
         deepest = -2.5 * math.log10(2.0 + 3 * 10.0) + 27.5
         self.assertAlmostEqual(stat.deepest_limit, deepest, places=6)
         self.assertAlmostEqual(stat.deepest_limit_mjd, 60003.0)
+        self.assertEqual(stat.deepest_limit_band, self.r)
         self.assertAlmostEqual(stat.last_non_detection_mjd, 60004.0)
+        self.assertEqual(stat.last_non_detection_band, self.g)
         self.assertAlmostEqual(stat.time_to_non_detection, 2.0)
+        self.assertEqual(stat.schema_version, photstat.SCHEMA_VERSION)
+        self.assertFalse(photstat.is_stale(stat))
         # rates: rise in the first-detection band (r): (19.0 - 17.5) / (60012 - 60006)
         self.assertAlmostEqual(stat.rise_rate, 1.5 / 6.0)
         # decay in the last-detection band (r): (18.7 - 17.5) / (60024 - 60012)
@@ -139,6 +148,12 @@ class ComputeStatsTests(PhotStatFixture):
         self.assertAlmostEqual(per_band[str(self.g.id)]["peak_mag"], 17.8)
         self.assertAlmostEqual(per_band[str(self.g.id)]["last_mjd"], 60020.0)
         self.assertEqual(per_band[str(self.r.id)]["name"], self.r.name)
+        # per-band limits: only the pre-detection ones (the 60015 r limit is not counted)
+        self.assertEqual(per_band[str(self.r.id)]["n_limits"], 2)
+        self.assertAlmostEqual(per_band[str(self.r.id)]["deepest_limit"], deepest, places=6)
+        self.assertAlmostEqual(per_band[str(self.r.id)]["deepest_limit_mjd"], 60003.0)
+        self.assertEqual(per_band[str(self.g.id)]["n_limits"], 1)
+        self.assertAlmostEqual(per_band[str(self.g.id)]["last_limit_mjd"], 60004.0)
 
     def test_last_detection_matches_the_dashboard_recent_mag_rule(self):
         stat = TransientPhotStat.objects.get(transient=self.transient)
@@ -180,8 +195,28 @@ class ComputeStatsTests(PhotStatFixture):
         self.assertEqual(limits.num_det_global, 0)
         self.assertEqual(limits.num_limits_global, 2)
         self.assertAlmostEqual(limits.deepest_limit_mjd, 60000.0)
+        self.assertEqual(limits.deepest_limit_band_id, 1)
         self.assertAlmostEqual(limits.last_non_detection_mjd, 60001.0)
+        self.assertEqual(limits.last_non_detection_band_id, 1)
         self.assertIsNone(limits.time_to_non_detection)
+        self.assertEqual(limits.per_band["1"]["n_limits"], 2)
+        self.assertEqual(limits.per_band["1"]["n_det"], 0)
+        # limits after the first detection are observations, not limit statistics (#349)
+        late = photstat.compute_stats([
+            P(mjd=60000.0, band_id=1, mag=18.0),
+            P(mjd=60001.0, band_id=2, flux=1.0, flux_err=1.0, flux_zero_point=25.0),
+        ])
+        self.assertEqual((late.num_obs_global, late.num_det_global, late.num_limits_global), (2, 1, 0))
+        self.assertIsNone(late.deepest_limit)
+        self.assertIsNone(late.deepest_limit_band_id)
+        self.assertIsNone(late.last_non_detection_mjd)
+        self.assertIsNone(late.time_to_non_detection)
+        self.assertNotIn("2", late.per_band)
+        # the schema version is part of the fingerprint: older rows rewrite once
+        self.assertEqual(late.schema_version, photstat.SCHEMA_VERSION)
+        older = photstat.compute_stats([P(mjd=60000.0, band_id=1, mag=18.0)])
+        older.schema_version = photstat.SCHEMA_VERSION - 1
+        self.assertNotEqual(older.fingerprint(), photstat.compute_stats([P(mjd=60000.0, band_id=1, mag=18.0)]).fingerprint())
         # flagged rows never count; non-positive flux + 3 sigma is not a limit
         junk = photstat.compute_stats([
             P(mjd=60000.0, band_id=1, mag=10.0, flagged=True),
@@ -333,6 +368,22 @@ class CommandTests(PhotStatFixture):
         with self.assertRaises(CommandError):
             self._run("--batch-size", "0")
 
+    def test_stale_only_visits_missing_and_outdated_rows(self):
+        bare = create_minimal_transient(self.user, name="2026stale-missing")
+        TransientPhotStat.objects.filter(transient=bare).delete()
+        current = create_minimal_transient(self.user, name="2026stale-current")
+        self.assertFalse(photstat.is_stale(photstat.recompute(current.id)))
+        TransientPhotStat.objects.filter(transient=self.transient).update(
+            schema_version=photstat.SCHEMA_VERSION - 1, deepest_limit_band=None)
+        out = self._run("--stale-only")
+        self.assertIn("processed 2 transient(s); created 1, updated 1, unchanged 0", out)
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        self.assertEqual(stat.schema_version, photstat.SCHEMA_VERSION)
+        self.assertEqual(stat.deepest_limit_band, self.r)
+        self.assertTrue(TransientPhotStat.objects.filter(transient=bare).exists())
+        out = self._run("--stale-only", "--quiet")
+        self.assertIn("processed 0 transient(s)", out)
+
     def test_recompute_many_uses_a_flat_number_of_queries(self):
         ids = [self.transient.id]
         for i in range(4):
@@ -364,6 +415,11 @@ class ApiTests(PhotStatFixture):
         self.assertAlmostEqual(row["peak_mag"], 17.5)
         self.assertEqual(row["peak_band_name"], self.r.name)
         self.assertEqual(row["num_det_global"], 8)
+        self.assertEqual(row["num_limits_global"], 3)
+        self.assertEqual(row["deepest_limit_band_name"], self.r.name)
+        self.assertEqual(row["last_non_detection_band_name"], self.g.name)
+        self.assertIn("/photometricbands/%d/" % self.r.id, row["deepest_limit_band"])
+        self.assertEqual(row["schema_version"], photstat.SCHEMA_VERSION)
         self.assertIn(str(self.g.id), row["per_band"])
         self.assertNotIn("phot_hash", row)
         self.assertNotIn("per_band_json", row)
@@ -387,6 +443,11 @@ class ApiTests(PhotStatFixture):
         self.assertEqual(names("peak_mag_lte=18"), [self.transient.name])
         self.assertEqual(names("peak_mag_gte=20"), [other.name])
         self.assertEqual(names("num_det_gte=2"), [self.transient.name])
+        self.assertEqual(names("deepest_limit_band=%s" % self.r.name), [self.transient.name])
+        self.assertEqual(names("last_non_detection_band=%s" % self.g.name), [self.transient.name])
+        self.assertEqual(names("deepest_limit_band=%s" % self.g.name), [])
+        self.assertEqual(names("num_limits_gte=3"), [self.transient.name])
+        self.assertEqual(names("deepest_limit_gte=23"), [self.transient.name])
         self.assertEqual(names("ordering=peak_mag"), [self.transient.name, other.name])
         self.assertEqual(names("ordering=-peak_mag"), [other.name, self.transient.name])
         # the transients endpoint filters and orders on the same columns
@@ -418,15 +479,15 @@ class SurfaceTests(PhotStatFixture):
         self.assertIn('id="photstat-summary"', html)
         self.assertIn("Photometry statistics", html)
         self.assertIn("<td>Detections</td>", html)
-        self.assertIn("<strong>8</strong> of 12 unflagged points", html)
+        self.assertIn("<strong>8</strong> of 13 unflagged points", html)
         self.assertIn("<td>Upper limits (deepest)</td>", html)
-        self.assertIn("<strong>3</strong> (deepest 23.74 mag on", html)
+        self.assertIn("<strong>3</strong> pre-detection (deepest 23.74 mag in %s on" % self.r.name, html)
         self.assertIn("<td>Rise rate</td>", html)
         self.assertIn("<strong>0.250</strong> mag/day (%s)" % self.r.name, html)
         self.assertIn("<td>Decay rate</td>", html)
         self.assertIn("<strong>0.100</strong> mag/day (%s)" % self.r.name, html)
         self.assertIn("<td>Last non-detection before discovery</td>", html)
-        self.assertIn("(MJD 60004.00)", html)
+        self.assertIn("(MJD 60004.00; %s)" % self.g.name, html)
         self.assertIn("<td>Time to non-detection</td>", html)
         self.assertIn("<strong>2.0</strong> days before first detection", html)
 
@@ -451,6 +512,32 @@ class SurfaceTests(PhotStatFixture):
             response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
         self.assertEqual(response.status_code, 200)
         spy.assert_not_called()
+
+    def test_detail_page_refreshes_a_row_written_under_older_rules(self):
+        """A row with an older schema_version is recomputed on the page view (#349)."""
+        TransientPhotStat.objects.filter(transient=self.transient).update(
+            schema_version=photstat.SCHEMA_VERSION - 1, deepest_limit_band=None, num_limits_global=4)
+        with mock.patch.object(photstat, "recompute", wraps=photstat.recompute) as spy:
+            response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(spy.call_count, 1)
+        self.assert_stats_block(response.content.decode())
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        self.assertEqual(stat.schema_version, photstat.SCHEMA_VERSION)
+        self.assertEqual(stat.deepest_limit_band, self.r)
+        # current row: an integer compare, no recompute
+        with mock.patch.object(photstat, "recompute") as spy:
+            response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        self.assertEqual(response.status_code, 200)
+        spy.assert_not_called()
+        # a failing refresh keeps the old row on the page
+        TransientPhotStat.objects.filter(transient=self.transient).update(schema_version=0)
+        with mock.patch.object(photstat, "recompute", side_effect=RuntimeError("boom")), \
+                self.assertLogs("YSE_App.services.photstat", level="ERROR"):
+            response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="photstat-summary"', response.content)
+        self.assertEqual(TransientPhotStat.objects.get(transient=self.transient).schema_version, 0)
 
     def test_detail_page_survives_a_failing_on_demand_compute(self):
         TransientPhotStat.objects.filter(transient=self.transient).delete()
@@ -477,6 +564,9 @@ class SurfaceTests(PhotStatFixture):
     def test_stat_for_transient_accessor(self):
         stat = photstat.stat_for_transient(self.transient.id)
         self.assertEqual(stat.peak_band, self.r)
+        TransientPhotStat.objects.filter(transient=self.transient).update(schema_version=0)
+        self.assertEqual(photstat.stat_for_transient(self.transient.id, compute_missing=False).schema_version, 0)
+        self.assertEqual(photstat.stat_for_transient(self.transient.id).schema_version, photstat.SCHEMA_VERSION)
         TransientPhotStat.objects.filter(transient=self.transient).delete()
         self.assertIsNone(photstat.stat_for_transient(self.transient.id, compute_missing=False))
         # the miss path: lookup, photometry pass, existence check, INSERT, reload with bands

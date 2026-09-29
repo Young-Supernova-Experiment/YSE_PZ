@@ -514,6 +514,10 @@ class TransientPhotStatFilter(django_filters.FilterSet):
     num_det_gte = django_filters.NumberFilter(field_name="num_det_global", lookup_expr='gte')
     rise_rate_gte = django_filters.NumberFilter(field_name="rise_rate", lookup_expr='gte')
     decay_rate_gte = django_filters.NumberFilter(field_name="decay_rate", lookup_expr='gte')
+    deepest_limit_gte = django_filters.NumberFilter(field_name="deepest_limit", lookup_expr='gte')
+    deepest_limit_band = django_filters.CharFilter(field_name="deepest_limit_band__name")
+    last_non_detection_band = django_filters.CharFilter(field_name="last_non_detection_band__name")
+    num_limits_gte = django_filters.NumberFilter(field_name="num_limits_global", lookup_expr='gte')
     ordering = django_filters.OrderingFilter(
         fields=(
             'peak_mag', 'peak_mjd', 'last_detected_mag', 'last_detected_mjd',
@@ -538,7 +542,8 @@ class TransientPhotStatViewSet(viewsets.ReadOnlyModelViewSet):
         allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
         return (
             TransientPhotStat.objects.filter(transient__in=allowed.values('pk'))
-            .select_related('transient', 'first_detected_band', 'last_detected_band', 'peak_band')
+            .select_related('transient', 'first_detected_band', 'last_detected_band', 'peak_band',
+                            'deepest_limit_band', 'last_non_detection_band')
             .order_by('-last_updated', '-pk')
         )
 
