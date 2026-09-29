@@ -17,7 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views, analysis_views, candidate_views, job_views, notification_views, sharing_views
+from YSE_App import allocation_views, analysis_views, candidate_views, collaboration_views, job_views, notification_views, sharing_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -114,6 +114,11 @@ urlpatterns = [
             allocation_views.transient_facility_requests_fragment, name='transient_facility_requests_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_submit/$',
             allocation_views.transient_facility_submit, name='transient_facility_submit'),
+    # Interests (#290) and data access requests (#293): before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/interests/register/$',
+            collaboration_views.interest_register, name='interest_register'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/data_access/request/$',
+            collaboration_views.data_access_request_create, name='data_access_request_create'),
     # Sharing services (#326): report dialog preview/submit for one transient; before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/preview/$',
             sharing_views.report_preview, name='sharing_report_preview'),
@@ -293,6 +298,15 @@ urlpatterns = [
     re_path(r'^get_legacy_image/(?P<transient_id>[0-9]+)',
         view_utils.get_legacy_image, name='get_legacy_image'),
 
+    # Transient interests (#288) and data access requests (#291)
+    re_path(r'^interests/(?P<interest_id>[0-9]+)/status/$', collaboration_views.interest_status,
+            name='interest_status'),
+    re_path(r'^my/interests/$', collaboration_views.my_interests, name='my_interests'),
+    re_path(r'^data_access_requests/$', collaboration_views.data_access_requests, name='data_access_requests'),
+    re_path(r'^data_access_requests/pending_count\.json$', collaboration_views.data_access_pending_count,
+            name='data_access_pending_count'),
+    re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/decide/$', collaboration_views.data_access_decide,
+            name='data_access_decide'),
     # Background job queue (#263) and notifications (#266)
     re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
     re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),
@@ -384,6 +398,8 @@ router.register(r'classicalresources', api_views.ClassicalResourceViewSet, basen
 router.register(r'classicalobservingdates', api_views.ClassicalObservingDateViewSet, basename='classicalobservingdate')
 router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
 router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
+router.register(r'transientinterests', api_views.TransientInterestViewSet, basename='transientinterest')
+router.register(r'dataaccessrequests', api_views.DataAccessRequestViewSet, basename='dataaccessrequest')
 router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
 

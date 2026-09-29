@@ -184,7 +184,7 @@ overridden); `manage.py expire_service_runs --days 90` deletes old runs with the
 
 ## Deploy notes
 
-- Migration `0019_analysis_services` (two tables; depends on `0018_sharing_services`). Deploy Stack runs `migrate`.
+- Migration `0020_analysis_services` (two tables; depends on `0019_interests_data_access`). Deploy Stack runs `migrate`.
 - No new packages: `sncosmo`, `matplotlib`, `scipy`, `requests` are pinned already. The SALT3 model is
   downloaded by sncosmo on first use into the astropy cache (`~/.astropy/cache/sncosmo`); the web /
   worker user needs a writable home and outbound HTTPS, or pre-seed the cache. Without the model a

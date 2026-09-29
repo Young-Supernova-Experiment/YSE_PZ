@@ -32,6 +32,11 @@
             {% if transient_detail_defer %}
             <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
             {% endif %}
+            {% if messages %}
+            <div class="yse-detail-messages">
+                {% for message in messages %}<div class="alert alert-{{ message.level_tag|default:"info" }} py-2 mb-2">{{ message }}</div>{% endfor %}
+            </div>
+            {% endif %}
             <div class="nav-tabs-custom yse-page-transient-summary">
                 <ul class="nav nav-tabs">
                     <li class="nav-item"><a class="nav-link active" href="#summary_tab" data-toggle="tab">Summary</a></li>

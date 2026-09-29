@@ -406,6 +406,14 @@ class FacilityRequestAdmin(admin.ModelAdmin):
 		obj.modified_by = request.user
 		super().save_model(request, obj, form, change)
 
+
+# --- Transient interests (#288) and data access requests (#291) --------------
+@admin.register(TransientInterest)
+class TransientInterestAdmin(admin.ModelAdmin):
+	list_display = ("transient", "user", "title", "group", "role", "status", "created_date", "modified_date")
+	list_filter = ("status", "role", "group")
+	search_fields = ("title", "description", "doi", "transient__name", "user__username")
+	raw_id_fields = ("transient", "user")
 # --- Sharing services (#324, #325) ----------------------------------------------
 from YSE_App.models.sharing_models import AutoPublisher, SharingService, SharingSubmission  # noqa: E402
 
@@ -442,6 +450,14 @@ class SharingServiceAdmin(admin.ModelAdmin):
 		super().save_model(request, obj, form, change)
 
 
+@admin.register(DataAccessRequest)
+class DataAccessRequestAdmin(admin.ModelAdmin):
+	list_display = ("id", "transient", "requester", "dataset_kind", "dataset_id", "owner_group", "target_group",
+	                "status", "decided_by", "decided_at", "created_date")
+	list_filter = ("status", "dataset_kind", "owner_group")
+	search_fields = ("transient__name", "requester__username", "message", "note")
+	raw_id_fields = ("transient", "requester", "decided_by")
+	readonly_fields = ("granted_dataset_ids", "created_by", "created_date", "modified_by", "modified_date")
 @admin.register(SharingSubmission)
 class SharingSubmissionAdmin(admin.ModelAdmin):
 	list_display = ("id", "service", "transient", "kind", "status", "tns_name", "external_id", "attempts",

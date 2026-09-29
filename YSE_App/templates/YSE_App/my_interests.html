@@ -1,0 +1,80 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="content-header">
+	<h1>My interests <small class="text-muted">papers you registered on transients</small></h1>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid yse-my-interests">
+				<div class="box-header with-border d-flex align-items-center">
+					<strong>{% if show_all %}All{% else %}Open and published{% endif %} interests</strong>
+					<div class="ml-auto">
+						{% if show_all %}
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'my_interests' %}">Hide withdrawn</a>
+						{% else %}
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'my_interests' %}?show=all">Show withdrawn</a>
+						{% endif %}
+					</div>
+				</div>
+				<div class="box-body p-0 table-responsive">
+					{% if interests %}
+					<table class="table table-sm table-hover mb-0" id="my_interests_tbl">
+						<thead>
+							<tr><th>Transient</th><th>Paper / project</th><th>Collaboration</th><th>Role</th><th>Status</th><th>Since</th><th>Updated</th><th></th></tr>
+						</thead>
+						<tbody>
+							{% for i in interests %}
+							<tr data-interest-id="{{ i.id }}" data-status="{{ i.status }}"{% if i.is_withdrawn %} class="text-muted"{% endif %}>
+								<td><a href="{% url 'transient_detail' i.transient.slug %}">{{ i.transient.name }}</a></td>
+								<td>{{ i.title }}{% if i.doi %}<br><small><a href="https://doi.org/{{ i.doi }}" target="_blank" rel="noopener">{{ i.doi }}</a></small>{% endif %}{% if i.description %}<br><small class="text-muted">{{ i.description|truncatechars:120 }}</small>{% endif %}</td>
+								<td>{{ i.group.name|default:"-" }}</td>
+								<td>{{ i.role_label }}</td>
+								<td><span class="badge {% if i.status == 'published' %}badge-success{% elif i.status == 'withdrawn' %}badge-light{% elif i.status == 'submitted' %}badge-info{% elif i.status == 'in_progress' %}badge-primary{% else %}badge-secondary{% endif %}">{{ i.status_label }}</span></td>
+								<td><small>{{ i.created_date|date:"Y-m-d" }}</small></td>
+								<td><small>{{ i.modified_date|date:"Y-m-d H:i" }}</small></td>
+								<td class="text-nowrap">
+									<form method="post" action="{% url 'interest_status' i.id %}" class="form-inline d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="next" value="{% url 'my_interests' %}{% if show_all %}?show=all{% endif %}">
+										{% if i.is_withdrawn %}
+										<button type="submit" name="status" value="planned" class="btn btn-sm btn-outline-secondary">Re-open</button>
+										{% else %}
+										<select name="status" class="form-control form-control-sm mr-1" aria-label="New status">
+											{% for value, label in statuses %}<option value="{{ value }}"{% if value == i.status %} selected{% endif %}>{{ label }}</option>{% endfor %}
+										</select>
+										<input type="text" name="doi" class="form-control form-control-sm mr-1" placeholder="DOI" value="{{ i.doi }}" style="width: 10em" aria-label="DOI">
+										<button type="submit" class="btn btn-sm btn-primary">Update</button>
+										{% endif %}
+									</form>
+								</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="p-3 mb-0 text-muted">You have not registered an interest yet. Use <em>Register interest</em> in the "Working on this" box on a transient's summary tab.</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-3 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>What this is</strong></div>
+				<div class="box-body small">
+					<p class="mb-1">An interest is a registered intention to publish on a transient, one per planned paper. Registering one posts a comment on the transient so collaborators see who is working on what, and notifies the others who registered there.</p>
+					<p class="mb-0">Statuses: planned, in progress, submitted, published (add the DOI), withdrawn. Withdrawing posts a comment too. REST: <code>/api/transientinterests/</code>.</p>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}
