@@ -173,6 +173,12 @@
 							<p>Query Explorer</p>
 						</a>
 					</li>
+					<li class="nav-item">
+						<a href="{% url 'sharing_submissions' %}" class="nav-link{% if url_name == 'sharing_submissions' or url_name == 'sharing_submission_detail' or url_name == 'sharing_services' %} active{% endif %}">
+							<i class="nav-icon fa fa-share-square-o"></i>
+							<p>TNS Reports</p>
+						</a>
+					</li>
 					{% if user.is_staff %}
 					<li class="nav-item">
 						<a href="{% url 'external_service_runs' %}" class="nav-link{% if url_name == 'external_service_runs' or url_name == 'external_service_run_detail' %} active{% endif %}">

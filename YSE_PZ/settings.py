@@ -164,6 +164,10 @@ CRON_CLASSES = [
     # Daily retention of notification and finished-job rows (#320); no-op when
     # NOTIFICATION_PRUNE_CRON_ENABLED is False.
     'YSE_App.data_ingest.Job_Queue.PruneNotifications',
+    # Sharing services (#324): queue the TNS retrieval and auto-publish sweep jobs;
+    # no-ops unless enabled under [sharing] in settings.ini.
+    'YSE_App.data_ingest.Sharing_Jobs.TNSRetrieval',
+    'YSE_App.data_ingest.Sharing_Jobs.AutoPublishSweep',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -516,3 +520,44 @@ DEFAULT_FROM_EMAIL = _ini_value(config.get('SMTP_provider', 'FROM_ADDRESS', fall
     EMAIL_HOST_USER if '@' in EMAIL_HOST_USER
     else ('%s@gmail.com' % EMAIL_HOST_USER if EMAIL_HOST_USER else 'yse-pz@localhost')
 )
+
+# ---------------------------------------------------------------------------
+# Sharing services: TNS reporting, submission queue, TNS retrieval (#324;
+# docs/tns-sharing.md). All keys optional, under [sharing] in settings.ini.
+# The bot credentials live in EncryptedCredential rows, not here.
+TNS_API_URL = config.get('sharing', 'TNS_API_URL', fallback='https://www.wis-tns.org/api')
+TNS_SANDBOX_API_URL = config.get('sharing', 'TNS_SANDBOX_API_URL', fallback='https://sandbox.wis-tns.org/api')
+TNS_HTTP_TIMEOUT_SECONDS = config.getint('sharing', 'TNS_HTTP_TIMEOUT_SECONDS', fallback=60)
+# New SharingService rows start in sandbox mode; the per-service "testing" flag decides at run time.
+SHARING_DEFAULT_TESTING = config.getboolean('sharing', 'DEFAULT_TESTING', fallback=True)
+# Rename the transient to its TNS designation when a discovery report is accepted
+# (the old name is kept as an alternate name); per-service config.rename_transient overrides.
+SHARING_RENAME_ON_ACCEPT = config.getboolean('sharing', 'RENAME_ON_ACCEPT', fallback=True)
+# bulk-report-reply polling: first poll after N seconds, then the queue's backoff, up to M polls.
+SHARING_POLL_DELAY_SECONDS = config.getint('sharing', 'POLL_DELAY_SECONDS', fallback=10)
+SHARING_POLL_MAX_ATTEMPTS = config.getint('sharing', 'POLL_MAX_ATTEMPTS', fallback=12)
+# Actor for rule- and job-created rows (falls back to the first superuser).
+SHARING_SYSTEM_USERNAME = config.get('sharing', 'SYSTEM_USERNAME', fallback='')
+# Auto-publisher rules: evaluate on every Transient save (cheap no-op without rules) and/or sweep hourly.
+SHARING_AUTOPUBLISH_ON_SAVE = config.getboolean('sharing', 'AUTOPUBLISH_ON_SAVE', fallback=True)
+SHARING_AUTOPUBLISH_CRON_ENABLED = (
+    os.environ.get('YSE_SHARING_AUTOPUBLISH_CRON', '').strip() == '1'
+    or config.getboolean('sharing', 'AUTOPUBLISH_CRON_ENABLED', fallback=False)
+)
+SHARING_AUTOPUBLISH_CRON_MINUTES = config.getint('sharing', 'AUTOPUBLISH_CRON_MINUTES', fallback=60)
+# TNS retrieval (#327): match internally named transients to TNS by cone search.
+SHARING_TNS_RETRIEVAL_CRON_ENABLED = (
+    os.environ.get('YSE_SHARING_TNS_RETRIEVAL_CRON', '').strip() == '1'
+    or config.getboolean('sharing', 'TNS_RETRIEVAL_CRON_ENABLED', fallback=False)
+)
+SHARING_TNS_RETRIEVAL_CRON_MINUTES = config.getint('sharing', 'TNS_RETRIEVAL_CRON_MINUTES', fallback=60)
+SHARING_TNS_RETRIEVAL_SERVICE = config.get('sharing', 'TNS_RETRIEVAL_SERVICE', fallback='')
+SHARING_TNS_RETRIEVAL_SINCE_DAYS = config.getfloat('sharing', 'TNS_RETRIEVAL_SINCE_DAYS', fallback=30)
+SHARING_TNS_RETRIEVAL_STATUSES = [
+    s.strip() for s in config.get(
+        'sharing', 'TNS_RETRIEVAL_STATUSES', fallback='New,Watch,Following,FollowupRequested,Interesting'
+    ).split(',') if s.strip()
+]
+SHARING_TNS_RETRIEVAL_RADIUS_ARCSEC = config.getfloat('sharing', 'TNS_RETRIEVAL_RADIUS_ARCSEC', fallback=3.0)
+SHARING_TNS_RETRIEVAL_MAX_PER_RUN = config.getint('sharing', 'TNS_RETRIEVAL_MAX_PER_RUN', fallback=50)
+SHARING_TNS_REQUEST_INTERVAL_SECONDS = config.getfloat('sharing', 'TNS_REQUEST_INTERVAL_SECONDS', fallback=1.0)
