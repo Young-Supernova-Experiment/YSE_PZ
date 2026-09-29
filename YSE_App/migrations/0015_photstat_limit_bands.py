@@ -7,7 +7,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('YSE_App', '0013_credentials_external_services'),
+        ('YSE_App', '0014_notification_kind_preferences'),
     ]
 
     operations = [

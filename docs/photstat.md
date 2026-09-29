@@ -96,7 +96,7 @@ transients that have not had a photometry upload since the deploy; the detail pa
 time someone opens the transient (#345), so a page that has been visited also shows up in the column. Re-running the full command later is harmless: unchanged rows are
 skipped (`updated 0, unchanged T`).
 
-**After #349** (migration `0014_photstat_limit_bands`: limit bands, `schema_version`; pre-detection limits only) the
+**After #349** (migration `0015_photstat_limit_bands`: limit bands, `schema_version`; pre-detection limits only) the
 rows written before it are outdated. On a database where the backfill already ran, re-run it once with
 `--stale-only` (only outdated or missing rows are read; idempotent, a second run reports `processed 0`):
 
