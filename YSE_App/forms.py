@@ -80,13 +80,16 @@ class TransientFollowupForm(ModelForm):
         self.resource_audience_map = {}
 
         valid_after = timezone.now() - timedelta(days=1)
+        # Classical nights: chronological, soonest first (that first entry is
+        # the default), and a night drops out the morning after the run in
+        # the observatory's time zone. See services/classical_nights.py.
+        from YSE_App.services.classical_nights import upcoming_classical_resources
+
         if user is not None:
             from YSE_App import view_utils
 
-            self.fields["classical_resource"].queryset = (
+            self.fields["classical_resource"].queryset = upcoming_classical_resources(
                 view_utils.get_authorized_classical_resources(user)
-                .filter(end_date_valid__gt=valid_after)
-                .order_by("telescope__name")
             )
             self.fields["too_resource"].queryset = (
                 view_utils.get_authorized_too_resources(user)
@@ -99,11 +102,9 @@ class TransientFollowupForm(ModelForm):
                 .order_by("telescope__name")
             )
         else:
-            # Safe deferred querysets for non-user forms (admin/tests); still lazy.
-            self.fields["classical_resource"].queryset = (
-                ClassicalResource.objects.filter(end_date_valid__gt=valid_after)
-                .order_by("end_date_valid")
-                .select_related()
+            # Non-user forms (admin/tests): same night rule, every resource.
+            self.fields["classical_resource"].queryset = upcoming_classical_resources(
+                ClassicalResource.objects.all()
             )
 
         classical_qs = self.fields["classical_resource"].queryset
