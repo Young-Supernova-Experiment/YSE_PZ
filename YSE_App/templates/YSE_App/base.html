@@ -80,6 +80,7 @@
 					{% if user.is_authenticated %}
 					<a class="dropdown-item" href="{% url 'notification_list' %}">Notifications</a>
 					<a class="dropdown-item" href="{% url 'notification_preferences' %}">Notification preferences</a>
+					<a class="dropdown-item" id="yse-fav-menu-link" href="{% url 'my_favorites' %}" data-ids-url="{% url 'favorite_ids' %}" data-toggle-url="{% url 'favorite_toggle' 0 %}">My favorites</a>
 					<a class="dropdown-item" href="{% url 'my_interests' %}">My interests</a>
 					<a class="dropdown-item" id="yse-dar-menu-link" href="{% url 'data_access_requests' %}" data-count-url="{% url 'data_access_pending_count' %}">Data access requests <span class="badge badge-warning yse-dar-menu-badge" id="yse-dar-menu-badge" hidden></span></a>
 					{% if user.is_staff %}<a class="dropdown-item" href="{% url 'jobs_status' %}">Background jobs</a>{% endif %}
@@ -315,6 +316,80 @@
 				badge.removeAttribute("hidden");
 			})
 			.catch(function () {});
+	})();
+	// Favorite stars (#323): one fetch of the starred ids paints every .yse-fav-star
+	// (tables render them state-unknown so page renders stay query-free); a click toggles.
+	(function () {
+		var link = document.getElementById("yse-fav-menu-link");
+		if (!link || !window.fetch) { return; }
+		var idsUrl = link.getAttribute("data-ids-url"), toggleUrl = link.getAttribute("data-toggle-url");
+		var starred = null, pending = [];
+		function paint(el, on) {
+			el.setAttribute("data-state", on ? "on" : "off");
+			el.setAttribute("aria-pressed", on ? "true" : "false");
+			el.classList.toggle("yse-fav-on", on);
+			el.setAttribute("title", on ? "Remove from my favorites" : "Add to my favorites");
+			var icon = el.querySelector("i");
+			if (icon) { icon.className = on ? "fa fa-star" : "fa fa-star-o"; }
+		}
+		function paintUnknown(root) {
+			var stars = (root || document).querySelectorAll('.yse-fav-star[data-state="unknown"]');
+			if (!stars.length) { return; }
+			if (starred === null) { pending.push(root || document); return; }
+			Array.prototype.forEach.call(stars, function (el) {
+				paint(el, starred[el.getAttribute("data-transient-id")] === true);
+			});
+		}
+		function csrfToken() {
+			var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+			if (m) { return decodeURIComponent(m[1]); }
+			var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+			return input ? input.value : "";
+		}
+		fetch(idsUrl, { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
+			.then(function (r) { return r.ok ? r.json() : { ids: [] }; })
+			.catch(function () { return { ids: [] }; })
+			.then(function (d) {
+				starred = {};
+				(d.ids || []).forEach(function (id) { starred[String(id)] = true; });
+				var roots = pending; pending = [];
+				roots.forEach(paintUnknown);
+				paintUnknown(document);
+			});
+		if (window.MutationObserver) {
+			// Sections loaded after the page (dashboard AJAX fragments) bring their own stars.
+			new MutationObserver(function (records) {
+				records.forEach(function (rec) {
+					Array.prototype.forEach.call(rec.addedNodes, function (node) {
+						if (node.nodeType === 1) { paintUnknown(node); }
+					});
+				});
+			}).observe(document.body, { childList: true, subtree: true });
+		}
+		document.addEventListener("click", function (ev) {
+			var el = ev.target.closest ? ev.target.closest(".yse-fav-star") : null;
+			if (!el) { return; }
+			ev.preventDefault();
+			var id = el.getAttribute("data-transient-id");
+			if (!id || el.classList.contains("yse-fav-busy")) { return; }
+			el.classList.add("yse-fav-busy");
+			fetch(toggleUrl.replace(/\/0\/$/, "/" + id + "/"), {
+				method: "POST", credentials: "same-origin",
+				headers: { "X-CSRFToken": csrfToken(), "X-Requested-With": "XMLHttpRequest" }
+			})
+				.then(function (r) { return r.ok ? r.json() : null; })
+				.then(function (d) {
+					if (!d) { return; }
+					if (starred) { if (d.favorite) { starred[String(id)] = true; } else { delete starred[String(id)]; } }
+					Array.prototype.forEach.call(document.querySelectorAll('.yse-fav-star[data-transient-id="' + id + '"]'), function (star) {
+						paint(star, d.favorite);
+						var count = star.querySelector(".yse-fav-count");
+						if (count && d.count !== undefined) { count.textContent = d.count ? String(d.count) : ""; }
+					});
+				})
+				.catch(function () {})
+				.then(function () { el.classList.remove("yse-fav-busy"); });
+		});
 	})();
 </script>
 {% block scripts %}

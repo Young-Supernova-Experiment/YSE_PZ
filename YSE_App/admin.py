@@ -421,9 +421,9 @@ class NotificationAdmin(admin.ModelAdmin):
 
 @admin.register(NotificationPreference)
 class NotificationPreferenceAdmin(admin.ModelAdmin):
-	list_display = ("user", "in_app", "email", "has_slack_webhook", "updated_at")
+	list_display = ("user", "in_app", "email", "has_slack_webhook", "slack_user_id", "updated_at")
 	list_filter = ("in_app", "email")
-	search_fields = ("user__username",)
+	search_fields = ("user__username", "slack_user_id")
 	raw_id_fields = ("user",)
 
 	def has_slack_webhook(self, obj):
@@ -503,6 +503,19 @@ class FacilityRequestAdmin(admin.ModelAdmin):
 			obj.created_by = request.user
 		obj.modified_by = request.user
 		super().save_model(request, obj, form, change)
+
+
+# --- Favorite transients (#323) ---------------------------------------------
+from YSE_App.models.favorite_models import UserFavoriteTransient  # noqa: E402
+
+
+@admin.register(UserFavoriteTransient)
+class UserFavoriteTransientAdmin(admin.ModelAdmin):
+	list_display = ("user", "transient", "created")
+	search_fields = ("user__username", "transient__name")
+	raw_id_fields = ("user", "transient")
+	date_hierarchy = "created"
+	list_select_related = ("user", "transient")
 
 
 # --- Transient interests (#288) and data access requests (#291) --------------

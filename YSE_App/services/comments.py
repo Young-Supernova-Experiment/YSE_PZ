@@ -74,13 +74,16 @@ def create_transient_comment(
     elif audience_groups == [] and not is_public:
         audience_groups = []
 
-    log = Log.objects.create(
+    log = Log(
         transient=transient,
         comment=comment,
         created_by=user,
         modified_by=user,
         is_public=is_public,
     )
+    # Favorite activity (#323) is recorded below, once the audience is known.
+    log._favorites_defer = True
+    log.save()
     if audience_groups and not is_public:
         log.groups.set(audience_groups)
 
@@ -88,4 +91,7 @@ def create_transient_comment(
         from YSE_App.services.notifications import notify_transient_comment
 
         notify_transient_comment(log)
+    from YSE_App.services import favorites
+
+    favorites._safely(favorites.on_comment, log, audience_known=True)
     return log

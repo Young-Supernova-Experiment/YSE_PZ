@@ -317,11 +317,46 @@ def annotate_peak_mag(qs):
     return qs.annotate(peak_mag=F('photstat__peak_mag'))
 
 
+# Star toggle (#323). The state is painted after load by base.html from
+# /my/favorites/ids.json (one fetch per page), so table renders stay
+# query-free; a queryset annotated with ``is_favorite`` renders it directly.
+FAVORITE_STAR_TEMPLATE = (
+    '<a href="#" class="yse-fav-star" data-transient-id="{{ record.id }}" '
+    'data-state="{% if record.is_favorite is True %}on{% elif record.is_favorite is False %}off{% else %}unknown{% endif %}" '
+    'title="Favorite" aria-label="Toggle favorite for {{ record.name }}">'
+    '<i class="fa {% if record.is_favorite %}fa-star{% else %}fa-star-o{% endif %}" aria-hidden="true"></i></a>'
+)
+
+# Open paper interests on the row (#290); ``annotate_open_interest_count`` fills it in the same query.
+INTEREST_COUNT_TEMPLATE = (
+    '{% if record.open_interest_count %}<span class="badge badge-info yse-interest-count" '
+    'title="{{ record.open_interest_count }} open paper interest{{ record.open_interest_count|pluralize }} '
+    '(see Working on this on the summary tab)">{{ record.open_interest_count }}</span>'
+    '{% else %}<span class="text-muted">-</span>{% endif %}'
+)
+
+
+def annotate_open_interest_count(qs):
+    """``open_interest_count`` per row from a correlated subquery (no extra query, #290)."""
+    if 'open_interest_count' in qs.query.annotations:
+        return qs
+    from django.db.models import IntegerField, OuterRef, Subquery
+    from YSE_App.models.interest_models import TransientInterest
+
+    counts = (TransientInterest.objects.filter(transient=OuterRef('pk'), status__in=TransientInterest.OPEN_STATUSES)
+              .order_by().values('transient').annotate(n=Count('id')).values('n')[:1])
+    return qs.annotate(open_interest_count=Subquery(counts, output_field=IntegerField()))
+
+
 class TransientTable(tables.Table):
 
     # The first line of the AI/human summary (#295) as the link's tooltip.
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\"{% if record.summary %} title=\"{{ record.summary_first_line }}\" class=\"yse-has-summary\"{% endif %}>{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
+    favorite = tables.TemplateColumn(FAVORITE_STAR_TEMPLATE, verbose_name='Fav.', orderable=False,
+                                     attrs={'td': {'class': 'yse-fav-cell'}, 'th': {'class': 'yse-fav-cell'}})
+    interest_count = tables.TemplateColumn(INTEREST_COUNT_TEMPLATE, verbose_name='Papers', orderable=True,
+                                           order_by='open_interest_count')
     ra_string = tables.Column(accessor='CoordString.0',
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
@@ -366,10 +401,14 @@ class TransientTable(tables.Table):
 
     def __init__(self, data, *args, **kwargs):
         if isinstance(data, QuerySet):
-            data = annotate_peak_mag(data)
+            data = annotate_open_interest_count(annotate_peak_mag(data))
         super().__init__(data, *args, **kwargs)
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
+
+    def order_interest_count(self, queryset, is_descending):
+        queryset = annotate_open_interest_count(queryset)
+        return (stable_order_by(queryset, 'open_interest_count', is_descending), True)
 
     def order_peak_mag(self, queryset, is_descending):
         queryset = annotate_peak_mag(queryset)
@@ -408,8 +447,10 @@ class TransientTable(tables.Table):
 
     class Meta:
         model = Transient
+        # The star and paper-interest columns (#323, #290) come last so the
+        # title-numeric / default-order column indexes below stay valid.
         fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','peak_mag','mw_ebv',
-                  'obs_group','best_spec_class','best_redshift','status_string')
+                  'obs_group','best_spec_class','best_redshift','status_string','interest_count','favorite')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
         attrs = {
@@ -454,9 +495,26 @@ class SearchTransientTable(TransientTable):
     class Meta(TransientTable.Meta):
         fields = ('name_string', 'separation', 'ra_string', 'dec_string', 'disc_date_string', 'recent_mag',
                   'recent_magdate', 'peak_mag', 'mw_ebv', 'obs_group', 'best_spec_class', 'best_redshift',
-                  'annotation_value', 'status_string')
+                  'annotation_value', 'status_string', 'interest_count', 'favorite')
         sequence = fields
         attrs = dict(TransientTable.Meta.attrs, id='search_transient_tbl')
+
+
+class FavoriteTransientTable(TransientTable):
+    """``/my/favorites/`` and the dashboard section (#323): the shared columns plus when it was starred."""
+
+    favorited_at = tables.DateTimeColumn(accessor='favorited_at', verbose_name='Starred', format='Y-m-d H:i',
+                                         orderable=True)
+
+    class Meta(TransientTable.Meta):
+        fields = ('favorite', 'name_string', 'ra_string', 'dec_string', 'disc_date_string', 'recent_mag',
+                  'recent_magdate', 'peak_mag', 'obs_group', 'best_spec_class', 'best_redshift', 'status_string',
+                  'interest_count', 'favorited_at')
+        sequence = fields
+        exclude = ('mw_ebv',)
+        attrs = dict(TransientTable.Meta.attrs, id='favorite_transient_tbl')
+        attrs['columnDefs'] = [{"type": "title-numeric", "targets": 2}, {"type": "title-numeric", "targets": 3}]
+        attrs['order'] = [[13, "desc"]]
 
 
 class FieldTransientTable(tables.Table):

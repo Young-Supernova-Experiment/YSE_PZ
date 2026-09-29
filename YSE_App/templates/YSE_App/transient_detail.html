@@ -12,10 +12,11 @@
 <!-- Content Header (Page header) -->
 {% block content_header %}
     <h1>{% if 'YSE' in transient.tags|tags_list or 'YSE Forced Phot' in transient.tags|tags_list %}
-        {{transient.name}}   <b>(YSE)</b><br/>
+        {{transient.name}}   <b>(YSE)</b>
         {% else %}
-        {{transient.name}}<br/>
+        {{transient.name}}
         {% endif %}
+        <a href="#" class="yse-fav-star yse-fav-star-header{% if is_favorite %} yse-fav-on{% endif %}" id="yse-fav-header" data-transient-id="{{ transient.id }}" data-state="{% if is_favorite %}on{% else %}off{% endif %}" title="{% if is_favorite %}Remove from my favorites{% else %}Add to my favorites{% endif %}" aria-label="Toggle favorite for {{ transient.name }}" aria-pressed="{% if is_favorite %}true{% else %}false{% endif %}"><i class="fa {% if is_favorite %}fa-star{% else %}fa-star-o{% endif %}" aria-hidden="true"></i><span class="yse-fav-count badge badge-light" title="Users who starred this transient">{{ favorite_count|default:'' }}</span></a><br/>
         <small><a href="{% url 'index' %}">Back</a></small>
     </h1>
     <ol class="breadcrumb">

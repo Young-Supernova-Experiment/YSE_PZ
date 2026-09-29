@@ -39,9 +39,10 @@ from YSE_App.tests.perf_tracking import LoadTimeRegistry
 # extra queries once per transient, none on later views.
 # +4 (#288 / #291): the "Working on this" box (interests, the user's groups) and
 # the restricted-data owner scan (one query each for photometry and spectra).
-MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 58
-MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 58
-MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 98  # audience form loads shared collaboration groups
+# +1 (#323): the header star state (one aggregate over the favorite rows).
+MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 59
+MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 59
+MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 99  # audience form loads shared collaboration groups
 MAX_QUERIES_PERSONAL_DASHBOARD = 40
 # Cold: five explorer SQL runs + five table builds (heavy; ceiling guards regressions).
 MAX_QUERIES_PERSONAL_DASHBOARD_FIVE_QUERIES_COLD = 33
