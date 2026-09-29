@@ -16,6 +16,7 @@ from YSE_App.yse_utils import yse_pointings, yse_view_utils
 from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
+from YSE_App import service_run_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -207,6 +208,12 @@ urlpatterns = [
     re_path(r'^add_oncall_observer/', AddOncallUserFormView.as_view(), name='add_oncall_observer'),
     re_path(r'^add_transient_comment/', AddTransientCommentFormView.as_view(), name='add_transient_comment'),
     re_path(r'^slack/events/$', slack_events, name='slack_events'),
+    # External-service runs (#265): staff pages and the token-protected callback.
+    re_path(r'^service_runs/$', service_run_views.external_service_runs, name='external_service_runs'),
+    re_path(r'^service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/$',
+            service_run_views.external_service_run_detail, name='external_service_run_detail'),
+    re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
+            service_run_views.external_service_run_callback, name='external_service_run_callback'),
     re_path(r'^add_dashboard_query/', AddDashboardQueryFormView.as_view(), name='add_dashboard_query'),
     re_path(r'^remove_dashboard_query/(?P<pk>[0-9_-]+)/', RemoveDashboardQueryFormView.as_view(), name='remove_dashboard_query'),
     re_path(r'^add_followup_notice/', AddFollowupNoticeFormView.as_view(), name='add_followup_notice'),

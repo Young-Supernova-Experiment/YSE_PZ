@@ -159,6 +159,14 @@
 							<p>Query Explorer</p>
 						</a>
 					</li>
+					{% if user.is_staff %}
+					<li class="nav-item">
+						<a href="{% url 'external_service_runs' %}" class="nav-link{% if url_name == 'external_service_runs' or url_name == 'external_service_run_detail' %} active{% endif %}">
+							<i class="nav-icon fa fa-cogs"></i>
+							<p>Service Runs</p>
+						</a>
+					</li>
+					{% endif %}
 
 					<li class="nav-header yse-nav-docs">Docs</li>
 					<li class="nav-item">

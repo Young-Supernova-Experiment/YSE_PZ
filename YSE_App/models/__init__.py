@@ -21,3 +21,6 @@ from YSE_App.models.tag_models import *
 from YSE_App.models.gw_models import *
 from YSE_App.models.survey_models import *
 from YSE_App.models.integration_models import *
+from YSE_App.models.json_text_field import JSONTextField
+from YSE_App.models.credential_models import EncryptedCredential
+from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
