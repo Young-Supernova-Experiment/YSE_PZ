@@ -107,7 +107,7 @@ runs are also in the Django admin.
 
 ## Deploy notes
 
-- Migration `0011_credentials_external_services` (three tables, two indexes). `yse_experimental`
+- Migration `0012_credentials_external_services` (three tables, two indexes). `yse_experimental`
   and `yse_test` share `YSE_test`; Deploy Stack runs `migrate`.
 - `IS_DEBUG: True` stacks (experimental) need nothing. Before the work reaches `yse_test` /
   production (`IS_DEBUG: False`) add to `YSE_PZ/settings.ini`:
