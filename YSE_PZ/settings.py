@@ -90,7 +90,6 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.QUB_data.QUB',
 	'YSE_App.data_ingest.QUB_data.YSE_Stack',
     'YSE_App.data_ingest.DECam_upload.DECam',
-    'YSE_App.rapid.rapid_classify.rapid_classify_cron',
 	'YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhot',
 	'YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhotUpdate',
 	'YSE_App.data_ingest.TNS_uploads.TNS_updates',
