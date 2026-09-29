@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/1.11/ref/settings/
 import os
 from configparser import RawConfigParser
 
+from django.core.exceptions import ImproperlyConfigured
+
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
 configFile = os.path.join(__location__, 'settings.ini')
 
@@ -25,19 +27,40 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/1.11/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# Prefer DJANGO_SECRET_KEY env var; optional [site_settings] SECRET_KEY in settings.ini.
-if os.environ.get('DJANGO_SECRET_KEY'):
-    SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
-elif config.has_option('site_settings', 'SECRET_KEY'):
-    SECRET_KEY = config.get('site_settings', 'SECRET_KEY')
-else:
-    SECRET_KEY = 'f9zh73k2z&-p*k^fzj!sydk03zwlxdm%*13rd9t$*n0i6*sr6%'
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config.getboolean('site_settings', 'IS_DEBUG', fallback=False)
 
-ALLOWED_HOSTS = ['*']
+# SECURITY WARNING: keep the secret key used in production secret!
+# Prefer the DJANGO_SECRET_KEY env var; otherwise [site_settings] SECRET_KEY in
+# settings.ini. A value left as the "<...>" placeholder from public_settings.ini
+# counts as unset. With DEBUG on (local docker, CI) a fixed development key is
+# used; with DEBUG off a missing key is a configuration error, not a silent
+# fallback to a key that is committed to the repository.
+_secret_key = os.environ.get('DJANGO_SECRET_KEY', '').strip()
+if not _secret_key:
+    _secret_key = config.get('site_settings', 'SECRET_KEY', fallback='').strip()
+    if _secret_key.startswith('<') and _secret_key.endswith('>'):
+        _secret_key = ''
+if _secret_key:
+    SECRET_KEY = _secret_key
+elif DEBUG:
+    SECRET_KEY = 'yse-pz-development-only-secret-key-not-for-production'
+else:
+    raise ImproperlyConfigured(
+        'SECRET_KEY is not configured. Set the DJANGO_SECRET_KEY environment '
+        'variable or SECRET_KEY under [site_settings] in YSE_PZ/settings.ini '
+        '(required whenever IS_DEBUG is False).'
+    )
+
+# Hosts this stack answers for. DJANGO_ALLOWED_HOSTS env var or a comma-separated
+# [site_settings] ALLOWED_HOSTS in settings.ini, e.g.
+#   ALLOWED_HOSTS: ziggy.ucolick.org,localhost,127.0.0.1
+# When neither is set every host is accepted, as before, so existing stacks keep
+# working until their settings.ini names their hosts.
+_allowed_hosts = os.environ.get('DJANGO_ALLOWED_HOSTS', '').strip()
+if not _allowed_hosts:
+    _allowed_hosts = config.get('site_settings', 'ALLOWED_HOSTS', fallback='')
+ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()] or ['*']
 
 if DEBUG:
     CSRF_TRUSTED_ORIGINS = [
@@ -146,8 +169,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
-				'django.template.context_processors.request',
-				'django.template.context_processors.static'
+                'django.template.context_processors.static',
             ],
         },
     },
@@ -162,6 +184,9 @@ WSGI_APPLICATION = 'YSE_PZ.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/1.11/ref/settings/#databases
 # import pymysql
+# MySQL TLS for the default connection. [database] SSL_DISABLED in settings.ini;
+# default True keeps the historical behaviour (plain TCP/socket to a local server).
+_db_ssl_disabled = config.getboolean('database', 'SSL_DISABLED', fallback=True)
 DATABASES = {
     'explorer': {
         'ENGINE': 'django.db.backends.mysql',
@@ -179,7 +204,7 @@ DATABASES = {
         'PASSWORD': config.get('database', 'DATABASE_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
-		'OPTIONS': {'ssl': {'ssl_disabled': True}},
+        'OPTIONS': {'ssl': {'ssl_disabled': _db_ssl_disabled}},
         'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
     }
 }
@@ -201,6 +226,16 @@ else:
     }
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
+
+# Per-statement time cap (ms) for saved Explorer SQL run on a dashboard cache
+# miss (run_explorer_query_cached). MySQL max_execution_time / MariaDB
+# max_statement_time; no-op on other backends. 0 disables the cap.
+# YSE_EXPLORER_MAX_EXECUTION_MS env var or [site_settings]
+# EXPLORER_QUERY_MAX_EXECUTION_MS in settings.ini; default 20000.
+EXPLORER_QUERY_MAX_EXECUTION_MS = int(
+    os.environ.get('YSE_EXPLORER_MAX_EXECUTION_MS', '').strip()
+    or config.getint('site_settings', 'EXPLORER_QUERY_MAX_EXECUTION_MS', fallback=20000)
+)
 
 EXPLORER_CONNECTIONS = { 'Explorer': 'explorer' }
 EXPLORER_DEFAULT_CONNECTION = 'explorer'
