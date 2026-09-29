@@ -1,0 +1,45 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Notification preferences</h1>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-6 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Channels</strong></div>
+				<div class="box-body">
+					<form method="post" action="{% url 'notification_preferences' %}">
+						{% csrf_token %}
+						{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+						<div class="form-group form-check">
+							{{ form.in_app }}
+							<label class="form-check-label" for="{{ form.in_app.id_for_label }}">In-app: show notifications in the <a href="{% url 'notification_list' %}">list</a> and the navbar badge</label>
+						</div>
+						<div class="form-group form-check">
+							{{ form.email }}
+							<label class="form-check-label" for="{{ form.email.id_for_label }}">Email{% if not has_email %} (your account has no email address){% endif %}{% if not email_enabled %} (email delivery is not enabled on this server){% endif %}</label>
+						</div>
+						<div class="form-group">
+							<label for="{{ form.slack_webhook_url.id_for_label }}">Slack incoming-webhook URL (optional)</label>
+							{{ form.slack_webhook_url }}
+							{% if form.slack_webhook_url.errors %}<div class="text-danger small">{{ form.slack_webhook_url.errors }}</div>{% endif %}
+							<small class="form-text text-muted">Each notification is posted there as text.{% if not slack_enabled %} Slack delivery is disabled on this server.{% endif %}</small>
+						</div>
+						<button type="submit" class="btn btn-primary">Save</button>
+						<a class="btn btn-outline-secondary" href="{% url 'notification_list' %}">Back to notifications</a>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}

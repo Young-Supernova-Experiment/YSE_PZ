@@ -1,0 +1,97 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="content-header">
+	<h1>
+		Notifications
+		{% if unread_count %}<small><span class="badge badge-warning yse-notif-count">{{ unread_count }} unread</span></small>{% endif %}
+	</h1>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid yse-notifications">
+				<div class="box-header with-border d-flex align-items-center">
+					<strong>{% if only_unread %}Unread{% else %}All{% endif %} notifications</strong>
+					<div class="ml-auto">
+						{% if only_unread %}
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}">Show all</a>
+						{% else %}
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}?unread=1">Unread only</a>
+						{% endif %}
+						{% if unread_count %}
+						<form method="post" action="{% url 'notification_mark_all_read' %}" class="d-inline">
+							{% csrf_token %}
+							<button type="submit" class="btn btn-sm btn-primary">Mark all read</button>
+						</form>
+						{% endif %}
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_preferences' %}">Preferences</a>
+					</div>
+				</div>
+				<div class="box-body p-0">
+					{% if page.object_list %}
+					<ul class="list-group list-group-flush yse-notification-list">
+						{% for n in page.object_list %}
+						<li class="list-group-item yse-notification{% if not n.read_at %} yse-notification-unread{% endif %}" data-notification-id="{{ n.id }}" data-status="{% if n.read_at %}read{% else %}unread{% endif %}">
+							<div class="d-flex">
+								<div class="flex-grow-1">
+									{% if not n.read_at %}<span class="badge badge-warning mr-1">new</span>{% endif %}
+									<span class="badge badge-secondary mr-1">{{ n.kind }}</span>
+									{% if n.subject %}<strong>{{ n.subject }}</strong><br>{% endif %}
+									<span class="yse-notification-text">{{ n.text|linebreaksbr }}</span>
+									<div class="text-muted small mt-1">
+										{{ n.created|date:"Y-m-d H:i" }} UTC
+										{% if n.transient %} &middot; <a href="{% url 'transient_detail' n.transient.slug %}">{{ n.transient.name }}</a>{% endif %}
+									</div>
+								</div>
+								<div class="ml-2 text-nowrap">
+									{% if n.url %}
+									<form method="post" action="{% url 'notification_mark_read' n.id %}" class="d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="follow" value="1">
+										<button type="submit" class="btn btn-sm btn-outline-primary">Open</button>
+									</form>
+									{% endif %}
+									{% if not n.read_at %}
+									<form method="post" action="{% url 'notification_mark_read' n.id %}" class="d-inline">
+										{% csrf_token %}
+										{% if only_unread %}<input type="hidden" name="next" value="{% url 'notification_list' %}?unread=1">{% endif %}
+										<button type="submit" class="btn btn-sm btn-outline-secondary">Mark read</button>
+									</form>
+									{% endif %}
+								</div>
+							</div>
+						</li>
+						{% endfor %}
+					</ul>
+					{% else %}
+					<p class="p-3 mb-0 text-muted">{% if only_unread %}No unread notifications.{% else %}No notifications yet.{% endif %}</p>
+					{% endif %}
+				</div>
+				{% if page.paginator.num_pages > 1 %}
+				<div class="box-footer">
+					{% if page.has_previous %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page.previous_page_number }}{% if only_unread %}&unread=1{% endif %}">Newer</a>{% endif %}
+					<span class="text-muted small mx-2">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+					{% if page.has_next %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page.next_page_number }}{% if only_unread %}&unread=1{% endif %}">Older</a>{% endif %}
+				</div>
+				{% endif %}
+			</div>
+		</div>
+		<div class="col-lg-3 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Delivery</strong></div>
+				<div class="box-body small">
+					<p class="mb-1">Every notification appears here. Email{% if not email_enabled %} (not enabled on this server){% endif %} and Slack delivery follow your <a href="{% url 'notification_preferences' %}">preferences</a> and run from the background job queue.</p>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}
