@@ -121,5 +121,5 @@ runs are also in the Django admin.
   or export `YSE_CREDENTIALS_KEY`; without it the stack refuses to start, like a missing `SECRET_KEY`.
   Use a different key per stack. Back the key up outside the database: the rows are unreadable without it.
 - No pip step: `cryptography` is already installed.
-- Tests: `YSE_App/tests/test_credentials_services.py` (45; round trip, masking, key resolution,
+- Tests: `YSE_App/tests/test_credentials_services.py` (47; round trip, masking, key resolution, job-queue dispatch,
   rotation, run lifecycle, cap, callback auth, staff pages).
