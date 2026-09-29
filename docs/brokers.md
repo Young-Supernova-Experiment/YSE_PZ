@@ -5,7 +5,9 @@ issue #272) and can poll them on a schedule, run each group's saved filters on
 the incoming alerts and put the ones that pass on a scanning page as
 *candidates*, separate from the dashboard, until someone saves or rejects them
 (issue #276). This is the polling half of that design; Kafka stream consumers
-(#278) are not part of it.
+(#278) are not part of it. The non-optical feeds (Hermes / SCiMMA, Einstein Probe,
+JPL Scout; #280) are `BrokerProvider`s too and reuse the candidate table and page:
+see docs/feeds-hermes.md, docs/feeds-einstein-probe.md and docs/feeds-jpl-scout.md.
 
 ## Concepts
 

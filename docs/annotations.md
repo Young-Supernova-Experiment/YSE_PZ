@@ -34,7 +34,8 @@ upsert(transient, "private_pipeline", {...}, user=me, groups=[yse_group])   # au
 
 `upsert` replaces the document (or merges with `merge=True`), keeps `created_by`, sets
 `modified_by`, records `run` / `service` when given, and rebuilds the value rows in the same
-transaction. Ingest code (`Query_LSST`, brokers) writes `origin='antares'` with this one call.
+transaction. Ingest code (`Query_LSST`, brokers) writes `origin='antares'` with this one call; the feeds (#280) write
+`einstein_probe`, `minor_planet` (verdict `moving object`, also a badge) and `neofixer` the same way.
 `visible_annotations(transient, user)` and `annotations_for_transients(transients, user)` read with
 the group audience applied; `legacy_annotation(transient)` returns the read-only `legacy` entry.
 
