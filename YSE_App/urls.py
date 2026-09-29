@@ -18,6 +18,8 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
 from YSE_App import candidate_views, job_views, notification_views
+from YSE_App import allocation_views
+from YSE_App import job_views, notification_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -109,6 +111,11 @@ urlpatterns = [
         views.transient_detail_photometry_fragment,
         name='transient_detail_photometry_fragment',
     ),
+    # Facility requests on the follow-up tab (#300); before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_requests_fragment/$',
+            allocation_views.transient_facility_requests_fragment, name='transient_facility_requests_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_submit/$',
+            allocation_views.transient_facility_submit, name='transient_facility_submit'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -215,6 +222,12 @@ urlpatterns = [
             service_run_views.external_service_run_detail, name='external_service_run_detail'),
     re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
             service_run_views.external_service_run_callback, name='external_service_run_callback'),
+    # Allocations page (#305) and facility requests (#300)
+    re_path(r'^allocations/$', allocation_views.allocations, name='allocations'),
+    re_path(r'^allocations/new/$', allocation_views.allocation_create, name='allocation_create'),
+    re_path(r'^allocations/(?P<allocation_id>[0-9]+)/edit/$', allocation_views.allocation_edit, name='allocation_edit'),
+    re_path(r'^facility_requests/(?P<request_id>[0-9]+)/action/$',
+            allocation_views.facility_request_action, name='facility_request_action'),
     re_path(r'^add_dashboard_query/', AddDashboardQueryFormView.as_view(), name='add_dashboard_query'),
     re_path(r'^remove_dashboard_query/(?P<pk>[0-9_-]+)/', RemoveDashboardQueryFormView.as_view(), name='remove_dashboard_query'),
     re_path(r'^add_followup_notice/', AddFollowupNoticeFormView.as_view(), name='add_followup_notice'),
@@ -335,6 +348,8 @@ router.register(r'tooresources', api_views.ToOResourceViewSet, basename='tooreso
 router.register(r'queuedresources', api_views.QueuedResourceViewSet, basename='queuedresource')
 router.register(r'classicalresources', api_views.ClassicalResourceViewSet, basename='classicalresource')
 router.register(r'classicalobservingdates', api_views.ClassicalObservingDateViewSet, basename='classicalobservingdate')
+router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
+router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

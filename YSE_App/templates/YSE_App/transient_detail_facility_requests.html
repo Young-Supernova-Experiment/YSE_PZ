@@ -1,0 +1,41 @@
+{# Facility requests for one transient (#300); loaded into #facility_requests_slot and refreshed after every action. #}
+<table class="table table-bordered table-condensed table-sm" id="tbl_facility_requests">
+	<thead>
+		<tr>
+			<th>Allocation</th>
+			<th>State</th>
+			<th>External id</th>
+			<th>Requested by</th>
+			<th>When</th>
+			<th>Hours</th>
+			<th>Actions</th>
+		</tr>
+	</thead>
+	<tbody>
+		{% for row in facility_requests %}
+		{% with r=row.r %}
+		<tr class="facility-request-row" data-request-id="{{ r.id }}" data-status="{{ r.state }}">
+			<td>{{ r.allocation.name }} <small class="text-muted">({{ r.allocation.facility }})</small></td>
+			<td>
+				<span class="badge badge-{% if r.state == 'complete' %}success{% elif r.state == 'failed' %}danger{% elif r.state == 'cancelled' %}secondary{% elif r.state == 'queued' or r.state == 'draft' %}warning{% else %}info{% endif %}" title="{{ r.state_detail }}">{{ r.get_state_display }}</span>
+				{% if r.state_detail %}<br><small class="text-muted">{{ r.state_detail|truncatechars:90 }}</small>{% endif %}
+			</td>
+			<td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank" rel="noopener noreferrer">{{ r.external_id }}</a>{% else %}{{ r.external_id|default:"-" }}{% endif %}
+				{% if r.run and user.is_staff %}<br><a href="{% url 'external_service_run_detail' r.run.uuid %}"><small>run {{ r.run.uuid|slice:":8" }}</small></a>{% endif %}</td>
+			<td>{{ r.submitted_by.username }}</td>
+			<td>{{ r.created_date|date:"Y-m-d H:i" }}</td>
+			<td>{{ r.hours_charged|floatformat:2 }}{% if r.charged_at %} <i class="fa fa-check text-success" title="charged to the allocation"></i>{% endif %}</td>
+			<td class="facility-request-actions">
+				{% if row.can_manage and not r.is_final %}
+					{% if row.can_poll %}<button type="button" class="btn btn-xs btn-outline-info" data-fr-action="poll">Refresh</button>{% endif %}
+					{% if row.manual and r.is_open %}<button type="button" class="btn btn-xs btn-outline-success" data-fr-action="complete">Mark complete</button>{% endif %}
+					<button type="button" class="btn btn-xs btn-outline-danger" data-fr-action="cancel">Cancel</button>
+				{% else %}<span class="text-muted">&mdash;</span>{% endif %}
+			</td>
+		</tr>
+		{% endwith %}
+		{% empty %}
+		<tr><td colspan="7" class="text-muted">No facility requests for this transient.</td></tr>
+		{% endfor %}
+	</tbody>
+</table>
