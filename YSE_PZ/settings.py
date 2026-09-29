@@ -9,9 +9,11 @@ https://docs.djangoproject.com/en/1.11/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/1.11/ref/settings/
 """
+import logging
 import os
 from configparser import RawConfigParser
 
+import django
 from django.core.exceptions import ImproperlyConfigured
 
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
@@ -212,21 +214,49 @@ DATABASES = {
     }
 }
 
+# Shared cache. With REDIS_URL set, every web process and the cron runner share
+# one cache (dashboard saved-query results, plot HTML); without it each process
+# has its own LocMemCache. The project runs Django 3.2, which has no built-in
+# Redis backend (django.core.cache.backends.redis is 4.0+), so the Redis
+# backend comes from the django-redis package (requirements.txt). If REDIS_URL
+# is set but that package is missing we log a warning and keep LocMemCache
+# rather than fail every request with InvalidCacheBackendError (#338).
+_LOCMEM_CACHE = {
+    'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+    'LOCATION': 'yse-default',
+}
+
+
+def _redis_cache_backend():
+    """Return the importable Redis cache backend path, or None."""
+    try:
+        import django_redis  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        return 'django_redis.cache.RedisCache'
+    if django.VERSION >= (4, 0):
+        try:
+            import redis  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            return 'django.core.cache.backends.redis.RedisCache'
+    return None
+
+
 _redis_url = os.environ.get('REDIS_URL', '').strip()
-if _redis_url:
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-            'LOCATION': _redis_url,
-        }
-    }
+_redis_backend = _redis_cache_backend() if _redis_url else None
+if _redis_url and _redis_backend is None:
+    logging.getLogger(__name__).warning(
+        'REDIS_URL is set but no Redis cache backend is importable on Django %s '
+        '(pip install django-redis); using the per-process LocMemCache instead.',
+        django.get_version(),
+    )
+if _redis_backend:
+    CACHES = {'default': {'BACKEND': _redis_backend, 'LOCATION': _redis_url}}
 else:
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'yse-default',
-        }
-    }
+    CACHES = {'default': dict(_LOCMEM_CACHE)}
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
 
