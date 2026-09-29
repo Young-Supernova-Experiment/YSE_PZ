@@ -129,6 +129,9 @@ CRON_CLASSES = [
     # Personal-dashboard saved-query cache warmer; no-op unless
     # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
     'YSE_App.data_ingest.Dashboard_Cache_Warm.WarmDashboardQueries',
+    # Background job queue: one run_jobs pass per runcrons run (#263); no-op
+    # when JOB_RUNNER_CRON_ENABLED is False (see the end of this file).
+    'YSE_App.data_ingest.Job_Queue.RunQueuedJobs',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -399,3 +402,67 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
+
+# ---------------------------------------------------------------------------
+# Background job queue (YSE_App.jobs; issue #263) and notification queue
+# (YSE_App.services.notify; issue #266). All keys optional, [site_settings] in
+# settings.ini; docs/background-jobs.md explains each one.
+JOB_RUNNER_MAX_ATTEMPTS = config.getint('site_settings', 'JOB_RUNNER_MAX_ATTEMPTS', fallback=3)
+JOB_RUNNER_BACKOFF_SECONDS = config.getint('site_settings', 'JOB_RUNNER_BACKOFF_SECONDS', fallback=60)
+JOB_RUNNER_BACKOFF_MAX_SECONDS = config.getint('site_settings', 'JOB_RUNNER_BACKOFF_MAX_SECONDS', fallback=3600)
+JOB_RUNNER_STALE_MINUTES = config.getint('site_settings', 'JOB_RUNNER_STALE_MINUTES', fallback=60)
+JOB_RUNNER_PASS_LIMIT = config.getint('site_settings', 'JOB_RUNNER_PASS_LIMIT', fallback=100)
+# The RunQueuedJobs django_cron class drains the queue from `manage.py runcrons`;
+# set False once a `run_jobs --loop` worker (systemd) owns the queue.
+JOB_RUNNER_CRON_ENABLED = (
+    os.environ.get('YSE_JOB_RUNNER_CRON', '').strip() not in ('0', 'false', 'no')
+    and config.getboolean('site_settings', 'JOB_RUNNER_CRON_ENABLED', fallback=True)
+)
+JOB_RUNNER_CRON_MINUTES = config.getint('site_settings', 'JOB_RUNNER_CRON_MINUTES', fallback=1)
+JOB_RUNNER_CRON_BUDGET_SECONDS = config.getint('site_settings', 'JOB_RUNNER_CRON_BUDGET_SECONDS', fallback=50)
+# Run jobs synchronously inside enqueue() (development, tests); no runner needed.
+JOB_RUNNER_INLINE = (
+    os.environ.get('YSE_JOB_RUNNER_INLINE', '').strip() == '1'
+    or config.getboolean('site_settings', 'JOB_RUNNER_INLINE', fallback=False)
+)
+# Extra modules whose import registers @job handlers (comma-separated).
+JOB_HANDLER_MODULES = [
+    m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
+]
+
+NOTIFICATION_EMAIL_ENABLED = (
+    os.environ.get('YSE_NOTIFICATION_EMAIL', '').strip() == '1'
+    or config.getboolean('site_settings', 'NOTIFICATION_EMAIL_ENABLED', fallback=False)
+)
+NOTIFICATION_SLACK_ENABLED = config.getboolean('site_settings', 'NOTIFICATION_SLACK_ENABLED', fallback=True)
+NOTIFICATION_SLACK_TIMEOUT_SECONDS = config.getint('site_settings', 'NOTIFICATION_SLACK_TIMEOUT_SECONDS', fallback=10)
+NOTIFICATION_EMAIL_SUBJECT_PREFIX = config.get('site_settings', 'NOTIFICATION_EMAIL_SUBJECT_PREFIX', fallback='[YSE-PZ] ')
+# Absolute prefix for links in emails/Slack posts; defaults to YSE_PUBLIC_BASE_URL.
+NOTIFICATION_BASE_URL = (
+    os.environ.get('YSE_NOTIFICATION_BASE_URL', '').strip()
+    or config.get('site_settings', 'NOTIFICATION_BASE_URL', fallback='')
+    or YSE_PUBLIC_BASE_URL
+)
+NOTIFICATION_LIST_PAGE_SIZE = config.getint('site_settings', 'NOTIFICATION_LIST_PAGE_SIZE', fallback=50)
+
+# Django's mail backend, fed from the existing [SMTP_provider] block so
+# django.core.mail.send_mail (notification emails) uses the same account as
+# YSE_App/common/alert.py. A "<...>" placeholder counts as unset.
+def _ini_value(value):
+    value = (value or '').strip()
+    return '' if value.startswith('<') else value
+
+EMAIL_BACKEND = (
+    os.environ.get('YSE_EMAIL_BACKEND', '').strip()
+    or config.get('SMTP_provider', 'EMAIL_BACKEND', fallback='django.core.mail.backends.smtp.EmailBackend')
+)
+EMAIL_HOST = _ini_value(SMTP_HOST) or 'localhost'
+EMAIL_PORT = int(_ini_value(SMTP_PORT) or 587) if _ini_value(SMTP_PORT).isdigit() or not _ini_value(SMTP_PORT) else 587
+EMAIL_HOST_USER = _ini_value(SMTP_LOGIN)
+EMAIL_HOST_PASSWORD = _ini_value(SMTP_PASSWORD)
+EMAIL_USE_TLS = config.getboolean('SMTP_provider', 'SMTP_USE_TLS', fallback=True)
+EMAIL_TIMEOUT = config.getint('SMTP_provider', 'SMTP_TIMEOUT_SECONDS', fallback=30)
+DEFAULT_FROM_EMAIL = _ini_value(config.get('SMTP_provider', 'FROM_ADDRESS', fallback='')) or (
+    EMAIL_HOST_USER if '@' in EMAIL_HOST_USER
+    else ('%s@gmail.com' % EMAIL_HOST_USER if EMAIL_HOST_USER else 'yse-pz@localhost')
+)

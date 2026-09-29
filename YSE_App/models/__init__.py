@@ -22,3 +22,5 @@ from YSE_App.models.tag_models import *
 from YSE_App.models.gw_models import *
 from YSE_App.models.survey_models import *
 from YSE_App.models.integration_models import *
+from YSE_App.models.job_models import *
+from YSE_App.models.notification_models import *
