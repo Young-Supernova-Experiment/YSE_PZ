@@ -190,17 +190,18 @@ MAX_SPEC_DISPLAY_PIXELS = int(os.environ.get('YSE_SPEC_PLOT_MAX_PIXELS', '800'))
 PLOT_HTML_CACHE_TIMEOUT = int(os.environ.get('YSE_PLOT_CACHE_SECONDS', '900'))
 
 
-BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections per band)" % bazin_fits.MIN_DETECTIONS
+BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections)" % bazin_fits.MIN_DETECTIONS
 BAZIN_LEGEND_LABEL = "Bazin fit"
 
 
 def _draw_bazin_fits(ax, series, today):
     """Overlay per-band Bazin curves on the detail light-curve plot (#225).
 
-    ``series`` holds one dict per plotted band: ``label``, ``color``,
-    ``leader`` (the detection renderer, so hiding the band in the legend
-    hides its fit), ``mjd`` / ``mag`` / ``magerr`` (flagged points already
-    removed).  The fitted span is drawn solid, the extrapolation past the
+    ``series`` holds one dict per plotted band: ``label``, ``band_name``,
+    ``color``, ``leader`` (the detection renderer, so hiding the band in the
+    legend hides its fit), ``mjd`` / ``mag`` / ``magerr`` (flagged points
+    already removed).  All bands are fitted together (wavelength-correlated
+    shape, see ``services/bazin.py``).  The fitted span is drawn solid, the extrapolation past the
     last detection dashed, in the band's colour, and labels list each band's
     extrapolated magnitude today.  Returns ``(renderers, x_end)``: the fit
     renderers for one shared legend entry and the last MJD of the
@@ -209,8 +210,12 @@ def _draw_bazin_fits(ax, series, today):
     """
     renderers, notes = [], []
     x_end = None
-    for entry in series:
-        fit = bazin_fits.fit_bazin(entry['mjd'], entry['mag'], entry['magerr'])
+    fits = bazin_fits.fit_bands(
+        {k: list(zip(e['mjd'], e['mag'], e['magerr'])) for k, e in enumerate(series)},
+        {k: bazin_fits.band_effective_wavelength(e.get('band_name')) for k, e in enumerate(series)},
+    )
+    for k, entry in enumerate(series):
+        fit = fits.get(k)
         if fit is None:
             continue
         fitted, extrapolated = bazin_fits.bazin_plot_grid(fit, today)
@@ -241,7 +246,10 @@ def _draw_bazin_fits(ax, series, today):
         ))
         return renderers, None
     y = 280
-    for text in ["Bazin fit (dashed = extrapolated)"] + notes[:8]:
+    header = "Bazin fit (dashed = extrapolated)"
+    if any(fit.method == 'shared' for fit in fits.values()):
+        header = "Bazin fit, shared shape (dashed = extrapolated)"
+    for text in [header] + notes[:8]:
         ax.add_layout(Label(
             x=10, y=y, x_units='screen', y_units='screen',
             render_mode='css', text_font_size='10pt', text=text,
@@ -1349,7 +1357,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
             # detections only, flagged (data_quality) points left out
             iFit = iPlot & (data_quality == 'Good')
             bazin_series.append(dict(
-                label=legend_label, color=color, leader=p_det,
+                label=legend_label, band_name=bn, color=color, leader=p_det,
                 mjd=mjds[iFit].astype(float), mag=mags[iFit].astype(float),
                 magerr=mag_errs[iFit].astype(float),
             ))
