@@ -57,7 +57,7 @@ from YSE_App.tests.fixtures_minimal import (
     create_minimal_transient,
     create_test_user,
 )
-from YSE_App.tests.test_lightcurve_legend import bokeh_doc_from_html, legend_grid
+from YSE_App.tests.test_lightcurve_legend import bokeh_doc_from_html, legend_blocks, legend_series
 
 TRUTH = (2000.0, 60012.0, 25.0, 4.0, 50.0)  # A, t0, tau_fall, tau_rise, B
 
@@ -500,10 +500,10 @@ class BazinPlotViewTests(TestCase):
         with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}):
             _plain, plain_doc = self._doc(reverse("bazinplot", args=[self.transient.id, 0]))
             response, doc = self._doc(reverse("bazinplot", args=[self.transient.id, 1]))
-        labels = [label for row in legend_grid(doc) for label in row]
+        labels = legend_series(legend_blocks(doc))
         self.assertIn(view_utils.BAZIN_LEGEND_LABEL, labels)
         self.assertTrue(labels[-1].startswith("today ("))
-        plain_labels = [label for row in legend_grid(plain_doc) for label in row]
+        plain_labels = legend_series(legend_blocks(plain_doc))
         self.assertNotIn(view_utils.BAZIN_LEGEND_LABEL, plain_labels)
         dashed = [line for line in self._lines(doc) if line.get("line_dash") == [6]]
         def width(line):
