@@ -49,7 +49,7 @@ from astroplan import moon_illumination
 from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
-from YSE_App.common.db_time_cap import statement_time_cap
+from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
 
 from .table_utils import (
     TransientTable,
@@ -229,16 +229,16 @@ def run_explorer_query_cached(query, timeout=3600):
     cache_key = explorer_query_cache_key(query.id)
     names = cache.get(cache_key)
     if names is None:
-        # Cap the saved SQL (MySQL max_execution_time; no-op on sqlite) so one
-        # slow query cannot hold a worker indefinitely on a cache miss (#233).
-        max_ms = getattr(djangoSettings, 'EXPLORER_QUERY_MAX_EXECUTION_MS', 0)
-        with statement_time_cap('explorer', max_ms):
-            cursor = connections['explorer'].cursor()
-            try:
+        # The explorer connection is capped at EXPLORER_QUERY_MAX_EXECUTION_MS
+        # when it is opened (YSE_App.common.db_time_cap, #233); a capped run
+        # surfaces here as QueryTimeout naming the budget.
+        cursor = connections['explorer'].cursor()
+        try:
+            with translate_query_timeout(explorer_cap_ms()):
                 cursor.execute(query.sql.replace('%', '%%'), ())
-                names = [row[0] for row in cursor.fetchall()]
-            finally:
-                cursor.close()
+            names = [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
         cache.set(cache_key, names, timeout=timeout)
     return names
 
