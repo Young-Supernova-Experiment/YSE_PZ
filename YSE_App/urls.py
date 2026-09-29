@@ -17,8 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views
-from YSE_App import job_views, notification_views
+from YSE_App import allocation_views, candidate_views, job_views, notification_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -272,6 +271,12 @@ urlpatterns = [
             name='notification_mark_all_read'),
     re_path(r'^notifications/preferences/$', notification_views.notification_preferences,
             name='notification_preferences'),
+    # Broker candidates (#276 / #279) and provider status (#272)
+    re_path(r'^candidates/$', candidate_views.candidate_list, name='candidate_list'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/save/$', candidate_views.candidate_save, name='candidate_save'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reject/$', candidate_views.candidate_reject, name='candidate_reject'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reopen/$', candidate_views.candidate_reopen, name='candidate_reopen'),
+    re_path(r'^brokers/status\.json$', candidate_views.brokers_status_json, name='brokers_status_json'),
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
@@ -321,6 +326,9 @@ router.register(r'transientphotometry', api_views.TransientPhotometryViewSet, ba
 router.register(r'hostphotometry', api_views.HostPhotometryViewSet, basename='hostphotometry')
 router.register(r'transientphotdata', api_views.TransientPhotDataViewSet, basename='transientphotdata')
 router.register(r'transientphotstats', api_views.TransientPhotStatViewSet, basename='transientphotstat')
+router.register(r'brokerfilters', api_views.BrokerFilterViewSet, basename='brokerfilter')
+router.register(r'candidates', api_views.CandidateViewSet, basename='candidate')
+router.register(r'brokers', api_views.BrokerViewSet, basename='broker')
 router.register(r'hostphotdata', api_views.HostPhotDataViewSet, basename='hostphotdata')
 
 router.register(r'transientimages', api_views.TransientImageViewSet)

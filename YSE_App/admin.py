@@ -286,6 +286,39 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
 	has_slack_webhook.boolean = True
 	has_slack_webhook.short_description = "slack"
 
+
+# --- Broker filters and candidates (#276): criteria / query JSON edited as text.
+@admin.register(BrokerFilter)
+class BrokerFilterAdmin(admin.ModelAdmin):
+	list_display = ("name", "broker", "group", "enabled", "auto_save", "save_status", "last_run_at", "last_run_summary")
+	list_filter = ("broker", "enabled", "auto_save", "group")
+	search_fields = ("name", "description")
+	readonly_fields = ("last_run_at", "last_run_summary", "created_at", "updated_at")
+	fieldsets = (
+		(None, {"fields": ("name", "broker", "group", "description", "enabled")}),
+		("Poll", {"fields": ("query", "criteria", "max_alerts"),
+				  "description": "query: broker-side keys (see the provider's query_keys); criteria: "
+								 "YSE_App.brokers.filters.CRITERIA keys, all must pass."}),
+		("Saving", {"fields": ("auto_save", "save_status", "save_obs_group", "import_photometry")}),
+		("Bookkeeping", {"fields": ("created_by", "last_run_at", "last_run_summary", "created_at", "updated_at")}),
+	)
+
+	def save_model(self, request, obj, form, change):
+		if not change and not obj.created_by_id:
+			obj.created_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(Candidate)
+class CandidateAdmin(admin.ModelAdmin):
+	list_display = ("alert_id", "broker", "status", "last_mag", "last_band", "rb", "classification", "transient", "last_seen")
+	list_filter = ("broker", "status")
+	search_fields = ("alert_id", "classification", "transient__name")
+	raw_id_fields = ("transient", "status_changed_by")
+	readonly_fields = ("first_seen", "last_seen", "n_alerts", "created_at", "updated_at")
+	filter_horizontal = ("filters",)
+
+
 # --- Allocations and facility requests (#303, #298) -----------------------------
 from YSE_App.models.allocation_models import Allocation, FacilityRequest  # noqa: E402
 
