@@ -22,24 +22,31 @@ from unittest import mock
 from urllib.parse import urlsplit
 
 from django.conf import settings
+from django.contrib.auth.models import Group
 from django.contrib.staticfiles import finders
+from django.db import connection
 from django.test import Client, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import Resolver404, resolve, reverse
 from django.utils import timezone
 
+from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models import (
     ClassicalResource,
     FollowupStatus,
     ToOResource,
+    Transient,
     TransientFollowup,
     TransientTag,
 )
 from YSE_App.services.followup_requests import create_or_attach_request
 from YSE_App.tests.fixtures_minimal import (
     audit_fields,
+    create_instrument_stack,
     create_minimal_transient,
     create_test_user,
     create_transient_with_synthetic_data,
+    ensure_transient_statuses,
 )
 
 # Views that fetch from MAST, Chandra, PS1, the Legacy Survey or SDSS over
@@ -303,3 +310,86 @@ class TransientPageAssetsTests(TestCase):
                     with self.subTest(fragment=name, transient=transient.name, user=user.username):
                         response = self.client.get(reverse(name, args=[transient.id]))
                         self.assertEqual(response.status_code, 200)
+
+
+class FollowupFragmentQueryScaleTests(TestCase):
+    """The fragment's SQL must not grow with the number of follow-ups in the database.
+
+    For a non-staff user the visibility filter used to materialise the pk of
+    every public legacy follow-up in the database and pass the list back as
+    ``pk IN (...)``, so one request carried tens of thousands of ids on a
+    production-sized table.
+    """
+
+    N_OTHER_FOLLOWUPS = 2000
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("fragment_scale_user", is_staff=False)
+        public_group, _ = Group.objects.get_or_create(name=PUBLIC_COLLABORATION_GROUP_NAME)
+        cls.user.groups.add(public_group)
+        cls.transient = create_transient_with_synthetic_data(
+            cls.user, name="2026fragscale", n_phot_points=2, with_spectrum=False, with_host=False
+        )
+        audit = audit_fields(cls.user)
+        statuses = ensure_transient_statuses(cls.user)
+        obs_group = cls.transient.obs_group
+        requested, _ = FollowupStatus.objects.get_or_create(name="Requested", defaults=audit)
+        now = timezone.now()
+        _group, instrument, _band = create_instrument_stack(cls.user, obs_group_name="fragscale-res")
+        resource = ClassicalResource.objects.create(
+            telescope=instrument.telescope,
+            begin_date_valid=now - timedelta(days=1),
+            end_date_valid=now + timedelta(days=7),
+            **audit,
+        )
+        window = dict(status=requested, valid_start=now, valid_stop=now + timedelta(days=5))
+        for _ in range(3):
+            TransientFollowup.objects.create(
+                transient=cls.transient, classical_resource=resource, is_public=True, priority=4.0,
+                **window, **audit
+            )
+        # Public legacy follow-ups on other transients; bulk_create skips the
+        # TESS lookup and notification signals.
+        others = Transient.objects.bulk_create(
+            [
+                Transient(
+                    name=f"fragscale{i:05d}", slug=f"fragscale{i:05d}", ra=1.0 + i * 0.001, dec=2.0,
+                    status=statuses["New"], obs_group=obs_group, **audit
+                )
+                for i in range(200)
+            ]
+        )
+        other_ids = list(Transient.objects.filter(name__startswith="fragscale0").values_list("id", flat=True))
+        TransientFollowup.objects.bulk_create(
+            [
+                TransientFollowup(
+                    transient_id=other_ids[i % len(other_ids)], classical_resource=resource,
+                    is_public=True, priority=4.0, **window, **audit
+                )
+                for i in range(cls.N_OTHER_FOLLOWUPS)
+            ],
+            batch_size=500,
+        )
+        del others
+
+    def test_non_staff_fragment_sql_is_bounded(self):
+        client = Client()
+        client.force_login(self.user)
+        url = reverse("transient_detail_followup_fragment", args=[self.transient.id])
+        with CaptureQueriesContext(connection) as ctx:
+            response = client.get(url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8", errors="replace")
+        self.assertEqual(html.count('class="followupbox'), 3)
+        # An ``IN (1, 2, 3, ...)`` list built from the whole table shows up as
+        # thousands of integer literals in one statement.
+        for query in ctx.captured_queries:
+            literals = len(re.findall(r"\b\d+\b", query["sql"]))
+            self.assertLess(
+                literals,
+                200,
+                f"a fragment query carries {literals} integer literals; it is passing a pk list "
+                f"that grows with the table: {query['sql'][:200]}",
+            )
+        self.assertLess(len(ctx.captured_queries), 40)
