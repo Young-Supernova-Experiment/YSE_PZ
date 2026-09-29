@@ -309,3 +309,106 @@ class ObservingPagesQueryCountTests(TestCase):
             },
         )
         self.assertEqual(self._queries_for(url, 2), self._queries_for(url, 10))
+
+
+# --------------------------------------------------------------------------- P3
+
+
+class ObservingTableAstroTests(TestCase):
+    """P3: one moon lookup and one vectorised rise/set solve per table render."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("speed_astro_user")
+        cls.obs_date = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        cls.night = _classical_night(cls.user, tag="p3-night", obs_date=cls.obs_date)
+        cls.night.resource.telescope.latitude = 19.8
+        cls.night.resource.telescope.longitude = -155.5
+        cls.night.resource.telescope.elevation = 4200.0
+        cls.night.resource.telescope.save()
+        cls.transients = []
+        for i, (ra, dec) in enumerate(((30.0, 10.0), (150.0, -20.0), (250.0, 45.0), (10.0, -80.0), (30.0, 10.0))):
+            t = create_minimal_transient(cls.user, name=f"p3astro{i}", ra=ra, dec=dec)
+            _request_followup(cls.user, t, resource=cls.night.resource,
+                              classical_resource=cls.night.resource)
+            cls.transients.append(t)
+
+    def _render(self):
+        from django.test import RequestFactory
+        from YSE_App.table_utils import ObsNightFollowupTable
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        request = RequestFactory().get("/")
+        request.user = self.user
+        qs = self.night.resource.transientfollowup_set.select_related("transient")
+        table = ObsNightFollowupTable(qs, classical_obs_date=self.night)
+        with iers_offline():
+            table.as_html(request)
+            cells = [
+                (
+                    row.record.transient,
+                    row.get_cell("rise_time"),
+                    row.get_cell("set_time"),
+                    row.get_cell("moon_angle"),
+                )
+                for row in table.rows
+            ]
+        return table, cells
+
+    def test_moon_and_rise_set_are_solved_once_per_table(self):
+        from astroplan import Observer
+
+        rise_calls, set_calls = [], []
+        orig_rise, orig_set = Observer.target_rise_time, Observer.target_set_time
+
+        def counted_rise(obs, *a, **k):
+            rise_calls.append(a)
+            return orig_rise(obs, *a, **k)
+
+        def counted_set(obs, *a, **k):
+            set_calls.append(a)
+            return orig_set(obs, *a, **k)
+
+        with mock.patch("YSE_App.table_utils.get_moon", wraps=__import__("astropy.coordinates", fromlist=["get_moon"]).get_moon) as moon, \
+             mock.patch.object(Observer, "target_rise_time", counted_rise), \
+             mock.patch.object(Observer, "target_set_time", counted_set):
+            _table, cells = self._render()
+        self.assertEqual(len(cells), 5)
+        self.assertEqual(moon.call_count, 1)
+        self.assertEqual(len(rise_calls), 1)
+        self.assertEqual(len(set_calls), 1)
+
+    def test_vectorised_values_match_per_row_astroplan(self):
+        import astropy.units as u
+        from astropy.coordinates import EarthLocation, SkyCoord, get_moon
+        from astropy.time import Time
+        from astroplan import Observer
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        table, cells = self._render()
+        tel = self.night.resource.telescope
+        observer = Observer(
+            location=EarthLocation.from_geodetic(tel.longitude * u.deg, tel.latitude * u.deg, tel.elevation * u.m),
+            timezone="UTC",
+        )
+        tme = Time(str(self.night.obs_date).split()[0])
+
+        def legacy(t):  # the pre-P3 per-row expression, masked/NaN -> None
+            if t and t.value == t.value:
+                return t.isot.split("T")[-1].split(".")[0]
+            return None
+
+        with iers_offline():
+            moon = get_moon(tme)
+            for transient, rise, sett, moon_angle in cells:
+                sc = SkyCoord("%s %s" % tuple(transient.CoordString()), unit=(u.hourangle, u.deg))
+                exp_rise = observer.target_rise_time(tme, sc, horizon=18 * u.deg, which="previous")
+                exp_set = observer.target_set_time(tme, sc, horizon=18 * u.deg, which="previous")
+                self.assertEqual(rise, legacy(exp_rise))
+                self.assertEqual(sett, legacy(exp_set))
+                self.assertEqual(moon_angle, "%.1f" % sc.separation(moon).deg)
+        # Duplicate coordinates share one cache entry; the circumpolar-south target is None.
+        self.assertEqual(len(table._rise_set), 4)
+        by_name = {cell[0].name: cell for cell in cells}
+        self.assertIsNone(by_name["p3astro3"][1])
+        self.assertTrue(all(by_name[f"p3astro{i}"][1] for i in (0, 1, 2, 4)))
