@@ -55,7 +55,7 @@ plan changes apply to minutes rather than seconds.
 
 | key | default | meaning |
 |---|---|---|
-| `EXPLORER_QUERY_MAX_EXECUTION_MS` | 20000 (#253) | MySQL `max_execution_time` for saved SQL run inside a web request; 0 disables. The warmer ignores it. |
+| `EXPLORER_QUERY_MAX_EXECUTION_MS` | 0 (#253, #261: off until the saved queries are rewritten; 20000 recommended afterwards) | MySQL `max_execution_time` for saved SQL run inside a web request; 0 disables. The warmer ignores it. |
 | `EXPLORER_QUERY_CACHE_SECONDS` | 3600 | how long a saved query's cached result is reused (env `YSE_EXPLORER_QUERY_CACHE_SECONDS`) |
 | `DASHBOARD_CACHE_WARM_ENABLED` | False | run the warmer cron (env `YSE_DASHBOARD_CACHE_WARM=1`) |
 | `DASHBOARD_CACHE_WARM_MINUTES` | 60 | warmer interval; set it to the photometry ingest cadence |

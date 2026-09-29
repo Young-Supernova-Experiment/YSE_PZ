@@ -230,14 +230,16 @@ else:
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
 
-# Per-statement time cap (ms) for saved Explorer SQL run on a dashboard cache
-# miss (run_explorer_query_cached). MySQL max_execution_time / MariaDB
-# max_statement_time; no-op on other backends. 0 disables the cap.
-# YSE_EXPLORER_MAX_EXECUTION_MS env var or [site_settings]
-# EXPLORER_QUERY_MAX_EXECUTION_MS in settings.ini; default 20000.
+# Statement time cap (ms) applied to every new 'explorer' DB connection, i.e.
+# saved Explorer SQL run on a dashboard cache miss and the SQL Explorer UI.
+# MySQL max_execution_time / MariaDB max_statement_time; no-op on other
+# backends. Default 0 = no cap: the current saved dashboard queries take
+# several minutes on production data (#233), so a cap would fail them all.
+# Set YSE_EXPLORER_MAX_EXECUTION_MS or [site_settings]
+# EXPLORER_QUERY_MAX_EXECUTION_MS once those queries are rewritten.
 EXPLORER_QUERY_MAX_EXECUTION_MS = int(
     os.environ.get('YSE_EXPLORER_MAX_EXECUTION_MS', '').strip()
-    or config.getint('site_settings', 'EXPLORER_QUERY_MAX_EXECUTION_MS', fallback=20000)
+    or config.getint('site_settings', 'EXPLORER_QUERY_MAX_EXECUTION_MS', fallback=0)
 )
 
 # How long a saved query's cached name list is reused by the personal

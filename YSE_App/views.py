@@ -73,6 +73,7 @@ from .table_utils import (
     prefetch_followup_resources,
 )
 from .queries.yse_python_queries import *
+from .services.night_astro import twilight_times
 from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
@@ -575,20 +576,25 @@ def transient_summary(request,status_or_query_name,
 @login_required
 def followup(request):
 
-    followup_transients = None
-
-    telescopes = Telescope.objects.all()
     from YSE_App.services.visibility import filter_transient_followups_for_user
+
+    visible_followups = filter_transient_followups_for_user(TransientFollowup.objects.all(), request.user)
+    # One query for the telescopes that have a visible follow-up at all, instead
+    # of a filtered query plus .exists() for every telescope in the catalogue.
+    telescope_ids = set()
+    for ids in visible_followups.values_list(
+        'too_resource__telescope', 'classical_resource__telescope', 'queued_resource__telescope'
+    ).distinct():
+        telescope_ids.update(pk for pk in ids if pk is not None)
+    telescopes = Telescope.objects.filter(pk__in=telescope_ids)
 
     table_list = []
     for t in telescopes:
-        followup_transients = TransientFollowup.objects.filter(Q(too_resource__telescope__name=t) |
-                                                               Q(classical_resource__telescope__name=t) |
-                                                               Q(queued_resource__telescope__name=t))
-        followup_transients = filter_transient_followups_for_user(
-            followup_transients,
-            request.user,
-        )
+        # the table reads transient name/coords/status and the follow-up status per row
+        followup_transients = visible_followups.filter(Q(too_resource__telescope=t) |
+                                                       Q(classical_resource__telescope=t) |
+                                                       Q(queued_resource__telescope=t)).\
+            select_related('transient__status', 'status')
         followuptransientfilter = FollowupFilter(request.GET, queryset=followup_transients,prefix=t)
         
         if not followuptransientfilter.qs.exists():
@@ -671,7 +677,7 @@ def calendar(request):
 
 @login_required
 def yse_oncall_calendar(request):
-    all_dates = YSEOnCallDate.objects.all()
+    all_dates = YSEOnCallDate.objects.all().prefetch_related('user')
     users = all_dates.order_by('-on_call_date').values_list('user__username',flat=True).distinct()
 
     colors = ['#dd4b39', 
@@ -834,43 +840,96 @@ def too_requests(request, telescope, pi_name):
     }
     return render(request, 'YSE_App/too_requests.html', context)
 
+def _yse_home_defer_enabled():
+    """Load Latest Transients synchronously; the other four tables via AJAX (default on)."""
+    return os.environ.get('YSE_HOME_DEFER', '1') != '0'
+
+
+def _yse_home_queryset(prefix):
+    """Base queryset of one yse_home table, before the per-row annotations."""
+    # '-pk' breaks disc_date ties (NULL or same-day) so a page is the same set of
+    # rows on every database, as the personal dashboard already orders.
+    yse = Transient.objects.filter(tags__name='YSE')
+    if prefix == 'yse':
+        return yse.filter(~Q(status__name='Ignore')).order_by('-disc_date', '-pk')
+    if prefix == 'yse_follow':
+        return yse.order_by('-disc_date', '-pk').filter(Q(status__name='FollowupRequested') | Q(status__name='Following'))
+    if prefix == 'yserise':
+        return rising_transient_queryset(ndays=7).filter(tags__name='YSE')
+    if prefix == 'ysefastrise':
+        return fastrising_transient_queryset(ndays=7).filter(tags__name='YSE')
+    if prefix == 'yseztf':
+        return Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date', '-pk')
+    raise KeyError(prefix)
+
+
+# (context key, table/filter prefix, anchor id, table class); prefix is the
+# section key in /yse_home/section/<prefix>/.
+_YSE_HOME_SECTIONS = (
+    ('transient_table', 'yse', 'yse', YSEFullTransientTable),
+    ('transient_follow_table', 'yse_follow', 'yse_follow', YSETransientTable),
+    ('transient_rising_table', 'yserise', 'yserise', YSERisingTransientTable),
+    ('transient_fastrising_table', 'ysefastrise', 'ysefastrise', YSERisingTransientTable),
+    ('ztf_transient_table', 'yseztf', 'ztfyse', YSEFullTransientTable),
+)
+_YSE_HOME_SYNC_SECTION = 'yse'
+
+
+def _yse_home_section_tuple(request, section):
+    """(table, anchor, filter) for one yse_home table, as the template reads it."""
+    _key, prefix, anchor, table_cls = section
+    # recent_mag/recent_magdate as annotations and the follow-up resource
+    # columns from one prefetch, instead of ~8 queries per rendered row.
+    queryset = annotate_dashboard_transient_fields(prefetch_followup_resources(_yse_home_queryset(prefix)))
+    transientfilter = TransientFilter(request.GET, queryset=queryset, prefix=prefix)
+    table = table_cls(transientfilter.qs, prefix=prefix)
+    RequestConfig(request, paginate={'per_page': 10}).configure(table)
+    return (table, anchor, transientfilter)
+
+
+def _ps1_survey_fields(telescope, ut_obs_date):
+    """SurveyFields observed (or requested) by GPC between sunset and sunrise of ``ut_obs_date``."""
+    night = twilight_times(telescope, ut_obs_date)
+    survey_obs = SurveyObservation.objects.filter(
+        Q(mjd_requested__gte = night['sunset_mjd']-0.1) | Q(obs_mjd__gte = night['sunset_mjd']-0.1)).\
+        filter(Q(mjd_requested__lte = night['sunrise_mjd']+0.1) | Q(obs_mjd__lte = night['sunrise_mjd']+0.1)).\
+        filter(survey_field__instrument__name__startswith = 'GPC').select_related()
+    field_pk = survey_obs.values('survey_field').distinct()
+    return SurveyField.objects.filter(pk__in = field_pk).filter(~Q(obs_group__name='ZTF')).select_related()
+
+
+@login_required
+def yse_home_section(request, section_key):
+    """AJAX fragment for one yse_home transient table."""
+    for section in _YSE_HOME_SECTIONS:
+        if section[1] == section_key:
+            row = _yse_home_section_tuple(request, section)
+            return render(
+                request,
+                'YSE_App/dashboard_section.html',
+                {'transient_cat': row, 'all_transient_statuses': TransientStatus.objects.all()},
+            )
+    raise Http404(f"Unknown yse_home section: {section_key}")
+
+
 @login_required
 def yse_home(request):
     oncall_form = OncallForm()
     classical_resource_form = ClassicalResourceForm()
     too_resource_form = ToOResourceForm()
 
-    # recent_mag/recent_magdate as annotations and the follow-up resource
-    # columns from one prefetch, instead of ~8 queries per rendered row.
-    def _home_table_qs(qs):
-        return annotate_dashboard_transient_fields(prefetch_followup_resources(qs))
-
-    fastrising_transients = _home_table_qs(fastrising_transient_queryset(ndays=7).filter(tags__name='YSE'))
-    fastrisingtransientfilter = TransientFilter(request.GET, queryset=fastrising_transients,prefix='ysefastrise')
-    table_fastrising = YSERisingTransientTable(fastrisingtransientfilter.qs,prefix='ysefastrise')
-    RequestConfig(request, paginate={'per_page': 10}).configure(table_fastrising)
-
-    rising_transients = _home_table_qs(rising_transient_queryset(ndays=7).filter(tags__name='YSE'))
-    risingtransientfilter = TransientFilter(request.GET, queryset=rising_transients,prefix='yserise')
-    table_rising = YSERisingTransientTable(risingtransientfilter.qs,prefix='yserise')
-    RequestConfig(request, paginate={'per_page': 10}).configure(table_rising)
-
-    
-    transients = _home_table_qs(Transient.objects.filter(tags__name='YSE').filter(~Q(status__name='Ignore')).order_by('-disc_date'))
-    transientfilter = TransientFilter(request.GET, queryset=transients,prefix='yse')
-    table = YSEFullTransientTable(transientfilter.qs,prefix='yse')
-    RequestConfig(request, paginate={'per_page': 10}).configure(table)
-
-    ztftransients = _home_table_qs(Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date'))
-    ztftransientfilter = TransientFilter(request.GET, queryset=ztftransients,prefix='yseztf')
-    ztftable = YSEFullTransientTable(ztftransientfilter.qs,prefix='yseztf')
-    RequestConfig(request, paginate={'per_page': 10}).configure(ztftable)
-
-    
-    transients_follow = _home_table_qs(Transient.objects.filter(tags__name='YSE').order_by('-disc_date').filter(Q(status__name='FollowupRequested') | Q(status__name='Following')))
-    transientfilter_follow = TransientFilter(request.GET, queryset=transients_follow,prefix='yse_follow')
-    table_follow = YSETransientTable(transientfilter_follow.qs,prefix='yse_follow')
-    RequestConfig(request, paginate={'per_page': 10}).configure(table_follow)
+    defer = _yse_home_defer_enabled()
+    context = {}
+    for section in _YSE_HOME_SECTIONS:
+        key, prefix, anchor, _table_cls = section
+        if defer and prefix != _YSE_HOME_SYNC_SECTION:
+            # Table comes from /yse_home/section/<prefix>/ via AJAX; still
+            # render the (query-free) filter form so the section keeps its
+            # search box like the synchronous section.
+            deferred_filter = TransientFilter(request.GET, queryset=Transient.objects.none(), prefix=prefix)
+            context[key] = (None, anchor, deferred_filter)
+        else:
+            context[key] = _yse_home_section_tuple(request, section)
 
     #obsnights = view_utils.get_obs_nights_happening_soon(request.user)
     obsnights = ObservingResourceService.GetAuthorizedClassicalResource_ByUser(request.user).\
@@ -881,56 +940,29 @@ def yse_home(request):
     too_resources = view_utils.get_too_resources(request.user)
     all_transient_statuses = TransientStatus.objects.all()
 
-    # get current fields
+    # get current fields: tonight's and last night's GPC observations, bounded
+    # by the (cached) Pan-STARRS1 sunset/sunrise of each UT date
     telescope = Telescope.objects.get(name='Pan-STARRS1')
-    location = EarthLocation.from_geodetic(
-        telescope.longitude*u.deg,telescope.latitude*u.deg,
-        telescope.elevation*u.m)
     ut_obs_date = (datetime.datetime.utcnow()+datetime.timedelta(1)).strftime('%Y-%m-%d 00:00:00')
-    time = Time(ut_obs_date, format='iso')
-    tel = Observer(location=location, timezone="UTC")
-    sunset_forobs = tel.sun_set_time(time,which="next")
-    sunrise_forobs = tel.sun_rise_time(time,which="next")
-
     obs_date_now = datetime.datetime.utcnow().strftime('%Y-%m-%d 00:00:00')
-    survey_obs = SurveyObservation.objects.filter(
-        Q(mjd_requested__gte = date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte = date_to_mjd(sunset_forobs)-0.1)).\
-        filter(Q(mjd_requested__lte = date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte = date_to_mjd(sunrise_forobs)+0.1)).\
-        filter(survey_field__instrument__name__startswith = 'GPC').select_related()
-    field_pk = survey_obs.values('survey_field').distinct()
-    survey_fields_tonight = SurveyField.objects.filter(pk__in = field_pk).filter(~Q(obs_group__name='ZTF')).select_related()
+    survey_fields_tonight = _ps1_survey_fields(telescope, ut_obs_date)
 
     ut_obs_date = (datetime.datetime.utcnow()).strftime('%Y-%m-%d 00:00:00')
-    time = Time(ut_obs_date, format='iso')
-    tel = Observer(location=location, timezone="UTC")
-    sunset_forobs = tel.sun_set_time(time,which="next")
-    sunrise_forobs = tel.sun_rise_time(time,which="next")
-
     obs_date_last = datetime.datetime.utcnow().strftime('%Y-%m-%d 00:00:00')
-    survey_obs = SurveyObservation.objects.filter(
-        Q(mjd_requested__gte = date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte = date_to_mjd(sunset_forobs)-0.1)).\
-        filter(Q(mjd_requested__lte = date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte = date_to_mjd(sunrise_forobs)+0.1)).\
-        filter(survey_field__instrument__name__startswith = 'GPC').select_related()
-    field_pk = survey_obs.values('survey_field').distinct()
-    survey_fields_last_night = SurveyField.objects.filter(pk__in = field_pk).filter(~Q(obs_group__name='ZTF')).select_related()
+    survey_fields_last_night = _ps1_survey_fields(telescope, ut_obs_date)
     
     
     nowdate = datetime.datetime.utcnow()
     on_call = YSEOnCallDate.objects.filter(on_call_date__gte=nowdate-timedelta(0.5)).\
-        filter(on_call_date__lte=nowdate+timedelta(0.5))
+        filter(on_call_date__lte=nowdate+timedelta(0.5)).prefetch_related('user')
 
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-')[0]
     else: anchor = ''   
-    context = {'on_call_observers':on_call,
+    context.update({'on_call_observers':on_call,
                'oncall_form':oncall_form,
                'date_start': datetime.datetime.now().__str__().split()[0],
                'date_end': (datetime.datetime.now()+datetime.timedelta(1)).__str__().split()[0],
-               'transient_table':(table,'yse',transientfilter),
-               'ztf_transient_table':(ztftable,'ztfyse',ztftransientfilter),
-               'transient_follow_table':(table_follow,'yse_follow',transientfilter_follow),
-               'transient_rising_table':(table_rising,'yserise',risingtransientfilter),
-               'transient_fastrising_table':(table_fastrising,'ysefastrise',fastrisingtransientfilter),
                'upcoming_observing_nights':obsnights,
                'too_resources':too_resources,
                'all_transient_statuses':all_transient_statuses,
@@ -940,8 +972,9 @@ def yse_home(request):
                'obs_date_now':obs_date_now.split()[0],
                'classical_resource_form':classical_resource_form,
                'too_resource_form':too_resource_form,
-               'anchor':anchor
-    }
+               'anchor':anchor,
+               'yse_home_defer': defer,
+    })
     return render(request, 'YSE_App/yse_home.html', context)
 
 
@@ -1108,18 +1141,13 @@ def observing_night(request, telescope, obs_date, pi_name):
     RequestConfig(request, paginate={'per_page': 20}).configure(followup_table)
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
-    location = EarthLocation.from_geodetic(
-        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
-        classical_obs_date.resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
-    tel = Observer(location=location, timezone="UTC")
-
-    sunset = tel.sun_set_time(time,which="previous").isot.split('T')[-1][:-7]
-    night_start_12 = tel.twilight_evening_nautical(time,which="previous").isot.split('T')[-1][:-7]
-    night_start_18 = tel.twilight_evening_astronomical(time,which="previous").isot.split('T')[-1][:-7]
-    night_end_18 = tel.twilight_morning_astronomical(time,which="previous").isot.split('T')[-1][:-7]
-    night_end_12 = tel.twilight_morning_nautical(time,which="previous").isot.split('T')[-1][:-7]
-    sunrise = tel.sun_rise_time(time,which="previous").isot.split('T')[-1][:-7]
+    # six twilight root-finds, solved once per (telescope, night) and cached
+    night = twilight_times(
+        classical_obs_date.resource.telescope, str(classical_obs_date.obs_date).split('+')[0], which="previous"
+    )
+    sunset, sunrise = night['sunset'], night['sunrise']
+    night_start_12, night_start_18 = night['night_start_12'], night['night_start_18']
+    night_end_18, night_end_12 = night['night_end_18'], night['night_end_12']
 
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-ex')[0]
@@ -1144,31 +1172,21 @@ def yse_observing_night(request, obs_date):
     survey_obs_form = SurveyObsForm()
     
     telescope = Telescope.objects.get(name='Pan-STARRS1')
-    location = EarthLocation.from_geodetic(
-        telescope.longitude*u.deg,telescope.latitude*u.deg,
-        telescope.elevation*u.m)
 
     ut_obs_date = (dateutil.parser.parse(obs_date)).strftime('%Y-%m-%d 00:00:00')
-    time = Time(ut_obs_date, format='iso')
-    tel = Observer(location=location, timezone="UTC")
+    # six twilight root-finds, solved once per (telescope, UT date) and cached
+    night = twilight_times(telescope, ut_obs_date)
+    sunset, sunrise = night['sunset'], night['sunrise']
+    night_start_12, night_start_18 = night['night_start_12'], night['night_start_18']
+    night_end_18, night_end_12 = night['night_end_18'], night['night_end_12']
+    moon_illum = night['moon_illum']
 
-    sunset = tel.sun_set_time(time,which="next").isot.split('T')[-1][:-7]
-    night_start_12 = tel.twilight_evening_nautical(time,which="next").isot.split('T')[-1][:-7]
-    night_start_18 = tel.twilight_evening_astronomical(time,which="next").isot.split('T')[-1][:-7]
-    night_end_18 = tel.twilight_morning_astronomical(time,which="next").isot.split('T')[-1][:-7]
-    night_end_12 = tel.twilight_morning_nautical(time,which="next").isot.split('T')[-1][:-7]
-    sunrise = tel.sun_rise_time(time,which="next").isot.split('T')[-1][:-7]
-    moon_illum = '%.3f'%moon_illumination(time)
-
-    sunset_forobs = tel.sun_set_time(time,which="next")
-    sunrise_forobs = tel.sun_rise_time(time,which="next")
-    
     # get follow requests for telescope/date
     survey_obs = SurveyObservation.objects.filter(
-        Q(mjd_requested__gte = date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte = date_to_mjd(sunset_forobs)-0.1)).\
-        filter(Q(mjd_requested__lte = date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte = date_to_mjd(sunrise_forobs)+0.1)).\
+        Q(mjd_requested__gte = night['sunset_mjd']-0.1) | Q(obs_mjd__gte = night['sunset_mjd']-0.1)).\
+        filter(Q(mjd_requested__lte = night['sunrise_mjd']+0.1) | Q(obs_mjd__lte = night['sunrise_mjd']+0.1)).\
         filter(survey_field__instrument__name__startswith = 'GPC').select_related()
-    obs_table = YSEObsNightTable(survey_obs,obs_date=obs_date)
+    obs_table = YSEObsNightTable(survey_obs,obs_date=obs_date,telescope=telescope)
 
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-ex')[0]
@@ -1420,7 +1438,17 @@ def transient_detail_gw_fragment(request, transient_id):
 @login_required
 def transient_detail_spectra_tab_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
-    spectra = _authorized_transient_spectra(request, transient_id)
+    spectra = list(_authorized_transient_spectra(request, transient_id))
+    # The plot needs TransientSpecData points, not just a TransientSpectrum
+    # row; show the count so a spectrum without points is visibly unplottable.
+    point_counts = dict(
+        TransientSpecData.objects.filter(spectrum_id__in=[s.id for s in spectra])
+        .values_list('spectrum_id')
+        .annotate(n=Count('id'))
+        .values_list('spectrum_id', 'n')
+    )
+    for spectrum in spectra:
+        spectrum.n_points = point_counts.get(spectrum.id, 0)
     return render(
         request,
         'YSE_App/transient_detail_spectra_tab.html',

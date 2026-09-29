@@ -1737,8 +1737,6 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
 
 
 def spectrumplot(request, transient_id):
-    _load_heavy_plot_stack()
-
     cache_key = None
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
@@ -1782,7 +1780,11 @@ def spectrumplot(request, transient_id):
         })
     if not spectra:
         return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
-    
+
+    # bokeh/matplotlib/sncosmo are imported only now: a transient with nothing
+    # to plot answers in milliseconds instead of paying the cold import.
+    _load_heavy_plot_stack()
+
     # Process spectra and compute offsets
     dates = np.array([spec['mjd'] for spec in spectra])
     sorted_idx = np.argsort(-dates)
@@ -1951,13 +1953,17 @@ def spectrumplotsingle(request, transient_id, spec_id):
     spectrum = spectra.filter(id=spec_id)
     
     if not len(spectrum):
-        return django.http.HttpResponse('')
+        return django.http.HttpResponse(
+            '<p class="text-muted yse-plot-empty">'
+            'That spectrum is not on file for this transient (or you are not '
+            'authorized to see it).</p>'
+        )
     else:
         spectrum = spectrum[0]
     spec = TransientSpecData.objects.filter(spectrum=spectrum)
     
     if not len(spec):
-        return django.http.HttpResponse('')
+        return django.http.HttpResponse(_spectrum_plot_empty_message(1))
 
     wave,flux = [],[]
     for s in spec:
@@ -2172,24 +2178,75 @@ def get_ps1_image(request,transient_id):
     jpegurldict = {"jpegurl":jpegurl,"msg":"success"}
     return(JsonResponse(jpegurldict))
 
-def _archive_status_with_timeout(work, *, timeout_seconds=8):
-    """Run a blocking archive lookup with a wall-clock timeout."""
+ARCHIVE_STATUS_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_STATUS_TIMEOUT', '8'))
+ARCHIVE_STATUS_CACHE_SECONDS = 3600
+# A failed or timed-out archive lookup is remembered only briefly, so a
+# reload retries it instead of showing a stale negative for an hour.
+ARCHIVE_STATUS_FAILURE_CACHE_SECONDS = 60
+
+
+def _archive_status_with_timeout(work, *, timeout_seconds=None):
+    """Run a blocking archive lookup with a wall-clock timeout.
+
+    Returns ``None`` when the lookup does not finish in time. The worker
+    thread is left to finish on its own: ``ThreadPoolExecutor`` used as a
+    context manager would ``shutdown(wait=True)`` and block the response
+    until MAST answered, which made the timeout cosmetic.
+    """
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    if timeout_seconds is None:
+        timeout_seconds = ARCHIVE_STATUS_TIMEOUT_SECONDS
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
         future = pool.submit(work)
         try:
             return future.result(timeout=timeout_seconds)
         except FuturesTimeout:
             return None
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _archive_status_payload(cache_key, lookup, archive_name):
+    """JSON payload for the HST/Chandra tab labels.
+
+    ``has_data`` is ``True``/``False`` only when the archive answered; when the
+    lookup timed out or raised it is ``None`` and ``error`` says why, so the
+    page can say "lookup failed" instead of "No HST" (an upstream outage is
+    not the same as no data). Failures are cached for a minute, answers for
+    an hour.
+    """
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        count = _archive_status_with_timeout(lookup)
+    except Exception as exc:
+        logger.warning('%s archive status lookup failed: %s', archive_name, exc)
+        payload = {
+            'has_data': None, 'count': 0, 'error': 'lookup_failed',
+            'message': f'{archive_name} archive lookup failed; open the tab to retry.',
+        }
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_FAILURE_CACHE_SECONDS)
+        return payload
+    if count is None:
+        payload = {
+            'has_data': None, 'count': 0, 'error': 'timeout', 'timed_out': True,
+            'message': (
+                f'{archive_name} archive did not answer within '
+                f'{ARCHIVE_STATUS_TIMEOUT_SECONDS} s; open the tab to retry.'
+            ),
+        }
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_FAILURE_CACHE_SECONDS)
+        return payload
+    payload = {'has_data': count > 0, 'count': count}
+    cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_CACHE_SECONDS)
+    return payload
 
 
 def get_hst_status(request, transient_id):
     """Lightweight HST availability for tab label (no JPG fetch)."""
-    cache_key = f'hst_status_v2_{transient_id}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return JsonResponse(cached)
     try:
         t = Transient.objects.get(pk=transient_id)
     except Transient.DoesNotExist:
@@ -2204,24 +2261,11 @@ def get_hst_status(request, transient_id):
             count = len(hst.obstable)
         return count
 
-    try:
-        count = _archive_status_with_timeout(_lookup)
-        if count is None:
-            payload = {'has_data': False, 'count': 0, 'timed_out': True}
-        else:
-            payload = {'has_data': count > 0, 'count': count}
-    except Exception:
-        payload = {'has_data': False, 'count': 0}
-    cache.set(cache_key, payload, timeout=3600)
-    return JsonResponse(payload)
+    return JsonResponse(_archive_status_payload(f'hst_status_v3_{transient_id}', _lookup, 'HST'))
 
 
 def get_chandra_status(request, transient_id):
     """Lightweight Chandra availability for tab label (no image fetch)."""
-    cache_key = f'chandra_status_v2_{transient_id}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return JsonResponse(cached)
     try:
         t = Transient.objects.get(pk=transient_id)
     except Transient.DoesNotExist:
@@ -2233,29 +2277,33 @@ def get_chandra_status(request, transient_id):
         chr.search_chandra_database()
         return int(getattr(chr, 'n_obsid', 0) or 0)
 
-    try:
-        count = _archive_status_with_timeout(_lookup)
-        if count is None:
-            payload = {'has_data': False, 'count': 0, 'timed_out': True}
-        else:
-            payload = {'has_data': count > 0, 'count': count}
-    except Exception:
-        payload = {'has_data': False, 'count': 0}
-    cache.set(cache_key, payload, timeout=3600)
-    return JsonResponse(payload)
+    return JsonResponse(
+        _archive_status_payload(f'chandra_status_v3_{transient_id}', _lookup, 'Chandra')
+    )
 
 
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
-    except t.DoesNotExist:
+    except Transient.DoesNotExist:
         raise Http404("Transient id does not exist")
 
     startTime = datetime.datetime.now()
     from . import common
     hst=common.mast_query.hstImages(t.ra,t.dec,'Object')
-    hst.getObstable()
-    hst.getJPGurl()
+    try:
+        hst.getObstable()
+        hst.getJPGurl()
+    except Exception as exc:
+        # MAST unreachable/slow: say so (HTTP 502) instead of a 500 the page
+        # silently swallows, so the tab can offer a retry.
+        logger.warning('HST image lookup failed for transient %s: %s', transient_id, exc)
+        return JsonResponse(
+            {"error": "lookup_failed",
+             "message": "HST archive (MAST) lookup failed; retry in a moment.",
+             "jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []},
+            status=502,
+        )
     print("I found",hst.Nimages,"HST images of",hst.object,"located at coordinates",hst.ra,hst.dec)
     print("The cut out images have the following URLs:")
     fitsurllist = []

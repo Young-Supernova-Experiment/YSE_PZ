@@ -1,3 +1,4 @@
+import functools
 from astropy.coordinates import SkyCoord
 from astropy.coordinates import EarthLocation
 import astropy.units as u
@@ -40,7 +41,10 @@ def getSeparation(ra1_decimal,dec1_decimal,
 		c2 = SkyCoord(ra2_decimal,dec2_decimal,unit=(u.deg, u.deg))
 		return(c1.separation(c2).arcsec)
 		
+@functools.lru_cache(maxsize=16384)
 def GetSexigesimalString(ra_decimal, dec_decimal):
+	# Pure function of (ra, dec); each SkyCoord build costs ~2 ms and the tables
+	# ask for the same pair up to seven times per row (RA, Dec, rise, set, moon...).
 	c = SkyCoord(ra_decimal,dec_decimal,unit=(u.deg, u.deg))
 	ra = c.ra.hms
 	#dec = c.dec.dms
