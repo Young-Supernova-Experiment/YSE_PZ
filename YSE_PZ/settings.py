@@ -102,6 +102,11 @@ CRON_CLASSES = [
     'YSE_App.data_ingest.TNS_uploads.UpdateGHOST'
 ]
 
+# django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
+# older than this many days. Optional [site_settings] CRON_LOG_RETENTION_DAYS in
+# settings.ini overrides the 30-day default.
+DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RETENTION_DAYS', fallback=30)
+
 MIDDLEWARE = [
 	#'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
