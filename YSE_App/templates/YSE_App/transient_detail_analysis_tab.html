@@ -1,5 +1,6 @@
 {# Analysis tab body (#314): loaded into #analysis_container; the page's JS (transient_detail.html) drives the form, polling and actions. #}
-<div class="yse-analysis-tab" id="yse_analysis_tab_body"
+{# clear:both keeps the flex .row below the floated tab headers of the AdminLTE nav. #}
+<div class="yse-analysis-tab" id="yse_analysis_tab_body" style="clear: both;"
      data-run-url="{% url 'transient_analysis_run' transient.id %}"
      data-fragment-url="{% url 'transient_detail_analysis_fragment' transient.id %}"
      data-active="{% if analysis_active %}1{% else %}0{% endif %}"

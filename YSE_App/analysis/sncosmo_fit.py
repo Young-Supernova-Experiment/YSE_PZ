@@ -34,7 +34,9 @@ from typing import Dict, List
 
 import numpy as np
 
-from YSE_App.analysis.base import AnalysisError, AnalysisResult, band_colors, clean_json, figure_png, new_figure, param
+from YSE_App.analysis.base import (
+    AnalysisError, AnalysisResult, band_colors, clean_json, figure_png, format_value, new_figure, param,
+)
 from YSE_App.services import bazin
 from YSE_App.services.analysis_payload import detections
 
@@ -257,7 +259,7 @@ def _corner_png(names: List[str], values: Dict, cov: np.ndarray) -> bytes:
                 xs = np.linspace(xi - 3.5 * s, xi + 3.5 * s, 200)
                 ax.plot(xs, np.exp(-0.5 * ((xs - xi) / s) ** 2), color="#4c72b0")
                 ax.set_yticks([])
-                ax.set_title("%s = %.3g +/- %.2g" % (names[i], xi, s), fontsize=7)
+                ax.set_title("%s = %s" % (names[i], format_value(xi, s)), fontsize=7)
             else:
                 sub = cov[np.ix_([j, i], [j, i])]
                 vals, vecs = np.linalg.eigh(sub)

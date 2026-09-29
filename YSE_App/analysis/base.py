@@ -135,12 +135,34 @@ def band_colors(names: List[str]) -> Dict[str, str]:
 
 
 def format_value(value, err: Optional[float] = None, digits: int = 3) -> str:
+    """``61302.93 +/- 0.08``, ``3.04e-08 +/- 2e-10``: fixed notation with the error's precision when sensible."""
     if value is None:
         return "-"
     try:
         v = float(value)
     except (TypeError, ValueError):
         return str(value)
-    if err is None:
-        return "%.*g" % (digits + 1, v)
-    return "%.*g +/- %.2g" % (digits + 1, v, float(err))
+    if not math.isfinite(v):
+        return str(value)
+    e = None
+    if err is not None:
+        try:
+            e = abs(float(err))
+            if not math.isfinite(e):
+                e = None
+        except (TypeError, ValueError):
+            e = None
+    magnitude = abs(v) if v else (e or 0.0)
+    if e is None and v == int(v) and magnitude < 1e7:
+        return "%d" % int(v)
+    if magnitude and (magnitude < 1e-3 or magnitude >= 1e7):
+        text = "%.*g" % (digits + 1, v)
+        return text if e is None else "%s +/- %.2g" % (text, e)
+    if e is not None and e > 0:
+        decimals = int(max(0, min(6, -math.floor(math.log10(e)) + 1)))
+    elif magnitude >= 100:
+        decimals = 2
+    else:
+        decimals = digits + 1 if magnitude < 1 else digits
+    text = "%.*f" % (decimals, v)
+    return text if e is None else "%s +/- %.*f" % (text, decimals, e)

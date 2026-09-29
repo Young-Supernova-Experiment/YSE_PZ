@@ -677,6 +677,9 @@
             return yseFollowupLoadPromise;
         }
         window.yseLoadFollowupPhased = yseLoadFollowupPhased;
+        /* The Analysis tab script (below, outside this closure) reuses the fragment loader. */
+        window.yseLoadDetailFragment = yseLoadDetailFragment;
+        window.yseDetailFragmentsLoaded = yseDetailFragmentsLoaded;
         window.yseResetFollowupFragmentCache = function() {
             yseFollowupLoadPromise = null;
             delete yseDetailFragmentsLoaded['followup_requests'];
@@ -2273,14 +2276,14 @@
             });
         }
         function yseLoadAnalysisTab(force) {
-            if (force) {
-                delete yseDetailFragmentsLoaded['analysis'];
+            if (force && window.yseDetailFragmentsLoaded) {
+                delete window.yseDetailFragmentsLoaded['analysis'];
             }
             if (yseAnalysisPollTimer) {
                 clearTimeout(yseAnalysisPollTimer);
                 yseAnalysisPollTimer = null;
             }
-            return yseLoadDetailFragment(
+            return window.yseLoadDetailFragment(
                 'analysis',
                 "{% url 'transient_detail_analysis_fragment' transient.id %}",
                 '#analysis_container'

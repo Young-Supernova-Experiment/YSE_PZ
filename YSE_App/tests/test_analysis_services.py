@@ -145,7 +145,7 @@ def seed_bazin_lightcurve(user, transient, *, peak_offset=12.0, group=None, n=10
     return phot, truth, now_mjd
 
 
-def seed_sncosmo_lightcurve(user, transient, *, t0_offset=15.0, z=0.03):
+def seed_sncosmo_lightcurve(user, transient, *, t0_offset=15.0, z=0.03, amplitude=0.2):
     """g/r/i points drawn from the synthetic sncosmo source at ``z`` peaking ``t0_offset`` days ago."""
     import sncosmo
 
@@ -156,7 +156,7 @@ def seed_sncosmo_lightcurve(user, transient, *, t0_offset=15.0, z=0.03):
     now_mjd = bazin.datetime_to_mjd(timezone.now())
     t0 = now_mjd - t0_offset
     model = sncosmo.Model(source=SYNTH_SOURCE)
-    model.set(z=z, t0=t0, amplitude=3.0e-8)
+    model.set(z=z, t0=t0, amplitude=amplitude)  # 0.2 puts the peak near 18th mag on the 27.5 zero point
     rng = np.random.default_rng(5)
     rows = []
     for bname, sband in (("g", "sdssg"), ("r", "sdssr"), ("i", "sdssi")):
