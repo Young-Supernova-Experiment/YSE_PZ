@@ -13,6 +13,11 @@ from django.core.management.base import BaseCommand
 
 from YSE_App.perf import plots
 from YSE_App.perf.benchmark import run_primary_pages
+from YSE_App.perf.mag_limited import (
+    configured_n_points,
+    configured_n_transients,
+    run_mag_limited_benchmark,
+)
 from YSE_App.perf.test_db import benchmark_test_database
 from YSE_App.perf.waterfall_collect import collect_all_timelines
 
@@ -36,6 +41,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Only append JSON history; do not write PNGs.",
         )
+        parser.add_argument(
+            "--skip-mag-limited",
+            action="store_true",
+            help="Skip the magnitude-limited sample saved-query benchmark.",
+        )
 
     def handle(self, *args, **options):
         label = options["label"] or _git_short_sha() or "manual"
@@ -50,6 +60,25 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f"  {p.page_key}: {p.ttfb_ms:.1f} ms, {p.sql_count} queries ({p.url})"
                 )
+
+            sections_by_page = {}
+            if not options["skip_mag_limited"]:
+                self.stdout.write(
+                    "Running magnitude-limited sample query benchmark "
+                    f"({configured_n_transients()} transients x {configured_n_points()} points)..."
+                )
+                ml_pages, dataset, n_rows = run_mag_limited_benchmark()
+                for p in ml_pages:
+                    self.stdout.write(
+                        f"  {p.page_key}: {p.ttfb_ms:.1f} ms, {p.sql_count} queries ({p.url})"
+                    )
+                    if p.sections:
+                        sections_by_page[p.page_key] = p.sections
+                self.stdout.write(
+                    f"  query matched {n_rows} of {dataset.n_transients} transients "
+                    f"({dataset.n_photdata_rows} photometry rows)"
+                )
+                pages = pages + ml_pages
 
             self.stdout.write("Collecting per-resource waterfalls (timeline)...")
             timelines = collect_all_timelines()
@@ -71,6 +100,7 @@ class Command(BaseCommand):
                 commit=commit,
                 branch=branch,
                 pages=pages,
+                sections_by_page=sections_by_page or None,
                 waterfalls=waterfalls,
                 timelines=timelines,
             )

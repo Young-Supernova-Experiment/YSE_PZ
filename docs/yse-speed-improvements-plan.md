@@ -113,6 +113,8 @@ HST/Chandra: `get_hst_status` / `get_chandra_status` on load; full images on tab
 | `YSE_App/perf/plots.py` | Trend + waterfall PNGs |
 | `YSE_App/management/commands/record_perf_benchmark.py` | `--label <name>` |
 | `YSE_App/tests/test_page_load_regression.py` | CI vs `perf_baselines.json` |
+| `YSE_App/perf/mag_limited.py` | Saved query "YSE Magnitude-Limited Sample (min mag < 18.6)" on the personal dashboard: synthetic dataset (`YSE_PERF_MAG_LIMITED_TRANSIENTS`, default 3000 x 20 points), raw SQL + section fragment cold/warm; `trend_mag_limited_sample.png` |
+| `YSE_App/tests/test_mag_limited_query_regression.py` | CI vs `perf_baselines.json` -> `benchmarks` (absolute budget + 2x vs baseline; issue #204) |
 | `docker/scripts/run-baseline-benchmark.sh` | Full protocol script |
 
 ### Run locally

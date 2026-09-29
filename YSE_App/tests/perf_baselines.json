@@ -16,5 +16,30 @@
       "max_ms": 350,
       "note": "Deferred shell with phase 1–2 summary/comments; fragments + HST/Chandra on tab click"
     }
+  },
+  "benchmarks": {
+    "note": "Saved query 'YSE Magnitude-Limited Sample (min mag < 18.6)' on the personal dashboard (issue #204). Budgets are for the dataset below; test_mag_limited_query_regression scales them linearly when YSE_PERF_MAG_LIMITED_TRANSIENTS is larger. baseline_ms null = not yet recorded; paste ttfb_ms from a CI metrics_history.json run to enable the 2x regression check.",
+    "dataset": {
+      "n_transients": 3000,
+      "n_points_per_transient": 20
+    },
+    "regression_factor": 2.0,
+    "entries": {
+      "mag_limited_sample_sql": {
+        "baseline_ms": null,
+        "max_ms": 10000,
+        "note": "Raw SQL via the dashboard cursor path. Production budget is 60 s at ~30x this volume; 10 s here catches a per-transient dependent-subquery blow-up without failing on runner noise."
+      },
+      "personal_dashboard_mag_limited_cold": {
+        "baseline_ms": null,
+        "max_ms": 20000,
+        "note": "/personaldashboard/section/<id>/ with empty result cache: SQL + Transient table build + render."
+      },
+      "personal_dashboard_mag_limited_warm": {
+        "baseline_ms": null,
+        "max_ms": 5000,
+        "note": "Same fragment with the SQL result cached (1 h TTL in the view); table build + render only."
+      }
+    }
   }
 }
