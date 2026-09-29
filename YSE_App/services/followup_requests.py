@@ -12,7 +12,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
-from django.db.models import QuerySet
+from django.db.models import Prefetch, QuerySet
 # Import model modules directly. ``from YSE_App.models import TransientFollowupRequest``
 # fails during URLconf load: views -> yse_pa -> table_utils -> view_utils ->
 # serializers -> this module, while ``YSE_App.models`` package namespace is stale
@@ -277,7 +277,24 @@ def create_or_attach_request(
     return parent, child, created_parent
 
 
+def requests_prefetch() -> Prefetch:
+    """Prefetch for ``TransientFollowup.requests`` in the order the formatters need.
+
+    Attach it to a follow-up queryset so format_requestors / format_comments
+    read the cache instead of querying per row.
+    """
+    return Prefetch(
+        "requests",
+        queryset=TransientFollowupRequest.objects.select_related("requestor").order_by(
+            "requested_at", "id"
+        ),
+    )
+
+
 def _ordered_requests(followup: TransientFollowup) -> Iterable[TransientFollowupRequest]:
+    prefetched = getattr(followup, "_prefetched_objects_cache", {}).get("requests")
+    if prefetched is not None:
+        return sorted(prefetched, key=lambda row: (row.requested_at, row.id))
     requests = followup.requests.all()
     if isinstance(requests, QuerySet):
         return requests.select_related("requestor").order_by("requested_at", "id")
