@@ -87,12 +87,9 @@ def credential_for(slug: str) -> Dict:
     try:
         from YSE_App.models.credential_models import EncryptedCredential
 
-        row = (
-            EncryptedCredential.objects.filter(service=slug, is_active=True)
-            .filter(kind__in=(EncryptedCredential.KIND_BROKER, EncryptedCredential.KIND_GENERIC))
-            .order_by("-kind", "pk")
-            .first()
-        )
+        rows = EncryptedCredential.objects.filter(service=slug, is_active=True).order_by("pk")
+        row = rows.filter(kind=EncryptedCredential.KIND_BROKER).first() or \
+            rows.filter(kind=EncryptedCredential.KIND_GENERIC).first()
         if row is None or not row.has_secret:
             return {}
         return row.get_secret(touch=True) or {}
