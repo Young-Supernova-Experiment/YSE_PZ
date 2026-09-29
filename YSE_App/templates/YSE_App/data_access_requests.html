@@ -1,0 +1,91 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Data access requests
+		{% if pending_count %}<small><span class="badge badge-warning yse-dar-pending-count">{{ pending_count }} to decide</span></small>{% endif %}
+	</h1>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid yse-data-access-requests">
+				<div class="box-header with-border d-flex align-items-center">
+					<ul class="nav nav-pills yse-dar-tabs">
+						<li class="nav-item"><a class="nav-link{% if box == 'inbox' %} active{% endif %}" href="{% url 'data_access_requests' %}?box=inbox">To decide{% if pending_count %} <span class="badge badge-light">{{ pending_count }}</span>{% endif %}</a></li>
+						<li class="nav-item"><a class="nav-link{% if box == 'decided' %} active{% endif %}" href="{% url 'data_access_requests' %}?box=decided">Decided</a></li>
+						<li class="nav-item"><a class="nav-link{% if box == 'mine' %} active{% endif %}" href="{% url 'data_access_requests' %}?box=mine">Mine</a></li>
+					</ul>
+					<span class="ml-auto small text-muted">
+						{% if box == 'mine' %}Requests you sent.{% elif box == 'decided' %}Requests to your groups that were accepted or declined.{% else %}Pending requests to {% if user.is_staff %}any group (staff){% else %}your collaboration groups{% endif %}.{% endif %}
+					</span>
+				</div>
+				<div class="box-body p-0 table-responsive">
+					{% if rows %}
+					<table class="table table-sm table-hover mb-0" id="data_access_requests_tbl">
+						<thead>
+							<tr>
+								<th>#</th><th>Transient</th><th>Data</th><th>Owner group</th><th>{% if box == 'mine' %}Share with{% else %}Requester &rarr; group{% endif %}</th><th>Message</th><th>Status</th><th>When</th>{% if box == 'inbox' %}<th>Decision</th>{% endif %}
+							</tr>
+						</thead>
+						<tbody>
+							{% for r in rows %}
+							<tr data-request-id="{{ r.id }}" data-status="{{ r.status }}"{% if highlight == r.id %} class="table-warning"{% endif %}>
+								<td>{{ r.id }}</td>
+								<td><a href="{% url 'transient_detail' r.transient.slug %}#{% if r.dataset_kind == 'spectrum' %}spectra_tab{% else %}photometry_tab{% endif %}">{{ r.transient.name }}</a></td>
+								<td>{{ r.kind_label }}{% if r.dataset_id %} <small class="text-muted">#{{ r.dataset_id }}</small>{% else %} <small class="text-muted">(all restricted)</small>{% endif %}</td>
+								<td>{{ r.owner_group.name }}</td>
+								<td>{% if box != 'mine' %}{{ r.requester.username }} &rarr; {% endif %}{{ r.target_group.name }}</td>
+								<td><small>{{ r.message|default:"-" }}</small></td>
+								<td>
+									<span class="badge {% if r.status == 'accepted' %}badge-success{% elif r.status == 'declined' %}badge-secondary{% else %}badge-info{% endif %}">{{ r.status_label }}</span>
+									{% if r.decided_by %}<br><small class="text-muted">by {{ r.decided_by.username }} {{ r.decided_at|date:"Y-m-d H:i" }}</small>{% endif %}
+									{% if r.note %}<br><small>&ldquo;{{ r.note }}&rdquo;</small>{% endif %}
+									{% if r.status == 'accepted' %}<br><small class="text-muted">{{ r.granted_count }} dataset{{ r.granted_count|pluralize }} shared</small>{% endif %}
+								</td>
+								<td><small>{{ r.created_date|date:"Y-m-d H:i" }}</small></td>
+								{% if box == 'inbox' %}
+								<td class="text-nowrap">
+									{% if r.can_decide %}
+									<form method="post" action="{% url 'data_access_decide' r.id %}" class="form-inline yse-dar-decide-form">
+										{% csrf_token %}
+										<input type="hidden" name="next" value="{% url 'data_access_requests' %}?box=inbox">
+										<input type="text" name="note" class="form-control form-control-sm mr-1" placeholder="Note (optional)" maxlength="1000" style="width: 12em" aria-label="Decision note">
+										<button type="submit" name="decision" value="accept" class="btn btn-sm btn-success mr-1" title="Add {{ r.target_group.name }} to the restricted {{ r.kind_label|lower }} data of {{ r.owner_group.name }} on {{ r.transient.name }}">Accept</button>
+										<button type="submit" name="decision" value="decline" class="btn btn-sm btn-outline-danger">Decline</button>
+									</form>
+									{% else %}
+									<span class="small text-muted">members of {{ r.owner_group.name }} decide</span>
+									{% endif %}
+								</td>
+								{% endif %}
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="p-3 mb-0 text-muted">{% if box == 'mine' %}You have not requested access to any data.{% elif box == 'decided' %}No decided requests.{% else %}Nothing to decide.{% endif %}</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-3 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>How it works</strong></div>
+				<div class="box-body small">
+					<p class="mb-1">When a transient has photometry or spectra restricted to a collaboration group you are not in, its Spectra and Detailed Photometry tabs show how many datasets are hidden and let you ask the owner group for access.</p>
+					<p class="mb-1">Members of the owner group are notified and decide here. <strong>Accept</strong> adds the requester's chosen group to the data's collaboration groups (the same mechanism every visibility check uses); <strong>Decline</strong> records a note. The requester is notified either way.</p>
+					<p class="mb-0">REST: <code>/api/dataaccessrequests/</code> with <code>accept</code> / <code>decline</code> actions.</p>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}

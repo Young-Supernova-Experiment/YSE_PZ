@@ -312,11 +312,13 @@
                                                 Request ZTF Forced Phot</span>
                                             </button>
                                             </div>
+                                            {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows hint_compact=True %}
                                             <div class="box-body" id="lcplot"></div>
                                         </div>
                                     </div>
                                 </div>
                             <div class="col-6 yse-summary-side-col">
+                                {% include "YSE_App/transient_detail/interests_panel.html" %}
                                 {% include "YSE_App/transient_detail/comments_panel.html" %}
                                 <div class="box box-primary">
                                     <div class="box-header">

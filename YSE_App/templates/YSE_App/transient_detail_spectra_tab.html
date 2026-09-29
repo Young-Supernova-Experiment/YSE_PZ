@@ -1,4 +1,5 @@
 <h4>Spectra for {{ transient.name }}</h4>
+{% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows_spectrum %}
 {% if all_transient_spectra %}
 <table class="table table-bordered table-striped">
     <thead>
