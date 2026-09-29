@@ -1381,7 +1381,7 @@ class ToOFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMi
         super().__init__(*args, **kwargs)
         now = datetime.datetime.now()
         self._set_observer(too_resource.telescope, now)
-        self._set_bazin_epoch(datetime_to_mjd(datetime.datetime.utcnow()))
+        self._set_bazin_epoch(datetime_to_mjd(datetime.datetime.now(datetime.timezone.utc)))
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass

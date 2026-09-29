@@ -201,10 +201,11 @@ def _draw_bazin_fits(ax, series, today):
     ``leader`` (the detection renderer, so hiding the band in the legend
     hides its fit), ``mjd`` / ``mag`` / ``magerr`` (flagged points already
     removed).  The fitted span is drawn solid, the extrapolation past the
-    last detection dashed, in the band's colour.  Returns the fit renderers
-    (for one shared legend entry), the fitted MJD grid end and the labels
-    listing each band's extrapolated magnitude today; when no band has a
-    usable fit a note is drawn instead.
+    last detection dashed, in the band's colour, and labels list each band's
+    extrapolated magnitude today.  Returns ``(renderers, x_end)``: the fit
+    renderers for one shared legend entry and the last MJD of the
+    extrapolation grid (so the caller can widen the x-range); when no band
+    has a usable fit a note is drawn instead and ``([], None)`` returned.
     """
     renderers, notes = [], []
     x_end = None
