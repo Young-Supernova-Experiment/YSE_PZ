@@ -19,8 +19,7 @@ from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, instrument_views,
-    summary_views,
-    job_views, notification_views, sharing_views,
+    job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
@@ -232,6 +231,9 @@ urlpatterns = [
     re_path(r'^logout/$', views.auth_logout, name='auth_logout'),
     re_path(r"^airmassplot/(?P<transient_id>[a-zA-Z0-9_-]+)/(?P<obs_id>[a-zA-Z0-9_-]+)/(?P<telescope_id>[a-zA-Z0-9_-]+)", 
         view_utils.airmassplot, name='airmassplot'),
+    # Observability page (#307): every telescope's altitude/airmass curve for one night.
+    re_path(r'^observability/(?P<transient_id>[0-9]+)/$', observability_views.observability_page, name='observability'),
+    re_path(r'^observability/(?P<transient_id>[0-9]+)/data/$', observability_views.observability_data, name='observability_data'),
     re_path(r'^lightcurveplot_detail/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_detail, name='lightcurveplot_detail'),
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),

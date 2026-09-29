@@ -14,7 +14,8 @@
                                                 <strong>R.A./Dec (2000)</strong>
                                                 <p class="text-muted">
                                                     {{ transient.CoordString.0 }}&nbsp;&nbsp;&nbsp;{{ transient.CoordString.1 }}<br>
-                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small>
+                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small><br>
+                                                    <a class="btn btn-xs btn-outline-primary yse-observability-link" href="{% url 'observability' transient.id %}" title="Tonight's altitude, airmass and moon at every telescope">Observability</a>
                                                 </p>
                                             </div>
                                         </div>
@@ -254,7 +255,7 @@
                                                 </tbody>
                                             </table>
                                             {% if photstat %}
-                                            <table class="table table-bordered table-sm" id="photstat-summary" title="Stored photometry statistics: detections are unflagged points with a magnitude; upper limits are -2.5 log10(flux + 3 flux_err) + zero point and count only before the first detection; rates are mag/day in the band of the first (rise) and last (decay) detection.">
+                                            <table class="table table-bordered table-sm" id="photstat-summary" title="Stored photometry statistics, classified as the light-curve plot draws them: detections are unflagged points with a magnitude and mag_err &lt;= 0.36 (or no flux information); upper limits are unflagged points with flux / flux_err &lt; 3, shown as -2.5 log10(flux + 3 flux_err) + zero point, and count only before the first detection; rates are mag/day in the band of the first (rise) and last (decay) detection.">
                                                 <thead>
                                                     <tr>
                                                         <th colspan="2">Photometry statistics</th>

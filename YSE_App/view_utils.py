@@ -28,10 +28,14 @@ from .common.bandpassdict import bandpassdict
 from .common.filter_display import (
     band_display_color,
     display_filter_label,
-    legend_sort_key,
     plot_legend_label,
     telescope_display_name,
     telescope_display_symbol,
+)
+from .common.band_order import (
+    group_consecutive,
+    legend_column_key,
+    legend_sort_key,
 )
 from .common.legend_layout import (
     GLYPH_HEIGHT as LEGEND_GLYPH_HEIGHT,
@@ -39,15 +43,17 @@ from .common.legend_layout import (
     LABEL_STANDOFF as LEGEND_LABEL_STANDOFF,
     PADDING as LEGEND_PADDING,
     SPACING as LEGEND_SPACING,
+    MAX_COLUMNS as LEGEND_MAX_COLUMNS,
     legend_column_count,
-    legend_height_px,
+    legend_column_grid,
+    legend_grid_height_px,
     legend_label_width_px,
-    legend_rows,
     requested_plot_width,
 )
 from .common.utilities import date_to_mjd
 from .services.visibility import group_access_plot_cache_token
 from .services import bazin as bazin_fits
+from .services import phot_points
 
 import copy
 import functools
@@ -192,6 +198,8 @@ PLOT_HTML_CACHE_TIMEOUT = int(os.environ.get('YSE_PLOT_CACHE_SECONDS', '900'))
 
 BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections)" % bazin_fits.MIN_DETECTIONS
 BAZIN_LEGEND_LABEL = "Bazin fit"
+# Legend column of the today line and fit overlays: after every instrument column.
+MARKER_LEGEND_COLUMN = "markers"
 
 
 def _draw_bazin_fits(ax, series, today):
@@ -826,19 +834,35 @@ def bazinplot(request, transient_id, bazinfit):
     """Detail light-curve plot with (1) or without (0) the per-band Bazin overlay (#225)."""
     return lightcurveplot_detail(request, transient_id, bazin=int(bazinfit))
 
-def _band_legend_key(band_obj):
-    """Stable legend sort key for a PhotometricBand (telescope family, then wavelength; #91)."""
+def _band_instrument_names(band_obj):
+    """(instrument name, telescope name) of a PhotometricBand, ``None`` where unset."""
     inst = band_obj.instrument if getattr(band_obj, 'instrument_id', None) else None
     tel_name = (
         inst.telescope.name
         if inst is not None and getattr(inst, 'telescope_id', None)
         else None
     )
+    return (inst.name if inst is not None else None, tel_name)
+
+
+def _band_legend_key(band_obj):
+    """Stable legend sort key for a PhotometricBand (instrument group, then wavelength; #91).
+
+    The order is the one in ``YSE_App/common/band_order.py``: PS1/2, DECam,
+    Swope, LSST, ZTF, ATLAS, Swift, other instruments alphabetically, and
+    bands bluest to reddest within each.
+    """
+    inst_name, tel_name = _band_instrument_names(band_obj)
     return legend_sort_key(
-        band_obj.name,
-        instrument_name=inst.name if inst is not None else None,
+        getattr(band_obj, 'name', None),
+        instrument_name=inst_name,
         telescope_name=tel_name,
     )
+
+
+def _band_column_key(band_obj):
+    """Legend column (one per instrument label) a PhotometricBand's series belongs to."""
+    return legend_column_key(*_band_instrument_names(band_obj))
 
 
 def _legend_series_order(band_objs):
@@ -878,20 +902,39 @@ def _requested_plot_width(request, default):
 
 
 def _add_legend_grid(ax, legend_items, plot_width):
-    """Lay ``legend_items`` out in columns below ``ax`` (#226).
+    """Lay ``legend_items`` out below ``ax``, one column per instrument (#226).
 
-    Bokeh 2.4.2 has no ``Legend.ncols``; each row is a horizontal ``Legend``
-    whose labels are padded to the longest label so the columns align.  The
-    column count comes from :func:`legend_column_count` (documented in
-    ``YSE_App/common/legend_layout.py``).  Returns the column count so the
-    caller can size the plot with :func:`legend_height_px`.
+    ``legend_items`` are ``(label, renderers, column)`` in legend order;
+    consecutive items with the same ``column`` key form one column that
+    reads down (``PS1 g`` over ``PS1 r`` over ``PS1 i`` ...).  Bokeh 2.4.2
+    has no ``Legend.ncols``, so each row is a horizontal ``Legend`` whose
+    labels are padded to the longest label so the columns align, with an
+    empty item where a shorter column has no entry.  How many columns sit
+    side by side comes from :func:`legend_column_count` (documented in
+    ``YSE_App/common/legend_layout.py``); further instruments start on the
+    row below.  Returns the number of rows so the caller can size the plot
+    with :func:`legend_grid_height_px`.
     """
-    labels = [label for label, _renderers in legend_items]
-    ncols = legend_column_count(labels, plot_width)
+    from bokeh.models import LegendItem
+
+    labels = [label for label, _renderers, _column in legend_items]
+    columns = [
+        [(label, renderers) for label, renderers, _column in items]
+        for _column, items in group_consecutive(legend_items, key=lambda item: item[2])
+    ]
+    ncols = legend_column_count(
+        labels, plot_width, max_columns=min(LEGEND_MAX_COLUMNS, max(1, len(columns))),
+    )
     label_width = legend_label_width_px(labels)
-    for row in legend_rows(legend_items, ncols):
+    rows = legend_column_grid(columns, ncols)
+    for row in rows:
+        items = [
+            LegendItem(label=cell[0], renderers=cell[1]) if cell is not None
+            else LegendItem(label='', renderers=[])
+            for cell in row
+        ]
         legend = Legend(
-            items=row,
+            items=items,
             orientation='horizontal',
             click_policy='hide',
             location='top_left',
@@ -906,7 +949,7 @@ def _add_legend_grid(ax, legend_items, plot_width):
             border_line_color=None,
         )
         ax.add_layout(legend, 'below')
-    return ncols
+    return len(rows)
 
 
 @login_required
@@ -1059,7 +1102,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
         _link_series_visibility(plot, [p_err])
 
-        legend_items.append((legend_label, [plot]))
+        legend_items.append((legend_label, [plot], _band_column_key(band_obj)))
 
         # SALT2 processing
         if salt2 and str(band_obj.name) in bandpassdict.keys():
@@ -1185,6 +1228,10 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     return _bokeh_ajax_response(ax, "my plot")
 
 
+def _limit_or_nan(limit):
+    return np.nan if limit is None else limit
+
+
 @login_required
 def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     _load_heavy_plot_stack()
@@ -1227,12 +1274,6 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ).select_related('instrument', 'instrument__telescope')
     }
 
-    fluxes = np.array([p.flux for p in phot_rows], dtype=object)
-    flux_errs = np.array([p.flux_err for p in phot_rows], dtype=object)
-    flux_zpts = np.array(
-        [p.flux_zero_point if p.flux_zero_point is not None else 27.5 for p in phot_rows],
-        dtype=float,
-    )
     mags = np.array([p.mag for p in phot_rows], dtype=object)
     mag_errs = np.array([p.mag_err for p in phot_rows], dtype=object)
     disc_points = np.array([p.discovery_point for p in phot_rows], dtype=bool)
@@ -1245,8 +1286,18 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     instrument_name = np.array([band_lookup[b].instrument.name for b in band])
     disp_symbol = np.array([band_lookup[b].disp_symbol for b in band])
     disp_color = np.array([band_lookup[b].disp_color for b in band])
-    mag_errs_tmp = mag_errs.copy()
-    mag_errs_tmp[mag_errs == None] = 0.01
+    # Detection / upper-limit classification shared with the stored
+    # statistics (services.phot_points, #368): the triangles this plot draws
+    # are the limits the Photometry statistics block counts.
+    is_det = np.array(
+        [phot_points.is_detection(p.mag, p.mag_err, p.flux, p.flux_err) for p in phot_rows],
+        dtype=bool,
+    )
+    ulim_mags = np.array(
+        [_limit_or_nan(phot_points.limiting_mag(p.flux, p.flux_err, p.flux_zero_point)) for p in phot_rows],
+        dtype=float,
+    )
+    is_ulim = np.isfinite(ulim_mags)
 
     colorlist = ['#8dd3c7','#bebada','#fb8072','#80b1d3','#fdb462','#b3de69','#fccde5','#d9d9d9']
     TOOLTIPS = [
@@ -1301,17 +1352,12 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
                 if 'bessell' in bandpassdict[bandkey]: zpsys = np.append(zpsys,['Vega']*len(mag_errs[iBand]))
                 else: zpsys = np.append(zpsys,['AB']*len(mag_errs[iBand]))
 
-        iPlot = (band_name == bn) & (instrument_name == inn) & (mags != None) & \
-                (mag_errs != None) & ((mag_errs_tmp <= 0.36) | (fluxes == None) | (flux_errs == None))
-        iPlotUlimFlux = (band_name == bn) & (instrument_name == inn) & (fluxes != None) & (flux_errs != None) & (flux_errs != 0)
-        iPlotUlimFlux2 = fluxes[iPlotUlimFlux]/flux_errs[iPlotUlimFlux] < 3
-        mags_ulim = -2.5*np.log10((fluxes[iPlotUlimFlux][iPlotUlimFlux2] + \
-            3*flux_errs[iPlotUlimFlux][iPlotUlimFlux2]).astype(float)) + flux_zpts[iPlotUlimFlux][iPlotUlimFlux2]
-        iPlotUlimFlux3 = mags_ulim == mags_ulim
-        upperlimmag = np.append(upperlimmag,mags_ulim[iPlotUlimFlux3])
-        upperlimmjd = np.append(upperlimmjd,mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist())
-        
-        
+        iPlot = (band_name == bn) & (instrument_name == inn) & is_det
+        iUlim = (band_name == bn) & (instrument_name == inn) & is_ulim
+        mags_ulim = ulim_mags[iUlim]
+        upperlimmag = np.append(upperlimmag,mags_ulim)
+        upperlimmjd = np.append(upperlimmjd,mjds[iUlim].tolist())
+
         source = ColumnDataSource(data=dict(x=mjds[iPlot].tolist(),
                                             y=mags[iPlot].tolist(),
                                             date=obs_dates_str[iPlot].tolist(),
@@ -1326,15 +1372,15 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
                              tooltips=TOOLTIPS,toggleable=False)
         ax.add_tools(g1_hover)
 
-        ulim_x = mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3]
-        ulim_y = mags_ulim[iPlotUlimFlux3]
+        ulim_x = mjds[iUlim]
+        ulim_y = mags_ulim
         p_ulim = None
         if len(ulim_x):
             source = ColumnDataSource(data=dict(x=ulim_x.tolist(),
                                                 y=ulim_y.tolist(),
-                                                date=obs_dates_str[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist(),
-                                                data_quality=data_quality[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist(),
-                                                magsys=mag_sys[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist(),
+                                                date=obs_dates_str[iUlim].tolist(),
+                                                data_quality=data_quality[iUlim].tolist(),
+                                                magsys=mag_sys[iUlim].tolist(),
                                                 telescope=[tel_label]*len(ulim_x),
                                                 filter=[short_filter]*len(ulim_x)))
 
@@ -1352,7 +1398,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
         _link_series_visibility(p_det, [p_err, p_ulim])
 
-        legend_it.append((legend_label, [p_det]))
+        legend_it.append((legend_label, [p_det], _band_column_key(band_obj)))
         if bazin:
             # detections only, flagged (data_quality) points left out
             iFit = iPlot & (data_quality == 'Good')
@@ -1367,15 +1413,15 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     if bazin:
         bazin_renderers, bazin_x_end = _draw_bazin_fits(ax, bazin_series, today)
         if bazin_renderers:
-            legend_it.append((BAZIN_LEGEND_LABEL, bazin_renderers))
+            legend_it.append((BAZIN_LEGEND_LABEL, bazin_renderers, MARKER_LEGEND_COLUMN))
         if bazin_x_end is not None:
             x_end = max(x_end, bazin_x_end)
     p_today = ax.line(today,20,line_width=3,line_color='black')
-    legend_it.append(('today (%i)'%today, [p_today]))
+    legend_it.append(('today (%i)'%today, [p_today], MARKER_LEGEND_COLUMN))
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
-    legend_ncols = _add_legend_grid(ax, legend_it, plot_width)
+    legend_nrows = _add_legend_grid(ax, legend_it, plot_width)
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
@@ -1397,7 +1443,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     #ax.y_range=Range1d(np.max(mags[mags != None])+0.25,np.min(mags[mags != None])-0.5)
     ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 400 + legend_height_px(len(legend_it), legend_ncols)
+    ax.plot_height = 400 + legend_grid_height_px(legend_nrows)
     ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
@@ -1691,18 +1737,18 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
         _link_series_visibility(p, [p_err])
 
-        legend_it.append((legend_label, [p]))
+        legend_it.append((legend_label, [p], _band_column_key(b)))
         
     today = Time(datetime.datetime.today()).mjd
     p = ax.line(today,20,line_width=3,line_color='black')
-    legend_it.append(('today (%i)'%today, [p]))
+    legend_it.append(('today (%i)'%today, [p], MARKER_LEGEND_COLUMN))
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
     hline = Span(location=0, dimension='width', line_color='black',
                  line_width=3)
     ax.add_layout(hline)
-    legend_ncols = _add_legend_grid(ax, legend_it, plot_width)
+    legend_nrows = _add_legend_grid(ax, legend_it, plot_width)
     
 
     
@@ -1723,7 +1769,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ax.extra_x_ranges = {"dateax": Range1d(np.min(mjd)-10,np.max(mjd)+10)}
         ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 200 + legend_height_px(len(legend_it), legend_ncols)
+    ax.plot_height = 200 + legend_grid_height_px(legend_nrows)
     ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}

@@ -10,13 +10,19 @@ band), the rise and decay rate and the time from the last upper limit to the fir
 
 | term | rule | same as |
 |---|---|---|
-| detection | `mag` set and no `data_quality` flag | `Transient.recent_mag()`, the `recent_mag` table columns, `_recent_phot_subqueries` |
-| upper limit | no `mag`, `flux`, `flux_err`, `flux_zero_point` set and `flux + 3 flux_err > 0`; limit `= -2.5 log10(flux + 3 flux_err) + zp`; **counted only before the first detection** (every limit when there is no detection, #349) | the light-curve plot (`view_utils.lightcurveplot`) for the value |
-| ignored | any point with a `data_quality` flag | everything above |
+| detection | `mag` and `mag_err` set, no `data_quality` flag, and either no `flux`/`flux_err` or `mag_err <= 0.36` (S/N 3) | the markers of the detail-page light-curve plot (`view_utils.lightcurveplot_detail`), the Bazin fit's `is_usable_detection` |
+| upper limit | `flux` and `flux_err` set, `flux_err != 0`, `flux / flux_err < 3`, no `data_quality` flag; limit `= -2.5 log10(flux + 3 flux_err) + zp` (`zp` 27.5 when the row has none); a point that is also a detection counts as the detection; **counted only before the first detection** (every limit when there is no detection, #349) | the inverted triangles of the same plot |
+| ignored | any point with a `data_quality` flag | `Transient.recent_mag()`, the Bazin fit |
 
-So `last_detected_mag` / `last_obs_date` are exactly the values the dashboard "Last Mag" / "Last Obs. Date"
-columns compute with two subqueries per row today; those columns can be switched to the stat table in the
-follow-up work (#270, #331).
+Both predicates live in `services/phot_points.py` and the plot builds its masks from them (#368), so the
+limits the Photometry statistics block counts are the triangles drawn before the first marker. ZTF forced
+photometry uploads a `mag`/`mag_err` for every epoch, S/N < 3 included; until #368 those rows counted as
+detections and a transient like 2022abom reported no pre-detection limits while the plot showed them.
+
+`last_detected_mag` / `last_obs_date` match the dashboard "Last Mag" / "Last Obs. Date" columns
+(`_recent_phot_subqueries`: latest unflagged `mag`) except when the latest unflagged row is a
+forced-photometry magnitude noisier than 0.36 mag, which the statistics do not call a detection; switching
+those columns to the stat table is follow-up work (#270, #331).
 
 ## Columns (`YSE_App_transientphotstat`)
 
@@ -33,7 +39,7 @@ follow-up work (#270, #331).
 | `decay_rate` | mag/day, positive: `(last_mag - peak_mag) / (last_mjd - peak_mjd)` in the band of the last detection; NULL when that detection is the peak |
 | `per_band_json` | `{"<band_id>": {name, n_det, peak_mag, peak_mjd, first_mag, first_mjd, last_mag, last_mjd, n_limits, deepest_limit, deepest_limit_mjd, last_limit_mjd}}` (a band with only pre-detection limits has `n_det: 0`) |
 | `phot_hash`, `last_updated` | fingerprint of the stored values (an unchanged recompute writes nothing) and when it last changed |
-| `schema_version` | `services.photstat.SCHEMA_VERSION` when the row was written (2 since #349). A smaller value marks a row computed under older rules: the detail page recomputes it when opened, the next signal rewrites it, `rebuild_photstats --stale-only` visits only those rows |
+| `schema_version` | `services.photstat.SCHEMA_VERSION` when the row was written (2 since #349, 3 since #368). A smaller value marks a row computed under older rules: the detail page recomputes it when opened, the next signal rewrites it, `rebuild_photstats --stale-only` visits only those rows |
 
 Indexes: `peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, `num_det_global`,
 `first_detected_mjd`.
@@ -106,5 +112,11 @@ cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.p
 
 Until then an outdated row is refreshed the first time someone opens the transient, and the plain command above
 does the same job (it rewrites every row once).
+
+**After #368** (`SCHEMA_VERSION` 3, the plot's detection / upper-limit rules; no migration) every row is outdated
+again. Nothing needs to run: a row is recomputed the first time someone opens the transient, and the next
+photometry upload for the transient rewrites it. To refresh every row at once (so the API and the search
+filters on `num_limits_gte` / `deepest_limit_gte` see the new values before anyone opens the page), the same
+`rebuild_photstats --stale-only` command applies.
 
 No new settings.
