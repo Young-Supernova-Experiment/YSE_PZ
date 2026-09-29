@@ -70,14 +70,20 @@ jobs:
 
           if [ "${{ steps.target.outputs.install_deps }}" = "true" ]; then
             "$PYTHON" -m pip install wheel
+            # extinction is an sdist whose setup.py imports numpy, so it cannot
+            # build inside pip's isolated build env; install it first.
             "$PYTHON" -m pip install --no-build-isolation "extinction==0.4.2"
-            "$PYTHON" -m pip install "sncosmo==2.8.0" "urllib3<1.27" "django>=3.2,<4.0"
-            # requirements.txt is a frozen snapshot of the venv, not a resolver-
-            # consistent set: astrorapid pins extinction==0.4 while sncosmo needs
-            # >=0.4.2, and several other pinned pairs disagree the same way, so a
-            # plain `-r` install ends in ResolutionImpossible (and Ziggy pip has
-            # no legacy resolver). Install exactly the pinned versions instead.
-            "$PYTHON" -m pip install --no-deps -r requirements.txt
+            # The web venv gets only the web/app runtime set. requirements.txt is
+            # resolver-consistent since the web/ingest split (#186), so no
+            # --no-deps: pip checks the pins against each other. Django stays on
+            # 3.2 (Django>=3.2,<4.0 in the file) until #133 is scheduled.
+            "$PYTHON" -m pip install -r requirements.txt
+            # The ML extras (requirements-ingest.txt: RAPID/TCN, TF-addons) are
+            # NOT installed here. To set up a cron / analysis environment with
+            # them, run with that environment's interpreter (by hand or from its
+            # own job):
+            #   <cron-venv>/bin/python -m pip install --no-build-isolation "extinction==0.4.2"
+            #   <cron-venv>/bin/python -m pip install -r requirements-ingest.txt
           else
             echo "Skipping pip install (shared interpreter; not writable by runner)"
           fi

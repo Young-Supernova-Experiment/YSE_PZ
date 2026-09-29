@@ -90,7 +90,6 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.QUB_data.QUB',
 	'YSE_App.data_ingest.QUB_data.YSE_Stack',
     'YSE_App.data_ingest.DECam_upload.DECam',
-    'YSE_App.rapid.rapid_classify.rapid_classify_cron',
 	'YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhot',
 	'YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhotUpdate',
 	'YSE_App.data_ingest.TNS_uploads.TNS_updates',
@@ -102,6 +101,11 @@ CRON_CLASSES = [
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
     'YSE_App.data_ingest.TNS_uploads.UpdateGHOST'
 ]
+
+# django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
+# older than this many days. Optional [site_settings] CRON_LOG_RETENTION_DAYS in
+# settings.ini overrides the 30-day default.
+DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RETENTION_DAYS', fallback=30)
 
 MIDDLEWARE = [
 	#'silk.middleware.SilkyMiddleware',

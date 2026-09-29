@@ -1,5 +1,7 @@
 # Frozen from ghcr.io/davecoulter/yse_pz:latest (pip freeze inside ysepz_web_container).
 # Regenerate: docker exec ysepz_web_container pip3 freeze > docker/requirements.web.lock
+# Hand-edited for the Django 3.2 target (#133 is not scheduled): Django 4.0 -> 3.2.25 and
+# astrorapid dropped. Regenerate the freeze once the GHCR image is rebuilt on these pins.
 absl-py==2.1.0
 alerce==1.0.1
 antares-client==1.2.0
@@ -10,7 +12,6 @@ astroplan==0.8
 astropy==5.0
 astropy-helpers==4.0.1
 astroquery==0.4.6
-astrorapid==0.2.16
 astunparse==1.6.3
 attrs==21.2.0
 auditlog==0.0.5
@@ -34,7 +35,7 @@ cycler==0.10.0
 Cython==0.29.23
 DateTime==4.3
 decorator==5.0.8
-Django==4.0
+Django==3.2.25
 django-auditlog==1.0.0
 django-autoslug==1.9.8
 django-bootstrap3==21.1
