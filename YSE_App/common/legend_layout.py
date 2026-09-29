@@ -1,17 +1,24 @@
 """Column layout for the Bokeh light-curve legends (#226).
 
 Bokeh 2.4.2 has no ``Legend.ncols``, so a multi-column legend is built from
-several horizontal ``Legend`` rows stacked ``below`` the plot, each holding
-``ncols`` items.  Every label is padded to the same width (``label_width``)
-so the columns line up across rows.  This module holds the pure arithmetic
-so it can be unit-tested without Bokeh.
+several horizontal ``Legend`` rows stacked ``below`` the plot.  Every label
+is padded to the same width (``label_width``) so the columns line up across
+rows.  This module holds the pure arithmetic so it can be unit-tested
+without Bokeh.
+
+Each legend column is one instrument (``PS1``, ``DECam`` ... see
+``YSE_App/common/band_order.py`` for the order) and reads down: row ``r``
+of a block holds the ``r``-th band of every instrument in that block, with
+an empty cell where an instrument has fewer bands.  When more instruments
+have data than columns fit the width, the next block of instruments starts
+on the row below (:func:`legend_column_grid`).
 
 Column rule::
 
     entry_px = GLYPH_WIDTH + LABEL_STANDOFF + max_label_chars * PX_PER_CHAR + SPACING
     usable   = plot_width - TOOLBAR_WIDTH_PX - 2 * PADDING
-    ncols    = clamp(usable // entry_px, 1, min(MAX_COLUMNS, n_items))
-    nrows    = ceil(n_items / ncols)
+    ncols    = clamp(usable // entry_px, 1, min(MAX_COLUMNS, n_instruments))
+    nrows    = sum(max(len(instrument) for instrument in block) for each block of ncols)
 
 Short labels (``PS1 g``) pack into up to ``MAX_COLUMNS`` columns; one long
 label forces fewer, wider columns so nothing overlaps.  ``plot_width`` is
@@ -32,7 +39,8 @@ GLYPH_HEIGHT = 20
 LABEL_STANDOFF = 5
 SPACING = 6
 PADDING = 4
-MAX_COLUMNS = 6
+# PS1, PS2, DECam, Swope, LSST, ZTF, ATLAS, Swift, one "other" and the marker column.
+MAX_COLUMNS = 10
 # The figure's right-hand toolbar sits inside plot_width; the legend cannot use it.
 TOOLBAR_WIDTH_PX = 30
 # Accepted range for a page-supplied width, and the bucket it is rounded to
@@ -66,6 +74,31 @@ def legend_rows(items, ncols: int) -> list[list]:
     items = list(items)
     ncols = max(1, int(ncols))
     return [items[i:i + ncols] for i in range(0, len(items), ncols)]
+
+
+def legend_column_grid(columns, ncols: int, placeholder=None) -> list[list]:
+    """Rows of at most ``ncols`` cells that read down each column.
+
+    ``columns`` is ``[[item, ...], ...]``, one list per instrument in legend
+    order.  Columns are laid out ``ncols`` at a time: within a block, row
+    ``r`` holds the ``r``-th item of each column (``placeholder`` where a
+    shorter column has none) and the next block of columns starts on the
+    row below the deepest column of the block.  Empty columns are skipped.
+    """
+    columns = [list(column) for column in columns if column]
+    ncols = max(1, int(ncols))
+    rows: list[list] = []
+    for start in range(0, len(columns), ncols):
+        block = columns[start:start + ncols]
+        depth = max(len(column) for column in block)
+        for r in range(depth):
+            rows.append([column[r] if r < len(column) else placeholder for column in block])
+    return rows
+
+
+def legend_grid_height_px(n_rows: int) -> int:
+    """Vertical space ``n_rows`` stacked legend rows take below the plot."""
+    return ROW_HEIGHT_PX * max(0, int(n_rows))
 
 
 def legend_row_count(n_items: int, ncols: int) -> int:
