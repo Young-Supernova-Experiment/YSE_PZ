@@ -29,6 +29,7 @@ from django.views.decorators.csrf import csrf_exempt
 from .basicauth import *
 
 from YSE_App.util import lcogt
+from YSE_App.services.dashboard_queries import duplicates_of, matching_user_queries
 from YSE_App.services.followup_requests import (
 	DEFAULT_PRIORITY,
 	create_or_attach_request,
@@ -659,6 +660,7 @@ class AddTransientCommentFormView(FormView):
 			return JsonResponse(data)
 		return HttpResponseRedirect(self._transient_detail_success_url(log.transient))
 		
+@method_decorator(login_required, name='dispatch')
 class AddDashboardQueryFormView(FormView):
 	form_class = AddDashboardQueryForm
 	template_name = 'YSE_App/form_snippets/dashboard_query_form.html'
@@ -674,28 +676,78 @@ class AddDashboardQueryFormView(FormView):
 	def form_valid(self, form):
 		response = super(AddDashboardQueryFormView, self).form_valid(form)
 		if is_ajax(self.request):
+			query = form.cleaned_data.get('query')
+			python_query = form.cleaned_data.get('python_query') or None
+			if query is None and not python_query:
+				return JsonResponse(
+					{'message': 'Choose an SQL query or a Python function.'}, status=400
+				)
+
+			# Idempotent: the same query attached twice is still one dashboard
+			# box (issue #203). Re-use the existing row instead of adding another.
+			existing = matching_user_queries(
+				self.request.user, query=query, python_query=python_query
+			).order_by('id').first()
+			if existing is not None:
+				return JsonResponse({
+					'message': "Query is already on your dashboard.",
+					'user_query_id': existing.id,
+					'created': False,
+				})
 
 			instance = form.save(commit=False)
 			instance.created_by = self.request.user
 			instance.modified_by = self.request.user
 			instance.user = self.request.user
+			instance.python_query = python_query
 
 			instance.save() #update_fields=['created_by','modified_by']
 
-			print(form.cleaned_data)
-
 			data = {
 				'message': "Successfully submitted form data.",
+				'user_query_id': instance.id,
+				'created': True,
 			}
 			return JsonResponse(data)
 		else:
 			return response
 
+@method_decorator(login_required, name='dispatch')
 class RemoveDashboardQueryFormView(DeleteView):
+	"""Detach a saved query from the requesting user's dashboard.
+
+	Deletes every ``UserQuery`` row attaching that query to the user (not just
+	``pk``), so duplicates created before issue #203 disappear in one click.  An
+	AJAX request gets a JSON answer instead of the redirect to
+	``personaldashboard``: jQuery follows redirects inside the XHR, which made
+	the delete wait on a full dashboard render.  Only the row's owner can delete
+	it.
+	"""
 	model = UserQuery
 	form_class = RemoveDashboardQueryForm
 	template_name = 'YSE_App/personaldashboard.html'
 	success_url = reverse_lazy('personaldashboard')
+
+	def get_queryset(self):
+		return UserQuery.objects.filter(user=self.request.user)
+
+	def post(self, request, *args, **kwargs):
+		target = self.get_queryset().filter(pk=kwargs.get('pk')).first()
+		if target is None:
+			if is_ajax(request):
+				# Already gone (e.g. removed by an earlier click): nothing to do.
+				return JsonResponse({'message': 'Query is not on your dashboard.', 'removed': 0})
+			raise Http404("No UserQuery matches the given query.")
+
+		# get_success_url() formats success_url with self.object.__dict__.
+		self.object = target
+		removed, _ = duplicates_of(target).delete()
+		if is_ajax(request):
+			return JsonResponse({'message': 'Removed query from dashboard.', 'removed': removed})
+		return HttpResponseRedirect(self.get_success_url())
+
+	# Django >= 4 routes DELETE through form_valid; keep it on the same path.
+	delete = post
 	
 	def form_invalid(self, form):
 		response = super(RemoveDashboardQueryFormView, self).form_invalid(form)
