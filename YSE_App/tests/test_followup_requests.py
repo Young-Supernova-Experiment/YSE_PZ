@@ -263,3 +263,194 @@ class FollowupRequestTests(TestCase):
         self.assertTrue(created)
         self.assertEqual(child.priority, 4.0)
         self.assertEqual(parent.priority, 4.0)
+
+
+class SharedClassicalRequestTests(TestCase):
+    """Several people request the same object for the same classical night.
+
+    Each keeps their own comment and priority under one parent follow-up;
+    deleting a request never touches someone else's.
+    """
+
+    def setUp(self):
+        from YSE_App.models import ClassicalObservingDate
+        from YSE_App.tests.deploy_checklist_helpers import (
+            create_telescope,
+            ensure_classical_night_type,
+        )
+
+        self.user_a = create_test_user("shared_req_a", is_staff=False)
+        self.user_b = create_test_user("shared_req_b", is_staff=False)
+        self.staff = create_test_user("shared_req_staff", is_staff=True)
+        self.transient = create_minimal_transient(self.user_a, name="sharedreq01")
+        # Non-staff users only see follow-ups of transients they have data for.
+        attach_synthetic_photometry(self.user_a, self.transient, n_points=2)
+        self.requested, _ = FollowupStatus.objects.get_or_create(
+            name="Requested",
+            defaults={"created_by": self.user_a, "modified_by": self.user_a},
+        )
+        now = timezone.now()
+        self.telescope = create_telescope(self.user_a, "SharedReqTel")
+        self.resource = ClassicalResource.objects.create(
+            telescope=self.telescope,
+            begin_date_valid=now - timedelta(days=1),
+            end_date_valid=now + timedelta(days=6),
+            creator_only=True,
+            **audit_fields(self.user_a),
+        )
+        self.night = ClassicalObservingDate.objects.create(
+            resource=self.resource,
+            night_type=ensure_classical_night_type(self.user_a),
+            obs_date=(now + timedelta(days=2)).replace(hour=12, minute=0, second=0, microsecond=0),
+            **audit_fields(self.user_a),
+        )
+
+    def _client(self, user):
+        client = Client()
+        client.force_login(user)
+        return client
+
+    def _post_request(self, user, *, priority, comment):
+        response = self._client(user).post(
+            reverse("add_transient_followup"),
+            {
+                "status": self.requested.id,
+                "classical_resource": self.resource.id,
+                "priority": priority,
+                "comment": comment,
+                "transient": self.transient.id,
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.json()["data"]
+
+    def _service_request(self, user, *, priority, comment):
+        parent, child, _ = create_or_attach_request(
+            user,
+            self.transient,
+            status=self.requested,
+            valid_start=self.resource.begin_date_valid,
+            valid_stop=self.resource.end_date_valid,
+            priority=priority,
+            comment=comment,
+            classical_resource=self.resource,
+        )
+        return parent, child
+
+    def _night_url(self):
+        return reverse(
+            "observing_night",
+            kwargs={
+                "telescope": self.telescope.name.replace(" ", "_"),
+                "obs_date": self.night.obs_date.strftime("%Y-%m-%d"),
+                "pi_name": "None",
+            },
+        )
+
+    def test_two_users_same_night_keep_their_own_comments(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        first = self._post_request(self.user_a, priority=3.0, comment="a")
+        second = self._post_request(self.user_b, priority=2.0, comment="b")
+        self.assertFalse(first["attached"])
+        self.assertTrue(second["attached"])
+        self.assertEqual(first["id"], second["id"])
+
+        self.assertEqual(TransientFollowup.objects.filter(transient=self.transient).count(), 1)
+        parent = TransientFollowup.objects.get(transient=self.transient)
+        children = {r.requestor.username: r for r in parent.requests.all()}
+        self.assertEqual(set(children), {"shared_req_a", "shared_req_b"})
+        self.assertEqual(children["shared_req_a"].comment, "a")
+        self.assertEqual(children["shared_req_b"].comment, "b")
+        self.assertEqual(children["shared_req_a"].priority, 3.0)
+        self.assertEqual(children["shared_req_b"].priority, 2.0)
+        self.assertEqual(parent.priority, 2.0)
+
+        # Follow-up tab (as B): both requests listed, delete only on B's own.
+        fragment = self._client(self.user_b).get(
+            reverse("transient_detail_followup_fragment", kwargs={"transient_id": self.transient.id})
+        )
+        self.assertEqual(fragment.status_code, 200)
+        html = fragment.content.decode()
+        self.assertIn("shared_req_a", html)
+        self.assertIn("shared_req_b", html)
+        self.assertIn(">a<", html)
+        self.assertIn(">b<", html)
+        self.assertIn(
+            reverse("delete_followup_request", kwargs={"request_id": children["shared_req_b"].id}), html
+        )
+        self.assertNotIn(
+            reverse("delete_followup_request", kwargs={"request_id": children["shared_req_a"].id}), html
+        )
+        self.assertNotIn(reverse("delete_followup", kwargs={"followup_id": parent.id}), html)
+
+        # Observing night page and target list show every requester and comment.
+        with iers_offline():
+            night_page = self._client(self.user_a).get(self._night_url())
+        self.assertEqual(night_page.status_code, 200)
+        self.assertContains(night_page, self.transient.name)
+        self.assertContains(night_page, "shared_req_a")
+        self.assertContains(night_page, "shared_req_b")
+        self.assertContains(night_page, "shared_req_a: a")
+        self.assertContains(night_page, "shared_req_b: b")
+
+        with iers_offline():
+            target_list = self._client(self.user_a).get(
+                reverse(
+                    "download_target_list",
+                    kwargs={
+                        "telescope": self.telescope.name.replace(" ", "_"),
+                        "obs_date": self.night.obs_date.strftime("%Y-%m-%d"),
+                    },
+                )
+            )
+        self.assertEqual(target_list.status_code, 200)
+        text = target_list.content.decode()
+        self.assertIn("shared_req_a: a", text)
+        self.assertIn("shared_req_b: b", text)
+
+    def test_delete_own_request_leaves_others(self):
+        parent, child_a = self._service_request(self.user_a, priority=3.0, comment="a")
+        _, child_b = self._service_request(self.user_b, priority=2.0, comment="b")
+        client_b = self._client(self.user_b)
+
+        response = client_b.get(reverse("delete_followup_request", kwargs={"request_id": child_a.id}))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(parent.requests.count(), 2)
+
+        response = client_b.get(reverse("delete_followup_request", kwargs={"request_id": child_b.id}))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(self.transient.slug, response.url)
+        self.assertTrue(TransientFollowup.objects.filter(pk=parent.id).exists())
+        self.assertEqual(list(parent.requests.values_list("id", flat=True)), [child_a.id])
+        parent.refresh_from_db()
+        self.assertEqual(parent.priority, 3.0)
+        self.assertEqual(TransientFollowupRequest.objects.get(pk=child_a.id).comment, "a")
+
+        # Last request gone: parent goes with it.
+        response = self._client(self.user_a).get(
+            reverse("delete_followup_request", kwargs={"request_id": child_a.id})
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(TransientFollowup.objects.filter(pk=parent.id).exists())
+
+    def test_parent_delete_by_non_staff_only_withdraws_own_requests(self):
+        parent, child_a = self._service_request(self.user_a, priority=3.0, comment="a")
+        _, child_b = self._service_request(self.user_b, priority=2.0, comment="b")
+
+        response = self._client(self.user_b).get(
+            reverse("delete_followup", kwargs={"followup_id": parent.id})
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(TransientFollowup.objects.filter(pk=parent.id).exists())
+        self.assertEqual(list(parent.requests.values_list("id", flat=True)), [child_a.id])
+        parent.refresh_from_db()
+        self.assertEqual(parent.priority, 3.0)
+
+        # Staff may still remove the whole follow-up.
+        response = self._client(self.staff).get(
+            reverse("delete_followup", kwargs={"followup_id": parent.id})
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(TransientFollowup.objects.filter(pk=parent.id).exists())
