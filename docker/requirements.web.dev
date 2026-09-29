@@ -7,3 +7,8 @@ astro-datalab==2.22.1
 # created directly" under protobuf 4.x; pin 3.20.3 so the photo-z / rapid crons
 # import in the CI image (issue #183; matches requirements.txt).
 protobuf==3.20.3
+# Production (Ziggy) runs Django 3.2 and requirements.txt says Django>=3.2,<4.0,
+# but the GHCR base image ships Django 4.0. Pin the 3.2 LTS line here so the dev
+# image (and CI, which installs the same pin into the pulled image) tests what
+# production runs, until the Django 4 upgrade (#133) is scheduled.
+Django==3.2.25
