@@ -152,3 +152,73 @@ class SearchFilterTests(TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(len(ctx.captured_queries), 1)
         self.assertEqual(ctx.captured_queries[0]["sql"].upper().count(" LIKE "), 3 * n_fields)
+
+
+# --------------------------------------------------------------------------- P2
+
+
+class FollowupTableRecentMagTests(TestCase):
+    """P2: recent_mag is one subquery on the follow-up queryset, not a query per row."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("speed_recent_mag_user")
+        cls.night = _classical_night(cls.user, tag="p2-night", obs_date=timezone.now())
+        cls.transients = []
+        for i in range(6):
+            t = create_minimal_transient(cls.user, name=f"p2mag{i}", ra=10.0 + i, dec=-5.0 + i)
+            if i != 5:  # one row without photometry
+                attach_synthetic_photometry(cls.user, t, n_points=2 + i)
+            _request_followup(cls.user, t, resource=cls.night.resource,
+                              classical_resource=cls.night.resource)
+            cls.transients.append(t)
+
+    def _cells(self, table_cls, qs, **kwargs):
+        table = table_cls(qs, **kwargs)
+        return [(row.record.transient.name, row.get_cell("recent_mag")) for row in table.rows]
+
+    def test_recent_mag_cells_match_model_method(self):
+        from YSE_App.table_utils import FollowupTable, ObsNightFollowupTable, ToOFollowupTable
+
+        qs = self.night.resource.transientfollowup_set.select_related("transient")
+        expected = {t.name: t.recent_mag() for t in self.transients}
+        for table_cls, kwargs in (
+            (FollowupTable, {}),
+            (ObsNightFollowupTable, {"classical_obs_date": self.night}),
+            (ToOFollowupTable, {"too_resource": self.night.resource}),
+        ):
+            with self.subTest(table=table_cls.__name__):
+                for name, cell in self._cells(table_cls, qs, **kwargs):
+                    if expected[name] is None:
+                        self.assertEqual(cell, "—")  # django-tables2 default for None
+                    else:
+                        self.assertEqual(cell, expected[name])
+
+    def test_recent_mag_query_count_does_not_grow_with_rows(self):
+        from YSE_App.table_utils import FollowupTable
+
+        def count_for(n):
+            ids = [t.id for t in self.transients[:n]]
+            qs = self.night.resource.transientfollowup_set.filter(
+                transient_id__in=ids
+            ).select_related("transient")
+            with CaptureQueriesContext(connection) as ctx:
+                cells = self._cells(FollowupTable, qs)
+            self.assertEqual(len(cells), n)
+            return len(ctx.captured_queries)
+
+        self.assertEqual(count_for(2), count_for(6))
+        self.assertLessEqual(count_for(6), 2)
+
+    def test_ordering_by_recent_mag_uses_the_annotation(self):
+        from YSE_App.table_utils import FollowupTable
+
+        qs = self.night.resource.transientfollowup_set.select_related("transient")
+        with CaptureQueriesContext(connection) as ctx:
+            table = FollowupTable(qs, order_by="-recent_mag")
+            names = [row.record.transient.name for row in table.rows]
+        self.assertLessEqual(len(ctx.captured_queries), 2)
+        with_mag = [t for t in self.transients if t.recent_mag() is not None]
+        expected = [t.name for t in sorted(with_mag, key=lambda t: float(t.recent_mag()), reverse=True)]
+        self.assertEqual(names[: len(expected)], expected)
+        self.assertEqual(names[-1], "p2mag5")  # NULL magnitude sorts last on descending

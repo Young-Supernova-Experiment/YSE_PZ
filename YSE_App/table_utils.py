@@ -9,6 +9,7 @@ from django.db.models import Count, OuterRef, Subquery, Value, Max, Min
 from django.db.models.functions import Greatest, Coalesce
 from django_tables2 import A
 from django.db import models
+from django.db.models.query import QuerySet
 from .data import PhotometryService
 import time
 import django_filters
@@ -29,6 +30,47 @@ def stable_order_by(queryset, field, is_descending):
     if is_descending:
         return queryset.order_by(f'-{field}', '-pk')
     return queryset.order_by(field, 'pk')
+
+
+def _recent_phot_subqueries(transient_ref):
+    """(recent_mag, recent_magdate) scalar subqueries for the transient at ``transient_ref``.
+
+    Matches PhotometryService / Transient.recent_mag(): flagged bad data excluded.
+    """
+    recent_phot = TransientPhotData.objects.filter(
+        photometry__transient=OuterRef(transient_ref),
+    ).exclude(data_quality__isnull=False)
+    recent_mag_sq = (
+        recent_phot.filter(mag__isnull=False)
+        .order_by('-obs_date')
+        .values('mag')[:1]
+    )
+    recent_magdate_sq = recent_phot.order_by('-obs_date').values('obs_date')[:1]
+    return Subquery(recent_mag_sq), Subquery(recent_magdate_sq)
+
+
+def annotate_followup_recent_mag(qs):
+    """recent_mag for each TransientFollowup row, one subquery instead of a query per row."""
+    if 'recent_mag' in qs.query.annotations:
+        return qs
+    recent_mag, _ = _recent_phot_subqueries('transient_id')
+    return qs.annotate(recent_mag=recent_mag)
+
+
+class FollowupRecentMagMixin:
+    """Follow-up tables: recent_mag from the annotation, formatted like Transient.recent_mag()."""
+
+    def __init__(self, data, *args, **kwargs):
+        if isinstance(data, QuerySet):
+            data = annotate_followup_recent_mag(data)
+        super().__init__(data, *args, **kwargs)
+
+    def render_recent_mag(self, value):
+        return '%.2f' % value
+
+    def order_recent_mag(self, queryset, is_descending):
+        queryset = annotate_followup_recent_mag(queryset)
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
 
 class MagnitudeColumn(tables.Column):
@@ -1004,7 +1046,7 @@ SELECT pd.mag
         }
 
 
-class FollowupTable(tables.Table):
+class FollowupTable(FollowupRecentMagMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='transient__name')
@@ -1012,7 +1054,7 @@ class FollowupTable(tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='transient.recent_mag',
+    recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
 
 
@@ -1045,24 +1087,6 @@ class FollowupTable(tables.Table):
         self.base_columns['transient.status'].verbose_name = 'Transient Status'
         #self.base_columns['status'].verbose_name = 'Followup Status'
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
     class Meta:
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag','transient.status','observation_window','action')
@@ -1083,7 +1107,7 @@ SELECT pd.mag
             "order": [[ 2, "desc" ]],
         }
 
-class ObsNightFollowupTable(tables.Table):
+class ObsNightFollowupTable(FollowupRecentMagMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='transient__name')
@@ -1091,7 +1115,7 @@ class ObsNightFollowupTable(tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='transient.recent_mag',
+    recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
 
 
@@ -1187,24 +1211,6 @@ class ObsNightFollowupTable(tables.Table):
 
         return format_comments(record)
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
     class Meta:
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag',
@@ -1227,7 +1233,7 @@ SELECT pd.mag
             "order": [[ 2, "desc" ]],
         }
 
-class ToOFollowupTable(tables.Table):
+class ToOFollowupTable(FollowupRecentMagMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -1235,7 +1241,7 @@ class ToOFollowupTable(tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='transient.recent_mag',
+    recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
 
 
@@ -1323,24 +1329,6 @@ class ToOFollowupTable(tables.Table):
         from YSE_App.services.followup_requests import format_comments
 
         return format_comments(record)
-
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     class Meta:
         model = TransientFollowup
@@ -1464,19 +1452,10 @@ def annotate_dashboard_transient_fields(qs):
 
     Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
     """
-    # Match PhotometryService / Transient.recent_mag: exclude flagged bad data.
-    recent_phot = TransientPhotData.objects.filter(
-        photometry__transient=OuterRef('pk'),
-    ).exclude(data_quality__isnull=False)
-    recent_mag_sq = (
-        recent_phot.filter(mag__isnull=False)
-        .order_by('-obs_date')
-        .values('mag')[:1]
-    )
-    recent_magdate_sq = recent_phot.order_by('-obs_date').values('obs_date')[:1]
+    recent_mag, recent_magdate = _recent_phot_subqueries('pk')
     return qs.select_related('status', 'host', 'obs_group').annotate(
-        recent_mag=Subquery(recent_mag_sq),
-        recent_magdate=Subquery(recent_magdate_sq),
+        recent_mag=recent_mag,
+        recent_magdate=recent_magdate,
     )
 
 
