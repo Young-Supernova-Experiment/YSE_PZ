@@ -184,18 +184,17 @@
                         </table>
                     </div>
                     <div class="tab-pane" id="jwst_tab">
-                        <h4>JWST Observations for {{transient.name}}</h4>
-                        <p class="text-muted small" id="jwst_summary">Science images and spectra in the MAST archive within 1&Prime; of the transient position.</p>
+                        <h4>JWST Images for {{transient.name}}</h4>
+                        <p class="text-muted small" id="jwst_summary">Science images in the MAST archive within 1&Prime; of the transient position (spectra are not listed).</p>
                         <table class="table table-bordered table-striped" id="jwst_observation_table">
                             <thead>
                                 <tr>
                                     <th>Date (UT)</th>
                                     <th>Instrument</th>
-                                    <th>Filter / grating</th>
+                                    <th>Filter</th>
                                     <th>Program</th>
                                     <th>Target</th>
                                     <th>Exp. (s)</th>
-                                    <th>Product</th>
                                     <th>Preview</th>
                                     <th>Links</th>
                                 </tr>
@@ -2166,18 +2165,17 @@
                     'onerror="this.parentNode.textContent=\'preview\'" /></a>';
             }
             var exptime = (row.exptime === null || row.exptime === undefined) ? '' : Math.round(Number(row.exptime));
-            var product = yseEscapeHtml(row.product || '');
+            var inst = yseEscapeHtml(row.inst || '');
             if (row.calib_level !== null && row.calib_level !== undefined) {
-                product += ' <span class="text-muted">(L' + yseEscapeHtml(row.calib_level) + ')</span>';
+                inst += ' <span class="text-muted small" title="MAST calibration level">(L' + yseEscapeHtml(row.calib_level) + ')</span>';
             }
             return '<tr>' +
                 '<td title="MJD ' + yseEscapeHtml(row.mjd) + '">' + yseEscapeHtml(row.obsdate || '') + '</td>' +
-                '<td>' + yseEscapeHtml(row.inst || '') + '</td>' +
+                '<td>' + inst + '</td>' +
                 '<td>' + yseEscapeHtml(row.filters || '') + '</td>' +
                 '<td>' + yseEscapeHtml(row.program || '') + (row.pi ? '<br><span class="text-muted small">' + yseEscapeHtml(row.pi) + '</span>' : '') + '</td>' +
                 '<td>' + yseEscapeHtml(row.target || '') + '</td>' +
                 '<td class="text-right">' + exptime + '</td>' +
-                '<td>' + product + '</td>' +
                 '<td>' + preview + '</td>' +
                 '<td>' + (links.length ? links.join(' &middot; ') : '<span class="text-muted">&mdash;</span>') + '</td>' +
                 '</tr>';
@@ -2185,13 +2183,13 @@
         function loadJwstObservations() {
             var rows_full = $("#jwst_observation_list");
             var rows_tab = $("#jwst_tab_header");
-            rows_full.html('<tr><td colspan="9" class="text-muted"><i class="fa fa-spinner fa-spin"></i> Querying the JWST archive (MAST)…</td></tr>');
+            rows_full.html('<tr><td colspan="8" class="text-muted"><i class="fa fa-spinner fa-spin"></i> Querying the JWST archive (MAST)…</td></tr>');
             $.get("{% url 'get_jwst_observations' transient.id %}").done(function(json) {
                 var rows = (json && json.rows) || [];
                 rows_full.empty();
                 if (!rows.length) {
                     rows_tab.text("No JWST").removeAttr('title');
-                    rows_full.html('<tr><td colspan="9" class="text-muted">No JWST observations of this position in MAST.</td></tr>');
+                    rows_full.html('<tr><td colspan="8" class="text-muted">No JWST images of this position in MAST.</td></tr>');
                     return;
                 }
                 rows_tab.text("JWST Data (" + rows.length + ")").removeAttr('title');
@@ -2205,7 +2203,7 @@
                     "JWST archive (MAST) lookup failed.";
                 yseJwstObservationsLoaded = false;
                 rows_tab.text("JWST (lookup failed)").attr('title', message);
-                rows_full.html('<tr><td colspan="9" class="text-warning">' + yseEscapeHtml(message) +
+                rows_full.html('<tr><td colspan="8" class="text-warning">' + yseEscapeHtml(message) +
                     ' <a href="#" class="yse-jwst-retry">Retry</a></td></tr>');
             });
         }
