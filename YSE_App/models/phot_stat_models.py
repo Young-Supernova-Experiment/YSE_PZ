@@ -95,12 +95,20 @@ class TransientPhotStat(models.Model):
     mean_mag = models.FloatField(null=True, blank=True)
     faintest_mag = models.FloatField(null=True, blank=True)
 
-    # Deepest upper limit (largest limiting magnitude) and when it was taken.
+    # Deepest upper limit (largest limiting magnitude) among the limits taken
+    # before the first detection (every limit when there is no detection),
+    # when it was taken and in which band.
     deepest_limit = models.FloatField(null=True, blank=True)
     deepest_limit_mjd = models.FloatField(null=True, blank=True)
+    deepest_limit_band = models.ForeignKey(
+        PhotometricBand, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
 
-    # Last upper limit before the first detection, and the gap to it (days).
+    # Last upper limit before the first detection, its band, and the gap (days).
     last_non_detection_mjd = models.FloatField(null=True, blank=True)
+    last_non_detection_band = models.ForeignKey(
+        PhotometricBand, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
     time_to_non_detection = models.FloatField(null=True, blank=True)
 
     # mag/day, both positive: brightening before peak, fading after it.
@@ -113,6 +121,10 @@ class TransientPhotStat(models.Model):
 
     # Fingerprint of the stored values; an unchanged recompute writes nothing.
     phot_hash = models.CharField(max_length=40, blank=True, default='')
+    # ``services.photstat.SCHEMA_VERSION`` at the time of the last write; a
+    # smaller value marks a row computed with older rules (recomputed on the
+    # next page view, signal or ``rebuild_photstats --stale-only``).
+    schema_version = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
 
     class Meta:

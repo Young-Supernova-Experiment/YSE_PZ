@@ -6,6 +6,7 @@ values did not change is left alone, so the command is safe to re-run::
 
   python manage.py rebuild_photstats                      # every transient
   python manage.py rebuild_photstats --missing-only       # only transients without a row
+  python manage.py rebuild_photstats --stale-only         # missing rows + rows written under older rules
   python manage.py rebuild_photstats --transient 2025aarm --transient 2026bzn
   python manage.py rebuild_photstats --batch-size 200
 
@@ -14,6 +15,8 @@ photometry query and one stat query per batch; progress is printed per
 batch and the totals (processed / created / updated / unchanged) at the end.
 Interrupting and re-running picks up where the values differ, and
 ``--missing-only`` resumes a first backfill without touching finished rows.
+After a rules change (``services.photstat.SCHEMA_VERSION`` bumped)
+``--stale-only`` reads photometry only for the rows that predate it.
 """
 
 from __future__ import annotations
@@ -39,6 +42,11 @@ class Command(BaseCommand):
             help="Only transients that have no stat row yet.",
         )
         parser.add_argument(
+            "--stale-only", action="store_true",
+            help="Only transients without a row or with a row computed under older rules "
+                 "(schema_version < %d)." % photstat.SCHEMA_VERSION,
+        )
+        parser.add_argument(
             "--batch-size", type=int, default=photstat.DEFAULT_BATCH_SIZE,
             help="Transients per batch (default %(default)s).",
         )
@@ -58,6 +66,9 @@ class Command(BaseCommand):
                 raise CommandError("Unknown transient(s): %s" % ", ".join(sorted(missing)))
         if options["missing_only"]:
             qs = qs.exclude(pk__in=TransientPhotStat.objects.values("transient_id"))
+        if options["stale_only"]:
+            current = TransientPhotStat.objects.filter(schema_version__gte=photstat.SCHEMA_VERSION)
+            qs = qs.exclude(pk__in=current.values("transient_id"))
         ids = list(qs.values_list("pk", flat=True))
         total = len(ids)
         totals = photstat.RecomputeResult()
