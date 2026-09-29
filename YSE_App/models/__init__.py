@@ -34,3 +34,4 @@ from YSE_App.models.sharing_models import SharingService, SharingSubmission, Aut
 from YSE_App.models.instrument_log_models import InstrumentLog
 from YSE_App.models.annotation_models import TransientAnnotation, TransientAnnotationValue
 from YSE_App.models.analysis_models import AnalysisResultFile, AnalysisService
+from YSE_App.models.summary_models import TransientSummaryEmbedding, TransientSummaryHistory, TransientSummaryPreference

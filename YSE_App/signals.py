@@ -23,6 +23,8 @@ import YSE_App.analysis.runners  # noqa: E402,F401
 # ... and the annotation checks (#318: Gaia DR3, WISE, quasar catalogue) as runners.
 import YSE_App.annotation_services  # noqa: E402,F401
 from YSE_App.services import annotations as annotations_svc
+# ... and the AI summariser runner + summaries.refresh_stale job (#296).
+import YSE_App.services.summaries  # noqa: E402,F401
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 
