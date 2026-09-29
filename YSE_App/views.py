@@ -1180,13 +1180,20 @@ def yse_observing_night(request, obs_date):
 def download_target_list(request, telescope, obs_date):
 
     # get follow requests for telescope/date
-    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).filter(resource__telescope__name = telescope.replace('_',' '))
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).filter(valid_start__lte = classical_obs_date[0].obs_date).filter(valid_stop__gte = classical_obs_date[0].obs_date)
+    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
+        filter(resource__telescope__name = telescope.replace('_',' ')).select_related('resource__telescope')
+    # evaluate once; an empty result is a 404, not a 500
+    classical_obs_date = classical_obs_date.first()
+    if classical_obs_date is None:
+        raise Http404('No classical observing date found for this telescope/date')
+    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        select_related('transient')
 
     location = EarthLocation.from_geodetic(
-        classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-        classical_obs_date[0].resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date[0].obs_date).split('+')[0], format='iso')
+        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+        classical_obs_date.resource.telescope.elevation*u.m)
+    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
     
@@ -1211,13 +1218,20 @@ def download_target_list(request, telescope, obs_date):
 def download_targets_and_finders(request, telescope, obs_date):
 
     # get follow requests for telescope/date
-    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).filter(resource__telescope__name = telescope.replace('_',' '))
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).filter(valid_start__lte = classical_obs_date[0].obs_date).filter(valid_stop__gte = classical_obs_date[0].obs_date)
+    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
+        filter(resource__telescope__name = telescope.replace('_',' ')).select_related('resource__telescope')
+    # evaluate once; an empty result is a 404, not a 500
+    classical_obs_date = classical_obs_date.first()
+    if classical_obs_date is None:
+        raise Http404('No classical observing date found for this telescope/date')
+    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        select_related('transient')
 
     location = EarthLocation.from_geodetic(
-        classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-        classical_obs_date[0].resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date[0].obs_date).split('+')[0], format='iso')
+        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+        classical_obs_date.resource.telescope.elevation*u.m)
+    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
     

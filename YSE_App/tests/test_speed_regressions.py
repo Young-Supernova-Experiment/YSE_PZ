@@ -592,3 +592,64 @@ class ExplorerQueryCacheReuseTests(TestCase):
         )
         self.assertEqual(runs, 0)
         self.assertEqual(Transient.objects.get(name="perf-pdash-q0").status, watch)
+
+
+# ------------------------------------------------------------- Batch A residual
+
+
+class DownloadTargetListTests(TestCase):
+    """download_target_list / download_targets_and_finders: 404 on a missing night, not 500."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("speed_download_user")
+        cls.obs_date = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        cls.night = _classical_night(cls.user, tag="a-res-night", obs_date=cls.obs_date)
+        cls.transient = create_minimal_transient(cls.user, name="ares0", ra=50.0, dec=1.0)
+        attach_synthetic_photometry(cls.user, cls.transient, n_points=2)
+        _request_followup(cls.user, cls.transient, resource=cls.night.resource,
+                          classical_resource=cls.night.resource)
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _url(self, name, obs_date):
+        return reverse(
+            name,
+            kwargs={
+                "telescope": self.night.resource.telescope.name.replace(" ", "_"),
+                "obs_date": obs_date,
+            },
+        )
+
+    def test_target_list_404_without_a_night_and_200_with_one(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        missing = (self.obs_date + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+        self.assertEqual(self.client.get(self._url("download_target_list", missing)).status_code, 404)
+        with iers_offline():
+            response = self.client.get(self._url("download_target_list", self.obs_date.strftime("%Y-%m-%d")))
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("ares0", body)
+        self.assertIn("mag = %s" % self.transient.recent_mag(), body)
+
+    def test_targets_and_finders_404_without_a_night_and_200_with_one(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        missing = (self.obs_date + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+        self.assertEqual(
+            self.client.get(self._url("download_targets_and_finders", missing)).status_code, 404
+        )
+        finder = mock.MagicMock()
+        finder.return_value.finderchart_noview.return_value = (
+            [{"id": "star1", "ra": "03:20:00.0", "dec": "+01:00:00.0", "mag": 15.0, "ra_off": 1.5, "dec_off": -2.0}],
+            "finder.png",
+        )
+        with iers_offline(), mock.patch("YSE_App.view_utils.finder", finder):
+            response = self.client.get(
+                self._url("download_targets_and_finders", self.obs_date.strftime("%Y-%m-%d"))
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ares0", response.content.decode())
