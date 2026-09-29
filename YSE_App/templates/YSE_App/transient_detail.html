@@ -1880,77 +1880,22 @@
             }
 
 {% if not transient_detail_defer %}
+            // Several people can request the same follow-up, so a submit may attach to an
+            // existing box instead of creating one: re-render the list from the server rather
+            // than hand-building a (possibly duplicate) box here.
             window.yseOnTransientFollowupCreated = function(json) {
-                var followup_pk = json.data["id"];
-                var status_id = json.data["status_id"];
-                var status_name = json.data["status_name"];
-                var valid_start = json.data["valid_start"];
-                var valid_stop = json.data["valid_stop"];
-                var modified_by = json.data["modified_by"];
-                var requestors = json.data["requestors"] ? json.data["requestors"] : modified_by;
-
-                if (!followup_pk || !status_id || !status_name ||
-                    !valid_start || !valid_stop || !modified_by) {
+                if (!json || !json.data || !json.data["id"]) {
                     alert("Required fields for `Transient Followup` not found! Please contact administrator.");
                     return;
                 }
-
-                var too_resource = json.data["too_resource"];
-                var classical_resource = json.data["classical_resource"];
-                var queued_resource = json.data["queued_resource"];
-                var priority = (json.data["priority"] !== null && json.data["priority"] !== undefined) ? json.data["priority"] : "None";
-                var comment = json.data["comment"] ? json.data["comment"] : "";
-
-                var start_date = new Date(valid_start);
-                var end_date = new Date(valid_stop);
-                var start_date_str = (start_date.getUTCMonth() + 1) + "/" + start_date.getUTCDate() + "/" + start_date.getUTCFullYear();
-                var end_date_str = (end_date.getUTCMonth() + 1) + "/" + end_date.getUTCDate() + "/" + end_date.getUTCFullYear();
-
-                var associated_resouces = "";
-                if (too_resource) {
-                    associated_resouces = associated_resouces + too_resource + "<br>";
-                }
-                if (classical_resource) {
-                    associated_resouces = associated_resouces + classical_resource + "<br>";
-                }
-                if (queued_resource) {
-                    associated_resouces = associated_resouces + queued_resource;
-                }
-
-                var followupHTML = "<div class='col-12'>" +
-                    "<div class='followupbox box box-primary'>" +
-                    "<div class='box-header'>" +
-                    "<div class='col-4'><h3 class='box-title'>Follow-up (id: " + followup_pk + ")</h3></div>" +
-                    "<div class='col-4'><h3 class='box-title'>Valid: " + start_date_str + " - " + end_date_str + "</h3></div>" +
-                    "<div class='col-4'><h3 style='float:right;padding-right:10px' class='box-title'>Requestors: " + requestors + "</h3></div>" +
-                    "<div class='box-tools float-right'><button type='button' class='btn btn-box-tool' data-widget='collapse'><i class='fa fa-minus'></i></button></div>" +
-                    "</div><div class='box-body'>" +
-                    "<table id='tbl_followup_" + followup_pk + "' class='table table-bordered table-striped'>" +
-                    "<thead><tr><th>Priority</th><th>Attached Resource</th><th>Status</th><th>Comment</th><th>Action</th><th>Delete</th></tr></thead>" +
-                    "<tbody><tr>" +
-                    "<td>" + priority + "</td>" +
-                    "<td>" + associated_resouces + "</td><td>" + status_name + "</td><td>" + comment + "</td>" +
-                    "<td><a target='_blank' href='{% url 'admin:YSE_App_transientfollowup_changelist' %}" + followup_pk + "/change/'>Edit</a></td>" +
-                    "<td><a href='" + "{% url 'delete_followup' -1 %}".replace('-1', followup_pk) + "'>Delete</a></td>" +
-                    "</tr></tbody></table></div></div></div>";
-
-                $('#followup_container .text-muted').remove();
-                $('#followup_container .followupbox').each(function() {
-                    var $box = $(this);
-                    $box.addClass('collapsed-box');
-                    $box.find('.box-body').hide();
-                    $box.find('[data-widget=collapse] i').removeClass('fa-minus').addClass('fa-plus');
-                });
-                var $newRow = $(followupHTML).hide();
-                $newRow.find('.box-body').hide();
-                $('#followup_container').prepend($newRow);
-                $newRow.slideDown(300, function() {
-                    $newRow.find('.box-body').slideDown(300, function() {
-                        var $newBox = $newRow.find('.followupbox');
-                        if ($.fn.boxWidget) {
-                            $newBox.boxWidget();
-                        }
-                    });
+                $.get("{% url 'transient_detail_followup_fragment' transient.id %}").done(function(html) {
+                    $('#followup_container').html(html);
+                    if ($.fn.boxWidget) {
+                        $('#followup_container .followupbox').boxWidget();
+                    }
+                }).fail(function() {
+                    window.location.hash = '#followup_tab';
+                    window.location.reload();
                 });
             };
 {% endif %}

@@ -1178,6 +1178,7 @@ def yse_observing_night(request, obs_date):
 
 
 def download_target_list(request, telescope, obs_date):
+    from YSE_App.services.followup_requests import format_comments, requests_prefetch
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1188,7 +1189,7 @@ def download_target_list(request, telescope, obs_date):
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
         filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
-        select_related('transient')
+        select_related('transient').prefetch_related(requests_prefetch())
 
     location = EarthLocation.from_geodetic(
         classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
@@ -1199,7 +1200,7 @@ def download_target_list(request, telescope, obs_date):
     
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     for f in follow_requests:
-        comments = ';'.join([l.comment for l in Log.objects.filter(transient_followup=f)])
+        comments = format_comments(f)
         if f.transient.recent_mag():
             content += "%s  %s %s 2000 mag = %.2f comment = %s\n"%(
                 f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),
@@ -1301,6 +1302,14 @@ def _load_transient_followups(transient_id, user):
             followup.resource = followup.queued_resource
         followup.requestors = format_requestors(followup)
         followup.comment = format_comments(followup)
+        # One row per request so each requester sees (and can withdraw) their own.
+        followup.request_rows = list(followup.requests.all())
+        for row in followup.request_rows:
+            row.can_delete = user.is_staff or row.requestor_id == user.id
+        # Deleting the parent removes everyone's requests: staff or sole requester only.
+        followup.can_delete = user.is_staff or all(
+            row.requestor_id == user.id for row in followup.request_rows
+        )
     return followups
 
 
@@ -2185,12 +2194,57 @@ def change_status_for_query(request, query_id, status_id):
 
     return redirect('personaldashboard')
 
+def _followup_tab_redirect(slug):
+    return HttpResponseRedirect(
+        reverse_lazy('transient_detail', kwargs={'slug': slug}) + '#followup_tab'
+    )
+
+
 @login_required
 def delete_followup(request,followup_id):
+    """Delete a parent follow-up, or only withdraw the caller's own requests.
+
+    Several people can request the same object for the same night, so a
+    non-staff user whose parent also carries other people's requests only
+    removes their own child rows; the parent and everyone else's stay.
+    """
+    from YSE_App.services.followup_requests import recompute_parent_priority
+
     followup = get_object_or_404(TransientFollowup,pk=followup_id)
     slug = followup.transient.slug
-    followup.delete()
-    return HttpResponseRedirect(reverse_lazy('transient_detail',kwargs={'slug':slug}))
+    others = followup.requests.exclude(requestor=request.user).exists()
+    if others and not request.user.is_staff:
+        followup.requests.filter(requestor=request.user).delete()
+        recompute_parent_priority(followup)
+    else:
+        followup.delete()
+    return _followup_tab_redirect(slug)
+
+
+@login_required
+def delete_followup_request(request, request_id):
+    """Delete one TransientFollowupRequest (own only unless staff).
+
+    The parent follow-up is deleted once its last request is gone;
+    otherwise its consolidated priority is recomputed.
+    """
+    from django.core.exceptions import PermissionDenied
+    from YSE_App.services.followup_requests import recompute_parent_priority
+
+    child = get_object_or_404(
+        TransientFollowupRequest.objects.select_related('followup__transient'),
+        pk=request_id,
+    )
+    if child.requestor_id != request.user.id and not request.user.is_staff:
+        raise PermissionDenied('You can only delete your own follow-up requests.')
+    parent = child.followup
+    slug = parent.transient.slug
+    child.delete()
+    if parent.requests.exists():
+        recompute_parent_priority(parent)
+    else:
+        parent.delete()
+    return _followup_tab_redirect(slug)
     
 @method_decorator(login_required, name='dispatch')
 class SearchResultsView(ListView):

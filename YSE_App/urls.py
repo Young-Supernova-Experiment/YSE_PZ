@@ -118,6 +118,7 @@ urlpatterns = [
     re_path(r'^return_serialized_transients/$', yse_views.return_serialized_transients, name='return_serialized_transients'),
     re_path(r'^msb_detail/(?P<msb>.*)$', yse_views.msb_detail, name='msb_detail'),
     re_path(r'^delete_followup/(?P<followup_id>[0-9_-]+)/$', views.delete_followup, name='delete_followup'),
+    re_path(r'^delete_followup_request/(?P<request_id>[0-9]+)/$', views.delete_followup_request, name='delete_followup_request'),
 
     re_path(r'^toggleTargetField/$', yse_view_utils.toggle_field, name='toggle_field'),
     re_path(r'^toggleFieldSet/$', yse_view_utils.toggle_fieldset, name='toggle_fieldset'),
