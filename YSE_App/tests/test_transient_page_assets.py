@@ -57,6 +57,8 @@ EXTERNAL_ENDPOINTS = frozenset(
         "get_hst_status",
         "get_chandra_status",
         "get_hst_image",
+        "get_jwst_status",
+        "get_jwst_observations",
         "get_chandra_image",
         "get_ps1_image",
         "get_legacy_image",

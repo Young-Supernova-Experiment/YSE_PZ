@@ -88,12 +88,17 @@ on a given resource as a function of time.
 
 .. image:: _static/yse_pz_detailresources.png
 
-HST/Chandra Tabs
-----------------
+HST/JWST/Chandra Tabs
+---------------------
 
-For transients with archival HST or Chandra data at the transient
+For transients with archival HST, JWST or Chandra data at the transient
 location, YSE-PZ will display those data and allow FITS images to
-be downloaded.
+be downloaded.  The JWST tab lists each MAST observation (instrument,
+filter/grating, date, program, target, exposure time, preview) with
+links to the MAST Portal and the data product.  A tab reading
+"(lookup failed)" means the archive did not answer; opening it retries.
+See ``docs/archive-tabs.md`` for the endpoints and the shared
+timeout/caching behaviour.
 
 .. image:: _static/yse_pz_detailarchival.png
 
