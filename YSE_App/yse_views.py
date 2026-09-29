@@ -14,6 +14,7 @@ from django.utils import timezone
 from astropy.time import Time
 from django.core import serializers
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound
+from YSE_App.queries.raw_sql import DAYS_SINCE_DISC_SQL, RECENT_MAG_SQL
 
 @login_required
 def select_yse_fields(request):
@@ -277,24 +278,12 @@ def yse_sky(request):
         title = 'Transients with Any Status Except Ignore'
         query_name = 'default'
 
-    recent_mag_raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+    recent_mag_raw_query = RECENT_MAG_SQL
 
     if transients.exists():
         transients = transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,()))
 
-    days_from_disc_query = """SELECT DATEDIFF(curdate(), t.disc_date) as days_since_disc
-FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
+    days_from_disc_query = DAYS_SINCE_DISC_SQL
 
     if transients.exists():
         transients = transients.annotate(days_since_disc=RawSQL(days_from_disc_query,())).order_by('-days_since_disc')
@@ -329,22 +318,10 @@ def yse_planning(request):
     # rising transients
     rising_transients = rising_transient_queryset(ndays=7).filter(~Q(status__name='Ignore')).filter(~Q(tags__name='YSE'))
 
-    recent_mag_raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+    recent_mag_raw_query = RECENT_MAG_SQL
     rising_transients = rising_transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,()))
 
-    days_from_disc_query = """SELECT DATEDIFF(curdate(), t.disc_date) as days_since_disc
-FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
+    days_from_disc_query = DAYS_SINCE_DISC_SQL
     rising_transients = rising_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
     risingtransientfilter = RisingTransientFilter(request.GET, queryset=rising_transients,prefix='yserise')
@@ -354,22 +331,10 @@ FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
     # possibly interesting transients
     good_transients = Transient.objects.filter(~Q(status__name='Ignore'))
 
-    recent_mag_raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+    recent_mag_raw_query = RECENT_MAG_SQL
     good_transients = good_transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,())).filter(~Q(tags__name='YSE'))
 
-    days_from_disc_query = """SELECT DATEDIFF(curdate(), t.disc_date) as days_since_disc
-FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
+    days_from_disc_query = DAYS_SINCE_DISC_SQL
     good_transients = good_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
     goodtransientfilter = RisingTransientFilter(request.GET, queryset=good_transients,prefix='ysegood')
@@ -379,23 +344,11 @@ FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
     # transients w/i 15 deg of existing fields
     nearby_transients = sne_15deg_from_yse() #qs_start=rising_transients)
 
-    recent_mag_raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+    recent_mag_raw_query = RECENT_MAG_SQL
 
     nearby_transients = nearby_transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,())).filter(~Q(tags__name='YSE'))
 
-    days_from_disc_query = """SELECT DATEDIFF(curdate(), t.disc_date) as days_since_disc
-FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
+    days_from_disc_query = DAYS_SINCE_DISC_SQL
     nearby_transients = nearby_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
     nearbytransientfilter = RisingTransientFilter(request.GET, queryset=nearby_transients,prefix='ysenearby')
@@ -481,8 +434,7 @@ def yse_fields(request,ra_min_hour,ra_max_hour,min_mag):
             min_mag=F('transientphotometry__transientphotdata__mag')
         ).filter(min_mag__lt=min_mag)
                 
-        days_from_disc_query = """SELECT DATEDIFF(curdate(), t.disc_date) as days_since_disc
-FROM YSE_App_transient t WHERE YSE_App_transient.id = t.id"""
+        days_from_disc_query = DAYS_SINCE_DISC_SQL
         qs_final = qs_final.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
         risingtransientfilter = RisingTransientFilter(request.GET, queryset=qs_final,prefix=str(s[0]))

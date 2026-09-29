@@ -123,7 +123,10 @@ CRON_CLASSES = [
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
     'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
-    'YSE_App.data_ingest.TNS_uploads.UpdateGHOST'
+    'YSE_App.data_ingest.TNS_uploads.UpdateGHOST',
+    # Personal-dashboard saved-query cache warmer; no-op unless
+    # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
+    'YSE_App.data_ingest.Dashboard_Cache_Warm.WarmDashboardQueries',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -237,6 +240,33 @@ else:
 EXPLORER_QUERY_MAX_EXECUTION_MS = int(
     os.environ.get('YSE_EXPLORER_MAX_EXECUTION_MS', '').strip()
     or config.getint('site_settings', 'EXPLORER_QUERY_MAX_EXECUTION_MS', fallback=0)
+)
+
+# How long a saved query's cached name list is reused by the personal
+# dashboard, transient_summary and the API (run_explorer_query_cached).
+# YSE_EXPLORER_QUERY_CACHE_SECONDS env var or [site_settings]
+# EXPLORER_QUERY_CACHE_SECONDS in settings.ini; default 3600 (one hour).
+EXPLORER_QUERY_CACHE_SECONDS = int(
+    os.environ.get('YSE_EXPLORER_QUERY_CACHE_SECONDS', '').strip()
+    or config.getint('site_settings', 'EXPLORER_QUERY_CACHE_SECONDS', fallback=3600)
+)
+
+# Cache warmer cron (YSE_App.data_ingest.Dashboard_Cache_Warm): re-run every
+# dashboard saved query on a schedule so no browser triggers a cold run.
+# Off unless [site_settings] DASHBOARD_CACHE_WARM_ENABLED is True (or the
+# YSE_DASHBOARD_CACHE_WARM env var is 1); DASHBOARD_CACHE_WARM_MINUTES sets
+# the interval (default 60).
+DASHBOARD_CACHE_WARM_ENABLED = (
+    os.environ.get('YSE_DASHBOARD_CACHE_WARM', '').strip() == '1'
+    or config.getboolean('site_settings', 'DASHBOARD_CACHE_WARM_ENABLED', fallback=False)
+)
+DASHBOARD_CACHE_WARM_MINUTES = config.getint('site_settings', 'DASHBOARD_CACHE_WARM_MINUTES', fallback=60)
+
+# Where `manage.py rewrite_dashboard_queries --apply` writes the previous SQL
+# of every saved query it changes ([site_settings] DASHBOARD_QUERY_BACKUP_DIR).
+DASHBOARD_QUERY_BACKUP_DIR = config.get(
+    'site_settings', 'DASHBOARD_QUERY_BACKUP_DIR',
+    fallback=os.path.join(BASE_DIR, 'backups', 'saved_queries'),
 )
 
 EXPLORER_CONNECTIONS = { 'Explorer': 'explorer' }

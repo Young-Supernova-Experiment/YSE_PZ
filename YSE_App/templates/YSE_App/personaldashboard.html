@@ -175,6 +175,11 @@ $(document).ready(function() {
   $('.pdash-section-loading').each(function() {
     var $slot = $(this);
     $.get(sectionUrl($slot), function(html) {
+      if (!html || !$.trim(html)) {
+        // An empty body (e.g. a 204) would otherwise remove the placeholder silently.
+        $slot.html('<p class="text-danger">Failed to load this section.</p>');
+        return;
+      }
       $slot.replaceWith(html);
     }).fail(function() {
       $slot.html('<p class="text-danger">Failed to load this section.</p>');
