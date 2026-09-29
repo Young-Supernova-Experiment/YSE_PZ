@@ -1,8 +1,10 @@
 """Encrypted credentials (#264) and external-service runs (#265)."""
 
+import base64
 import io
 import json
 import os
+from unittest import mock
 
 from cryptography.fernet import Fernet
 from django.contrib.auth.models import Group, User
@@ -19,6 +21,10 @@ from YSE_App.tests.test_settings_hardening import _load_settings
 
 KEY_A = Fernet.generate_key().decode()
 KEY_B = Fernet.generate_key().decode()
+# A valid Fernet key whose first base64 character is '-' (6-bit value 62 ->
+# first byte 0xf8..0xfb): argparse mistakes it for an option (#359).
+DASH_KEY = base64.urlsafe_b64encode(b"\xf8" + b"\x01" * 31).decode()
+assert DASH_KEY.startswith("-")
 SECRET = {"username": "yse-bot", "password": "hunter2-very-secret", "token": "tok_abc123"}
 
 
@@ -237,7 +243,7 @@ class KeyCommandTests(TestCase):
             b = _cred(self.user, name="b", secret={"k": "v"})
             empty = _cred(self.user, name="empty", secret=None)
         out = io.StringIO()
-        call_command("rotate_credentials_key", "--old", KEY_A, "--new", KEY_B, stdout=out)
+        call_command("rotate_credentials_key", f"--old={KEY_A}", f"--new={KEY_B}", stdout=out)
         self.assertIn("re-encrypted 2 credential(s); 1 without a secret skipped; 0 undecryptable", out.getvalue())
         with override_settings(CREDENTIALS_KEY=KEY_B):
             self.assertEqual(EncryptedCredential.objects.get(pk=a.pk).get_secret(), SECRET)
@@ -253,7 +259,7 @@ class KeyCommandTests(TestCase):
             a = _cred(self.user, name="a")
         before = a.encrypted_payload
         out = io.StringIO()
-        call_command("rotate_credentials_key", "--old", KEY_A, "--new", KEY_B, "--dry-run", stdout=out)
+        call_command("rotate_credentials_key", f"--old={KEY_A}", f"--new={KEY_B}", "--dry-run", stdout=out)
         self.assertIn("would re-encrypt 1", out.getvalue())
         self.assertEqual(EncryptedCredential.objects.get(pk=a.pk).encrypted_payload, before)
 
@@ -266,18 +272,53 @@ class KeyCommandTests(TestCase):
         before = (a.encrypted_payload, stray.encrypted_payload)
         out = io.StringIO()
         with self.assertRaises(CommandError):
-            call_command("rotate_credentials_key", "--old", KEY_A, "--new", KEY_B, stdout=out)
+            call_command("rotate_credentials_key", f"--old={KEY_A}", f"--new={KEY_B}", stdout=out)
         self.assertIn("cannot decrypt: stray", out.getvalue())
         self.assertEqual((EncryptedCredential.objects.get(pk=a.pk).encrypted_payload,
                           EncryptedCredential.objects.get(pk=stray.pk).encrypted_payload), before)
         # Naming both old keys rotates everything.
-        call_command("rotate_credentials_key", "--old", KEY_A, "--old", key_c, "--new", KEY_B, stdout=io.StringIO())
+        call_command("rotate_credentials_key", f"--old={KEY_A}", f"--old={key_c}", f"--new={KEY_B}", stdout=io.StringIO())
         with override_settings(CREDENTIALS_KEY=KEY_B):
             self.assertEqual(EncryptedCredential.objects.get(pk=stray.pk).get_secret(), SECRET)
 
     def test_rotate_validates_keys(self):
         with self.assertRaises(CommandError):
-            call_command("rotate_credentials_key", "--old", "junk", "--new", KEY_B)
+            call_command("rotate_credentials_key", "--old=junk", f"--new={KEY_B}")
+
+    def test_rotate_accepts_keys_that_start_with_a_dash(self):
+        """A Fernet key is URL-safe base64, so one in 32 starts with '-' (#359).
+
+        Written as a separate word argparse takes it for an option; the
+        ``--old=KEY`` form and the environment fallback both work.
+        """
+        with override_settings(CREDENTIALS_KEY=DASH_KEY):
+            a = _cred(self.user, name="a")
+        with self.assertRaises(CommandError):
+            call_command("rotate_credentials_key", "--old", DASH_KEY, "--new", KEY_B, stdout=io.StringIO())
+        self.assertEqual(EncryptedCredential.objects.get(pk=a.pk).key_fingerprint, cs.key_fingerprint(DASH_KEY))
+
+        out = io.StringIO()
+        call_command("rotate_credentials_key", f"--old={DASH_KEY}", f"--new={KEY_B}", stdout=out)
+        self.assertIn("re-encrypted 1 credential(s)", out.getvalue())
+        with override_settings(CREDENTIALS_KEY=KEY_B):
+            self.assertEqual(EncryptedCredential.objects.get(pk=a.pk).get_secret(), SECRET)
+
+        env = {"YSE_ROTATE_OLD_KEYS": KEY_B, "YSE_ROTATE_NEW_KEY": DASH_KEY}
+        with mock.patch.dict(os.environ, env):
+            out = io.StringIO()
+            call_command("rotate_credentials_key", stdout=out)
+        self.assertIn("re-encrypted 1 credential(s)", out.getvalue())
+        with override_settings(CREDENTIALS_KEY=DASH_KEY):
+            self.assertEqual(EncryptedCredential.objects.get(pk=a.pk).get_secret(), SECRET)
+
+    def test_rotate_without_keys_names_the_flags_and_the_env_vars(self):
+        with mock.patch.dict(os.environ, {"YSE_ROTATE_OLD_KEYS": "", "YSE_ROTATE_NEW_KEY": ""}):
+            with self.assertRaises(CommandError) as ctx:
+                call_command("rotate_credentials_key", f"--new={KEY_B}")
+            self.assertIn("YSE_ROTATE_OLD_KEYS", str(ctx.exception))
+            with self.assertRaises(CommandError) as ctx:
+                call_command("rotate_credentials_key", f"--old={KEY_A}")
+            self.assertIn("YSE_ROTATE_NEW_KEY", str(ctx.exception))
         with self.assertRaises(CommandError):
             call_command("rotate_credentials_key", "--old", KEY_A, "--new", KEY_A)
 

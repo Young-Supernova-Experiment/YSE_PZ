@@ -42,13 +42,16 @@ Commands (`YSE_App/management/commands/`):
 
 ```bash
 python manage.py generate_credentials_key             # prints a new key and the ini snippet
-python manage.py rotate_credentials_key --old OLD --new NEW [--dry-run]
+python manage.py rotate_credentials_key --old=OLD --new=NEW [--dry-run]
 ```
 
-Rotation runs with the old configuration still active, re-encrypts every row inside one
-transaction (rows without a secret are skipped), refuses and rolls back if any row does not
-decrypt with the `--old` key(s) (repeat `--old` for several), and then tells you to switch
-`credentials_key` to the new value and restart web + cron. The staged alternative is
+Write the keys with `=` (`--old=OLD`): a Fernet key is URL-safe base64 and about one in 32
+starts with `-`, which argparse reads as another option when the value is a separate word
+(#359). Alternatively export `YSE_ROTATE_OLD_KEYS` (comma-separated) and `YSE_ROTATE_NEW_KEY`
+and omit the flags. Rotation runs with the old configuration still active, re-encrypts every
+row inside one transaction (rows without a secret are skipped), refuses and rolls back if any
+row does not decrypt with the `--old` key(s) (repeat `--old=` for several), and then tells you
+to switch `credentials_key` to the new value and restart web + cron. The staged alternative is
 `credentials_key: NEW,OLD` in the ini, restart, rotate, then drop `OLD`.
 
 ## External services and runs
