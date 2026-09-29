@@ -5,14 +5,14 @@ import django_tables2 as tables
 from django_tables2 import RequestConfig
 from django.db.models import F, Q
 from django.db.models.functions import Length, Substr
-from django.db.models import Count, OuterRef, Subquery, Value, Max, Min
+from django.db.models import Count, OuterRef, Prefetch, Subquery, Value, Max, Min
 from django.db.models.functions import Greatest, Coalesce
 from django_tables2 import A
 from django.db import models
+from django.db.models.query import QuerySet
 from .data import PhotometryService
 import time
 import django_filters
-import itertools
 from astropy.coordinates import get_moon, SkyCoord
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -30,6 +30,188 @@ def stable_order_by(queryset, field, is_descending):
     if is_descending:
         return queryset.order_by(f'-{field}', '-pk')
     return queryset.order_by(field, 'pk')
+
+
+def _recent_phot_subqueries(transient_ref):
+    """(recent_mag, recent_magdate) scalar subqueries for the transient at ``transient_ref``.
+
+    Matches PhotometryService / Transient.recent_mag(): flagged bad data excluded.
+    """
+    recent_phot = TransientPhotData.objects.filter(
+        photometry__transient=OuterRef(transient_ref),
+    ).exclude(data_quality__isnull=False)
+    recent_mag_sq = (
+        recent_phot.filter(mag__isnull=False)
+        .order_by('-obs_date')
+        .values('mag')[:1]
+    )
+    recent_magdate_sq = recent_phot.order_by('-obs_date').values('obs_date')[:1]
+    return Subquery(recent_mag_sq), Subquery(recent_magdate_sq)
+
+
+def annotate_followup_recent_mag(qs):
+    """recent_mag for each TransientFollowup row, one subquery instead of a query per row."""
+    if 'recent_mag' in qs.query.annotations:
+        return qs
+    recent_mag, _ = _recent_phot_subqueries('transient_id')
+    return qs.annotate(recent_mag=recent_mag)
+
+
+class FollowupRecentMagMixin:
+    """Follow-up tables: recent_mag from the annotation, formatted like Transient.recent_mag()."""
+
+    def __init__(self, data, *args, **kwargs):
+        if isinstance(data, QuerySet):
+            data = annotate_followup_recent_mag(data)
+        super().__init__(data, *args, **kwargs)
+
+    def render_recent_mag(self, value):
+        return '%.2f' % value
+
+    def order_recent_mag(self, queryset, is_descending):
+        queryset = annotate_followup_recent_mag(queryset)
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
+
+
+_REQUESTED_FOLLOWUP_STATUSES = ('Requested', 'InProcess')
+_SUCCESSFUL_FOLLOWUP_STATUSES = ('Successful',)
+_RESOURCE_SELECT_RELATED = (
+    'status',
+    'too_resource__telescope',
+    'classical_resource__telescope',
+    'queued_resource__telescope',
+)
+
+
+def prefetch_followup_resources(qs):
+    """
+    Prefetch what the Req. Followup / Followed By / Followup Comments columns read.
+
+    Without it each YSE table row ran six TransientFollowup queries (three
+    resource types x two status groups) plus one per follow-up for comments.
+    """
+    followups = TransientFollowup.objects.select_related(*_RESOURCE_SELECT_RELATED).order_by('-id')
+    return qs.prefetch_related(
+        Prefetch('transientfollowup_set', queryset=followups, to_attr='resource_followups'),
+        Prefetch(
+            'resource_followups__requests',
+            queryset=TransientFollowupRequest.objects.select_related('requestor').order_by(
+                'requested_at', 'id'
+            ),
+        ),
+    )
+
+
+def _resource_followups(record):
+    followups = getattr(record, 'resource_followups', None)
+    if followups is None:  # queryset was not prefetched: fall back to one query per row
+        followups = list(
+            TransientFollowup.objects.filter(transient__id=record.pk)
+            .select_related(*_RESOURCE_SELECT_RELATED)
+            .prefetch_related('requests__requestor')
+        )
+    return followups
+
+
+def followup_resource_names(record, status_names):
+    """Sorted, de-duplicated telescope names of follow-ups in ``status_names``."""
+    names = []
+    for followup in _resource_followups(record):
+        if followup.status.name not in status_names:
+            continue
+        for resource in (followup.too_resource, followup.classical_resource, followup.queued_resource):
+            if resource is not None:
+                names.append(resource.telescope.name)
+    return ', '.join(np.unique(names))
+
+
+def followup_comments_text(record):
+    from YSE_App.services.followup_requests import format_comments
+
+    comments = []
+    for followup in _resource_followups(record):
+        text = format_comments(followup)
+        if text:
+            comments.append(text)
+    return '; '.join(comments)
+
+
+class TargetVisibilityMixin:
+    """
+    Rise/Set/Moon Angle columns for one observer and one night.
+
+    The moon position is computed once per table (it was recomputed per row)
+    and rise/set times are solved for every target on the current page in one
+    vectorised astroplan call the first time a row asks, then served from a
+    dict keyed by (ra, dec) string. Values are formatted exactly as before.
+    """
+
+    horizon = 18 * u.deg
+
+    def _set_observer(self, telescope, obs_date):
+        location = EarthLocation.from_geodetic(
+            telescope.longitude * u.deg, telescope.latitude * u.deg, telescope.elevation * u.m)
+        self.tel = Observer(location=location, timezone="UTC")
+        self.tme = Time(str(obs_date).split()[0])
+        self._moon = None
+        self._rise_set = {}
+
+    @property
+    def moon(self):
+        if self._moon is None:
+            self._moon = get_moon(self.tme)
+        return self._moon
+
+    @staticmethod
+    def _time_str(t):
+        # astroplan masks targets that never cross the horizon (NaN before v0.7)
+        value = t.value
+        if np.ma.is_masked(value) or value != value:
+            return None
+        return t.isot.split('T')[-1].split('.')[0]
+
+    def _page_coords(self, bound_column, first):
+        """(ra, dec) strings for the rows about to render, ``first`` included."""
+        keys = [first]
+        rows = self.page.object_list if getattr(self, 'page', None) is not None else self.rows
+        try:
+            for row in rows:
+                coord = bound_column.accessor.resolve(row.record)
+                key = (coord[0], coord[1])
+                if key not in keys and key not in self._rise_set:
+                    keys.append(key)
+        except Exception:
+            pass
+        return keys
+
+    def _solve_rise_set(self, keys):
+        sc = SkyCoord(['%s %s' % k for k in keys], unit=(u.hourangle, u.deg))
+        rise = self.tel.target_rise_time(self.tme, sc, horizon=self.horizon, which="previous")
+        sett = self.tel.target_set_time(self.tme, sc, horizon=self.horizon, which="previous")
+        rise, sett = rise.reshape(-1), sett.reshape(-1)
+        for i, key in enumerate(keys):
+            self._rise_set[key] = (self._time_str(rise[i]), self._time_str(sett[i]))
+
+    def _rise_set_for(self, value, bound_column):
+        key = (value[0], value[1])
+        if key not in self._rise_set:
+            keys = self._page_coords(bound_column, key)
+            try:
+                self._solve_rise_set(keys)
+            except Exception:
+                self._rise_set = {}
+                self._solve_rise_set([key])
+        return self._rise_set[key]
+
+    def render_rise_time(self, value, bound_column):
+        return self._rise_set_for(value, bound_column)[0]
+
+    def render_set_time(self, value, bound_column):
+        return self._rise_set_for(value, bound_column)[1]
+
+    def render_moon_angle(self, value):
+        sc = SkyCoord('%s %s' % (value[0], value[1]), unit=(u.hourangle, u.deg))
+        return '%.1f' % sc.separation(self.moon).deg
 
 
 class MagnitudeColumn(tables.Column):
@@ -482,49 +664,14 @@ class YSETransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def render_requested_followup_resources(self, value):
+    def render_requested_followup_resources(self, value, record):
+        return followup_resource_names(record, _REQUESTED_FOLLOWUP_STATUSES)
 
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('queued_resource__telescope__name',flat=True)
+    def render_successful_followup_resources(self, value, record):
+        return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_successful_followup_resources(self, value):
-
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_followup_comments(self, value):
-        from YSE_App.services.followup_requests import format_comments
-
-        comments = []
-        for followup in TransientFollowup.objects.filter(transient__id=value).prefetch_related(
-            'requests__requestor'
-        ):
-            text = format_comments(followup)
-            if text:
-                comments.append(text)
-        return '; '.join(comments)
+    def render_followup_comments(self, value, record):
+        return followup_comments_text(record)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -643,37 +790,11 @@ class YSEFullTransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def render_requested_followup_resources(self, value):
+    def render_requested_followup_resources(self, value, record):
+        return followup_resource_names(record, _REQUESTED_FOLLOWUP_STATUSES)
 
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_successful_followup_resources(self, value):
-
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
+    def render_successful_followup_resources(self, value, record):
+        return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -798,37 +919,11 @@ class YSERisingTransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def render_requested_followup_resources(self, value):
+    def render_requested_followup_resources(self, value, record):
+        return followup_resource_names(record, _REQUESTED_FOLLOWUP_STATUSES)
 
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_successful_followup_resources(self, value):
-
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
+    def render_successful_followup_resources(self, value, record):
+        return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
 
     def render_dt(self,value):
@@ -1005,7 +1100,7 @@ SELECT pd.mag
         }
 
 
-class FollowupTable(tables.Table):
+class FollowupTable(FollowupRecentMagMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='transient__name')
@@ -1013,7 +1108,7 @@ class FollowupTable(tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='transient.recent_mag',
+    recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
 
 
@@ -1046,24 +1141,6 @@ class FollowupTable(tables.Table):
         self.base_columns['transient.status'].verbose_name = 'Transient Status'
         #self.base_columns['status'].verbose_name = 'Followup Status'
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
     class Meta:
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag','transient.status','observation_window','action')
@@ -1084,7 +1161,7 @@ SELECT pd.mag
             "order": [[ 2, "desc" ]],
         }
 
-class ObsNightFollowupTable(tables.Table):
+class ObsNightFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='transient__name')
@@ -1092,7 +1169,7 @@ class ObsNightFollowupTable(tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='transient.recent_mag',
+    recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
 
 
@@ -1138,42 +1215,7 @@ class ObsNightFollowupTable(tables.Table):
 
     def __init__(self,*args, classical_obs_date=None, **kwargs):
         super().__init__(*args, **kwargs)
-
-        #self.base_columns['transient.status'].verbose_name = 'Transient Status'
-        #self.base_columns['status'].verbose_name = 'Followup Status'
-
-        location = EarthLocation.from_geodetic(
-            classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
-            classical_obs_date.resource.telescope.elevation*u.m)
-        self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(classical_obs_date.obs_date).split()[0])
-
-    def render_rise_time(self, value):
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        target_rise_time = self.tel.target_rise_time(self.tme,sc,horizon=18*u.deg,which="previous")
-
-        if target_rise_time and target_rise_time.value == target_rise_time.value:
-            risetime = target_rise_time.isot.split('T')[-1].split('.')[0]
-        else:
-            risetime = None
-
-        return risetime
-
-    def render_set_time(self, value):
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        target_set_time = self.tel.target_set_time(self.tme,sc,horizon=18*u.deg,which="previous")
-
-        if target_set_time and target_set_time.value == target_set_time.value:
-            settime = target_set_time.isot.split('T')[-1].split('.')[0]
-        else:
-            settime = None
-
-        return settime
-
-    def render_moon_angle(self, value):
-        mooncoord = get_moon(self.tme)
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        return('%.1f'%sc.separation(mooncoord).deg)
+        self._set_observer(classical_obs_date.resource.telescope, classical_obs_date.obs_date)
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
@@ -1187,24 +1229,6 @@ class ObsNightFollowupTable(tables.Table):
         from YSE_App.services.followup_requests import format_comments
 
         return format_comments(record)
-
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     class Meta:
         model = TransientFollowup
@@ -1228,7 +1252,7 @@ SELECT pd.mag
             "order": [[ 2, "desc" ]],
         }
 
-class ToOFollowupTable(tables.Table):
+class ToOFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -1236,7 +1260,7 @@ class ToOFollowupTable(tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='transient.recent_mag',
+    recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
 
 
@@ -1278,39 +1302,7 @@ class ToOFollowupTable(tables.Table):
     
     def __init__(self,*args, too_resource=None, **kwargs):
         super().__init__(*args, **kwargs)
-
-        location = EarthLocation.from_geodetic(
-            too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
-            too_resource.telescope.elevation*u.m)
-        self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(datetime.datetime.now()).split()[0])
-
-    def render_rise_time(self, value):
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        target_rise_time = self.tel.target_rise_time(self.tme,sc,horizon=18*u.deg,which="previous")
-
-        if target_rise_time and target_rise_time.value == target_rise_time.value:
-            risetime = target_rise_time.isot.split('T')[-1].split('.')[0]
-        else:
-            risetime = None
-
-        return risetime
-
-    def render_set_time(self, value):
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        target_set_time = self.tel.target_set_time(self.tme,sc,horizon=18*u.deg,which="previous")
-
-        if target_set_time and target_set_time.value == target_set_time.value:
-            settime = target_set_time.isot.split('T')[-1].split('.')[0]
-        else:
-            settime = None
-
-        return settime
-
-    def render_moon_angle(self, value):
-        mooncoord = get_moon(self.tme)
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        return('%.1f'%sc.separation(mooncoord).deg)
+        self._set_observer(too_resource.telescope, datetime.datetime.now())
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
@@ -1324,24 +1316,6 @@ class ToOFollowupTable(tables.Table):
         from YSE_App.services.followup_requests import format_comments
 
         return format_comments(record)
-
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
     class Meta:
         model = TransientFollowup
@@ -1367,7 +1341,7 @@ SELECT pd.mag
 
 
 
-class YSEObsNightTable(tables.Table):
+class YSEObsNightTable(TargetVisibilityMixin, tables.Table):
 
     field_id = tables.Column(accessor="survey_field.field_id",verbose_name="Field ID",order_by="survey_field.field_id")
     ra_string = tables.Column(accessor='survey_field.CoordString.0',
@@ -1398,43 +1372,7 @@ class YSEObsNightTable(tables.Table):
 
     def __init__(self,*args, obs_date=None, **kwargs):
         super().__init__(*args, **kwargs)
-        telescope = Telescope.objects.get(name='Pan-STARRS1')
-
-        #self.base_columns['transient.status'].verbose_name = 'Transient Status'
-        #self.base_columns['status'].verbose_name = 'Followup Status'
-
-        location = EarthLocation.from_geodetic(
-            telescope.longitude*u.deg,telescope.latitude*u.deg,
-            telescope.elevation*u.m)
-        self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(obs_date).split()[0])
-
-    def render_rise_time(self, value):
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        target_rise_time = self.tel.target_rise_time(self.tme,sc,horizon=18*u.deg,which="previous")
-
-        if target_rise_time:
-            risetime = target_rise_time.isot.split('T')[-1].split('.')[0]
-        else:
-            risetime = None
-
-        return risetime
-
-    def render_set_time(self, value):
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        target_set_time = self.tel.target_set_time(self.tme,sc,horizon=18*u.deg,which="previous")
-
-        if target_set_time:
-            settime = target_set_time.isot.split('T')[-1].split('.')[0]
-        else:
-            settime = None
-
-        return settime
-
-    def render_moon_angle(self, value):
-        mooncoord = get_moon(self.tme)
-        sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
-        return('%.1f'%sc.separation(mooncoord).deg)
+        self._set_observer(Telescope.objects.get(name='Pan-STARRS1'), obs_date)
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
@@ -1465,40 +1403,63 @@ def annotate_dashboard_transient_fields(qs):
 
     Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
     """
-    # Match PhotometryService / Transient.recent_mag: exclude flagged bad data.
-    recent_phot = TransientPhotData.objects.filter(
-        photometry__transient=OuterRef('pk'),
-    ).exclude(data_quality__isnull=False)
-    recent_mag_sq = (
-        recent_phot.filter(mag__isnull=False)
-        .order_by('-obs_date')
+    recent_mag, recent_magdate = _recent_phot_subqueries('pk')
+    return qs.select_related('status', 'host', 'obs_group').annotate(
+        recent_mag=recent_mag,
+        recent_magdate=recent_magdate,
+    )
+
+
+def annotate_search_fields(qs):
+    """
+    Aliases for the search box: plain FK lookups instead of Min() aggregates.
+
+    The old annotate_with_disc_mag() wrapped every alias in Min(), which forced a
+    GROUP BY over the whole transient table (and a HAVING for each LIKE). disc_mag
+    is the only value that needs a subquery; the rest are single-valued joins.
+    """
+    disc_mag_sq = (
+        TransientPhotData.objects.filter(
+            photometry__transient=OuterRef('pk'),
+            discovery_point=1,
+            mag__isnull=False,
+        )
+        .order_by('mag')
         .values('mag')[:1]
     )
-    recent_magdate_sq = recent_phot.order_by('-obs_date').values('obs_date')[:1]
-    return qs.select_related('status', 'host', 'obs_group').annotate(
-        recent_mag=Subquery(recent_mag_sq),
-        recent_magdate=Subquery(recent_magdate_sq),
+    return qs.annotate(
+        disc_mag=Subquery(disc_mag_sq),
+        obs_group_name=F('obs_group__name'),
+        host_redshift=F('host__redshift'),
+        spec_class=F('best_spec_class__name'),
+        status_name=F('status__name'),
     )
 
 
-def annotate_with_disc_mag(qs):
+# Backwards-compatible name (callers outside this module).
+annotate_with_disc_mag = annotate_search_fields
 
-    all_phot = TransientPhotometry.objects.values('transient')#.filter(transient__in = queryset)
-    phot_ids = all_phot.values('id')
 
-    phot_data_query = Q(transientphotometry__id__in=phot_ids)
-    disc_query = Q(transientphotometry__transientphotdata__discovery_point = 1)
+def filter_tokens_any_field(qs, search_fields, value):
+    """
+    Every whitespace token must icontains-match at least one of search_fields.
 
-    qs = qs.annotate(
-        disc_mag=Min('transientphotometry__transientphotdata__mag',filter=phot_data_query & disc_query),
-    )
-
-    qs = qs.annotate(
-        obs_group_name=Min('obs_group__name'),
-        host_redshift=Min('host__redshift'),
-        spec_class=Min('best_spec_class__name'),
-        status_name=Min('status__name'))
-    return qs
+    Replaces itertools.permutations(search_fields, n_tokens), which produced
+    fields!/(fields-n)! AND-groups OR'd together (720 groups for 3 tokens over 10
+    fields). This is one WHERE with n_tokens * len(search_fields) LIKE clauses, so
+    the SQL shape and query count do not depend on the number of tokens. Any
+    match the old expansion found is also a match here (it is a superset).
+    """
+    tokens = value.split()
+    if not tokens:
+        return qs
+    q_total = Q()
+    for token in tokens:
+        q_token = Q()
+        for field in search_fields:
+            q_token |= Q(**{field + '__icontains': token})
+        q_total &= q_token
+    return qs.filter(q_total)
 
 class TransientFilter(django_filters.FilterSet):
 
@@ -1516,24 +1477,8 @@ class TransientFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-
-            qs = annotate_with_disc_mag(qs)
-
-            q_parts = value.split()
-
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = annotate_search_fields(qs)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 class RisingTransientFilter(django_filters.FilterSet):
@@ -1563,24 +1508,8 @@ class RisingTransientFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-
-            qs = annotate_with_disc_mag(qs)
-
-            q_parts = value.split()
-
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = annotate_search_fields(qs)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 class FollowupFilter(django_filters.FilterSet):
@@ -1594,20 +1523,7 @@ class FollowupFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-            q_parts = value.split()
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 class ObsNightFollowupFilter(django_filters.FilterSet):
@@ -1621,20 +1537,7 @@ class ObsNightFollowupFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-            q_parts = value.split()
-
-            list1=self.search_fields
-            list2=q_parts
-            perms = [zip(x,list2) for x in itertools.permutations(list1,len(list2))]
-
-            q_totals = Q()
-            for perm in perms:
-                q_part = Q()
-                for p in perm:
-                    q_part = q_part & Q(**{p[0]+'__icontains': p[1]})
-                q_totals = q_totals | q_part
-
-            qs = qs.filter(q_totals)
+            qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
 

@@ -73,6 +73,18 @@ jobs:
             exit 1
           }
 
+      # The pulled GHCR image bakes in Django 4.0, but production runs the 3.2 LTS
+      # line (requirements.txt: Django>=3.2,<4.0; docker/requirements.web.dev pins
+      # 3.2.25). Install the same pin into the running container and restart it so
+      # every check below runs on the Django that Ziggy runs. Drop this step once
+      # the image is rebuilt on docker/requirements.web.dev or #133 lands.
+      - name: Pin Django 3.2 in the web container
+        working-directory: docker
+        run: |
+          docker exec ysepz_web_container pip3 install --quiet "Django==3.2.25"
+          docker compose restart web
+          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
+
       - name: Wait for MySQL
         working-directory: docker
         run: |

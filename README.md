@@ -92,5 +92,5 @@ This fork’s **`main`** branch tracks [davecoulter/YSE_PZ `develop`](https://gi
 
 **Integration:** Changes from [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ) merge via `integrate/yse-*` branches. [YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) is archived.
 
-**CI:** `.github/workflows/ci.yml` runs `py_compile`, Docker compose, `manage.py check`, and `YSE_App.tests` on push/PR.
+**CI:** `.github/workflows/ci.yml` runs `py_compile`, Docker compose, `manage.py check`, and `YSE_App.tests` on push/PR. Tests run on Django 3.2 (the production line; the Django 4 upgrade is #133). Branch promotion order (`experimental -> develop -> master`) is enforced by `.github/workflows/promotion-guard.yml`; see [docs/branching.md](docs/branching.md).
 

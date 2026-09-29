@@ -63,6 +63,7 @@ from .table_utils import (
     YSEObsNightTable,
     ToOFollowupTable,
     annotate_dashboard_transient_fields,
+    prefetch_followup_resources,
 )
 from .queries.yse_python_queries import *
 from .queries import yse_python_queries
@@ -213,6 +214,30 @@ def dashboard_section(request, status_key):
             )
     raise Http404(f"Unknown dashboard section: {status_key}")
 
+def explorer_query_cache_key(query_id):
+    return f'explorer_query_{QUERY_CACHE_VERSION}_{query_id}'
+
+
+def run_explorer_query_cached(query, timeout=3600):
+    """
+    Transient names selected by a saved Explorer query, cached per Query id.
+
+    Shared by the personal dashboard, transient_summary, change_status_for_query
+    and download_bulk_photometry so one run serves every page for ``timeout``.
+    """
+    cache_key = explorer_query_cache_key(query.id)
+    names = cache.get(cache_key)
+    if names is None:
+        cursor = connections['explorer'].cursor()
+        try:
+            cursor.execute(query.sql.replace('%', '%%'), ())
+            names = [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+        cache.set(cache_key, names, timeout=timeout)
+    return names
+
+
 def _personal_dashboard_defer_enabled():
     """Progressive first paint: shell HTML then per-section fragments (default on)."""
     return os.environ.get('YSE_PERSONAL_DASHBOARD_DEFER', '1') != '0'
@@ -259,14 +284,7 @@ def _personaldashboard_table_for_user_query(request, q):
             sql = q.query.sql.lower()
             if 'yse_app_transient' not in sql or 'name' not in sql or not sql.startswith('select'):
                 return None
-            cache_key = f'user_query_{QUERY_CACHE_VERSION}_{q.id}'
-            cached_result = cache.get(cache_key)
-            if cached_result is None:
-                cursor = connections['explorer'].cursor()
-                cursor.execute(q.query.sql.replace('%', '%%'), ())
-                cached_result = [row[0] for row in cursor.fetchall()]
-                cache.set(cache_key, cached_result, timeout=3600)
-                cursor.close()
+            cached_result = run_explorer_query_cached(q.query)
             if not cached_result:
                 prefix = _personaldashboard_sql_query_prefix(q.query.title)
                 empty_qs = annotate_dashboard_transient_fields(Transient.objects.none())
@@ -284,7 +302,7 @@ def _personaldashboard_table_for_user_query(request, q):
             )
             return (table, q.query.title, prefix, transient_filter, q.id, len(cached_result))
         except Exception as e:
-            cache.delete(f'user_query_{QUERY_CACHE_VERSION}_{q.id}')
+            cache.delete(explorer_query_cache_key(q.query.id))
             logger.error(f"Error processing query {q.id}: {e}")
             return _personaldashboard_failed_row(q, f"{q.query.title} [QUERY FAILED]")
     if q.python_query:
@@ -323,18 +341,11 @@ def _personaldashboard_build_all_tables(request, queries):
                 sql = q.query.sql.lower()
                 if 'yse_app_transient' not in sql or 'name' not in sql or not sql.startswith('select'):
                     continue
-                cache_key = f'user_query_{QUERY_CACHE_VERSION}_{q.id}'
-                cached_result = cache.get(cache_key)
-                if cached_result is None:
-                    cursor = connections['explorer'].cursor()
-                    cursor.execute(q.query.sql.replace('%', '%%'), ())
-                    cached_result = [row[0] for row in cursor.fetchall()]
-                    cache.set(cache_key, cached_result, timeout=3600)
-                    cursor.close()
+                cached_result = run_explorer_query_cached(q.query)
                 all_transient_names.update(cached_result)
                 sql_dashboard_sections.append((q, cached_result))
             except Exception as e:
-                cache.delete(f'user_query_{QUERY_CACHE_VERSION}_{q.id}')
+                cache.delete(explorer_query_cache_key(q.query.id))
                 logger.error(f"Error processing query {q.id}: {e}")
                 tables.append(_personaldashboard_failed_row(q, f"{q.query.title} [QUERY FAILED]"))
         elif q.python_query:
@@ -473,10 +484,7 @@ def transient_summary(request,status_or_query_name,
                 if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
                 if 'name' not in query.sql.lower(): return Http404('Invalid Query')
                 if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
-                cursor = connections['explorer'].cursor()
-                cursor.execute(query.sql.replace('%','%%'), ())
-                transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-                cursor.close()
+                transients = Transient.objects.filter(name__in=run_explorer_query_cached(query)).order_by('-disc_date')
             except:
                 # Query bombed
                 pass
@@ -770,10 +778,13 @@ def too_requests(request, telescope, pi_name):
     if too_resource is None:
         raise Http404('No active ToO resource found for this telescope/PI')
 
+    from YSE_App.services.followup_requests import requests_prefetch
+
     follow_requests = TransientFollowup.objects.filter(too_resource = too_resource).\
         filter(valid_start__lte = too_resource.end_date_valid).\
         filter(valid_stop__gte = too_resource.begin_date_valid).\
-        filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).select_related()
+        filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).\
+        select_related().prefetch_related(requests_prefetch())
 
     followuptransientfilter = FollowupFilter(
         request.GET, queryset=follow_requests,prefix=telescope.replace('_',''))
@@ -817,29 +828,34 @@ def yse_home(request):
     classical_resource_form = ClassicalResourceForm()
     too_resource_form = ToOResourceForm()
 
-    fastrising_transients = fastrising_transient_queryset(ndays=7).filter(tags__name='YSE')
+    # recent_mag/recent_magdate as annotations and the follow-up resource
+    # columns from one prefetch, instead of ~8 queries per rendered row.
+    def _home_table_qs(qs):
+        return annotate_dashboard_transient_fields(prefetch_followup_resources(qs))
+
+    fastrising_transients = _home_table_qs(fastrising_transient_queryset(ndays=7).filter(tags__name='YSE'))
     fastrisingtransientfilter = TransientFilter(request.GET, queryset=fastrising_transients,prefix='ysefastrise')
     table_fastrising = YSERisingTransientTable(fastrisingtransientfilter.qs,prefix='ysefastrise')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_fastrising)
 
-    rising_transients = rising_transient_queryset(ndays=7).filter(tags__name='YSE')
+    rising_transients = _home_table_qs(rising_transient_queryset(ndays=7).filter(tags__name='YSE'))
     risingtransientfilter = TransientFilter(request.GET, queryset=rising_transients,prefix='yserise')
     table_rising = YSERisingTransientTable(risingtransientfilter.qs,prefix='yserise')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_rising)
 
     
-    transients = Transient.objects.filter(tags__name='YSE').filter(~Q(status__name='Ignore')).order_by('-disc_date')
+    transients = _home_table_qs(Transient.objects.filter(tags__name='YSE').filter(~Q(status__name='Ignore')).order_by('-disc_date'))
     transientfilter = TransientFilter(request.GET, queryset=transients,prefix='yse')
     table = YSEFullTransientTable(transientfilter.qs,prefix='yse')
     RequestConfig(request, paginate={'per_page': 10}).configure(table)
 
-    ztftransients = Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date')
+    ztftransients = _home_table_qs(Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date'))
     ztftransientfilter = TransientFilter(request.GET, queryset=ztftransients,prefix='yseztf')
     ztftable = YSEFullTransientTable(ztftransientfilter.qs,prefix='yseztf')
     RequestConfig(request, paginate={'per_page': 10}).configure(ztftable)
 
     
-    transients_follow = Transient.objects.filter(tags__name='YSE').order_by('-disc_date').filter(Q(status__name='FollowupRequested') | Q(status__name='Following'))
+    transients_follow = _home_table_qs(Transient.objects.filter(tags__name='YSE').order_by('-disc_date').filter(Q(status__name='FollowupRequested') | Q(status__name='Following')))
     transientfilter_follow = TransientFilter(request.GET, queryset=transients_follow,prefix='yse_follow')
     table_follow = YSETransientTable(transientfilter_follow.qs,prefix='yse_follow')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_follow)
@@ -1067,9 +1083,12 @@ def observing_night(request, telescope, obs_date, pi_name):
     #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
     #    filter(valid_start__lte = classical_obs_date.obs_date).\
     #    filter(valid_stop__gte = classical_obs_date.obs_date).select_related()
+    from YSE_App.services.followup_requests import requests_prefetch
+
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
         filter(valid_start__lte = classical_obs_date.resource.begin_date_valid).\
-        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).select_related()
+        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).\
+        select_related().prefetch_related(requests_prefetch())
 
     followuptransientfilter = FollowupFilter(request.GET, queryset=follow_requests,prefix=telescope)
         
@@ -1159,21 +1178,29 @@ def yse_observing_night(request, obs_date):
 
 
 def download_target_list(request, telescope, obs_date):
+    from YSE_App.services.followup_requests import format_comments, requests_prefetch
 
     # get follow requests for telescope/date
-    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).filter(resource__telescope__name = telescope.replace('_',' '))
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).filter(valid_start__lte = classical_obs_date[0].obs_date).filter(valid_stop__gte = classical_obs_date[0].obs_date)
+    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
+        filter(resource__telescope__name = telescope.replace('_',' ')).select_related('resource__telescope')
+    # evaluate once; an empty result is a 404, not a 500
+    classical_obs_date = classical_obs_date.first()
+    if classical_obs_date is None:
+        raise Http404('No classical observing date found for this telescope/date')
+    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        select_related('transient').prefetch_related(requests_prefetch())
 
     location = EarthLocation.from_geodetic(
-        classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-        classical_obs_date[0].resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date[0].obs_date).split('+')[0], format='iso')
+        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+        classical_obs_date.resource.telescope.elevation*u.m)
+    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
     
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     for f in follow_requests:
-        comments = ';'.join([l.comment for l in Log.objects.filter(transient_followup=f)])
+        comments = format_comments(f)
         if f.transient.recent_mag():
             content += "%s  %s %s 2000 mag = %.2f comment = %s\n"%(
                 f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),
@@ -1192,13 +1219,20 @@ def download_target_list(request, telescope, obs_date):
 def download_targets_and_finders(request, telescope, obs_date):
 
     # get follow requests for telescope/date
-    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).filter(resource__telescope__name = telescope.replace('_',' '))
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).filter(valid_start__lte = classical_obs_date[0].obs_date).filter(valid_stop__gte = classical_obs_date[0].obs_date)
+    classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
+        filter(resource__telescope__name = telescope.replace('_',' ')).select_related('resource__telescope')
+    # evaluate once; an empty result is a 404, not a 500
+    classical_obs_date = classical_obs_date.first()
+    if classical_obs_date is None:
+        raise Http404('No classical observing date found for this telescope/date')
+    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        select_related('transient')
 
     location = EarthLocation.from_geodetic(
-        classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-        classical_obs_date[0].resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date[0].obs_date).split('+')[0], format='iso')
+        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+        classical_obs_date.resource.telescope.elevation*u.m)
+    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
     
@@ -1268,6 +1302,14 @@ def _load_transient_followups(transient_id, user):
             followup.resource = followup.queued_resource
         followup.requestors = format_requestors(followup)
         followup.comment = format_comments(followup)
+        # One row per request so each requester sees (and can withdraw) their own.
+        followup.request_rows = list(followup.requests.all())
+        for row in followup.request_rows:
+            row.can_delete = user.is_staff or row.requestor_id == user.id
+        # Deleting the parent removes everyone's requests: staff or sole requester only.
+        followup.can_delete = user.is_staff or all(
+            row.requestor_id == user.id for row in followup.request_rows
+        )
     return followups
 
 
@@ -1905,10 +1947,7 @@ def download_bulk_photometry(request, query_title):
 
     query = Query.objects.filter(title=unquote(query_title))
     if len(query):
-        cursor = connections['explorer'].cursor()
-        cursor.execute(query[0].sql.replace('%','%%'), ())
-        transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-        cursor.close()
+        transients = Transient.objects.filter(name__in=run_explorer_query_cached(query[0])).order_by('-disc_date')
         from YSE_App.services.visibility import filter_transients_by_user_access
 
         transients = filter_transients_by_user_access(user, transients)
@@ -2139,10 +2178,7 @@ def change_status_for_query(request, query_id, status_id):
     q = UserQuery.objects.get(pk=query_id)
     if q.query:
         try:
-            cursor = connections['explorer'].cursor()
-            cursor.execute(q.query.sql.replace('%', '%%'), ())
-            transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-            cursor.close()
+            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query)).order_by('-disc_date')
         except:
             # Query bombed
             pass
@@ -2158,12 +2194,57 @@ def change_status_for_query(request, query_id, status_id):
 
     return redirect('personaldashboard')
 
+def _followup_tab_redirect(slug):
+    return HttpResponseRedirect(
+        reverse_lazy('transient_detail', kwargs={'slug': slug}) + '#followup_tab'
+    )
+
+
 @login_required
 def delete_followup(request,followup_id):
+    """Delete a parent follow-up, or only withdraw the caller's own requests.
+
+    Several people can request the same object for the same night, so a
+    non-staff user whose parent also carries other people's requests only
+    removes their own child rows; the parent and everyone else's stay.
+    """
+    from YSE_App.services.followup_requests import recompute_parent_priority
+
     followup = get_object_or_404(TransientFollowup,pk=followup_id)
     slug = followup.transient.slug
-    followup.delete()
-    return HttpResponseRedirect(reverse_lazy('transient_detail',kwargs={'slug':slug}))
+    others = followup.requests.exclude(requestor=request.user).exists()
+    if others and not request.user.is_staff:
+        followup.requests.filter(requestor=request.user).delete()
+        recompute_parent_priority(followup)
+    else:
+        followup.delete()
+    return _followup_tab_redirect(slug)
+
+
+@login_required
+def delete_followup_request(request, request_id):
+    """Delete one TransientFollowupRequest (own only unless staff).
+
+    The parent follow-up is deleted once its last request is gone;
+    otherwise its consolidated priority is recomputed.
+    """
+    from django.core.exceptions import PermissionDenied
+    from YSE_App.services.followup_requests import recompute_parent_priority
+
+    child = get_object_or_404(
+        TransientFollowupRequest.objects.select_related('followup__transient'),
+        pk=request_id,
+    )
+    if child.requestor_id != request.user.id and not request.user.is_staff:
+        raise PermissionDenied('You can only delete your own follow-up requests.')
+    parent = child.followup
+    slug = parent.transient.slug
+    child.delete()
+    if parent.requests.exists():
+        recompute_parent_priority(parent)
+    else:
+        parent.delete()
+    return _followup_tab_redirect(slug)
     
 @method_decorator(login_required, name='dispatch')
 class SearchResultsView(ListView):

@@ -7,7 +7,14 @@
 #had to pick central wavelength of r,g in /Users/patrickaleo/miniconda3/envs/yse_pz/lib/python3.7/site-packages/astrorapid/ANTARES_object
 
 
-from astrorapid.classify import Classify
+# astrorapid is not installed in the web or ingest environments (it is in neither
+# requirements file) and this cron is no longer in settings.CRON_CLASSES; the
+# import is guarded so the module still imports, and do() fails with a clear
+# message if it is ever run without the package.
+try:
+	from astrorapid.classify import Classify
+except ImportError:  # pragma: no cover - astrorapid is optional
+	Classify = None
 from django_cron import CronJobBase, Schedule
 
 import sys
@@ -25,6 +32,8 @@ classdict = {'SNIa':'SN Ia','SN Ia':'SN Ia','SNIa-norm':'SN Ia', 'SNIbc':'SN Ib/
 			 'ILOT':'ILOT', 'CART':'CART', 'TDE':'TDE', 'AGN':'AGN'}
 
 def do(debug=False):
+	if Classify is None:
+		raise ImportError("astrorapid is not installed; RAPID classification is disabled (it is not in either requirements file)")
 	# run this under Admin
 	user = User.objects.get(username='Admin')
 

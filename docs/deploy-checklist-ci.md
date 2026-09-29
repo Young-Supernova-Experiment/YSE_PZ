@@ -76,8 +76,8 @@ or logged). Network and data-shaped errors are recorded in the `-v2` output.
 An entry whose *import* fails for environment reasons is reported as skipped, not
 failed: a missing or broken third-party package (`SciServer`; TensorFlow, whose
 generated protobuf code is incompatible with the former `protobuf==4.25.3` pin in the web
-image, so `Photo_Z`, `SDSS_Photo_Z`, `PS1_PhotoZ` and `rapid_classify` never
-import there), a network fetch at import time (`astro_ghost` downloads the VO
+image, so `Photo_Z`, `SDSS_Photo_Z` and `PS1_PhotoZ` never import there), a
+network fetch at import time (`astro_ghost` downloads the VO
 cone-search registry, so `host_associate` and `DECam_upload` cannot import with the
 network stubbed), or a DB row read at import (`PS1_cutouts` does
 `User.objects.get(username='admin')`; the test seeds that user). Only a
@@ -109,10 +109,13 @@ naming a repo module, fails the inventory.
 | `yse_updates_stack.bash` | `QUB_data.YSE_Stack` *(inferred)* | yes (dust map stubbed) |
 | `new_lowz.bash` | not in `CRON_CLASSES` *(inferred: a query/notification script)* | **manual** |
 | — (no crontab line) | `PS1_cutouts.YSE`, `Query_ZTF.AntaresZTF`, `QUB_data.YSE_Weekly`, `PhotometryUploadExample.PhotometryUploads`, `TNS_uploads.UpdateGHOST` | import + `do()` smoke (`Query_ZTF`/`QUB_data` with the dust map stubbed) |
-| — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE`, `PS1_PhotoZ.YSE`, `rapid.rapid_classify_cron` | skipped in CI: TensorFlow does not import in the web image (`TypeError: Descriptors cannot be created directly`, protobuf pin); `Photo_Z`/`SDSS_Photo_Z` also need `SciServer` |
+| — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE`, `PS1_PhotoZ.YSE` | skipped in CI: TensorFlow does not import in the web image (`TypeError: Descriptors cannot be created directly`, protobuf pin); `Photo_Z`/`SDSS_Photo_Z` also need `SciServer`. |
+| — | `rapid.rapid_classify_cron` | **removed from `CRON_CLASSES`** (RAPID is not used; `astrorapid` is no longer installed). The module stays with a guarded import. |
 | — (no crontab line) | `host_associate.YSE` | skipped in CI: `astro_ghost` fetches the VO cone-search registry at import |
 
-Note: #183 pins `protobuf==3.20.3` in `requirements.txt` and `docker/requirements.web.dev`; once the CI image is rebuilt with it, the four TensorFlow crons import and are smoke-tested like the others (`Photo_Z`/`SDSS_Photo_Z` still skip on missing `SciServer`).
+Note: #183 pins `protobuf==3.20.3` in `requirements.txt` and `docker/requirements.web.dev`; once the CI image is rebuilt with it, the three TensorFlow crons import and are smoke-tested like the others (`Photo_Z`/`SDSS_Photo_Z` still skip on missing `SciServer`).
+
+Django version: the target is the **3.2 LTS line** (`Django>=3.2,<4.0` in `requirements.txt`, `Django==3.2.25` in `docker/requirements.web.dev`) until the Django 4 upgrade (#133) is scheduled; `ci.yml` installs that pin into the pulled GHCR image (which ships 4.0) before running the checks.
 
 Known follow-ups surfaced by the smoke test (XFAIL or reported in the `-v2`
 output, not failures):
