@@ -27,9 +27,6 @@ import urllib
 from django.contrib.auth.models import User
 
 
-
-user = User.objects.get(username = 'admin') #!!!
-
 def getimages(ra,dec,size=240,filters="grizy", type='stack'):
 
     """Query ps1filenames.py service to get a list of images
@@ -100,6 +97,7 @@ class YSE(CronJobBase):
             nowdate = datetime.datetime.utcnow() - datetime.timedelta(1)
             from django.db.models import Q #HAS To Remain Here, I dunno why
             print('Entered the PS cutout Cron')        
+            user = User.objects.get(username = 'admin') #!!!
             #save time b/c the other cron jobs print a time for completion
             
             transients = (Transient.objects.filter(Q(host__isnull=False) & Q(host__dec__gt=-31)))# & Q(something that prevents redownloading!)
