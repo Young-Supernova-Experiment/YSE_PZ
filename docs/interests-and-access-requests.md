@@ -111,5 +111,5 @@ pages and the REST actions.
 
 ## Deploy
 
-- Migration `0020_interests_data_access` (two tables, six indexes; no data migration).
+- Migration `0019_interests_data_access` (two tables, six indexes; no data migration), depending on `0018_sharing_services`; it becomes `0020` on `0019_analysis_services` if the analysis-services PR lands first.
 - No new settings or packages.

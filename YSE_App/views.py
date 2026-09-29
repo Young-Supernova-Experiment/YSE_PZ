@@ -1805,6 +1805,11 @@ def transient_detail(request, slug):
         context['submit_to_tns'] = submit_to_tns
         if tns_sandbox_comment:
             context['tns_sandbox_url'] = tns_sandbox_comment.split()[2]
+
+        # "Report to TNS" dialog (#326): the sharing services this user may report through.
+        from YSE_App.sharing_views import report_dialog_context
+
+        context.update(report_dialog_context(request.user, transient_obj))
         
         return render(request,
             'YSE_App/transient_detail.html',

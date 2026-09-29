@@ -958,3 +958,33 @@ class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixi
     @action(detail=True, methods=["post"])
     def decline(self, request, pk=None):
         return self._decide(request, False)
+class SharingServiceViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ``/api/sharingservices/``: the enabled services the user may report through (no secrets)."""
+    serializer_class = SharingServiceSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        visible = [s.pk for s in SharingService.for_user(self.request.user)]
+        return SharingService.objects.filter(pk__in=visible).prefetch_related(
+            'allowed_instruments', 'allowed_obs_groups', 'groups')
+
+
+class SharingSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ``/api/sharingsubmissions/`` for transients the user may see; filter by ``status``, ``kind``, ``service``."""
+    serializer_class = SharingSubmissionSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
+        qs = SharingSubmission.objects.filter(transient__in=allowed.values('pk')).select_related(
+            'service', 'transient', 'created_by')
+        params = self.request.query_params
+        if params.get('status'):
+            qs = qs.filter(status=params['status'])
+        if params.get('kind'):
+            qs = qs.filter(kind=params['kind'])
+        if params.get('service'):
+            qs = qs.filter(service__slug=params['service'])
+        if params.get('transient'):
+            qs = qs.filter(transient__name=params['transient'])
+        return qs
