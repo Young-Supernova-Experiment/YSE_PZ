@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('auth', '0012_alter_user_first_name_max_length'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('YSE_App', '0015_photstat_limit_bands'),
+        ('YSE_App', '0016_allocations_facility_requests'),
     ]
 
     operations = [

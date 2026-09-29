@@ -17,9 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import candidate_views, job_views, notification_views
-from YSE_App import allocation_views
-from YSE_App import job_views, notification_views
+from YSE_App import allocation_views, candidate_views, job_views, notification_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
