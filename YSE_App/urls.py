@@ -17,7 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views, candidate_views, job_views, notification_views
+from YSE_App import allocation_views, analysis_views, candidate_views, job_views, notification_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -114,6 +114,11 @@ urlpatterns = [
             allocation_views.transient_facility_requests_fragment, name='transient_facility_requests_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_submit/$',
             allocation_views.transient_facility_submit, name='transient_facility_submit'),
+    # Analysis tab (#314): fragment and run action for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_fragment/$',
+            analysis_views.transient_analysis_fragment, name='transient_detail_analysis_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_run/$',
+            analysis_views.transient_analysis_run, name='transient_analysis_run'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -220,6 +225,15 @@ urlpatterns = [
             service_run_views.external_service_run_detail, name='external_service_run_detail'),
     re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
             service_run_views.external_service_run_callback, name='external_service_run_callback'),
+    # Analysis runs (#314): status polling, result files, own-run actions.
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/status\.json$',
+            analysis_views.analysis_run_status, name='analysis_run_status'),
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/files/(?P<file_id>[0-9]+)/(?P<name>[^/]+)$',
+            analysis_views.analysis_run_file, name='analysis_run_file'),
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/delete/$',
+            analysis_views.analysis_run_delete, name='analysis_run_delete'),
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/cancel/$',
+            analysis_views.analysis_run_cancel, name='analysis_run_cancel'),
     # Allocations page (#305) and facility requests (#300)
     re_path(r'^allocations/$', allocation_views.allocations, name='allocations'),
     re_path(r'^allocations/new/$', allocation_views.allocation_create, name='allocation_create'),
@@ -348,6 +362,8 @@ router.register(r'classicalresources', api_views.ClassicalResourceViewSet, basen
 router.register(r'classicalobservingdates', api_views.ClassicalObservingDateViewSet, basename='classicalobservingdate')
 router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
 router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
+router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
+router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

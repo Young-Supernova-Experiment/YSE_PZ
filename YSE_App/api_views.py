@@ -1,5 +1,5 @@
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse
-from rest_framework import serializers, viewsets, status, permissions
+from rest_framework import serializers, viewsets, status, permissions, mixins
 from rest_framework.response import Response
 from rest_framework.decorators import action, api_view
 from rest_framework import generics
@@ -464,6 +464,81 @@ class FacilityRequestViewSet(viewsets.ReadOnlyModelViewSet):
             if value:
                 qs = qs.filter(**{key if key == "state" else key + "_id": value})
         return qs.distinct()
+
+
+class AnalysisServiceViewSet(viewsets.ReadOnlyModelViewSet):
+    """Analysis services (#313) the caller may run; ``param_fields`` is the parameter form, ``cap`` the daily-cap state."""
+
+    serializer_class = AnalysisServiceSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.analysis_services import services_for_user
+
+        return services_for_user(self.request.user, include_disabled=bool(self.request.user.is_staff))
+
+
+class AnalysisRunViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
+                         mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """Analysis runs (#313, #314): list (``?transient=<id>``, ``?service=<slug>``, ``?status=``), retrieve by uuid,
+    create ``{"service": slug, "transient": id or name, "params": {...}}`` (429 when the daily cap is reached),
+    delete own runs (staff: any)."""
+
+    serializer_class = AnalysisRunSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    lookup_field = "uuid"
+    lookup_value_regex = "[0-9a-fA-F-]{36}"
+
+    def get_queryset(self):
+        qs = (ExternalServiceRun.objects.filter(service__kind=ExternalService.KIND_ANALYSIS)
+              .select_related("service", "service__analysis", "transient", "created_by").prefetch_related("files"))
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser):
+            visible = filter_transients_by_user_access(
+                user, Transient.objects.filter(service_runs__service__kind=ExternalService.KIND_ANALYSIS).distinct())
+            qs = qs.filter(Q(created_by=user) | Q(transient__in=visible))
+        transient = self.request.query_params.get("transient")
+        if transient:
+            qs = qs.filter(Q(transient_id=transient) if str(transient).isdigit() else Q(transient__name=transient))
+        service = self.request.query_params.get("service")
+        if service:
+            qs = qs.filter(service__slug=service)
+        status_value = self.request.query_params.get("status")
+        if status_value:
+            qs = qs.filter(status=status_value)
+        return qs.distinct()
+
+    def create(self, request, *args, **kwargs):
+        from YSE_App.analysis_views import user_may_see_transient
+        from YSE_App.services import analysis_services as analysis_svc
+        from YSE_App.services import external_services as runs
+
+        data = AnalysisRunCreateSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        ref = str(data.validated_data["transient"])
+        transient = Transient.objects.filter(Q(pk=int(ref)) if ref.isdigit() else Q(name=ref)).first()
+        if transient is None or not user_may_see_transient(request.user, transient):
+            return Response({"error": "unknown transient or not visible to you"}, status=status.HTTP_404_NOT_FOUND)
+        profile = analysis_svc.services_for_user(request.user).filter(service__slug=data.validated_data["service"]).first()
+        if profile is None:
+            return Response({"error": "unknown analysis service or not available to you"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            run = analysis_svc.start_analysis(profile, transient, request.user, data.validated_data.get("params") or {})
+        except analysis_svc.InvalidParams as exc:
+            return Response({"error": str(exc), "errors": exc.errors}, status=status.HTTP_400_BAD_REQUEST)
+        except runs.RunLimitExceeded as exc:
+            return Response({"error": str(exc), "limit": exc.limit}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        except runs.ServiceDisabled as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        run = self.get_queryset().get(pk=run.pk)
+        return Response(self.get_serializer(run).data, status=status.HTTP_201_CREATED)
+
+    def perform_destroy(self, instance):
+        from YSE_App.services import analysis_services as analysis_svc
+
+        if not analysis_svc.can_manage_run(instance, self.request.user):
+            raise PermissionDenied("only the requester or staff may delete a run")
+        analysis_svc.delete_run(instance)
 
 
 ### `ClassicalResource` Filter Set ###

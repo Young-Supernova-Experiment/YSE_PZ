@@ -38,6 +38,7 @@
                     <li class="nav-item"><a class="nav-link" href="#followup_tab" data-toggle="tab">Follow-up</a></li>
                     <li class="nav-item"><a class="nav-link" href="#resources_tab" data-toggle="tab">Resources</a></li>
                     <li class="nav-item"><a class="nav-link" href="#photometry_tab" data-toggle="tab">Detailed Photometry</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#analysis_tab" data-toggle="tab" id="analysis_tab_header">Analysis</a></li>
                     <li class="nav-item"><a class="nav-link" href="#spectra_tab" data-toggle="tab">Spectra</a></li>
                     <li class="nav-item"><a class="nav-link" href="#hst_tab" data-toggle="tab" id="hst_tab_header">HST Data</a></li>
                     <li class="nav-item"><a class="nav-link" href="#chandra_tab" data-toggle="tab" id="chandra_tab_header">Chandra Data</a></li>
@@ -157,6 +158,11 @@
                             {% endif %}
                         </div>
 
+                    </div>
+                    <div class="tab-pane" id="analysis_tab">
+                        <div id="analysis_container">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Analysis runs load when you open this tab.</p>
+                        </div>
                     </div>
                     <div class="tab-pane" id="spectra_tab">
                         <div id="spectra_tab_content">
@@ -669,6 +675,8 @@
                         "{% url 'transient_detail_photometry_fragment' transient.id %}",
                         '#photometry_deferred_tables'
                     );
+                } else if (target === '#analysis_tab') {
+                    yseLoadAnalysisTab(false);
                 } else if (target === '#hst_tab' && !yseHstImagesLoaded) {
                     yseHstImagesLoaded = true;
                     if (window.yseLoadHstImages) {
@@ -2130,5 +2138,166 @@
         loadHstImages();
         loadChandraImages();
 {% endif %}
+    </script>
+
+    <script>
+        /* Analysis tab (#314): the fragment is HTML; this drives the run form, the
+           actions and the status polling. Re-run after every fragment reload. */
+        var yseAnalysisPollTimer = null;
+        var yseAnalysisBound = false;
+        function yseAnalysisEscape(value) {
+            if (value === null || value === undefined) { return ''; }
+            return String(value).replace(/[&<>"']/g, function(ch) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
+            });
+        }
+        function yseLoadAnalysisTab(force) {
+            if (force) {
+                delete yseDetailFragmentsLoaded['analysis'];
+            }
+            if (yseAnalysisPollTimer) {
+                clearTimeout(yseAnalysisPollTimer);
+                yseAnalysisPollTimer = null;
+            }
+            return yseLoadDetailFragment(
+                'analysis',
+                "{% url 'transient_detail_analysis_fragment' transient.id %}",
+                '#analysis_container'
+            ).then(yseAnalysisInit);
+        }
+        window.yseLoadAnalysisTab = yseLoadAnalysisTab;
+        function yseAnalysisServices() {
+            var node = document.getElementById('yse_analysis_services_json');
+            if (!node) { return []; }
+            try { return JSON.parse(node.textContent || '[]'); } catch (e) { return []; }
+        }
+        function yseAnalysisRenderFields() {
+            var $select = $('#analysis_service');
+            var slug = $select.val();
+            var services = yseAnalysisServices();
+            var service = null;
+            for (var i = 0; i < services.length; i++) { if (services[i].slug === slug) { service = services[i]; } }
+            var $box = $('#analysis_param_fields').empty();
+            $('#analysis_service_description').text('');
+            $('#analysis_cap_note').hide().text('');
+            if (!service) { return; }
+            $('#analysis_service_description').text($select.find('option:selected').attr('title') || '');
+            var fields = service.fields || [];
+            for (var k = 0; k < fields.length; k++) {
+                var f = fields[k];
+                var id = 'ap_' + yseAnalysisEscape(f.name);
+                var html = '<div class="form-group form-group-sm">';
+                if (f.type === 'boolean') {
+                    html += '<div class="form-check"><input class="form-check-input analysis-param" type="checkbox" id="' + id + '" data-name="' + yseAnalysisEscape(f.name) + '" data-type="boolean"' + (f.default === true || f.default === 'true' ? ' checked' : '') + '>' +
+                        '<label class="form-check-label small" for="' + id + '">' + yseAnalysisEscape(f.label) + '</label></div>';
+                } else {
+                    html += '<label class="small" for="' + id + '">' + yseAnalysisEscape(f.label) + '</label>';
+                    if (f.type === 'choice') {
+                        html += '<select class="form-control form-control-sm analysis-param" id="' + id + '" data-name="' + yseAnalysisEscape(f.name) + '" data-type="choice">';
+                        for (var c = 0; c < (f.choices || []).length; c++) {
+                            var ch = f.choices[c];
+                            html += '<option value="' + yseAnalysisEscape(ch) + '"' + (String(ch) === String(f.default) ? ' selected' : '') + '>' + yseAnalysisEscape(ch) + '</option>';
+                        }
+                        html += '</select>';
+                    } else {
+                        var type = (f.type === 'number' || f.type === 'integer') ? 'number' : 'text';
+                        html += '<input class="form-control form-control-sm analysis-param" type="' + type + '"' + (type === 'number' ? ' step="any"' : '') + ' id="' + id + '" data-name="' + yseAnalysisEscape(f.name) + '" data-type="' + yseAnalysisEscape(f.type) + '" value="' + yseAnalysisEscape(f.default === null || f.default === undefined ? '' : f.default) + '">';
+                    }
+                }
+                if (f.help) { html += '<small class="form-text text-muted">' + yseAnalysisEscape(f.help) + '</small>'; }
+                html += '</div>';
+                $box.append(html);
+            }
+            var cap = service.cap || {};
+            if (cap.limit && !cap.exempt) {
+                var note = cap.remaining === 0 ? 'Daily limit reached (' + cap.limit + ' run(s) per user per day); try again tomorrow.' : cap.remaining + ' of ' + cap.limit + ' run(s) left today.';
+                $('#analysis_cap_note').text(note).show();
+                $('#analysis_run_btn').prop('disabled', cap.remaining === 0);
+            } else {
+                $('#analysis_run_btn').prop('disabled', false);
+            }
+        }
+        function yseAnalysisCollectParams() {
+            var params = {};
+            $('#analysis_param_fields .analysis-param').each(function() {
+                var $f = $(this);
+                var name = $f.data('name');
+                if ($f.data('type') === 'boolean') {
+                    params[name] = $f.is(':checked');
+                } else if ($f.val() !== '') {
+                    params[name] = $f.val();
+                }
+            });
+            return params;
+        }
+        function yseAnalysisPoll() {
+            var $rows = $('#tbl_analysis_runs tr.analysis-run-row').filter(function() {
+                var s = $(this).data('status');
+                return s === 'pending' || s === 'running';
+            });
+            if (!$rows.length) { return; }
+            var pending = $rows.length;
+            var changed = false;
+            $rows.each(function() {
+                var $row = $(this);
+                $.get($row.data('status-url')).done(function(json) {
+                    if (json && json.is_finished) { changed = true; }
+                }).always(function() {
+                    pending -= 1;
+                    if (pending === 0) {
+                        if (changed) {
+                            yseLoadAnalysisTab(true);
+                        } else {
+                            var seconds = parseInt($('#yse_analysis_tab_body').data('poll-seconds'), 10) || 4;
+                            yseAnalysisPollTimer = setTimeout(yseAnalysisPoll, seconds * 1000);
+                        }
+                    }
+                });
+            });
+        }
+        function yseAnalysisInit() {
+            yseAnalysisRenderFields();
+            if ($('#yse_analysis_tab_body').data('active') === 1 || $('#yse_analysis_tab_body').data('active') === '1') {
+                var seconds = parseInt($('#yse_analysis_tab_body').data('poll-seconds'), 10) || 4;
+                yseAnalysisPollTimer = setTimeout(yseAnalysisPoll, seconds * 1000);
+            }
+            if (yseAnalysisBound) { return; }
+            yseAnalysisBound = true;
+            $('#analysis_tab').on('change', '#analysis_service', yseAnalysisRenderFields);
+            $('#analysis_tab').on('click', '#analysis_run_btn', function() {
+                var $btn = $(this).prop('disabled', true);
+                $('#analysis_run_error').text('');
+                $.ajax({
+                    url: $('#yse_analysis_tab_body').data('run-url'),
+                    method: 'POST',
+                    contentType: 'application/json',
+                    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+                    data: JSON.stringify({service: $('#analysis_service').val(), params: yseAnalysisCollectParams()})
+                }).done(function() {
+                    yseLoadAnalysisTab(true);
+                }).fail(function(xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.error) || ('request failed (' + xhr.status + ')');
+                    $('#analysis_run_error').text(msg);
+                    $btn.prop('disabled', false);
+                });
+            });
+            $('#analysis_tab').on('click', '[data-analysis-action]', function() {
+                var $btn = $(this);
+                if ($btn.data('analysis-action') === 'delete' && !window.confirm('Delete this analysis run and its files?')) {
+                    return;
+                }
+                $btn.prop('disabled', true);
+                $.ajax({
+                    url: $btn.data('url'), method: 'POST', headers: {'X-CSRFToken': '{{ csrf_token }}'}
+                }).always(function() {
+                    yseLoadAnalysisTab(true);
+                });
+            });
+        }
+        $(function() {
+            if (window.location.hash === '#analysis_tab') {
+                $('a[href="#analysis_tab"]').tab('show');
+            }
+        });
     </script>
 {% endblock %}

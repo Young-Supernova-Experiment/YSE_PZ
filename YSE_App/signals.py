@@ -14,6 +14,8 @@ from YSE_App.common.db_time_cap import cap_explorer_connection
 import YSE_App.services.external_services  # noqa: E402,F401
 # ... and the facility runner + poll job (#298) so every process can execute facility submissions.
 import YSE_App.services.facility_requests  # noqa: E402,F401
+# ... and the analysis runner (#313) for in-process fits and webhook dispatch.
+import YSE_App.analysis.runners  # noqa: E402,F401
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 

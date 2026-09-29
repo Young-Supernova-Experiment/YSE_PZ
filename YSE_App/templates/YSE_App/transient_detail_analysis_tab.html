@@ -1,0 +1,127 @@
+{# Analysis tab body (#314): loaded into #analysis_container; the page's JS (transient_detail.html) drives the form, polling and actions. #}
+<div class="yse-analysis-tab" id="yse_analysis_tab_body"
+     data-run-url="{% url 'transient_analysis_run' transient.id %}"
+     data-fragment-url="{% url 'transient_detail_analysis_fragment' transient.id %}"
+     data-active="{% if analysis_active %}1{% else %}0{% endif %}"
+     data-poll-seconds="{{ analysis_poll_seconds }}">
+	<script type="application/json" id="yse_analysis_services_json">{{ analysis_services_json|safe }}</script>
+
+	{% if not analysis_sees_data %}<p class="text-muted small"><i class="fa fa-lock"></i> You do not have access to this transient's photometry or spectra; only your own runs are listed and a new run sees only data you may access.</p>{% endif %}
+	<div class="row">
+		<div class="col-md-4">
+			<div class="card card-outline card-primary" id="analysis_run_box">
+				<div class="card-header"><h3 class="card-title"><i class="fa fa-play"></i> Run analysis</h3></div>
+				<div class="card-body">
+					{% if analysis_services %}
+					<form id="analysis_run_form" onsubmit="return false;">
+						<div class="form-group">
+							<label for="analysis_service">Service</label>
+							<select class="form-control form-control-sm" id="analysis_service" name="service">
+								{% for s in analysis_services %}
+								<option value="{{ s.slug }}" data-runner="{{ s.runner_kind }}" title="{{ s.description }}"
+										{% if s.cap.remaining is not None and s.cap.remaining == 0 %}data-capped="1"{% endif %}>{{ s.name }}{% if s.cap.limit %} ({% if s.cap.exempt %}no cap for staff{% else %}{{ s.cap.remaining }} of {{ s.cap.limit }} left today{% endif %}){% endif %}</option>
+								{% endfor %}
+							</select>
+						</div>
+						<p class="text-muted small" id="analysis_service_description">{{ analysis_services.0.description }}</p>
+						<div id="analysis_param_fields"></div>
+						<p class="text-warning small" id="analysis_cap_note" style="display:none;"></p>
+						<button type="button" class="btn btn-sm btn-primary" id="analysis_run_btn"><i class="fa fa-play"></i> Run</button>
+						<span class="text-danger small" id="analysis_run_error"></span>
+					</form>
+					{% else %}
+					<p class="text-muted">No analysis service is enabled for your groups. Staff register services with
+						<code>manage.py register_analysis_service</code> (see <em>docs/analysis-services.md</em>).</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="col-md-8">
+			<table class="table table-bordered table-condensed table-sm" id="tbl_analysis_runs">
+				<thead>
+					<tr>
+						<th>Service</th>
+						<th>Status</th>
+						<th>Requested by</th>
+						<th>Started</th>
+						<th>Duration</th>
+						<th>Results</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					{% for row in analysis_runs %}{% with r=row.r %}
+					<tr class="analysis-run-row" data-run-uuid="{{ r.uuid }}" data-status="{{ r.status }}"
+						data-status-url="{% url 'analysis_run_status' r.uuid %}">
+						<td><a href="#analysis_run_{{ r.uuid }}">{{ r.service.name }}</a></td>
+						<td><span class="badge badge-{% if r.status == 'succeeded' %}success{% elif r.status == 'failed' %}danger{% elif r.status == 'cancelled' %}secondary{% elif r.status == 'running' %}info{% else %}warning{% endif %} analysis-status">{{ r.get_status_display }}</span>
+							{% if not r.is_finished %}<i class="fa fa-spinner fa-spin text-muted"></i>{% endif %}</td>
+						<td>{{ r.created_by.username }}</td>
+						<td title="requested {{ r.created_date|date:'Y-m-d H:i:s' }} UTC">{{ r.started_at|date:"Y-m-d H:i"|default:"-" }}</td>
+						<td>{% if r.duration %}{{ r.duration.total_seconds|floatformat:1 }} s{% else %}-{% endif %}</td>
+						<td class="small">
+							{% if r.status == 'failed' %}<span class="text-danger">{{ r.error|truncatechars:120 }}</span>
+							{% else %}{% for key, value in row.summary %}<span class="text-nowrap"><strong>{{ key }}</strong> {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
+						</td>
+						<td class="text-nowrap analysis-run-actions">
+							{% if row.can_manage %}
+								{% if not r.is_finished %}<button type="button" class="btn btn-xs btn-outline-warning" data-analysis-action="cancel" data-url="{% url 'analysis_run_cancel' r.uuid %}">Cancel</button>{% endif %}
+								<button type="button" class="btn btn-xs btn-outline-danger" data-analysis-action="delete" data-url="{% url 'analysis_run_delete' r.uuid %}" title="Delete this run and its files">Delete</button>
+							{% endif %}
+							{% if user.is_staff %}<a class="btn btn-xs btn-outline-secondary" href="{% url 'external_service_run_detail' r.uuid %}" title="Staff run page">run</a>{% endif %}
+						</td>
+					</tr>
+					{% endwith %}{% empty %}
+					<tr><td colspan="7" class="text-muted">No analysis has been run on this transient yet.</td></tr>
+					{% endfor %}
+				</tbody>
+			</table>
+		</div>
+	</div>
+
+	{% for row in analysis_runs %}{% with r=row.r %}{% if r.status == 'succeeded' or r.status == 'failed' %}
+	<div class="card card-outline {% if r.status == 'succeeded' %}card-success{% else %}card-danger{% endif %} analysis-result-card" id="analysis_run_{{ r.uuid }}" data-run-uuid="{{ r.uuid }}">
+		<div class="card-header">
+			<h3 class="card-title">{{ r.service.name }}
+				<small class="text-muted">&mdash; {{ r.created_by.username }}, {{ r.finished_at|date:"Y-m-d H:i" }} UTC{% if row.summary_text %} &mdash; {{ row.summary_text }}{% endif %}</small></h3>
+			<div class="card-tools"><button type="button" class="btn btn-tool" data-card-widget="collapse"><i class="fa fa-minus"></i></button></div>
+		</div>
+		<div class="card-body">
+			{% if r.status == 'failed' %}
+			<p class="text-danger"><i class="fa fa-exclamation-triangle"></i> {{ r.error }}</p>
+			{% endif %}
+			<div class="row">
+				{% if row.plots %}
+				<div class="col-md-7">
+					{% for f in row.plots %}
+					<a href="{% url 'analysis_run_file' r.uuid f.pk f.name %}" target="_blank" rel="noopener" title="{{ f.name }}{% if f.meta.title %}: {{ f.meta.title }}{% endif %}">
+						<img class="analysis-plot img-fluid" src="{% url 'analysis_run_file' r.uuid f.pk f.name %}" alt="{{ f.name }}" loading="lazy" style="max-height:340px; margin: 0 6px 6px 0;">
+					</a>
+					{% endfor %}
+				</div>
+				{% endif %}
+				<div class="{% if row.plots %}col-md-5{% else %}col-md-12{% endif %}">
+					{% if row.rows %}
+					<table class="table table-sm table-condensed analysis-results-table">
+						<tbody>
+							{% for key, value in row.rows %}<tr><th class="small">{{ key }}</th><td class="small">{{ value }}</td></tr>{% endfor %}
+						</tbody>
+					</table>
+					{% endif %}
+					{% if row.params %}
+					<p class="small text-muted"><strong>Parameters:</strong>
+						{% for key, value in row.params.items %}{{ key }}={{ value }}{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+					{% endif %}
+					{% if row.downloads or row.plots %}
+					<p class="small"><strong>Download:</strong>
+						{% for f in row.downloads %}<a href="{% url 'analysis_run_file' r.uuid f.pk f.name %}" title="{{ f.get_kind_display }}, {{ f.size|filesizeformat }}">{{ f.name }}</a>{% if not forloop.last %} &middot; {% endif %}{% endfor %}
+						{% if row.downloads and row.plots %} &middot; {% endif %}
+						{% for f in row.plots %}<a href="{% url 'analysis_run_file' r.uuid f.pk f.name %}" title="{{ f.size|filesizeformat }}">{{ f.name }}</a>{% if not forloop.last %} &middot; {% endif %}{% endfor %}
+					</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}{% endwith %}{% endfor %}
+</div>

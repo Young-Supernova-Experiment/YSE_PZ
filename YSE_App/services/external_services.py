@@ -113,17 +113,19 @@ def start_run(
     target=None,
     target_ref: str = "",
     dispatch: bool = True,
+    enforce_limit: bool = True,
 ) -> Tuple[ExternalServiceRun, str]:
     """Create a pending run and return ``(run, callback_token)``.
 
     The token is returned exactly once: only its sha256 is stored. Raises
     :class:`ServiceDisabled` or :class:`RunLimitExceeded`; a caller that shows
-    the latter in the UI should map it to a 429.
+    the latter in the UI should map it to a 429. ``enforce_limit=False`` skips
+    the daily cap (analysis services exempt staff, #314).
     """
     if not service.enabled or not service.visible_to(user):
         raise ServiceDisabled("%s is not available." % service.name)
     limit = service.max_runs_per_user_per_day or 0
-    if limit and runs_today_for_user(service, user) >= limit:
+    if enforce_limit and limit and runs_today_for_user(service, user) >= limit:
         raise RunLimitExceeded(service, limit)
 
     merged = dict(service.default_params or {})
