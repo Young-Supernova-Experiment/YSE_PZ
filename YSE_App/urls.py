@@ -260,6 +260,8 @@ urlpatterns = [
             name='notification_mark_all_read'),
     re_path(r'^notifications/preferences/$', notification_views.notification_preferences,
             name='notification_preferences'),
+    re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
+            name='mention_suggest'),
 
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),

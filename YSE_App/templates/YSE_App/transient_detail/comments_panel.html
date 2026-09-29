@@ -25,13 +25,13 @@
                     <li class="yse-comment-empty text-muted">No comments yet.</li>
                     {% endfor %}
                 </ul>
-                <form id="add_transient_comment" action="{% url 'add_transient_comment' %}" method="post" class="yse-comment-composer">
+                <form id="add_transient_comment" action="{% url 'add_transient_comment' %}" method="post" class="yse-comment-composer" data-mention-url="{% url 'mention_suggest' %}">
                     <input type="hidden" name="transient" value="{{ transient.id }}"/>
                     {% csrf_token %}
                     <div class="row yse-comment-composer-row">
                         <div class="col-9 col-sm-9">
                             <label for="id_comment" class="sr-only">Add comment</label>
-                            {% render_field transient_comment_form.comment class+="form-control yse-comment-input" rows="2" placeholder="Comment… @username or @channel to notify" %}
+                            {% render_field transient_comment_form.comment class+="form-control yse-comment-input" rows="2" placeholder="Comment… @username, @channel or #instrument to notify" autocomplete="off" %}
                         </div>
                         <div class="col-3 col-sm-3 yse-comment-submit-col">
                             <button type="submit" class="btn btn-primary btn-block yse-comment-submit">Submit</button>
@@ -65,4 +65,109 @@
             </div>
         </div>
     </div>
+    <ul id="yse-mention-menu" class="yse-mention-menu list-unstyled" hidden role="listbox"></ul>
+    <script>
+    // @user / #instrument autocomplete for the comment box (#322). Delegated on
+    // document: the panel's inner HTML is replaced by the comment poller, so
+    // nothing is bound to the textarea itself. Guarded against double init.
+    (function () {
+        if (window.yseMentionsInit) { return; }
+        window.yseMentionsInit = true;
+        var menu = null, active = null, items = [], selected = -1, timer = null, lastQuery = null;
+        function getMenu() {
+            if (!menu) {
+                menu = document.getElementById('yse-mention-menu');
+                // Move it to <body>: the panel's box clips absolutely positioned children.
+                if (menu && menu.parentNode !== document.body) { document.body.appendChild(menu); }
+            }
+            return menu;
+        }
+        function hide() { var m = getMenu(); if (m) { m.hidden = true; m.innerHTML = ''; } items = []; selected = -1; active = null; }
+        function tokenAt(field) {
+            var pos = field.selectionStart || 0;
+            var before = field.value.slice(0, pos);
+            var match = /(^|[\s\x28])([@#])([\w.+\-]*)$/.exec(before);  // \x28 = "("
+            if (!match) { return null; }
+            return { prefix: match[2], text: match[3], start: pos - match[3].length - 1, end: pos };
+        }
+        function render(field, token) {
+            var m = getMenu();
+            if (!m || !items.length) { hide(); return; }
+            m.innerHTML = '';
+            items.forEach(function (item, i) {
+                var li = document.createElement('li');
+                li.className = 'yse-mention-option' + (i === selected ? ' active' : '');
+                li.setAttribute('role', 'option');
+                li.dataset.value = item.value;
+                var strong = document.createElement('strong');
+                strong.textContent = item.value;
+                li.appendChild(strong);
+                li.appendChild(document.createTextNode(' ' + item.label));
+                li.addEventListener('mousedown', function (ev) { ev.preventDefault(); insert(field, token, item.value); });
+                m.appendChild(li);
+            });
+            var rect = field.getBoundingClientRect();
+            m.style.position = 'absolute';
+            m.style.left = (rect.left + window.pageXOffset) + 'px';
+            m.style.top = (rect.bottom + window.pageYOffset) + 'px';
+            m.style.minWidth = Math.min(rect.width, 420) + 'px';
+            m.hidden = false;
+        }
+        function insert(field, token, value) {
+            var current = tokenAt(field) || token;
+            var v = field.value;
+            field.value = v.slice(0, current.start) + value + ' ' + v.slice(current.end);
+            var caret = current.start + value.length + 1;
+            field.focus();
+            field.setSelectionRange(caret, caret);
+            hide();
+        }
+        function fetchSuggestions(field, token) {
+            var url = field.dataset.mentionUrl || (field.form && field.form.dataset.mentionUrl);
+            if (!url) { return; }
+            var query = token.prefix + token.text;
+            if (query === lastQuery && items.length) { render(field, token); return; }
+            lastQuery = query;
+            fetch(url + '?q=' + encodeURIComponent(query) + '&limit=8', { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(function (r) { return r.ok ? r.json() : { results: [] }; })
+                .then(function (data) {
+                    if (document.activeElement !== field) { return; }
+                    var now = tokenAt(field);
+                    if (!now || now.prefix + now.text !== query) { return; }
+                    items = data.results || [];
+                    selected = items.length ? 0 : -1;
+                    active = field;
+                    render(field, now);
+                })
+                .catch(function () { hide(); });
+        }
+        document.addEventListener('input', function (ev) {
+            var field = ev.target;
+            if (!field.classList || !field.classList.contains('yse-comment-input')) { return; }
+            var token = tokenAt(field);
+            if (!token) { hide(); return; }
+            clearTimeout(timer);
+            timer = setTimeout(function () { fetchSuggestions(field, token); }, 150);
+        });
+        document.addEventListener('keydown', function (ev) {
+            var m = getMenu();
+            if (!m || m.hidden || ev.target !== active) { return; }
+            if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+                ev.preventDefault();
+                var step = ev.key === 'ArrowDown' ? 1 : -1;
+                selected = (selected + step + items.length) % items.length;
+                render(active, tokenAt(active));
+            } else if ((ev.key === 'Enter' || ev.key === 'Tab') && selected >= 0) {
+                ev.preventDefault();
+                insert(active, tokenAt(active), items[selected].value);
+            } else if (ev.key === 'Escape') {
+                hide();
+            }
+        }, true);
+        document.addEventListener('click', function (ev) {
+            var m = getMenu();
+            if (m && !m.hidden && !m.contains(ev.target) && ev.target !== active) { hide(); }
+        });
+    })();
+    </script>
 </section>

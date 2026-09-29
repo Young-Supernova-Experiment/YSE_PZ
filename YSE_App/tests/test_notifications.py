@@ -69,7 +69,8 @@ class NotifyServiceTests(TestCase):
         carol = create_test_user("notif_carol", email="carol@example.com")
         NotificationPreference.objects.create(user=carol, in_app=False, email=False)
         dave = create_test_user("notif_dave", email="")  # email on by default but no address
-        rows = notify([self.alice, self.bob, carol, dave], "gated")
+        # kind "alert": email/Slack on by default for that group (the "system" group is in-app only)
+        rows = notify([self.alice, self.bob, carol, dave], "gated", "", "alert")
         by_user = {r.recipient.username: r for r in rows}
         self.assertEqual(set(by_user), {"notif_alice", "notif_bob", "notif_dave"})
         self.assertIsNone(by_user["notif_alice"].read_at)
@@ -80,7 +81,7 @@ class NotifyServiceTests(TestCase):
         self.assertEqual(svc.unread_count(dave), 1)
 
     def test_email_failure_is_recorded_and_retried(self):
-        rows = notify([self.alice], "flaky", "/x/")
+        rows = notify([self.alice], "flaky", "/x/", "alert")
         n = rows[0]
         with mock.patch.object(svc, "send_mail", side_effect=RuntimeError("smtp down")):
             result = run_pass()
@@ -103,7 +104,7 @@ class NotifyServiceTests(TestCase):
     def test_slack_webhook_delivery(self):
         NotificationPreference.objects.create(user=self.alice, email=False,
                                               slack_webhook_url="https://hooks.slack.test/abc")
-        rows = notify([self.alice], "ping", "/transient_detail/x/", subject="Hi")
+        rows = notify([self.alice], "ping", "/transient_detail/x/", "alert", subject="Hi")
         job = Job.objects.get(kind=svc.DELIVER_KIND)
         self.assertEqual(job.payload["channels"], ["slack"])
         fake = mock.Mock()
