@@ -1238,3 +1238,40 @@ class InstrumentLogViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, m
         )
         out = self.get_serializer(row)
         return Response(out.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class FeedSourceViewSet(viewsets.ReadOnlyModelViewSet):
+    """``/api/feedsources/`` (#280): the configured Hermes / Einstein Probe / Scout feeds and their poll status.
+    Disabled sources are listed for staff only. ``POST /api/feedsources/<id>/poll/`` (staff) queues a poll."""
+
+    serializer_class = FeedSourceSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_fields = ("kind", "enabled", "slug")
+
+    def get_queryset(self):
+        qs = FeedSource.objects.select_related("credential").order_by("kind", "name")
+        if not (self.request.user.is_staff or self.request.user.is_superuser):
+            qs = qs.filter(enabled=True)
+        return qs
+
+    def get_serializer_context(self):
+        from YSE_App.feed_views import candidate_counts_by_kind
+
+        context = super().get_serializer_context()
+        context["candidate_counts"] = candidate_counts_by_kind()
+        return context
+
+    @action(detail=True, methods=["post"])
+    def poll(self, request, pk=None):
+        from YSE_App.feeds.jobs import enqueue_poll, poll_active
+
+        if not (request.user.is_staff or request.user.is_superuser):
+            return Response({"detail": "staff only"}, status=status.HTTP_403_FORBIDDEN)
+        source = self.get_object()
+        if poll_active(source):
+            return Response({"detail": "a poll of %s is already queued or running" % source.slug},
+                            status=status.HTTP_409_CONFLICT)
+        job = enqueue_poll(source, created_by=request.user, force=True,
+                           dry_run=str((request.data or {}).get("dry_run", "")).lower() in ("1", "true", "yes"))
+        return Response({"job_id": job.pk, "source": source.slug, "status": job.status}, status=status.HTTP_202_ACCEPTED)

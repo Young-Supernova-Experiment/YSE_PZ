@@ -5,7 +5,8 @@ operation (roadmap section 9, issues #324 / #325 / #326 / #327). A **sharing ser
 credential, the reporting group, the default coauthors and which instruments and observation groups
 may be reported; a **submission** is one report with the exact payload sent, the TNS report id, the
 reply and the outcome; an **auto-publisher** is a per-group rule that queues reports without a click.
-Hermes publishing (#281) has a hook (`YSE_App/sharing/hermes.py`) but is not wired to a client yet.
+Hermes publishing (#281, #326) goes through `YSE_App/sharing/hermes.py` to the Hermes REST API; see
+docs/feeds-hermes.md for the message layout, the token credential and the `hermes.test` sandbox topic.
 
 The design follows SkyPortal's sharing services (BSD-3-Clause) in spirit; no code is copied.
 
@@ -48,7 +49,7 @@ rule-created rows: `SHARING_SYSTEM_USERNAME`, else the first superuser).
 
 **`AutoPublisher`**: `service`, `group`, `name`, `kind` (discovery / classification), `criteria` JSON
 (`statuses`, `classes`, `min_detections`, `instruments`, `obs_groups`, `max_age_days`, `tags`; every
-present key must hold), `tns_enabled`, `hermes_enabled` (hook only), `enabled`, `coauthors`, `remarks`,
+present key must hold), `tns_enabled`, `hermes_enabled`, `enabled`, `coauthors`, `remarks`,
 `last_run_at`. Discovery rules skip transients that already carry a `20xxabc` name; classification
 rules need one and a `best_spec_class`. A rule fires once per (service, transient, kind).
 
