@@ -250,19 +250,6 @@ def _linked_resource_visible_q(user: User) -> Q:
     return q
 
 
-def _legacy_public_followup_ids(user: User) -> List[int]:
-    """PKs for legacy ``is_public=True`` follow-ups with no explicit groups."""
-    from YSE_App.models import TransientFollowup
-
-    qs = TransientFollowup.objects.annotate(_followup_group_count=Count("groups")).filter(
-        is_public=True,
-        _followup_group_count=0,
-    )
-    if not _user_in_public_group(user):
-        qs = qs.filter(requested_by=user)
-    return list(qs.values_list("pk", flat=True))
-
-
 def filter_transient_followups_for_user(queryset: QuerySet, user: User) -> QuerySet:
     """Filter follow-up rows for read access (default public for legacy rows)."""
     if user.is_staff or user.is_superuser:
@@ -293,8 +280,14 @@ def filter_transient_followups_for_user(queryset: QuerySet, user: User) -> Query
         requested_by=user,
     )
     child_requestor = scoped.filter(requests__requestor=user)
-    legacy_ids = _legacy_public_followup_ids(user)
-    legacy = scoped.filter(pk__in=legacy_ids) if legacy_ids else scoped.none()
+    # Legacy ``is_public=True`` follow-ups with no explicit groups. Kept as a
+    # filter on the scoped queryset: materialising the matching pks first
+    # put every public follow-up in the database into one ``pk IN (...)``
+    # list, so the fragment's SQL grew with the table instead of with the
+    # transient's own follow-ups.
+    legacy = scoped.filter(~Exists(followup_group_link), is_public=True)
+    if not _user_in_public_group(user):
+        legacy = legacy.filter(requested_by=user)
     return (by_audience | creator_only | child_requestor | legacy).distinct()
 
 
