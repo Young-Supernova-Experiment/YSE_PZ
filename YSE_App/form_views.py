@@ -739,6 +739,8 @@ class RemoveDashboardQueryFormView(DeleteView):
 				return JsonResponse({'message': 'Query is not on your dashboard.', 'removed': 0})
 			raise Http404("No UserQuery matches the given query.")
 
+		# get_success_url() formats success_url with self.object.__dict__.
+		self.object = target
 		removed, _ = duplicates_of(target).delete()
 		if is_ajax(request):
 			return JsonResponse({'message': 'Removed query from dashboard.', 'removed': removed})
