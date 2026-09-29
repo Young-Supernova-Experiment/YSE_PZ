@@ -143,3 +143,77 @@ class TransientSummaryTabRegressionTests(TestCase):
             html,
         )
         self.assertNotIn('class="nav-item active"', html)
+
+
+def multiline_template_comments(root):
+    """Return ``(relative_path, line_number)`` for every ``{#`` whose line lacks ``#}``.
+
+    Django's ``{# ... #}`` comment is single-line only: a comment that spans lines
+    is not recognised and its text is emitted into the page. Multi-line notes must
+    use ``{% comment %} ... {% endcomment %}``.
+    """
+    problems = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for filename in sorted(filenames):
+            if not filename.endswith(".html"):
+                continue
+            path = os.path.join(dirpath, filename)
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                for lineno, line in enumerate(handle, start=1):
+                    if "{#" in line and "#}" not in line:
+                        problems.append((os.path.relpath(path, root), lineno))
+    return problems
+
+
+class TemplateCommentRegressionTests(TestCase):
+    """The spectra toolbar fragment opened with a three-line ``{# ... #}`` (#199).
+
+    The Summary-tab spectrum pane showed the comment as literal text on both the
+    deferred and inline detail page.
+    """
+
+    templates_root = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("template_comment_user")
+        cls.transient = create_minimal_transient(cls.user, name="2026templatecomment")
+        cls.spectra = [attach_synthetic_spectrum(cls.user, cls.transient) for _ in range(2)]
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def test_no_multiline_django_comments_in_templates(self):
+        self.assertTrue(os.path.isdir(self.templates_root), self.templates_root)
+        problems = multiline_template_comments(self.templates_root)
+        self.assertEqual(
+            problems,
+            [],
+            "multi-line {# #} comments render as page text; use "
+            "{% comment %}...{% endcomment %}: "
+            + ", ".join(f"{path}:{lineno}" for path, lineno in problems),
+        )
+
+    def test_summary_spectra_tools_fragment_has_no_raw_comment(self):
+        url = reverse("transient_detail_summary_spectra_tools_fragment", args=[self.transient.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode("utf-8", errors="replace")
+        self.assertNotIn("{#", html)
+        self.assertNotIn("#}", html)
+        self.assertNotIn("Summary-tab spectrum toolbar", html)
+        self.assertIn("Show single spectrum", html)
+
+    def test_detail_page_has_no_raw_comment(self):
+        url = reverse("transient_detail", kwargs={"slug": self.transient.slug})
+        for defer in (True, False):
+            with self.subTest(defer=defer):
+                env = {"YSE_TRANSIENT_DETAIL_DEFER": "1" if defer else "0"}
+                with mock.patch.dict(os.environ, env):
+                    response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                html = response.content.decode("utf-8", errors="replace")
+                self.assertNotIn("Summary-tab spectrum toolbar", html)
