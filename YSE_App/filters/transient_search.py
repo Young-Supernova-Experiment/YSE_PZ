@@ -19,6 +19,10 @@ list was the reference; the SQL here is YSE-PZ's own):
 * **relations**: status, observation group, internal survey, tags (any /
   all), has spectrum, has follow-up (optionally in a status), has comment,
   has host, host redshift range, visible to one collaboration group;
+* **annotations** (#319): has an origin, has a key, a key's value equals /
+  at least / at most (on the indexed ``TransientAnnotationValue`` side table;
+  ``legacy.<column>`` reads the ``Transient`` column itself), and an optional
+  results column showing one ``origin.key``;
 * **ordering** on every plain column, every stat column, the cone
   separation and the galactic latitude.
 
@@ -38,7 +42,7 @@ import re
 import django_filters
 from django import forms
 from django.core.exceptions import ValidationError
-from django.db.models import DateTimeField, Exists, F, FloatField, Func, OuterRef, Q, Value
+from django.db.models import CharField, DateTimeField, Exists, F, FloatField, Func, OuterRef, Q, Subquery, Value
 from django.db.models.functions import (
     Abs,
     ACos,
@@ -62,6 +66,8 @@ from YSE_App.models import (
     Log,
     ObservationGroup,
     Transient,
+    TransientAnnotation,
+    TransientAnnotationValue,
     TransientClass,
     TransientFollowup,
     TransientPhotometry,
@@ -78,6 +84,8 @@ __all__ = [
     'annotate_gal_b',
     'annotate_best_redshift',
     'annotate_separation',
+    'annotate_annotation_column',
+    'parse_annotation_column',
     'UtcNowMinusSeconds',
     'NowMjd',
     'cone_q',
@@ -153,6 +161,44 @@ def annotate_best_redshift(qs):
 
 def annotate_separation(qs, ra_deg, dec_deg):
     return qs.annotate(separation=separation_expression(ra_deg, dec_deg))
+
+
+def parse_annotation_column(text):
+    """``(origin or None, key)`` from ``origin.key`` or ``key``; ``None`` for blank."""
+    text = (text or '').strip()
+    if not text:
+        return None
+    origin, sep, key = text.partition('.')
+    if not sep:
+        return None, origin
+    if not key:
+        return None
+    return origin, key
+
+
+def _annotation_value_rows(origin, key):
+    rows = TransientAnnotationValue.objects.filter(transient_id=OuterRef('pk'), key=key)
+    if origin:
+        rows = rows.filter(origin=origin)
+    return rows.order_by('origin')
+
+
+def annotate_annotation_column(qs, origin, key):
+    """``annotation_value`` (text) and ``annotation_value_num`` of one ``origin.key`` per row, as subqueries."""
+    if 'annotation_value' in qs.query.annotations:
+        return qs
+    from YSE_App.services.annotations import LEGACY_COLUMNS, LEGACY_NUMERIC_KEYS
+
+    if origin == 'legacy' and key in LEGACY_COLUMNS:
+        column = LEGACY_COLUMNS[key]
+        if key in LEGACY_NUMERIC_KEYS:
+            return qs.annotate(annotation_value=F(column), annotation_value_num=F(column))
+        return qs.annotate(annotation_value=F(column), annotation_value_num=Value(None, output_field=FloatField()))
+    rows = _annotation_value_rows(origin, key)
+    return qs.annotate(
+        annotation_value=Subquery(rows.values('value_text')[:1], output_field=CharField()),
+        annotation_value_num=Subquery(rows.values('value_num')[:1], output_field=FloatField()),
+    )
 
 
 def _box_q(ramin, ramax, decmin, decmax):
@@ -333,6 +379,13 @@ class TransientSearchForm(forms.Form):
                 self.cone_center = parse_coordinate_pair(ra, dec)
             except ValueError as exc:
                 raise ValidationError(str(exc))
+        has_value = any(cleaned.get(n) not in (None, '') for n in
+                        ('annotation_value_eq', 'annotation_value_min', 'annotation_value_max'))
+        if has_value and not cleaned.get('annotation_key'):
+            raise ValidationError('Give an annotation key to filter on its value.')
+        column = cleaned.get('annotation_column')
+        if column and parse_annotation_column(column) is None:
+            raise ValidationError('Annotation column must be "origin.key" or "key".')
         return cleaned
 
 
@@ -418,6 +471,8 @@ FIELD_GROUPS = (
     ('Relations', ('status', 'obs_group', 'internal_survey', 'tags', 'tags_all',
                    'has_spectrum', 'has_followup', 'followup_status', 'has_comment',
                    'has_host', 'host_redshift_min', 'host_redshift_max', 'visible_to_group')),
+    ('Annotations', ('annotation_origin', 'annotation_key', 'annotation_value_eq', 'annotation_value_min',
+                     'annotation_value_max', 'annotation_column')),
 )
 
 ORDERING_FIELDS = (
@@ -432,6 +487,7 @@ ORDERING_FIELDS = (
     ('photstat__rise_rate', 'rise_rate'), ('photstat__decay_rate', 'decay_rate'),
     ('photstat__deepest_limit', 'deepest_limit'),
     ('separation', 'separation'), ('gal_b', 'gal_b'),
+    ('annotation_value', 'annotation_value'),
 )
 
 
@@ -524,6 +580,17 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     host_redshift_max = _num('host__redshift', 'lte', 'Host redshift at most')
     visible_to_group = django_filters.CharFilter(method='filter_visible_to_group', label='Data visible to group')
 
+    # --- annotations (#319) ------------------------------------------------
+    annotation_origin = django_filters.CharFilter(method='noop', label='Annotation origin',
+                                                  widget=forms.TextInput(attrs={'placeholder': 'gaia_dr3, wise, quasar, legacy'}))
+    annotation_key = django_filters.CharFilter(method='noop', label='Annotation key',
+                                               widget=forms.TextInput(attrs={'placeholder': 'parallax_over_error'}))
+    annotation_value_eq = django_filters.CharFilter(method='noop', label='Annotation value equals')
+    annotation_value_min = django_filters.NumberFilter(method='noop', label='Annotation value at least')
+    annotation_value_max = django_filters.NumberFilter(method='noop', label='Annotation value at most')
+    annotation_column = django_filters.CharFilter(method='noop', label='Show annotation column',
+                                                  widget=forms.TextInput(attrs={'placeholder': 'origin.key'}))
+
     ordering = StableOrderingFilter(fields=ORDERING_FIELDS, label='Order by')
 
     class Meta:
@@ -562,9 +629,102 @@ class TransientSearchFilterSet(django_filters.FilterSet):
             queryset = annotate_gal_b(queryset)
         if 'best_redshift' in wanted:
             queryset = annotate_best_redshift(queryset)
+        queryset = self._filter_annotations(queryset, cleaned)
+        column = self.annotation_column_spec
+        if column is not None:
+            queryset = annotate_annotation_column(queryset, column[0], column[1])
+            if 'annotation_value' in wanted:
+                # numbers first (nulls sort as the database likes), then the text form
+                expanded = []
+                for o in ordering:
+                    if o.lstrip('-') == 'annotation_value':
+                        prefix = '-' if o.startswith('-') else ''
+                        expanded += [prefix + 'annotation_value_num', prefix + 'annotation_value']
+                    else:
+                        expanded.append(o)
+                ordering = expanded
+        elif 'annotation_value' in wanted:
+            ordering = [o for o in ordering if o.lstrip('-') != 'annotation_value']
         if 'ordering' in cleaned:
             cleaned['ordering'] = ordering
         return super().filter_queryset(queryset)
+
+    # --- annotations (#319) -----------------------------------------------
+    @property
+    def annotation_column_spec(self):
+        """``(origin or None, key)`` of the results column: ``annotation_column``, else the filtered origin/key."""
+        form = self.form
+        if not form.is_valid():
+            return None
+        parsed = parse_annotation_column(form.cleaned_data.get('annotation_column'))
+        if parsed is not None:
+            return parsed
+        key = (form.cleaned_data.get('annotation_key') or '').strip()
+        if key:
+            return ((form.cleaned_data.get('annotation_origin') or '').strip() or None, key)
+        return None
+
+    @property
+    def annotation_column_label(self):
+        column = self.annotation_column_spec
+        if column is None:
+            return ''
+        return '%s.%s' % (column[0], column[1]) if column[0] else column[1]
+
+    def _filter_annotations(self, qs, cleaned):
+        """One ``EXISTS`` on the value side table (or a plain column filter for ``legacy``)."""
+        origin = (cleaned.get('annotation_origin') or '').strip()
+        key = (cleaned.get('annotation_key') or '').strip()
+        eq = cleaned.get('annotation_value_eq')
+        eq = str(eq).strip() if eq not in (None, '') else ''
+        vmin = cleaned.get('annotation_value_min')
+        vmax = cleaned.get('annotation_value_max')
+        if not origin and not key:
+            return qs
+        if origin == 'legacy':
+            return self._filter_legacy(qs, key, eq, vmin, vmax)
+        if not key:
+            return qs.filter(Exists(TransientAnnotation.objects.filter(transient_id=OuterRef('pk'), origin=origin)))
+        rows = TransientAnnotationValue.objects.filter(transient_id=OuterRef('pk'), key=key)
+        if origin:
+            rows = rows.filter(origin=origin)
+        if eq:
+            try:
+                rows = rows.filter(Q(value_text=eq) | Q(value_num=float(eq)))
+            except ValueError:
+                rows = rows.filter(value_text=eq)
+        if vmin is not None:
+            rows = rows.filter(value_num__gte=vmin)
+        if vmax is not None:
+            rows = rows.filter(value_num__lte=vmax)
+        return qs.filter(Exists(rows))
+
+    def _filter_legacy(self, qs, key, eq, vmin, vmax):
+        from YSE_App.services.annotations import LEGACY_COLUMNS, LEGACY_NUMERIC_KEYS
+
+        if not key:
+            return qs
+        column = LEGACY_COLUMNS.get(key)
+        if column is None:
+            return qs.none()
+        if column == 'antares_classification':
+            column = 'antares_classification__name'
+        q = Q(**{column + '__isnull': False})
+        if eq:
+            if key in ('has_hst', 'has_spitzer', 'has_chandra'):
+                q &= Q(**{column: eq.lower() in ('1', 'true', 'yes')})
+            elif key in LEGACY_NUMERIC_KEYS:
+                try:
+                    q &= Q(**{column: float(eq)})
+                except ValueError:
+                    return qs.none()
+            else:
+                q &= Q(**{column: eq})
+        if vmin is not None:
+            q &= Q(**{column + '__gte': vmin})
+        if vmax is not None:
+            q &= Q(**{column + '__lte': vmax})
+        return qs.filter(q)
 
     # --- names ---------------------------------------------------------
     def filter_alias(self, qs, name, value):

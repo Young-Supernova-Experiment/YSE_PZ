@@ -31,4 +31,6 @@ from YSE_App.models.allocation_models import Allocation, FacilityRequest
 from YSE_App.models.interest_models import SourceInterest, TransientInterest
 from YSE_App.models.data_access_models import DataAccessRequest
 from YSE_App.models.sharing_models import SharingService, SharingSubmission, AutoPublisher
+from YSE_App.models.instrument_log_models import InstrumentLog
+from YSE_App.models.annotation_models import TransientAnnotation, TransientAnnotationValue
 from YSE_App.models.analysis_models import AnalysisResultFile, AnalysisService

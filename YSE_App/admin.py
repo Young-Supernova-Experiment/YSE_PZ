@@ -32,7 +32,53 @@ admin.site.register(TransientClass)
 admin.site.register(Observatory)
 admin.site.register(OnCallDate)
 admin.site.register(YSEOnCallDate)
-admin.site.register(Telescope)
+
+
+@admin.register(Telescope)
+class TelescopeAdmin(admin.ModelAdmin):
+	list_display = ("name", "observatory", "latitude", "longitude", "elevation", "has_weather_widget")
+	search_fields = ("name", "observatory__name")
+	readonly_fields = ("weather", "weather_fetched_at", "created_by", "created_date", "modified_by", "modified_date")
+	fieldsets = (
+		(None, {"fields": ("observatory", "name", "latitude", "longitude", "elevation")}),
+		("Weather widget and SkyCam (#311)", {
+			"fields": ("weather_url", "weather_link", "skycam_url", "weather", "weather_fetched_at"),
+			"description": "weather_url: JSON endpoint (Open-Meteo or OpenWeatherMap shape; {lat}/{lon}/{elevation} "
+			               "placeholders). weather_link: the site's own weather page. skycam_url: all-sky image.",
+		}),
+		("Audit", {"fields": ("created_by", "created_date", "modified_by", "modified_date"), "classes": ("collapse",)}),
+	)
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(InstrumentLog)
+class InstrumentLogAdmin(admin.ModelAdmin):
+	list_display = ("id", "instrument", "start", "end", "source", "source_name", "short_message", "entry_count", "created_by")
+	list_filter = ("source", "instrument__telescope")
+	search_fields = ("message", "instrument__name", "instrument__telescope__name")
+	raw_id_fields = ("instrument", "run")
+	readonly_fields = ("fingerprint", "created_by", "created_date", "modified_by", "modified_date")
+	date_hierarchy = "start"
+	list_select_related = ("instrument", "instrument__telescope", "created_by")
+
+	def short_message(self, obj):
+		return (obj.summary or "")[:80]
+	short_message.short_description = "message"
+
+	def save_model(self, request, obj, form, change):
+		from YSE_App.services.instrument_logs import fingerprint, normalize_entries
+
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		obj.fingerprint = fingerprint(obj.instrument_id, obj.start, obj.message, normalize_entries(obj.log))
+		super().save_model(request, obj, form, change)
+
 admin.site.register(Instrument)
 
 
@@ -260,6 +306,56 @@ class AnalysisResultFileAdmin(admin.ModelAdmin):
 	search_fields = ("name", "run__uuid")
 	readonly_fields = ("size", "created_by", "created_date", "modified_by", "modified_date")
 	raw_id_fields = ("run",)
+
+
+# --- Transient annotations (#317) ----------------------------------------------
+from YSE_App.models.annotation_models import TransientAnnotation, TransientAnnotationValue  # noqa: E402
+
+
+class TransientAnnotationForm(forms.ModelForm):
+	data = forms.JSONField(required=False, initial=dict, widget=forms.Textarea(attrs={"rows": 8, "cols": 80}))
+
+	class Meta:
+		model = TransientAnnotation
+		exclude = ("created_by", "modified_by")
+
+	def clean_data(self):
+		value = self.cleaned_data.get("data")
+		if value in (None, ""):
+			return {}
+		if not isinstance(value, dict):
+			raise forms.ValidationError("Annotation data must be a JSON object.")
+		return value
+
+
+class TransientAnnotationValueInline(admin.TabularInline):
+	model = TransientAnnotationValue
+	extra = 0
+	can_delete = False
+	fields = ("key", "value_text", "value_num")
+	readonly_fields = fields
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(TransientAnnotation)
+class TransientAnnotationAdmin(admin.ModelAdmin):
+	form = TransientAnnotationForm
+	list_display = ("transient", "origin", "verdict", "service", "modified_by", "modified_date")
+	list_filter = ("origin", "service")
+	search_fields = ("transient__name", "origin")
+	raw_id_fields = ("transient", "run")
+	filter_horizontal = ("groups",)
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+	inlines = (TransientAnnotationValueInline,)
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+		obj.sync_values()
 
 
 # --- Background job queue (#263) and notifications (#266) -------------------

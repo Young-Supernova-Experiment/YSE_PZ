@@ -17,7 +17,10 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views, analysis_views, candidate_views, collaboration_views, job_views, notification_views, sharing_views
+from YSE_App import (
+    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, instrument_views,
+    job_views, notification_views, sharing_views,
+)
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -129,6 +132,15 @@ urlpatterns = [
             analysis_views.transient_analysis_fragment, name='transient_detail_analysis_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_run/$',
             analysis_views.transient_analysis_run, name='transient_analysis_run'),
+    # Annotations tab (#317, #318): fragment, summary JSON and actions for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_fragment/$',
+            annotation_views.transient_annotations_fragment, name='transient_detail_annotations_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_summary\.json$',
+            annotation_views.transient_annotations_summary, name='transient_annotations_summary'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_run/$',
+            annotation_views.transient_annotation_run, name='transient_annotation_run'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_delete/$',
+            annotation_views.transient_annotation_delete, name='transient_annotation_delete'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -236,6 +248,15 @@ urlpatterns = [
             service_run_views.external_service_run_detail, name='external_service_run_detail'),
     re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
             service_run_views.external_service_run_callback, name='external_service_run_callback'),
+    # Instrument logs (#310), telescope page and weather / SkyCam widget (#311)
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/$', instrument_views.instrument_logs, name='instrument_logs'),
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/add/$', instrument_views.instrument_log_add,
+            name='instrument_log_add'),
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/pull/$', instrument_views.instrument_log_pull,
+            name='instrument_log_pull'),
+    re_path(r'^telescopes/(?P<telescope_id>[0-9]+)/$', instrument_views.telescope_detail, name='telescope_detail'),
+    re_path(r'^telescopes/(?P<telescope_id>[0-9]+)/weather_fragment/$', instrument_views.telescope_weather_fragment,
+            name='telescope_weather_fragment'),
     # Analysis runs (#314): status polling, result files, own-run actions.
     re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/status\.json$',
             analysis_views.analysis_run_status, name='analysis_run_status'),
@@ -400,8 +421,10 @@ router.register(r'allocations', api_views.AllocationViewSet, basename='allocatio
 router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
 router.register(r'transientinterests', api_views.TransientInterestViewSet, basename='transientinterest')
 router.register(r'dataaccessrequests', api_views.DataAccessRequestViewSet, basename='dataaccessrequest')
+router.register(r'instrumentlogs', api_views.InstrumentLogViewSet, basename='instrumentlog')
 router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
+router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

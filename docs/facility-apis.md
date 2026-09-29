@@ -11,7 +11,7 @@ It sits on the encrypted credentials and external-service runs of #342 (#264, #2
 | term | meaning |
 |---|---|
 | `Allocation` | awarded time on one telescope (optionally one instrument): name, PI, audience `groups` (empty = everyone), `proposal_id`, `hours_allocated` / `hours_used`, `start_date` / `end_date`, `facility` slug, `credential` FK (`EncryptedCredential`), `endpoint_url`, `default_request_params` JSON, `is_active`, `notes`. `YSE_App/models/allocation_models.py` |
-| facility adapter | a `FacilityAPI` subclass registered under a slug (`YSE_App/facilities/`): `fields()` (request form), `validate()`, `estimate_hours()`, `build_payload()`, `submit()`, and where the facility offers it `get_status()` / `delete()` |
+| facility adapter | a `FacilityAPI` subclass registered under a slug (`YSE_App/facilities/`): `fields()` (request form), `validate()`, `estimate_hours()`, `build_payload()`, `submit()`, and where the facility offers it `get_status()` / `delete()`; optionally `fetch_instrument_log()` (capability `instrument_log`, see docs/instrument-logs-weather.md) |
 | `FacilityRequest` | one request for one transient against one allocation: validated `payload`, `state` (`draft` → `queued` → `submitted` → `accepted` → `running` → `complete`, or `failed` / `cancelled`), `external_id` / `external_url`, `submitted_by`, `submitted_at`, `last_polled`, `hours_charged` / `charged_at`, chronological `log`, optional `followup` (a `TransientFollowup`) and `run` (the `ExternalServiceRun`) |
 | run | every allocation owns an `ExternalService` (`allocation-<id>`, kind `facility`, created on demand by `services.allocations.ensure_service`); a submission is an `ExternalServiceRun` on it, executed by the `external_service.run` job through the runner registry |
 

@@ -541,6 +541,138 @@ class AnalysisRunViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mix
         analysis_svc.delete_run(instance)
 
 
+class TransientAnnotationViewSet(viewsets.ModelViewSet):
+    """Structured annotations (#317): one key/value document per transient and origin.
+
+    List filters: ``?transient=<id|name>``, ``?origin=``, ``?key=`` (has that key), ``?verdict=``;
+    with ``?transient=`` the read-only ``legacy`` entry (the annotation-like ``Transient`` columns)
+    is appended unless ``?legacy=0``. Create is an upsert of ``{transient, origin, data, groups}``
+    (``merge: true`` updates keys instead of replacing the document); update / delete work on one
+    row. Staff write any origin; other users only ``user:<their username>``.
+    """
+
+    serializer_class = TransientAnnotationSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services import annotations as annotations_svc
+
+        user = self.request.user
+        qs = (TransientAnnotation.objects.select_related("transient", "created_by", "modified_by", "service", "run")
+              .prefetch_related("groups"))
+        if not (user.is_staff or user.is_superuser):
+            qs = qs.filter(Q(groups__isnull=True) | Q(groups__in=user.groups.all()))
+            visible = filter_transients_by_user_access(user, Transient.objects.filter(annotations__isnull=False).distinct())
+            qs = qs.filter(transient__in=visible)
+        params = self.request.query_params
+        transient = (params.get("transient") or "").strip()
+        if transient:
+            qs = qs.filter(transient_id=transient) if transient.isdigit() else qs.filter(transient__name=transient)
+        origin = (params.get("origin") or "").strip()
+        if origin:
+            qs = qs.filter(origin=origin)
+        key = (params.get("key") or "").strip()
+        if key:
+            qs = qs.filter(values__key=key)
+        verdict = (params.get("verdict") or "").strip()
+        if verdict:
+            qs = qs.filter(values__key=annotations_svc.VERDICT_KEY, values__value_text=verdict)
+        return qs.distinct().order_by("transient_id", "origin")
+
+    def list(self, request, *args, **kwargs):
+        from YSE_App.services import annotations as annotations_svc
+
+        response = super().list(request, *args, **kwargs)
+        transient = (request.query_params.get("transient") or "").strip()
+        if not transient or request.query_params.get("legacy") in ("0", "false"):
+            return response
+        origin = (request.query_params.get("origin") or "").strip()
+        if origin and origin != "legacy":
+            return response
+        obj = Transient.objects.filter(Q(pk=int(transient)) if transient.isdigit() else Q(name=transient)).first()
+        if obj is None:
+            return response
+        legacy = annotations_svc.legacy_annotation(obj)
+        if legacy is None:
+            return response
+        data = response.data
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            data["results"].append(legacy)
+            if isinstance(data.get("count"), int):
+                data["count"] += 1
+        elif isinstance(data, list):
+            data.append(legacy)
+        return response
+
+    def _transient_for(self, request, ref):
+        from YSE_App.analysis_views import user_may_see_transient
+
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        transient = Transient.objects.filter(Q(pk=int(ref)) if ref.isdigit() else Q(name=ref)).first()
+        if transient is None or not user_may_see_transient(request.user, transient):
+            return None
+        return transient
+
+    def create(self, request, *args, **kwargs):
+        from YSE_App.services import annotations as annotations_svc
+
+        body = TransientAnnotationWriteSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        v = body.validated_data
+        transient = self._transient_for(request, v.get("transient"))
+        if transient is None:
+            return Response({"error": "unknown transient or not visible to you"}, status=status.HTTP_404_NOT_FOUND)
+        origin = (v.get("origin") or "").strip() or annotations_svc.user_origin(request.user)
+        if not annotations_svc.can_write_origin(request.user, origin):
+            raise PermissionDenied("you may only write annotations with origin %r" % annotations_svc.user_origin(request.user))
+        try:
+            annotation, created = annotations_svc.upsert(
+                transient, origin, v.get("data") or {}, user=request.user,
+                groups=v.get("groups") if "groups" in v else None, merge=bool(v.get("merge")),
+            )
+        except annotations_svc.AnnotationError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        annotation = self.get_queryset().get(pk=annotation.pk)
+        return Response(self.get_serializer(annotation).data,
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def update(self, request, *args, **kwargs):
+        from YSE_App.services import annotations as annotations_svc
+
+        annotation = self.get_object()
+        if not annotations_svc.can_manage(request.user, annotation):
+            raise PermissionDenied("only staff or the owner may change this annotation")
+        body = TransientAnnotationWriteSerializer(data=request.data, partial=True)
+        body.is_valid(raise_exception=True)
+        v = body.validated_data
+        if v.get("origin") and v["origin"].strip() != annotation.origin:
+            return Response({"error": "origin cannot be changed; create a new annotation"}, status=status.HTTP_400_BAD_REQUEST)
+        merge = bool(v.get("merge")) or kwargs.get("partial", False)
+        data = v.get("data") if "data" in v else (annotation.data or {})
+        try:
+            annotation, _ = annotations_svc.upsert(
+                annotation.transient, annotation.origin, data, user=request.user,
+                groups=v.get("groups") if "groups" in v else None, merge=merge,
+            )
+        except annotations_svc.AnnotationError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        annotation = self.get_queryset().get(pk=annotation.pk)
+        return Response(self.get_serializer(annotation).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        from YSE_App.services import annotations as annotations_svc
+
+        if not annotations_svc.can_manage(self.request.user, instance):
+            raise PermissionDenied("only staff or the owner may delete this annotation")
+        annotations_svc.delete_annotation(instance)
+
+
 ### `ClassicalResource` Filter Set ###
 class ClassicalResourceFilter(django_filters.FilterSet):
     telescope_name = django_filters.Filter(field_name="telescope__name")
@@ -1063,3 +1195,46 @@ class SharingSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
         if params.get('transient'):
             qs = qs.filter(transient__name=params['transient'])
         return qs
+
+
+class InstrumentLogViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
+                           viewsets.GenericViewSet):
+    """``/api/instrumentlogs/`` (#310): list / retrieve for every authenticated user; POST for staff or accounts
+    holding ``YSE_App.add_instrumentlog`` (facility service accounts; ``Authorization: Token <key>`` accepted).
+    Filters: ``instrument`` (id), ``telescope`` (id), ``start_after``, ``end_before`` (ISO), ``source``."""
+
+    serializer_class = InstrumentLogSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_authenticators(self):
+        from rest_framework.authentication import TokenAuthentication
+
+        return super().get_authenticators() + [TokenAuthentication()]
+
+    def get_queryset(self):
+        from YSE_App.services.instrument_logs import logs_between
+
+        params = self.request.query_params
+        qs = logs_between(start=params.get("start_after") or None, end=params.get("end_before") or None,
+                          source=params.get("source") or "")
+        if params.get("instrument"):
+            qs = qs.filter(instrument_id=params["instrument"])
+        if params.get("telescope"):
+            qs = qs.filter(instrument__telescope_id=params["telescope"])
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        from YSE_App.services.instrument_logs import add_log, can_add_logs
+
+        if not can_add_logs(request.user):
+            raise PermissionDenied({"message": "Only staff or accounts with the add_instrumentlog permission may post logs."})
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        row, created = add_log(
+            data["instrument"], request.user, start=data.get("start"), end=data.get("end"),
+            message=data.get("message", ""), entries=data.get("log"),
+            source=data.get("source") or InstrumentLog.SOURCE_MANUAL, source_name=data.get("source_name", ""),
+        )
+        out = self.get_serializer(row)
+        return Response(out.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
