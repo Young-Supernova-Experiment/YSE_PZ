@@ -87,6 +87,38 @@ FILTER_WAVELENGTH_ORDER = ('u', 'B', 'g', 'V', 'r', 'i', 'z', 'y', 'w')
 
 _BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
 
+# Effective wavelengths (Angstrom) for the joint Bazin fit (#225 follow-up):
+# the wavelength-correlated prior ties the light-curve shape of bands that
+# are close in log wavelength.  Keys are lowercase band names as stored in
+# PhotometricBand.name (with the same aliases normalize_filter_name knows);
+# the canonical uBVgrizy families give the fallback for any alias not listed.
+FILTER_EFFECTIVE_WAVELENGTH_AA = {
+    # canonical families (fallback per normalize_filter_name key)
+    'u': 3560.0, 'B': 4380.0, 'V': 5450.0, 'g': 4770.0, 'r': 6230.0, 'i': 7630.0, 'z': 9050.0, 'y': 9620.0,
+    'w': 6080.0,
+    # Johnson / Cousins
+    'u-johnson': 3660.0, 'b-johnson': 4380.0, 'v-johnson': 5450.0, 'r-cousins': 6410.0, 'i-cousins': 7980.0,
+    # SDSS / Sloan-like (LCOGT up/gp/rp/ip/zp)
+    'up': 3560.0, 'gp': 4770.0, 'rp': 6230.0, 'ip': 7630.0, 'zp': 9130.0,
+    'g-sloan': 4770.0, 'r-sloan': 6230.0, 'i-sloan': 7630.0, 'z-sloan': 9130.0,
+    # Pan-STARRS1 (GPC1)
+    'g-ps1': 4870.0, 'r-ps1': 6220.0, 'i-ps1': 7550.0, 'z-ps1': 8680.0, 'y-ps1': 9630.0, 'w-ps1': 6080.0,
+    # ZTF
+    'g-ztf': 4810.0, 'r-ztf': 6440.0, 'i-ztf': 7980.0,
+    # ATLAS cyan / orange
+    'cyan': 5330.0, 'cyan-atlas': 5330.0, 'orange': 6790.0, 'orange-atlas': 6790.0,
+    # Rubin / LSST
+    'u-lsst': 3670.0, 'g-lsst': 4830.0, 'r-lsst': 6220.0, 'i-lsst': 7550.0, 'z-lsst': 8690.0, 'y-lsst': 9710.0,
+    'lsstu': 3670.0, 'lsstg': 4830.0, 'lsstr': 6220.0, 'lssti': 7550.0, 'lsstz': 8690.0, 'lssty': 9710.0,
+    # Swift UVOT
+    'uvw2': 2030.0, 'uvm2': 2230.0, 'uvw1': 2590.0, 'u-uvot': 3470.0, 'b-uvot': 4390.0, 'v-uvot': 5470.0,
+    'uvw2-uvot': 2030.0, 'uvm2-uvot': 2230.0, 'uvw1-uvot': 2590.0,
+    # near-IR
+    'j': 12350.0, 'h': 16620.0, 'k': 21590.0, 'ks': 21590.0,
+}
+# Used when neither the band name nor its family is known (mid-optical).
+DEFAULT_EFFECTIVE_WAVELENGTH_AA = 6000.0
+
 # Instrument / telescope name substrings -> short legend label (e.g. ZTF-Cam -> ZTF).
 TELESCOPE_SHORT_LABELS = (
     (('ztf',), 'ZTF'),
@@ -141,6 +173,21 @@ def normalize_filter_name(band_name: str | None) -> str | None:
     if base == 'v':
         return 'V'
     return None
+
+
+def band_effective_wavelength(band_name: str | None) -> float:
+    """Effective wavelength in Angstrom for a band name, by exact alias, then filter family, else the default."""
+    if band_name:
+        lower = band_name.strip().lower()
+        if lower in FILTER_EFFECTIVE_WAVELENGTH_AA:
+            return FILTER_EFFECTIVE_WAVELENGTH_AA[lower]
+        canonical = normalize_filter_name(band_name)
+        if canonical in FILTER_EFFECTIVE_WAVELENGTH_AA:
+            return FILTER_EFFECTIVE_WAVELENGTH_AA[canonical]
+        base = lower.split('-')[0]
+        if base in FILTER_EFFECTIVE_WAVELENGTH_AA:
+            return FILTER_EFFECTIVE_WAVELENGTH_AA[base]
+    return DEFAULT_EFFECTIVE_WAVELENGTH_AA
 
 
 def band_display_color(
