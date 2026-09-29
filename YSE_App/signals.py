@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.backends.signals import connection_created
 from django.db.models.signals import m2m_changed, post_delete, post_save
@@ -22,6 +23,9 @@ from YSE_App.sharing.autopublish import on_transient_saved
 import YSE_App.analysis.runners  # noqa: E402,F401
 # ... and the annotation checks (#318: Gaia DR3, WISE, quasar catalogue) as runners.
 import YSE_App.annotation_services  # noqa: E402,F401
+# ... the feed providers and feeds.* job handlers (#280).
+import YSE_App.feeds  # noqa: E402,F401
+from YSE_App.feeds.jobs import enqueue_screen
 from YSE_App.services import annotations as annotations_svc
 from YSE_App.models.followup_models import TransientFollowup
 from YSE_App.models.phot_models import TransientPhotData
@@ -53,6 +57,15 @@ def account_followup_usage(sender, instance, created, **kwargs):
     from YSE_App.services.allocations import sync_followup_usage
 
     sync_followup_usage(instance)
+
+
+@receiver(post_save, sender=Transient, dispatch_uid="yse_feeds_mpc_screen")
+def screen_new_transient_for_minor_planets(sender, instance, created, **kwargs):
+    """Queue the sb_ident minor-planet check for a new transient (#283; FEEDS_MPC_SCREEN_ON_CREATE, off by default)."""
+    if not created or kwargs.get('raw'):
+        return
+    if getattr(settings, 'FEEDS_MPC_SCREEN_ON_CREATE', False):
+        enqueue_screen(instance)
 
 
 @receiver(post_save, sender=User, dispatch_uid="yse_ensure_user_public_group")

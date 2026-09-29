@@ -18,8 +18,8 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
 from YSE_App import (
-    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, instrument_views,
-    job_views, notification_views, observability_views, sharing_views,
+    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, feed_views,
+    instrument_views, job_views, notification_views, observability_views, sharing_views,
 )
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
@@ -352,6 +352,11 @@ urlpatterns = [
     re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reject/$', candidate_views.candidate_reject, name='candidate_reject'),
     re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reopen/$', candidate_views.candidate_reopen, name='candidate_reopen'),
     re_path(r'^brokers/status\.json$', candidate_views.brokers_status_json, name='brokers_status_json'),
+    # Other feeds (#280): Hermes / Einstein Probe / Scout sources and their poll status
+    re_path(r'^feeds/$', feed_views.feed_sources, name='feed_sources'),
+    re_path(r'^feeds/status\.json$', feed_views.feed_sources_json, name='feed_sources_json'),
+    re_path(r'^feeds/(?P<source_id>[0-9]+)/poll/$', feed_views.feed_source_poll, name='feed_source_poll'),
+    re_path(r'^feeds/screen/(?P<transient_id>[0-9]+)/$', feed_views.feed_screen_transient, name='feed_screen_transient'),
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
@@ -432,6 +437,7 @@ router.register(r'instrumentlogs', api_views.InstrumentLogViewSet, basename='ins
 router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
 router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
+router.register(r'feedsources', api_views.FeedSourceViewSet, basename='feedsource')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)
