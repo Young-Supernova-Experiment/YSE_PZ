@@ -135,8 +135,8 @@ class DatabaseAndTemplateTests(SimpleTestCase):
         self.assertEqual(len(processors), len(set(processors)))
         self.assertIn("django.template.context_processors.request", processors)
 
-    def test_explorer_cap_from_ini_and_env(self):
-        self.assertEqual(_load_settings(debug="True").EXPLORER_QUERY_MAX_EXECUTION_MS, 20000)
+    def test_explorer_cap_off_by_default_and_from_ini_and_env(self):
+        self.assertEqual(_load_settings(debug="True").EXPLORER_QUERY_MAX_EXECUTION_MS, 0)
         self.assertEqual(
             _load_settings(debug="True", site_extra="EXPLORER_QUERY_MAX_EXECUTION_MS: 5000").EXPLORER_QUERY_MAX_EXECUTION_MS,
             5000,

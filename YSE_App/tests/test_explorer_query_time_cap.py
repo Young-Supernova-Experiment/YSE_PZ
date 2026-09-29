@@ -91,7 +91,16 @@ class ExplorerConnectionSignalTests(SimpleTestCase):
         connection_created.send(sender=_FakeConnection, connection=conn)
         self.assertEqual(conn.executed, [])
 
-    def test_default_cap_setting_is_twenty_seconds(self):
+    def test_cap_is_off_by_default(self):
+        # The saved dashboard queries still take minutes on production data
+        # (#233); the cap is opt-in until they are rewritten.
+        self.assertEqual(explorer_cap_ms(), 0)
+        conn = _FakeConnection(alias="explorer")
+        connection_created.send(sender=_FakeConnection, connection=conn)
+        self.assertEqual(conn.executed, [])
+
+    @override_settings(EXPLORER_QUERY_MAX_EXECUTION_MS=20000)
+    def test_cap_setting_is_read_from_settings(self):
         self.assertEqual(explorer_cap_ms(), 20000)
 
 
@@ -141,6 +150,7 @@ class RunExplorerQueryCachedTests(TestCase):
             created_by_user=self.user,
         )
 
+    @override_settings(EXPLORER_QUERY_MAX_EXECUTION_MS=20000)
     def test_cache_miss_runs_the_sql_and_caches_the_names(self):
         from YSE_App import views
 
@@ -158,6 +168,7 @@ class RunExplorerQueryCachedTests(TestCase):
             names = views.run_explorer_query_cached(self.query)
         self.assertEqual(names, ["time-cap-sn"])
 
+    @override_settings(EXPLORER_QUERY_MAX_EXECUTION_MS=20000)
     def test_timeout_surfaces_as_query_timeout_and_is_not_cached(self):
         from YSE_App import views
 
