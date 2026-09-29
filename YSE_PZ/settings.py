@@ -179,6 +179,9 @@ CRON_CLASSES = [
     # screening sweep; no-ops unless enabled under [feeds] in settings.ini.
     'YSE_App.data_ingest.Feeds.FeedPoll',
     'YSE_App.data_ingest.Feeds.MinorPlanetScreen',
+    # AI summaries (#296): nightly batch of summariser runs for transients with new
+    # comments / spectra / follow-ups; no-op unless SUMMARY_BATCH_CRON_ENABLED ([llm]).
+    'YSE_App.data_ingest.Summary_Jobs.SummaryRefresh',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -522,6 +525,44 @@ ANNOTATION_RUN_STALE_MINUTES = config.getint('site_settings', 'ANNOTATION_RUN_ST
 ANNOTATION_AUTORUN_SERVICES = config.get('site_settings', 'ANNOTATION_AUTORUN_SERVICES', fallback='').strip()
 GAIA_TAP_URL = config.get('site_settings', 'GAIA_TAP_URL', fallback='').strip()
 VIZIER_TAP_URL = config.get('site_settings', 'VIZIER_TAP_URL', fallback='').strip()
+
+# AI summaries (#294; docs/ai-summaries.md). All keys optional, under [llm] in
+# settings.ini. The provider key is never here: it lives in an EncryptedCredential
+# (attached to the ai_summary ExternalService, or named by LLM_CREDENTIAL).
+# LLM_PROVIDER: template (default; deterministic, no network), openai (any
+# OpenAI-compatible /chat/completions endpoint) or anthropic (Messages API).
+LLM_PROVIDER = (os.environ.get('YSE_LLM_PROVIDER', '').strip()
+                or config.get('llm', 'LLM_PROVIDER', fallback='template')).strip().lower() or 'template'
+LLM_MODEL = config.get('llm', 'LLM_MODEL', fallback='').strip()
+# API model-ID default when LLM_PROVIDER is anthropic and LLM_MODEL is blank.
+LLM_ANTHROPIC_DEFAULT_MODEL = config.get('llm', 'LLM_ANTHROPIC_DEFAULT_MODEL', fallback='claude-opus-5-5').strip()
+LLM_API_BASE = config.get('llm', 'LLM_API_BASE', fallback='').strip()
+LLM_CREDENTIAL = config.get('llm', 'LLM_CREDENTIAL', fallback='llm').strip()
+LLM_MAX_TOKENS = config.getint('llm', 'LLM_MAX_TOKENS', fallback=600)
+_llm_temperature = config.get('llm', 'LLM_TEMPERATURE', fallback='').strip()
+LLM_TEMPERATURE = float(_llm_temperature) if _llm_temperature else None
+LLM_HTTP_TIMEOUT_SECONDS = config.getint('llm', 'LLM_HTTP_TIMEOUT_SECONDS', fallback=60)
+# Embeddings for /summary_search/: an OpenAI-compatible /embeddings endpoint, or
+# (both blank) the built-in hashed bag-of-words embedder that needs no key.
+LLM_EMBEDDING_API_BASE = config.get('llm', 'LLM_EMBEDDING_API_BASE', fallback='').strip()
+LLM_EMBEDDING_MODEL = config.get('llm', 'LLM_EMBEDDING_MODEL', fallback='').strip()
+SUMMARY_MAX_COMMENTS = config.getint('llm', 'SUMMARY_MAX_COMMENTS', fallback=15)
+SUMMARY_PROMPT_MAX_CHARS = config.getint('llm', 'SUMMARY_PROMPT_MAX_CHARS', fallback=12000)
+SUMMARY_RUN_STALE_MINUTES = config.getint('llm', 'SUMMARY_RUN_STALE_MINUTES', fallback=30)
+# Human edits: every user who can see the transient (default) or staff / can_edit_summary only.
+SUMMARY_EDIT_STAFF_ONLY = config.getboolean('llm', 'SUMMARY_EDIT_STAFF_ONLY', fallback=False)
+SUMMARY_SEARCH_LIMIT = config.getint('llm', 'SUMMARY_SEARCH_LIMIT', fallback=25)
+SUMMARY_SEARCH_MODE = config.get('llm', 'SUMMARY_SEARCH_MODE', fallback='embedding').strip().lower()
+# Cosine similarity below this is noise (hash collisions of the local embedder) and is not listed.
+SUMMARY_SEARCH_MIN_SCORE = config.getfloat('llm', 'SUMMARY_SEARCH_MIN_SCORE', fallback=0.1)
+# Nightly batch (SummaryRefresh cron -> summaries.refresh_stale job); off by default.
+SUMMARY_BATCH_CRON_ENABLED = (
+    os.environ.get('YSE_SUMMARY_BATCH_CRON', '').strip() == '1'
+    or config.getboolean('llm', 'SUMMARY_BATCH_CRON_ENABLED', fallback=False)
+)
+SUMMARY_BATCH_CRON_MINUTES = config.getint('llm', 'SUMMARY_BATCH_CRON_MINUTES', fallback=1440)
+SUMMARY_BATCH_HOURS = config.getint('llm', 'SUMMARY_BATCH_HOURS', fallback=24)
+SUMMARY_BATCH_MAX = config.getint('llm', 'SUMMARY_BATCH_MAX', fallback=200)
 
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
 # (the senders it replaced, alert.py and the comment-mention emails, sent

@@ -23,6 +23,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Transient
         fields = "__all__"
+        # Edits go through PATCH /api/transients/<id>/summary/ (audited history, #295).
+        read_only_fields = ("summary", "summary_modified")
         
     def create(self, validated_data):
 
