@@ -932,3 +932,13 @@ body.yse-theme .fc-event .fc-title,
 body.yse-theme .fc-event .fc-time {
   color: #111;
 }
+
+/* Favorite stars (#323) and paper-interest badges (#290) */
+.yse-fav-star { color: #999; text-decoration: none; font-size: 1.05em; }
+.yse-fav-star:hover, .yse-fav-star:focus { color: #f0ad4e; text-decoration: none; }
+.yse-fav-star.yse-fav-on { color: #f0ad4e; }
+.yse-fav-star.yse-fav-busy { opacity: 0.5; }
+.yse-fav-star-header { font-size: 0.6em; vertical-align: middle; margin-left: 0.4em; }
+.yse-fav-star-header .yse-fav-count { font-size: 0.55em; vertical-align: super; margin-left: 0.15em; }
+.yse-fav-star-header .yse-fav-count:empty { display: none; }
+td.yse-fav-cell, th.yse-fav-cell { text-align: center; width: 2.5em; }

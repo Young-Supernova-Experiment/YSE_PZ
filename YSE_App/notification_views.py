@@ -29,10 +29,17 @@ class NotificationPreferenceForm(forms.ModelForm):
 
     class Meta:
         model = NotificationPreference
-        fields = ("in_app", "email", "slack_webhook_url")
+        fields = ("in_app", "email", "slack_webhook_url", "slack_user_id")
         widgets = {
             "slack_webhook_url": forms.URLInput(attrs={"class": "form-control", "placeholder": "https://hooks.slack.com/services/..."}),
+            "slack_user_id": forms.TextInput(attrs={"class": "form-control", "placeholder": "U0123ABCDEF"}),
         }
+
+    def clean_slack_user_id(self):
+        value = (self.cleaned_data.get("slack_user_id") or "").strip()
+        if value and not (value[:1] in ("U", "W") and value[1:].isalnum()):
+            raise forms.ValidationError("A Slack member id starts with U (or W) followed by letters and digits.")
+        return value
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -160,7 +167,34 @@ def notification_preferences(request):
         "has_email": bool(request.user.email),
         "email_enabled": bool(getattr(settings, "NOTIFICATION_EMAIL_ENABLED", False)),
         "slack_enabled": bool(getattr(settings, "NOTIFICATION_SLACK_ENABLED", True)),
+        "slack_dm_enabled": notify_service.slack_dm_enabled(),
     })
+
+
+@login_required
+@require_POST
+def notification_slack_lookup(request):
+    """Fill ``slack_user_id`` from the account email through the site's Slack app (#321)."""
+    email = (request.user.email or "").strip()
+    if not email:
+        messages.error(request, "Your account has no email address to look up on Slack.")
+        return redirect(reverse("notification_preferences"))
+    if not notify_service.slack_dm_enabled():
+        messages.error(request, "Slack direct messages are not enabled on this server (no Slack bot token).")
+        return redirect(reverse("notification_preferences"))
+    try:
+        slack_id = notify_service.lookup_slack_user_id(email)
+    except Exception as exc:  # noqa: BLE001 - shown to the user
+        messages.error(request, "Slack lookup failed: %s" % exc)
+        return redirect(reverse("notification_preferences"))
+    if not slack_id:
+        messages.warning(request, "Slack has no member with the address %s." % email)
+        return redirect(reverse("notification_preferences"))
+    pref = NotificationPreference.objects.filter(user=request.user).first() or NotificationPreference(user=request.user)
+    pref.slack_user_id = slack_id
+    pref.save()
+    messages.success(request, "Slack member id %s stored; notifications with Slack on will be sent as direct messages." % slack_id)
+    return redirect(reverse("notification_preferences"))
 
 
 @login_required

@@ -9,7 +9,8 @@ too; ``YSE_App.jobs`` imports this module on its first pass
 (``DEFAULT_HANDLER_MODULES``).
 
 Per-user switches: ``NotificationPreference`` (global in_app, email,
-slack_webhook_url, plus the per-kind-group matrix in ``kinds``). Site
+slack_webhook_url, slack_user_id for DMs, plus the per-kind-group matrix in
+``kinds``). Site
 switches: ``NOTIFICATION_EMAIL_ENABLED`` (default: on when ``[SMTP_provider]``
 holds credentials), ``NOTIFICATION_SLACK_ENABLED``,
 ``NOTIFICATION_EMAIL_SUBJECT_PREFIX``, ``NOTIFICATION_BASE_URL``; retention:
@@ -46,7 +47,8 @@ PRUNE_KIND = "notifications.prune"
 IN_APP = "in_app"
 EMAIL = "email"
 SLACK = "slack"
-CHANNELS = (EMAIL, SLACK)
+SLACK_DM = "slack_dm"
+CHANNELS = (EMAIL, SLACK, SLACK_DM)
 
 
 def _setting(name, default):
@@ -76,18 +78,27 @@ def email_enabled() -> bool:
     return bool(_setting("NOTIFICATION_EMAIL_ENABLED", False))
 
 
+def slack_dm_enabled() -> bool:
+    """Slack DMs need the site's bot token (``SLACK_BOT_TOKEN``) and the Slack switch (#321)."""
+    return bool(_setting("NOTIFICATION_SLACK_ENABLED", True) and _setting("SLACK_BOT_TOKEN", ""))
+
+
 def channels_for(user: User, pref: Optional[NotificationPreference] = None, kind: str = "system") -> List[str]:
     """Out-of-app channels a notification of ``kind`` to ``user`` must be delivered on.
 
     A channel applies when the site switch, the user's global switch and the
-    switch for the kind's preference group are all on.
+    switch for the kind's preference group are all on. The Slack webhook and
+    the Slack DM (``slack_user_id``) both follow the matrix's Slack column.
     """
     pref = pref or NotificationPreference.for_user(user)
     channels = []
     if pref.email and user.email and email_enabled() and pref.allows(kind, EMAIL):
         channels.append(EMAIL)
-    if pref.slack_webhook_url and _setting("NOTIFICATION_SLACK_ENABLED", True) and pref.allows(kind, SLACK):
-        channels.append(SLACK)
+    if pref.allows(kind, SLACK):
+        if pref.slack_webhook_url and _setting("NOTIFICATION_SLACK_ENABLED", True):
+            channels.append(SLACK)
+        if pref.slack_user_id and slack_dm_enabled():
+            channels.append(SLACK_DM)
     return channels
 
 
@@ -113,7 +124,7 @@ def _unique_users(users) -> List[User]:
 
 def notify(users: Iterable[User], text: str, url: str = "", kind: str = "system", *,
            subject: str = "", transient=None, payload=None, created_by=None, html: str = "",
-           exclude=None) -> List[Notification]:
+           exclude=None, delay: Optional[float] = None) -> List[Notification]:
     """Record a notification for each user and queue its email/Slack delivery.
 
     Returns the ``Notification`` rows created (one per recipient whose
@@ -122,7 +133,9 @@ def notify(users: Iterable[User], text: str, url: str = "", kind: str = "system"
     read so it does not count as unread. Delivery jobs are created only for
     channels that apply. ``html`` is an optional HTML email body (the plain
     ``text`` stays the text part); ``exclude`` lists users (or ids) to skip,
-    typically the actor.
+    typically the actor; ``delay`` (seconds) holds the email/Slack delivery
+    job back, so a sender that keeps extending the row (favorite activity)
+    delivers the accumulated text once.
     """
     if not text:
         raise ValueError("notify() needs a non-empty text")
@@ -154,7 +167,7 @@ def notify(users: Iterable[User], text: str, url: str = "", kind: str = "system"
         )
         if channels:
             enqueue(DELIVER_KIND, {"notification_id": notification.pk, "channels": channels},
-                    created_by=created_by, transient=transient)
+                    created_by=created_by, transient=transient, delay=delay)
         created.append(notification)
     return created
 
@@ -231,7 +244,38 @@ def send_slack_webhook(notification: Notification) -> None:
     response.raise_for_status()
 
 
-SENDERS = {EMAIL: send_email, SLACK: send_slack_webhook}
+def send_slack_dm(notification: Notification) -> None:
+    """Direct message through the site's Slack app (``chat.postMessage`` to the member id)."""
+    from YSE_App.integrations.slack.client import chat_post_message
+
+    pref = NotificationPreference.for_user(notification.recipient)
+    if not pref.slack_user_id:
+        raise ValueError("recipient %s has no Slack member id" % notification.recipient.username)
+    response = chat_post_message(pref.slack_user_id, slack_text(notification))
+    if not response.get("ok"):
+        raise ValueError("Slack DM failed: %s" % (response.get("error") or "unknown error"))
+
+
+def lookup_slack_user_id(email: str) -> str:
+    """Slack member id for an email address through ``users.lookupByEmail``; ``""`` when unknown.
+
+    Raises ``ValueError`` with Slack's error text when the call itself fails
+    (no bot token, missing scope, network).
+    """
+    from YSE_App.integrations.slack.client import users_lookup_by_email
+
+    if not email:
+        return ""
+    response = users_lookup_by_email(email)
+    if response.get("ok"):
+        return str((response.get("user") or {}).get("id") or "")
+    error = response.get("error") or "unknown error"
+    if error == "users_not_found":
+        return ""
+    raise ValueError(error)
+
+
+SENDERS = {EMAIL: send_email, SLACK: send_slack_webhook, SLACK_DM: send_slack_dm}
 
 
 @job(DELIVER_KIND)

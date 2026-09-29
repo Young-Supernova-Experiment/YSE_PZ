@@ -1112,6 +1112,89 @@ class TransientInterestViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         self._update(serializer)
 
 
+class FavoriteTransientViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
+                               mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """The requesting user's favorite transients (#323): ``GET`` lists, ``POST {"transient": id}`` stars,
+    ``DELETE /api/favorites/<id>/`` unstars; ``?transient=<id|name>`` narrows the list.
+    ``POST /api/favorites/toggle/ {"transient": id}`` flips the star and answers ``{favorite, count}``."""
+
+    serializer_class = FavoriteTransientSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        qs = UserFavoriteTransient.objects.filter(user=self.request.user).select_related("transient")
+        transient = (self.request.query_params.get("transient") or "").strip()
+        if transient:
+            qs = qs.filter(transient_id=transient) if transient.isdigit() else qs.filter(transient__name=transient)
+        return qs
+
+    def _check_visible(self, transient):
+        from YSE_App.services.visibility import user_can_view_transient
+
+        if not user_can_view_transient(self.request.user, transient.id):
+            raise PermissionDenied({"message": "You do not have access to this transient."})
+
+    def perform_create(self, serializer):
+        from YSE_App.services import favorites as favorites_svc
+
+        transient = serializer.validated_data["transient"]
+        self._check_visible(transient)
+        serializer.instance, _created = favorites_svc.add(self.request.user, transient)
+
+    @action(detail=False, methods=["post"])
+    def toggle(self, request):
+        from YSE_App.services import favorites as favorites_svc
+
+        transient_id = request.data.get("transient")
+        try:
+            transient = Transient.objects.get(pk=int(transient_id))
+        except (TypeError, ValueError, Transient.DoesNotExist):
+            return Response({"transient": ["Give the id of an existing transient."]}, status=status.HTTP_400_BAD_REQUEST)
+        self._check_visible(transient)
+        state = favorites_svc.toggle(request.user, transient)
+        _mine, count = favorites_svc.favorite_state(request.user, transient.id)
+        return Response({"transient": transient.id, "favorite": state, "count": count})
+
+
+class NotificationViewSet(mixins.RetrieveModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+    """The requesting user's in-app notifications (#321): ``GET /api/notifications/?unread=1&kind=``,
+    ``GET .../unread_count/``, ``POST .../<id>/read/``, ``POST .../read_all/``."""
+
+    serializer_class = NotificationSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        params = self.request.query_params
+        qs = Notification.objects.filter(recipient=self.request.user).select_related("transient")
+        if params.get("unread") in ("1", "true"):
+            qs = qs.filter(read_at__isnull=True)
+        kind = (params.get("kind") or "").strip()[:32]
+        if kind:
+            qs = qs.filter(kind=kind)
+        transient = (params.get("transient") or "").strip()
+        if transient:
+            qs = qs.filter(transient_id=transient) if transient.isdigit() else qs.filter(transient__name=transient)
+        return qs
+
+    @action(detail=False, methods=["get"])
+    def unread_count(self, request):
+        from YSE_App.services import notify as notify_svc
+
+        return Response({"unread": notify_svc.unread_count(request.user)})
+
+    @action(detail=True, methods=["post"])
+    def read(self, request, pk=None):
+        notification = self.get_object()
+        notification.mark_read()
+        return Response(self.get_serializer(notification).data)
+
+    @action(detail=False, methods=["post"])
+    def read_all(self, request):
+        from YSE_App.services import notify as notify_svc
+
+        return Response({"marked": notify_svc.mark_all_read(request.user), "unread": 0})
+
+
 class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
                                viewsets.GenericViewSet):
     """Data access requests: the user's own and those addressed to their groups (staff: all).

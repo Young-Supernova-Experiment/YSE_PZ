@@ -164,16 +164,19 @@ and raises `JobRetry` while any channel failed.
 
 `html=` adds an HTML email body (stored in `Notification.payload["html"]`,
 sent as the `text/html` alternative of the plain `text`); `exclude=` lists
-users to skip, typically the actor.
+users to skip, typically the actor; `delay=` (seconds) postpones the delivery
+job, which favorite-activity batching uses to send one email per hour.
 
 ### Preferences (per user, per kind)
 
 `NotificationPreference` (`/notifications/preferences/`, also in the user menu
 and linked from the personal dashboard) has three master switches, `in_app`
 (default on), `email` (default on; needs an account email and the site switch
-below) and `slack_webhook_url` (optional; each notification is posted there as
-text), and a matrix in `kinds` (JSON text) with one row per kind group and one
-column per channel. A channel is used only when the master switch *and* the
+below), `slack_webhook_url` (optional; each notification is posted there as
+text) and `slack_user_id` (optional; a direct message from the site's Slack app,
+channel `slack_dm`, see `favorites-and-notifications.md`), and a matrix in
+`kinds` (JSON text) with one row per kind group and one column per channel
+(the Slack column covers the webhook and the DM). A channel is used only when the master switch *and* the
 group switch are on. A user with in-app off for a kind but email on still gets
 a row, pre-marked read, so it never shows as unread.
 
@@ -182,6 +185,7 @@ a row, pre-marked read, so it never shows as unread.
 | Comment mentions | `comment_mention` | on | on | on |
 | Follow-up requests and status | `followup_request`, `followup_status` | on | on | on |
 | Alerts | `alert`, `upload_error` | on | on | on |
+| Favorite transients | `favorite_activity` (batched, see `favorites-and-notifications.md`) | on | on | on |
 | System and jobs | `system`, `job_result` and any other kind | on | off | off |
 
 Code: `pref.allows(kind, channel)`, `pref.matrix()`, `pref.set_group_channels(group, email=False)`;

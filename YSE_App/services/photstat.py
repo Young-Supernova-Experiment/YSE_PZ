@@ -339,9 +339,22 @@ def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPh
             return None
         stat = TransientPhotStat(transient_id=transient_id)
     values = compute_stats(points_by_transient([transient_id]).get(transient_id, []))
+    had_row = stat.pk is not None
+    old_num_det = stat.num_det_global or 0
     if apply_values(stat, values):
         stat.save()
+        if had_row and (stat.num_det_global or 0) > old_num_det:
+            _announce_new_photometry(stat, (stat.num_det_global or 0) - old_num_det)
     return stat
+
+
+def _announce_new_photometry(stat, new_points: int) -> None:
+    """Favorite-activity hook (#323): detections that arrived since the last recompute."""
+    from YSE_App.services import favorites
+
+    band = getattr(getattr(stat, 'last_detected_band', None), 'name', '') or ''
+    favorites._safely(favorites.on_photometry, stat.transient_id, new_points,
+                      latest_mag=stat.last_detected_mag, latest_band=band)
 
 
 DISPLAY_RELATED = (
