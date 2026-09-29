@@ -1,7 +1,9 @@
 """Per-transient photometry statistics (``TransientPhotStat``, #268).
 
-Pins the detection and upper-limit rules (a magnitude and no data-quality
-flag; the light-curve plot's ``flux + 3 flux_err`` limit), the derived
+Pins the detection and upper-limit rules (the light-curve plot's, shared
+through ``services.phot_points`` (#368): a magnitude with an error at or
+below 0.36 when flux information exists, no data-quality flag; a limit is
+``flux / flux_err < 3`` shown as ``-2.5 log10(flux + 3 flux_err) + zp``), the derived
 numbers (first / last / peak, mean, faintest, deepest limit, rise and decay
 rates, time to non-detection, per-band JSON), the ``rebuild_photstats``
 command, the incremental updates through the ``TransientPhotData`` signals
@@ -15,6 +17,7 @@ detection and carry their band (#349).
 
 import datetime
 import json
+import math
 from io import StringIO
 from unittest import mock
 
@@ -34,7 +37,7 @@ from YSE_App.models import (
     TransientPhotStat,
 )
 from YSE_App.models.phot_stat_models import MJD_EPOCH, datetime_to_mjd, mjd_to_datetime
-from YSE_App.services import photstat
+from YSE_App.services import bazin, phot_points, photstat
 from YSE_App.table_utils import TransientTable, annotate_dashboard_transient_fields
 from YSE_App.tests.fixtures_minimal import (
     audit_fields,
@@ -42,6 +45,7 @@ from YSE_App.tests.fixtures_minimal import (
     create_minimal_transient,
     create_test_user,
 )
+from YSE_App.tests.test_lightcurve_legend import bokeh_doc_from_html
 
 
 def mjd_dt(mjd):
@@ -178,12 +182,12 @@ class ComputeStatsTests(PhotStatFixture):
         self.assertIsNone(one.time_to_non_detection)
         # first detection is the peak: no rise rate; last is the peak: no decay rate
         fading = photstat.compute_stats([
-            P(mjd=60000.0, band_id=1, mag=17.0), P(mjd=60005.0, band_id=1, mag=18.0),
+            P(mjd=60000.0, band_id=1, mag=17.0, mag_err=0.1), P(mjd=60005.0, band_id=1, mag=18.0, mag_err=0.1),
         ])
         self.assertIsNone(fading.rise_rate)
         self.assertAlmostEqual(fading.decay_rate, 0.2)
         rising = photstat.compute_stats([
-            P(mjd=60000.0, band_id=1, mag=18.0), P(mjd=60005.0, band_id=1, mag=17.0),
+            P(mjd=60000.0, band_id=1, mag=18.0, mag_err=0.1), P(mjd=60005.0, band_id=1, mag=17.0, mag_err=0.1),
         ])
         self.assertAlmostEqual(rising.rise_rate, 0.2)
         self.assertIsNone(rising.decay_rate)
@@ -203,7 +207,7 @@ class ComputeStatsTests(PhotStatFixture):
         self.assertEqual(limits.per_band["1"]["n_det"], 0)
         # limits after the first detection are observations, not limit statistics (#349)
         late = photstat.compute_stats([
-            P(mjd=60000.0, band_id=1, mag=18.0),
+            P(mjd=60000.0, band_id=1, mag=18.0, mag_err=0.1),
             P(mjd=60001.0, band_id=2, flux=1.0, flux_err=1.0, flux_zero_point=25.0),
         ])
         self.assertEqual((late.num_obs_global, late.num_det_global, late.num_limits_global), (2, 1, 0))
@@ -214,12 +218,12 @@ class ComputeStatsTests(PhotStatFixture):
         self.assertNotIn("2", late.per_band)
         # the schema version is part of the fingerprint: older rows rewrite once
         self.assertEqual(late.schema_version, photstat.SCHEMA_VERSION)
-        older = photstat.compute_stats([P(mjd=60000.0, band_id=1, mag=18.0)])
+        older = photstat.compute_stats([P(mjd=60000.0, band_id=1, mag=18.0, mag_err=0.1)])
         older.schema_version = photstat.SCHEMA_VERSION - 1
-        self.assertNotEqual(older.fingerprint(), photstat.compute_stats([P(mjd=60000.0, band_id=1, mag=18.0)]).fingerprint())
+        self.assertNotEqual(older.fingerprint(), photstat.compute_stats([P(mjd=60000.0, band_id=1, mag=18.0, mag_err=0.1)]).fingerprint())
         # flagged rows never count; non-positive flux + 3 sigma is not a limit
         junk = photstat.compute_stats([
-            P(mjd=60000.0, band_id=1, mag=10.0, flagged=True),
+            P(mjd=60000.0, band_id=1, mag=10.0, mag_err=0.1, flagged=True),
             P(mjd=60001.0, band_id=1, flux=-50.0, flux_err=1.0, flux_zero_point=25.0),
         ])
         self.assertEqual(junk.num_obs_global, 1)
@@ -227,7 +231,7 @@ class ComputeStatsTests(PhotStatFixture):
         self.assertIsNone(junk.deepest_limit)
         # fingerprints are stable and value-sensitive
         self.assertEqual(rising.fingerprint(), photstat.compute_stats([
-            P(mjd=60000.0, band_id=1, mag=18.0), P(mjd=60005.0, band_id=1, mag=17.0),
+            P(mjd=60000.0, band_id=1, mag=18.0, mag_err=0.1), P(mjd=60005.0, band_id=1, mag=17.0, mag_err=0.1),
         ]).fingerprint())
         self.assertNotEqual(rising.fingerprint(), fading.fingerprint())
 
@@ -638,3 +642,174 @@ class SurfaceTests(PhotStatFixture):
         desc = self.client.get("/dashboard/section/following/?followingsort=-peak_mag").content.decode()
         self.assertLess(asc.index(self.transient.name), asc.index(other.name))
         self.assertLess(desc.index(other.name), desc.index(self.transient.name))
+
+
+class PlotAgreementFixture(TestCase):
+    """2022abom-shaped photometry (#368): ZTF forced photometry uploads a
+    magnitude for every epoch, S/N < 3 ones included; the light-curve plot
+    draws those as upper limits and the statistics must count them the same
+    way."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("photstat_ztf_user")
+        cls.transient = create_minimal_transient(cls.user, name="2022abom")
+        cls.obs_group, cls.instrument, cls.r = create_instrument_stack(cls.user, obs_group_name="photstat-ztf-group")
+        cls.g = second_band(cls.user, cls.instrument, name="g-photstat-ztf")
+        cls.photometry = TransientPhotometry.objects.create(
+            transient=cls.transient, instrument=cls.instrument, obs_group=cls.obs_group,
+            **audit_fields(cls.user),
+        )
+        u, r, g, phot = cls.user, cls.r, cls.g, cls.photometry
+        with photstat.deferred_updates():
+            # forced-photometry epochs before the explosion: a magnitude and a
+            # large error for each, flux below 3 sigma -> upper limits on the plot
+            add_point(phot, r, 59900.0, mag=21.6, mag_err=0.9, flux=20.0, flux_err=40.0, zp=27.5, user=u)   # 22.13
+            add_point(phot, g, 59903.0, mag=21.1, mag_err=0.5, flux=60.0, flux_err=50.0, zp=27.5, user=u)   # 21.69
+            add_point(phot, r, 59905.0, mag=22.0, mag_err=0.4, flux=30.0, flux_err=12.0, zp=27.5, user=u)   # S/N 2.5: 22.95 (deepest, last)
+            # a non-detection without a zero point: the plot assumes 27.5
+            add_point(phot, g, 59904.0, flux=10.0, flux_err=20.0, zp=None, user=u)                          # 22.89
+            # neither: a magnitude without an error, and a flux with a zero error
+            add_point(phot, r, 59902.0, mag=20.0, user=u)
+            add_point(phot, r, 59901.0, flux=5.0, flux_err=0.0, zp=27.5, user=u)
+            # flagged: drawn by the plot (dq in the tooltip), skipped by the statistics
+            add_point(phot, r, 59899.0, mag=18.0, mag_err=0.1, bad=True, user=u)
+            # detections: S/N >= 3 with flux, or no flux information at all
+            add_point(phot, r, 59907.0, mag=19.5, mag_err=0.05, flux=1000.0, flux_err=50.0, zp=27.5, user=u)
+            add_point(phot, g, 59910.0, mag=18.8, mag_err=0.05, flux=2000.0, flux_err=40.0, zp=27.5, user=u)
+            add_point(phot, r, 59915.0, mag=19.0, mag_err=0.5, user=u)
+            add_point(phot, r, 59920.0, mag=19.4, mag_err=0.08, flux=800.0, flux_err=60.0, zp=27.5, user=u)
+            # a forced-photometry epoch after the first detection: a limit on the
+            # plot, not a pre-detection limit
+            add_point(phot, r, 59930.0, mag=21.8, mag_err=0.7, flux=20.0, flux_err=40.0, zp=27.5, user=u)
+
+    PRE_DETECTION_LIMIT_MJDS = {59900.0, 59903.0, 59904.0, 59905.0}
+    DETECTION_MJDS = {59907.0, 59910.0, 59915.0, 59920.0}
+
+
+class PlotAgreementTests(PlotAgreementFixture):
+    def test_shared_predicates_are_the_plot_rules(self):
+        det = phot_points.is_detection
+        self.assertTrue(det(19.5, 0.05, 1000.0, 50.0))
+        self.assertTrue(det(19.0, 0.5))                       # no flux information: the error does not matter
+        self.assertTrue(det(19.0, phot_points.MAX_MAG_ERR, 10.0, 5.0))
+        self.assertFalse(det(21.6, 0.9, 20.0, 40.0))          # noisy forced photometry
+        self.assertFalse(det(20.0, None))                     # no error
+        self.assertFalse(det(None, 0.1))
+        self.assertFalse(det(float("nan"), 0.1))
+        lim = phot_points.limiting_mag
+        self.assertAlmostEqual(lim(20.0, 40.0, 27.5), -2.5 * math.log10(140.0) + 27.5)
+        self.assertAlmostEqual(lim(10.0, 20.0, None), -2.5 * math.log10(70.0) + phot_points.DEFAULT_ZERO_POINT)
+        self.assertIsNone(lim(1000.0, 50.0, 27.5))            # S/N 20
+        self.assertIsNone(lim(30.0, 10.0, 27.5))              # S/N exactly 3
+        self.assertIsNone(lim(5.0, 0.0, 27.5))
+        self.assertIsNone(lim(-50.0, 1.0, 25.0))
+        self.assertIsNone(lim(None, 1.0, 25.0))
+        # the Bazin fit selects with the same rule
+        for args in ((19.5, 0.05, 1000.0, 50.0), (21.6, 0.9, 20.0, 40.0), (19.0, 0.5, None, None), (20.0, None)):
+            self.assertEqual(bazin.is_usable_detection(*args), det(*args), args)
+        self.assertFalse(bazin.is_usable_detection(19.5, 0.05, flagged=True))
+        # the PhotPoint wrappers add the flag rule
+        P = photstat.PhotPoint
+        self.assertFalse(photstat.is_detection(P(mjd=1.0, band_id=1, mag=19.5, mag_err=0.05, flagged=True)))
+        self.assertIsNone(photstat.limiting_mag(P(mjd=1.0, band_id=1, flux=20.0, flux_err=40.0, flagged=True)))
+        self.assertAlmostEqual(
+            photstat.limiting_mag(P(mjd=1.0, band_id=1, mag=21.6, mag_err=0.9, flux=20.0, flux_err=40.0, flux_zero_point=27.5)),
+            -2.5 * math.log10(140.0) + 27.5,
+        )
+
+    def test_forced_photometry_epochs_are_pre_detection_limits(self):
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        self.assertEqual(stat.schema_version, photstat.SCHEMA_VERSION)
+        self.assertEqual(stat.num_obs_global, 11)
+        self.assertEqual(stat.num_det_global, 4)
+        self.assertAlmostEqual(stat.first_detected_mjd, 59907.0)
+        self.assertAlmostEqual(stat.first_detected_mag, 19.5)
+        self.assertEqual(stat.first_detected_band_id, self.r.id)
+        self.assertAlmostEqual(stat.peak_mag, 18.8)
+        self.assertEqual(stat.num_limits_global, 4)
+        self.assertAlmostEqual(stat.deepest_limit, -2.5 * math.log10(66.0) + 27.5, places=6)
+        self.assertAlmostEqual(stat.deepest_limit_mjd, 59905.0)
+        self.assertEqual(stat.deepest_limit_band_id, self.r.id)
+        self.assertAlmostEqual(stat.last_non_detection_mjd, 59905.0)
+        self.assertEqual(stat.last_non_detection_band_id, self.r.id)
+        self.assertAlmostEqual(stat.time_to_non_detection, 2.0)
+        self.assertEqual(stat.per_band[str(self.r.id)]["n_limits"], 2)
+        self.assertEqual(stat.per_band[str(self.g.id)]["n_limits"], 2)
+        self.assertEqual(stat.per_band[str(self.r.id)]["n_det"], 3)
+        self.assertEqual(stat.per_band[str(self.g.id)]["n_det"], 1)
+
+    def _plot_markers(self):
+        """``(detections, limits)``: ``{mjd: dq_label}`` for the markers the detail plot draws."""
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("lightcurveplot_detail", args=[self.transient.id]))
+        self.assertEqual(response.status_code, 200)
+        doc = bokeh_doc_from_html(response.content.decode())
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        detections, limits = {}, {}
+        for ref in refs.values():
+            if ref["type"] != "GlyphRenderer":
+                continue
+            glyph = refs[ref["attributes"]["glyph"]["id"]]
+            data = refs[ref["attributes"]["data_source"]["id"]]["attributes"]["data"]
+            if "telescope" not in data:
+                continue  # error bars, the "today" line, fits
+            marker = glyph["attributes"].get("marker", {}).get("value")
+            is_ulim = glyph["type"] == "InvertedTriangle" or marker == "inverted_triangle"
+            target = limits if is_ulim else detections
+            for x, dq in zip(data["x"], data["data_quality"]):
+                target[round(float(x), 6)] = dq
+        return detections, limits
+
+    def test_statistics_count_the_limits_the_plot_draws(self):
+        detections, limits = self._plot_markers()
+        # what the plot draws: every limit (the post-detection one too) and the
+        # flagged detection with its flag in the tooltip
+        self.assertEqual(set(limits), self.PRE_DETECTION_LIMIT_MJDS | {59930.0})
+        self.assertEqual(set(detections), self.DETECTION_MJDS | {59899.0})
+        self.assertNotEqual(detections[59899.0], "Good")
+        good = {mjd for mjd, dq in detections.items() if dq == "Good"}
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        # the statistics: the plot's unflagged markers, limits before the first of them
+        self.assertEqual(good, self.DETECTION_MJDS)
+        self.assertAlmostEqual(stat.first_detected_mjd, min(good))
+        self.assertEqual(stat.num_det_global, len(good))
+        before = {mjd for mjd in limits if mjd < stat.first_detected_mjd}
+        self.assertEqual(before, self.PRE_DETECTION_LIMIT_MJDS)
+        self.assertEqual(stat.num_limits_global, len(before))
+        self.assertAlmostEqual(stat.last_non_detection_mjd, max(before))
+
+    def test_detail_page_recomputes_a_row_that_reported_no_limits(self):
+        """A row written under schema 2 (every mag a detection) shows the limits after one view (#368)."""
+        TransientPhotStat.objects.filter(transient=self.transient).update(
+            schema_version=2, num_limits_global=0, deepest_limit=None, deepest_limit_mjd=None,
+            deepest_limit_band=None, last_non_detection_mjd=None, last_non_detection_band=None,
+            time_to_non_detection=None, first_detected_mjd=59899.0, num_det_global=9,
+        )
+        client = Client()
+        client.force_login(self.user)
+        with mock.patch.object(photstat, "recompute", wraps=photstat.recompute) as spy:
+            response = client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(spy.call_count, 1)
+        html = response.content.decode()
+        self.assertIn("<strong>4</strong> of 11 unflagged points", html)
+        self.assertIn("<strong>4</strong> pre-detection (deepest 22.95 mag in %s on" % self.r.name, html)
+        self.assertIn("(MJD 59905.00; %s)" % self.r.name, html)
+        self.assertIn("<strong>2.0</strong> days before first detection", html)
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        self.assertEqual(stat.schema_version, photstat.SCHEMA_VERSION)
+        self.assertEqual(stat.num_limits_global, 4)
+        self.assertAlmostEqual(stat.first_detected_mjd, 59907.0)
+
+    def test_stale_only_rebuild_refreshes_schema_2_rows(self):
+        TransientPhotStat.objects.filter(transient=self.transient).update(schema_version=2, num_limits_global=0)
+        out = StringIO()
+        call_command("rebuild_photstats", "--stale-only", stdout=out)
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        self.assertEqual(stat.schema_version, photstat.SCHEMA_VERSION)
+        self.assertEqual(stat.num_limits_global, 4)
+        out = StringIO()
+        call_command("rebuild_photstats", "--stale-only", stdout=out)
+        self.assertIn("processed 0", out.getvalue())
