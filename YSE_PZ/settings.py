@@ -175,6 +175,10 @@ CRON_CLASSES = [
     # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
     'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
     'YSE_App.data_ingest.Instrument_Logs.WeatherRefresh',
+    # Other feeds (#280): queue feeds.poll per enabled FeedSource and the minor-planet
+    # screening sweep; no-ops unless enabled under [feeds] in settings.ini.
+    'YSE_App.data_ingest.Feeds.FeedPoll',
+    'YSE_App.data_ingest.Feeds.MinorPlanetScreen',
     # AI summaries (#296): nightly batch of summariser runs for transients with new
     # comments / spectra / follow-ups; no-op unless SUMMARY_BATCH_CRON_ENABLED ([llm]).
     'YSE_App.data_ingest.Summary_Jobs.SummaryRefresh',
@@ -683,3 +687,28 @@ SHARING_TNS_RETRIEVAL_STATUSES = [
 SHARING_TNS_RETRIEVAL_RADIUS_ARCSEC = config.getfloat('sharing', 'TNS_RETRIEVAL_RADIUS_ARCSEC', fallback=3.0)
 SHARING_TNS_RETRIEVAL_MAX_PER_RUN = config.getint('sharing', 'TNS_RETRIEVAL_MAX_PER_RUN', fallback=50)
 SHARING_TNS_REQUEST_INTERVAL_SECONDS = config.getfloat('sharing', 'TNS_REQUEST_INTERVAL_SECONDS', fallback=1.0)
+# Other feeds: Hermes / SCiMMA, Einstein Probe, JPL Scout (#280; docs/feeds-*.md).
+# All keys optional, under [feeds] in settings.ini. Sources are FeedSource rows
+# (admin), credentials EncryptedCredential rows; nothing secret lives here.
+FEEDS_POLL_CRON_ENABLED = (
+    os.environ.get('YSE_FEEDS_POLL_CRON', '').strip() == '1'
+    or config.getboolean('feeds', 'POLL_CRON_ENABLED', fallback=False)
+)
+FEEDS_POLL_CRON_MINUTES = config.getint('feeds', 'POLL_CRON_MINUTES', fallback=15)
+FEEDS_HTTP_TIMEOUT_SECONDS = config.getint('feeds', 'HTTP_TIMEOUT_SECONDS', fallback=30)
+FEEDS_HERMES_API_URL = config.get('feeds', 'HERMES_API_URL', fallback='https://hermes.lco.global/api/v0')
+FEEDS_HERMES_KAFKA_URL = config.get('feeds', 'HERMES_KAFKA_URL', fallback='kafka://kafka.scimma.org/')
+FEEDS_GCN_KAFKA_DOMAIN = config.get('feeds', 'GCN_KAFKA_DOMAIN', fallback='gcn.nasa.gov')
+FEEDS_SCOUT_API_URL = config.get('feeds', 'SCOUT_API_URL', fallback='https://ssd-api.jpl.nasa.gov/scout.api')
+FEEDS_SBIDENT_API_URL = config.get('feeds', 'SBIDENT_API_URL', fallback='https://ssd-api.jpl.nasa.gov/sb_ident.api')
+# Minor-planet screening of new transients (#283): on creation (signal) and/or a periodic sweep.
+FEEDS_MPC_SCREEN_ON_CREATE = config.getboolean('feeds', 'MPC_SCREEN_ON_CREATE', fallback=False)
+FEEDS_MPC_SCREEN_CRON_ENABLED = (
+    os.environ.get('YSE_FEEDS_MPC_SCREEN_CRON', '').strip() == '1'
+    or config.getboolean('feeds', 'MPC_SCREEN_CRON_ENABLED', fallback=False)
+)
+FEEDS_MPC_SCREEN_CRON_MINUTES = config.getint('feeds', 'MPC_SCREEN_CRON_MINUTES', fallback=360)
+FEEDS_MPC_SCREEN_RADIUS_ARCSEC = config.getfloat('feeds', 'MPC_SCREEN_RADIUS_ARCSEC', fallback=5.0)
+FEEDS_MPC_SCREEN_SINCE_DAYS = config.getfloat('feeds', 'MPC_SCREEN_SINCE_DAYS', fallback=3.0)
+FEEDS_MPC_SCREEN_MAX_PER_RUN = config.getint('feeds', 'MPC_SCREEN_MAX_PER_RUN', fallback=50)
+FEEDS_MPC_SCREEN_OBS_CODE = config.get('feeds', 'MPC_SCREEN_OBS_CODE', fallback='500')

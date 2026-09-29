@@ -2545,7 +2545,7 @@
                 var badges = json.badges || [];
                 for (var i = 0; i < badges.length; i++) {
                     var b = badges[i];
-                    var cls = b.verdict === 'stellar' ? 'badge-danger' : 'badge-warning';
+                    var cls = b.verdict === 'stellar' ? 'badge-danger' : (b.verdict === 'moving object' ? 'badge-info' : 'badge-warning');
                     $badges.append('<a href="#annotations_tab" class="badge ' + cls + ' annotation-badge mr-1" title="' +
                         yseAnnotationsEscape(b.summary) + '" data-origin="' + yseAnnotationsEscape(b.origin) + '">' +
                         yseAnnotationsEscape(b.origin) + ': ' + yseAnnotationsEscape(b.verdict) + '</a>');

@@ -485,13 +485,14 @@ class SubmissionQueueTests(SharingBase):
         self.assertNotIn("_yse", sent)
         self.assertEqual(Transient.objects.get(pk=named.pk).name, "2026abc")  # classification never renames
 
-    def test_hermes_submission_fails_clearly(self):
+    def test_hermes_submission_without_token_fails_clearly(self):
+        # The TNS bot credential carries no hermes_token; publishing itself is covered by test_feeds.
         hermes = self.make_service(slug="hermes", kind=SharingService.KIND_HERMES, hermes_topic="yse.transients")
         submission = tns.create_submission(hermes, self.transient, tns.KIND_HERMES, self.staff)
         run_pass()
         submission.refresh_from_db()
         self.assertEqual(submission.status, SharingSubmission.STATUS_FAILED)
-        self.assertIn("Hermes publishing is not implemented", submission.error)
+        self.assertIn("no Hermes token", submission.error)
 
     def test_record_tns_name_conflict_and_unchanged(self):
         create_minimal_transient(self.staff, name="2026abc", obs_group_name="other")
