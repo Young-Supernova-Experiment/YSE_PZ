@@ -16,6 +16,15 @@ Configuration lives on the allocation:
 
 Status is manual: a person marks the request complete (or cancelled) once the
 facility reports back. A submission that was sent is ``submitted``.
+
+Instrument logs (#310): when ``default_request_params["instrument_log_url"]`` (or
+the credential's ``instrument_log_endpoint``) is set, ``fetch_instrument_log``
+GETs it with ``start`` / ``end`` (ISO, UTC) and ``instrument`` / ``telescope``
+query parameters (or filled into ``{start}`` / ``{end}`` / ``{instrument}`` /
+``{telescope}`` placeholders in the URL) and expects JSON: a list of entries, or
+an object holding one under ``logs`` / ``data`` / ``results``. An entry is a
+dict with ``message`` (or ``msg`` / ``text``), optional ``timestamp`` (or
+``time`` / ``date`` / ``created_at``) and ``level``.
 """
 
 from __future__ import annotations
@@ -77,8 +86,8 @@ class GenericFacility(FacilityAPI):
         "Sends the request as JSON to an HTTP endpoint, as an email to a list of observers, "
         "or as a Slack webhook message. Status is updated by hand."
     )
-    capabilities = frozenset({"submit"})
-    credential_keys = ["api_token", "endpoint", "slack_webhook_url"]
+    capabilities = frozenset({"submit", "instrument_log"})
+    credential_keys = ["api_token", "endpoint", "slack_webhook_url", "instrument_log_endpoint"]
     manual_status = True
 
     def fields(self, allocation=None):
@@ -208,6 +217,59 @@ class GenericFacility(FacilityAPI):
         if response.status_code >= 300:
             raise FacilityError("Slack webhook answered %s: %s" % (response.status_code, response.text[:300]))
         return SubmitResult("submitted", detail="Slack webhook posted", response={"text": text})
+
+    # -- instrument logs (#310) ----------------------------------------------
+    def instrument_log_url(self, allocation) -> str:
+        params = allocation.default_request_params or {}
+        return str(params.get("instrument_log_url") or allocation.secret().get("instrument_log_endpoint") or "")
+
+    def fetch_instrument_log(self, allocation, instrument, start, end) -> List[Dict[str, Any]]:
+        template = self.instrument_log_url(allocation)
+        if not template:
+            raise FacilityError("no instrument_log_url configured for allocation %s" % allocation.name)
+        context = {
+            "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "instrument": instrument.name, "telescope": instrument.telescope.name,
+            "instrument_id": instrument.pk, "proposal_id": allocation.proposal_id,
+        }
+        url = render_template(template, context)
+        query = {} if url != template else {"start": context["start"], "end": context["end"],
+                                              "instrument": context["instrument"], "telescope": context["telescope"]}
+        headers = {"Accept": "application/json"}
+        secret = allocation.secret(touch=True)
+        if secret.get("api_token"):
+            headers["Authorization"] = "token %s" % secret["api_token"]
+        try:
+            response = requests.get(url, params=query or None, headers=headers, timeout=http_timeout())
+        except requests.RequestException as exc:
+            raise FacilityError("could not reach %s: %s" % (url, exc)) from exc
+        body = _json_or_text(response)
+        if response.status_code >= 300:
+            raise FacilityError("instrument log endpoint answered %s: %s" % (response.status_code, _short(body)))
+        return instrument_log_entries(body)
+
+
+def instrument_log_entries(body) -> List[Dict[str, Any]]:
+    """Pull the list of entries out of whatever JSON shape the endpoint answered with."""
+    if isinstance(body, dict):
+        for key in ("logs", "data", "results", "entries", "log"):
+            inner = body.get(key)
+            if isinstance(inner, dict):
+                inner = inner.get("logs") or inner.get("entries") or inner.get("results")
+            if isinstance(inner, list):
+                body = inner
+                break
+        else:
+            body = [body] if body.get("message") or body.get("msg") or body.get("text") else []
+    if not isinstance(body, list):
+        raise FacilityError("instrument log endpoint did not answer with a list of entries")
+    entries = []
+    for item in body:
+        if isinstance(item, str):
+            entries.append({"message": item})
+        elif isinstance(item, dict):
+            entries.append(item)
+    return entries
 
 
 def _json_or_text(response):

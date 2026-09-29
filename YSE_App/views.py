@@ -1165,7 +1165,20 @@ def observing_night(request, telescope, obs_date, pi_name):
         'classical_obs_date':classical_obs_date,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
+    context.update(_telescope_widgets_context(classical_obs_date.resource.telescope, request.user))
     return render(request, 'YSE_App/observing_night.html', context)
+
+
+def _telescope_widgets_context(telescope, user):
+    """Weather / SkyCam widget context and the last week's instrument logs for an observing-night page (#309)."""
+    from YSE_App.services import instrument_logs as _il
+    from YSE_App.services import weather as _wx
+
+    return {
+        'telescope_obj': telescope,
+        'weather_widget': _wx.widget_context(telescope, user=user, allow_fetch=False),
+        'recent_instrument_logs': _il.recent_logs_for_telescope(telescope, days=7, limit=20),
+    }
 
 @login_required
 def yse_observing_night(request, obs_date):
@@ -1206,6 +1219,7 @@ def yse_observing_night(request, obs_date):
 
     context['obs_date_str'] = datetime.datetime(
             int(obs_date.split('-')[0]),int(obs_date.split('-')[1]),int(obs_date.split('-')[2])).strftime('%m/%d/%Y')
+    context.update(_telescope_widgets_context(telescope, request.user))
     return render(request, 'YSE_App/yse_observing_night.html', context)
 
 
@@ -1493,13 +1507,21 @@ def transient_detail_summary_spectra_tools_fragment(request, transient_id):
 def transient_detail_resources_fragment(request, transient_id):
     get_object_or_404(Transient, pk=transient_id)
     obsnights = view_utils.get_obs_nights_happening_soon(request.user)
-    too_resources = view_utils.get_too_resources(request.user)
+    too_resources = view_utils.get_too_resources(request.user).select_related()
+    # Weather / SkyCam widgets (#311) beside the resources whose telescope has one configured
+    from YSE_App.services import weather as _wx
+
+    widgets = {}
+    for telescope in ([n.resource.telescope for n in obsnights] + [r.telescope for r in too_resources]):
+        if telescope.has_weather_widget and telescope.pk not in widgets:
+            widgets[telescope.pk] = _wx.widget_context(telescope, user=request.user, allow_fetch=False, compact=True)
     return render(
         request,
         'YSE_App/transient_detail_resources_tables.html',
         {
             'observing_nights': obsnights,
-            'too_resource_list': too_resources.select_related(),
+            'too_resource_list': too_resources,
+            'weather_widgets': list(widgets.values()),
         },
     )
 

@@ -52,3 +52,13 @@
         </tbody>
     </table>
 </div>
+{% if weather_widgets %}
+<div class="col-12 yse-resource-weather">
+    <b>Weather &amp; SkyCam</b><br>
+    <div class="row">
+    {% for w in weather_widgets %}
+        <div class="col-12 col-md-6 col-lg-4">{% include 'YSE_App/partials/weather_widget.html' with telescope=w.telescope weather=w.weather compact=True has_weather=w.has_weather has_skycam=w.has_skycam weather_link=w.weather_link stale=w.stale skycam_refresh_seconds=w.skycam_refresh_seconds weather_refresh_seconds=w.weather_refresh_seconds %}</div>
+    {% endfor %}
+    </div>
+</div>
+{% endif %}

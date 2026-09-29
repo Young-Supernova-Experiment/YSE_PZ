@@ -130,7 +130,7 @@ class FacilityAPI:
     slug: str = ""
     name: str = ""
     description: str = ""
-    #: subset of {"submit", "update", "delete", "status"}
+    #: subset of {"submit", "update", "delete", "status", "instrument_log"}
     capabilities = frozenset({"submit"})
     #: names the credential payload should hold (documentation and the allocations page)
     credential_keys: List[str] = []
@@ -198,6 +198,19 @@ class FacilityAPI:
 
     def get_status(self, request) -> StatusResult:
         raise FacilityError("%s has no status endpoint; mark the request complete by hand" % self.slug)
+
+    # -- instrument logs (#310) -----------------------------------------------
+    def fetch_instrument_log(self, allocation, instrument, start: datetime.datetime,
+                             end: datetime.datetime) -> List[Dict[str, Any]]:
+        """Return the facility's log entries for ``instrument`` between ``start`` and ``end``.
+
+        Optional capability (``"instrument_log"`` in :attr:`capabilities`). Each
+        entry is a dict with at least ``message``; ``timestamp`` (ISO) and
+        ``level`` are kept when present. ``allocation`` carries the endpoint
+        and credentials. Raise :class:`FacilityError` when the facility cannot
+        be reached.
+        """
+        raise NotImplementedError("%s does not publish instrument logs" % self.slug)
 
     # -- helpers ------------------------------------------------------------
     def can(self, capability: str) -> bool:

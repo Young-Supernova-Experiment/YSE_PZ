@@ -171,6 +171,10 @@ CRON_CLASSES = [
     # no-ops unless enabled under [sharing] in settings.ini.
     'YSE_App.data_ingest.Sharing_Jobs.TNSRetrieval',
     'YSE_App.data_ingest.Sharing_Jobs.AutoPublishSweep',
+    # Instrument logs and weather (#309): queue the facility-API log pull and the
+    # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
+    'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
+    'YSE_App.data_ingest.Instrument_Logs.WeatherRefresh',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -475,6 +479,29 @@ FACILITY_API_MODULES = [
     m.strip() for m in config.get('site_settings', 'FACILITY_API_MODULES', fallback='').split(',') if m.strip()
 ]
 FACILITY_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'FACILITY_HTTP_TIMEOUT_SECONDS', fallback=30)
+
+# Instrument logs, weather widget and SkyCam (#309: #310, #311). All keys optional,
+# under [observatory] in settings.ini; docs/instrument-logs-weather.md explains each.
+# The per-telescope endpoints (weather_url, weather_link, skycam_url) live on the
+# Telescope rows (admin). Both crons queue jobs and are off by default.
+INSTRUMENT_LOG_PULL_CRON_ENABLED = (
+    os.environ.get('YSE_INSTRUMENT_LOG_PULL_CRON', '').strip() == '1'
+    or config.getboolean('observatory', 'INSTRUMENT_LOG_PULL_CRON_ENABLED', fallback=False)
+)
+INSTRUMENT_LOG_PULL_CRON_MINUTES = config.getint('observatory', 'INSTRUMENT_LOG_PULL_CRON_MINUTES', fallback=60)
+# Each pull asks the facility for the last N hours (the fingerprint de-duplicates overlaps).
+INSTRUMENT_LOG_PULL_HOURS = config.getint('observatory', 'INSTRUMENT_LOG_PULL_HOURS', fallback=24)
+WEATHER_REFRESH_CRON_ENABLED = (
+    os.environ.get('YSE_WEATHER_REFRESH_CRON', '').strip() == '1'
+    or config.getboolean('observatory', 'WEATHER_REFRESH_CRON_ENABLED', fallback=False)
+)
+WEATHER_REFRESH_CRON_MINUTES = config.getint('observatory', 'WEATHER_REFRESH_CRON_MINUTES', fallback=10)
+# A snapshot younger than this is served from the Telescope.weather cache without a fetch.
+WEATHER_CACHE_MINUTES = config.getint('observatory', 'WEATHER_CACHE_MINUTES', fallback=10)
+WEATHER_HTTP_TIMEOUT_SECONDS = config.getint('observatory', 'WEATHER_HTTP_TIMEOUT_SECONDS', fallback=10)
+# The widget reloads the SkyCam image and re-reads the weather every N seconds (0 = never).
+SKYCAM_REFRESH_SECONDS = config.getint('observatory', 'SKYCAM_REFRESH_SECONDS', fallback=300)
+WEATHER_WIDGET_REFRESH_SECONDS = config.getint('observatory', 'WEATHER_WIDGET_REFRESH_SECONDS', fallback=600)
 
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
 # (the senders it replaced, alert.py and the comment-mention emails, sent
