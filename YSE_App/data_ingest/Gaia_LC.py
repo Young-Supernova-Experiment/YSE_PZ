@@ -1,5 +1,6 @@
 import pandas as pd
 import datetime
+from astropy.time import Time
 import numpy as np
 import time
 from django_cron import CronJobBase, Schedule

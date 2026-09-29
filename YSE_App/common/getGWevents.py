@@ -214,7 +214,7 @@ class GW2YSE:
 						or '.'+filt+'.' not in row['cmpfile']):
 						continue
 					else:
-						if sn[i] is '---':
+						if sn[i] == '---':
 							sn[i] = str(float(row['flux'])/float(row['dflux']))
 							types[i] = str(row['type'])
 						elif float(sn[i])<float(row['flux'])/float(row['dflux']):

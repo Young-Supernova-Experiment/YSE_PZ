@@ -12,12 +12,13 @@ from django.contrib.auth.decorators import login_required, permission_required
 from django.db import models, connection, reset_queries
 from django.db.models import Prefetch
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import render, get_object_or_404, render
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.generic import TemplateView
 
 import calendar
 import datetime
+import logging
 import time
 
 from .models import *
@@ -46,6 +47,8 @@ from rest_framework.request import Request
 from django.templatetags.static import static
 from .util import mkFinderChart
 from YSE_App.models import Transient
+
+logger = logging.getLogger(__name__)
 
 _HEAVY_PLOT_LOADED = False
 _ASTROPY_COORDS_LOADED = False
@@ -120,16 +123,6 @@ def _load_heavy_plot_stack():
     )
     CDN = _CDN
     cosmo = FlatLambdaCDM(70, 0.3)
-
-
-def _bokeh_ajax_response(ax, title="plot"):
-    """Embed Bokeh using components(); page already loads bokeh-2.4.2.min.js."""
-    _load_heavy_plot_stack()
-    from bokeh.embed import components
-
-    script, div = components(ax)
-    html = f"{div}{script}"
-    return HttpResponse(html.replace("width: 90%", "width: 100%"))
     plot_airmass = _plot_airmass
     hp = _hp
     matplotlib = _matplotlib
@@ -142,6 +135,40 @@ def _bokeh_ajax_response(ax, title="plot"):
     Figure = _Figure
     sncosmo = _sncosmo
     _HEAVY_PLOT_LOADED = True
+
+
+def _bokeh_ajax_response(ax, title="plot"):
+    """Embed Bokeh using components(); page already loads bokeh-2.4.2.min.js."""
+    _load_heavy_plot_stack()
+    from bokeh.embed import components
+
+    script, div = components(ax)
+    html = f"{div}{script}"
+    return HttpResponse(html.replace("width: 90%", "width: 100%"))
+
+
+SALT_FIT_UNAVAILABLE_TEXT = "SALT fit unavailable"
+
+
+def _note_salt2_fit_failure(ax, exc, transient_id):
+    """Log a failed SALT2/SALT3 fit and annotate the plot instead of raising.
+
+    A missing model download, a band that is not in ``bandpassdict``, or too
+    few points for the fitter all end up here; the light curve itself still
+    renders and the caller returns it without the fit (#189).
+    """
+    logger.warning(
+        "SALT fit failed for transient %s (%s: %s); returning plot without fit",
+        transient_id, type(exc).__name__, exc, exc_info=True,
+    )
+    try:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#b00020',
+            text=f"{SALT_FIT_UNAVAILABLE_TEXT} ({type(exc).__name__})",
+        ))
+    except Exception:
+        logger.debug("could not annotate plot with SALT fit failure", exc_info=True)
 
 
 MAX_LC_DISPLAY_POINTS = int(os.environ.get('YSE_LC_PLOT_MAX_POINTS', '3000'))
@@ -480,7 +507,6 @@ class Finder(TemplateView):
         import os
         from .util import mkFinderChart
 
-        from django.templatetags.static import static
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
         from matplotlib.figure import Figure
     
@@ -916,61 +942,64 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     ax.xaxis[0].major_label_overrides = overridedict
 
     if salt2:
-        model = sncosmo.Model(source='salt3')
+        try:
+            model = sncosmo.Model(source='salt3')
         
-        if transient.redshift:
-            model.set(z=transient.redshift)
-            fitparams = ['t0', 'x0', 'x1', 'c']
-        elif transient.host and transient.host.redshift:
-            model.set(z=transient.host.redshift)
-            fitparams = ['t0', 'x0', 'x1', 'c']
-        else:
-            fitparams = ['z', 't0', 'x0', 'x1', 'c']
+            if transient.redshift:
+                model.set(z=transient.redshift)
+                fitparams = ['t0', 'x0', 'x1', 'c']
+            elif transient.host and transient.host.redshift:
+                model.set(z=transient.host.redshift)
+                fitparams = ['t0', 'x0', 'x1', 'c']
+            else:
+                fitparams = ['z', 't0', 'x0', 'x1', 'c']
         
-        zp = np.array([27.5] * len(salt2band))
-        data = Table([salt2mjd, salt2band, flux, fluxerr, zp, zpsys],
-                     names=['mjd', 'band', 'flux', 'fluxerr', 'zp', 'zpsys'],
-                     meta={'t0': salt2mjd[flux == np.max(flux)]})
+            zp = np.array([27.5] * len(salt2band))
+            data = Table([salt2mjd, salt2band, flux, fluxerr, zp, zpsys],
+                         names=['mjd', 'band', 'flux', 'fluxerr', 'zp', 'zpsys'],
+                         meta={'t0': salt2mjd[flux == np.max(flux)]})
         
-        result, fitted_model = sncosmo.fit_lc(
-            data, model, fitparams,
-            bounds={
-                't0': (salt2mjd[flux == np.max(flux)] - 10, salt2mjd[flux == np.max(flux)] + 10),
-                'z': (0.0, 0.7), 'x1': (-3, 3), 'c': (-0.3, 0.3)
-            }
-        )
+            result, fitted_model = sncosmo.fit_lc(
+                data, model, fitparams,
+                bounds={
+                    't0': (salt2mjd[flux == np.max(flux)] - 10, salt2mjd[flux == np.max(flux)] + 10),
+                    'z': (0.0, 0.7), 'x1': (-3, 3), 'c': (-0.3, 0.3)
+                }
+            )
         
-        count = 0
-        plotmjd = np.arange(result['parameters'][1] - 20, result['parameters'][1] + 50, 0.5)
-        for band_id in unique_bands:
-            band_obj = band_lookup[band_id]
-            color = band_display_color(band_obj.name, band_obj.disp_color, fallback_index=count)
-            count += 1
-            bandkey = f'Band: {band_obj.instrument.name} - {band_obj.name}'
-            if bandkey in bandpassdict.keys() and bandpassdict[bandkey] in salt2band:
-                salt2flux = fitted_model.bandflux(
-                    bandpassdict[bandkey], plotmjd,
-                    zp=27.5, zpsys=zpsys[bandpassdict[bandkey] == salt2band][0]
-                )
-                ax.line(plotmjd, -2.5 * np.log10(salt2flux) + 27.5, color=color)
+            count = 0
+            plotmjd = np.arange(result['parameters'][1] - 20, result['parameters'][1] + 50, 0.5)
+            for band_id in unique_bands:
+                band_obj = band_lookup[band_id]
+                color = band_display_color(band_obj.name, band_obj.disp_color, fallback_index=count)
+                count += 1
+                bandkey = f'Band: {band_obj.instrument.name} - {band_obj.name}'
+                if bandkey in bandpassdict.keys() and bandpassdict[bandkey] in salt2band:
+                    salt2flux = fitted_model.bandflux(
+                        bandpassdict[bandkey], plotmjd,
+                        zp=27.5, zpsys=zpsys[bandpassdict[bandkey] == salt2band][0]
+                    )
+                    ax.line(plotmjd, -2.5 * np.log10(salt2flux) + 27.5, color=color)
         
-        # Calculate phase and add annotations
-        lcphase = today - result['parameters'][1]
-        lcphase_str = f"+{lcphase:.1f}" if lcphase > 0 else f"{lcphase:.1f}"
+            # Calculate phase and add annotations
+            lcphase = today - result['parameters'][1]
+            lcphase_str = f"+{lcphase:.1f}" if lcphase > 0 else f"{lcphase:.1f}"
         
-        annotations = [
-            ("phase = %s days" % lcphase_str, 280),
-            ("\uD835\uDE3B  = %.3f" % result.parameters[0], 265),
-            ("\uD835\uDC61\u2080  = %i" % result['parameters'][1], 250),
-            ("\uD835\uDC5A\u2088 = %.2f" % (10.635 - 2.5 * np.log10(result['parameters'][2])), 235),
-            ("\uD835\uDC65\u2081 = %.2f" % result['parameters'][3], 220),
-            ("\uD835\uDC50  = %.2f" % result['parameters'][4], 205)
-        ]
+            annotations = [
+                ("phase = %s days" % lcphase_str, 280),
+                ("\uD835\uDE3B  = %.3f" % result.parameters[0], 265),
+                ("\uD835\uDC61\u2080  = %i" % result['parameters'][1], 250),
+                ("\uD835\uDC5A\u2088 = %.2f" % (10.635 - 2.5 * np.log10(result['parameters'][2])), 235),
+                ("\uD835\uDC65\u2081 = %.2f" % result['parameters'][3], 220),
+                ("\uD835\uDC50  = %.2f" % result['parameters'][4], 205)
+            ]
         
-        for text, y in annotations:
-            label = Label(x=10, y=y, x_units='screen', y_units='screen',
-                          render_mode='css', text_font_size='10pt', text=text)
-            ax.add_layout(label)
+            for text, y in annotations:
+                label = Label(x=10, y=y, x_units='screen', y_units='screen',
+                              render_mode='css', text_font_size='10pt', text=text)
+                ax.add_layout(label)
+        except Exception as exc:
+            _note_salt2_fit_failure(ax, exc, transient_id)
 
     return _bokeh_ajax_response(ax, "my plot")
 
@@ -1266,8 +1295,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
                                text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
                 for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
                     ax.add_layout(latex)
-        except Exception:
-            pass
+        except Exception as exc:
+            _note_salt2_fit_failure(ax, exc, transient_id)
 
     html = file_html(ax, CDN, "my plot").replace('width: 90%', 'width: 100%')
     if cache_key:
@@ -1520,63 +1549,66 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     ax.xaxis[0].major_label_overrides = overridedict
     
     if salt2:
-        model = sncosmo.Model(source='salt2')
-        if transient.redshift:
-            model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        elif transient.host and transient.host.redshift:
-            model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
+        try:
+            model = sncosmo.Model(source='salt2')
+            if transient.redshift:
+                model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
+            elif transient.host and transient.host.redshift:
+                model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
+            else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
             
-        zp = np.array([27.5]*len(salt2band))
-        data = Table([salt2mjd,salt2band,salt2flux,salt2fluxerr,zp,zpsys],
-                     names=['mjd','band','flux','fluxerr','zp','zpsys'],
-                     meta={'t0':salt2mjd[salt2flux == np.max(salt2flux)]})
+            zp = np.array([27.5]*len(salt2band))
+            data = Table([salt2mjd,salt2band,salt2flux,salt2fluxerr,zp,zpsys],
+                         names=['mjd','band','flux','fluxerr','zp','zpsys'],
+                         meta={'t0':salt2mjd[salt2flux == np.max(salt2flux)]})
 
-        result, fitted_model = sncosmo.fit_lc(
-            data, model, fitparams,
-            bounds={'t0':(min(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))-10,
-                          max(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))+10),
-                    'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})
+            result, fitted_model = sncosmo.fit_lc(
+                data, model, fitparams,
+                bounds={'t0':(min(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))-10,
+                              max(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))+10),
+                        'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})
         
-        count = 0
-        plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
-        bandunq,idx = np.unique(bandstr,return_index=True)
-        for bs,b,bc in zip(bandunq,band[idx],bandcolor[idx]):
-            if bc != 'None' and bc:
-                color = bc
-            else:
-                coloridx = count % len(np.unique(colorlist))
-                color = colorlist[coloridx]
-                count += 1
+            count = 0
+            plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
+            bandunq,idx = np.unique(bandstr,return_index=True)
+            for bs,b,bc in zip(bandunq,band[idx],bandcolor[idx]):
+                if bc != 'None' and bc:
+                    color = bc
+                else:
+                    coloridx = count % len(np.unique(colorlist))
+                    color = colorlist[coloridx]
+                    count += 1
                 
-            if bs in bandpassdict.keys() and bandpassdict[bs] in salt2band:
-                salt2flux = fitted_model.bandflux(bandpassdict[bs], plotmjd, zp=27.5,zpsys=zpsys[bandpassdict[bs] == salt2band][0])
-                ax.line(plotmjd,salt2flux,color=color)
+                if bs in bandpassdict.keys() and bandpassdict[bs] in salt2band:
+                    salt2flux = fitted_model.bandflux(bandpassdict[bs], plotmjd, zp=27.5,zpsys=zpsys[bandpassdict[bs] == salt2band][0])
+                    ax.line(plotmjd,salt2flux,color=color)
                 
-        lcphase = today-result['parameters'][1]
-        if lcphase > 0: lcphase = '+%.1f'%(lcphase)
-        else: lcphase = '%.1f'%(lcphase)
-        latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="phase = %s days"%(
-                           lcphase))
-        latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
-        latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
-        latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
-        latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
-        latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
-        for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
-            ax.add_layout(latex)
+            lcphase = today-result['parameters'][1]
+            if lcphase > 0: lcphase = '+%.1f'%(lcphase)
+            else: lcphase = '%.1f'%(lcphase)
+            latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
+                           render_mode='css', text_font_size='10pt',
+                           text="phase = %s days"%(
+                               lcphase))
+            latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
+                           render_mode='css', text_font_size='10pt',
+                           text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
+            latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
+                           render_mode='css', text_font_size='10pt',
+                           text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
+            latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
+                           render_mode='css', text_font_size='10pt',
+                           text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
+            latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
+                           render_mode='css', text_font_size='10pt',
+                           text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
+            latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
+                           render_mode='css', text_font_size='10pt',
+                           text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
+            for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
+                ax.add_layout(latex)
+        except Exception as exc:
+            _note_salt2_fit_failure(ax, exc, transient_id)
 
     g = file_html(ax,CDN,"my plot")
     return HttpResponse(g.replace('width: 90%','width: 100%'))

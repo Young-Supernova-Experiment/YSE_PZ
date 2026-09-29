@@ -5,6 +5,7 @@ import numpy as np
 from astroplan import Observer
 from astropy.time import Time
 import requests
+from django.http import Http404
 
 def coordstr_to_decimal(coord):
 	if ',' in coord:

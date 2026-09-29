@@ -17,7 +17,6 @@ from django.db.models import Q
 from YSE_App.view_utils import get_all_phot_for_transient
 from YSE_App.common.utilities import date_to_mjd
 import numpy as np
-import sys
 import operator
 
 classdict = {'SNIa':'SN Ia','SN Ia':'SN Ia','SNIa-norm':'SN Ia', 'SNIbc':'SN Ib/c', 'SNII':'SN II',

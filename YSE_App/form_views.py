@@ -21,7 +21,6 @@ import json
 
 from django.views.generic import FormView, DeleteView
 from .forms import *
-from django.http import JsonResponse
 from django.forms.models import model_to_dict
 from .common import alert
 from .common.utilities import date_to_mjd, coordstr_to_decimal
@@ -644,14 +643,6 @@ class AddTransientCommentFormView(FormView):
 			audience_groups=audience_groups,
 		)
 		return log, log_to_comment_dict(log)
-
-	def get_form_kwargs(self):
-		kwargs = super().get_form_kwargs()
-		kwargs["user"] = self.request.user
-		transient_id = self.request.POST.get("transient") or self.request.GET.get("transient")
-		if transient_id:
-			kwargs["transient_id"] = int(transient_id)
-		return kwargs
 
 	def form_invalid(self, form):
 		if is_ajax(self.request):

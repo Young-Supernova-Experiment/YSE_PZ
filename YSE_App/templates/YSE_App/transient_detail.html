@@ -34,7 +34,7 @@
             {% endif %}
             <div class="nav-tabs-custom yse-page-transient-summary">
                 <ul class="nav nav-tabs">
-                    <li class="nav-item active"><a class="nav-link active" href="#summary_tab" data-toggle="tab">Summary</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="#summary_tab" data-toggle="tab">Summary</a></li>
                     <li class="nav-item"><a class="nav-link" href="#followup_tab" data-toggle="tab">Follow-up</a></li>
                     <li class="nav-item"><a class="nav-link" href="#resources_tab" data-toggle="tab">Resources</a></li>
                     <li class="nav-item"><a class="nav-link" href="#photometry_tab" data-toggle="tab">Detailed Photometry</a></li>
@@ -684,6 +684,11 @@
                     'spectra_tab',
                     "{% url 'transient_detail_spectra_tab_fragment' transient.id %}",
                     '#spectra_tab_content'
+                );
+                yseLoadDetailFragment(
+                    'summary_spectra_tools',
+                    "{% url 'transient_detail_summary_spectra_tools_fragment' transient.id %}",
+                    '#summary_spectra_tools'
                 );
                 {% if has_gw_candidate_tag %}
                 yseLoadDetailFragment(
@@ -2112,9 +2117,5 @@
         loadHstImages();
         loadChandraImages();
 {% endif %}
-
-      });
-
-
     </script>
 {% endblock %}

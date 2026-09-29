@@ -39,13 +39,11 @@ from . import view_utils
 import datetime
 from datetime import timedelta
 import pytz
-from pytz import timezone
 from .serializers import *
 from django.core import serializers
 import os
 from .data import PhotometryService, SpectraService, ObservingResourceService
 import json
-import time
 import dateutil.parser
 from astroplan import moon_illumination
 from astropy.time import Time
@@ -68,7 +66,6 @@ from .table_utils import (
 )
 from .queries.yse_python_queries import *
 from .queries import yse_python_queries
-import django_tables2 as tables
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
@@ -167,7 +164,17 @@ def dashboard(request):
     defer = _main_dashboard_defer_enabled()
     for title, statusname in _DASHBOARD_STATUS_SECTIONS:
         if defer and statusname != 'New':
-            transient_categories.append((None, title, statusname.lower(), None))
+            # Table comes from /dashboard/section/<status>/ via AJAX; still
+            # render the (query-free) filter form so the section keeps its
+            # search box like the synchronous sections and production.
+            deferred_filter = TransientFilter(
+                request.GET,
+                queryset=Transient.objects.none(),
+                prefix=statusname.lower(),
+            )
+            transient_categories.append(
+                (None, title, statusname.lower(), deferred_filter)
+            )
             continue
         transient_categories.append(
             _dashboard_section_tuple(request, title, statusname, status_by_name)
@@ -758,10 +765,14 @@ def too_requests(request, telescope, pi_name):
         filter(begin_date_valid__lte=nowdate).filter(end_date_valid__gte=nowdate).select_related()
     if pi_name != 'None':
         too_resource = too_resource.filter(principal_investigator__name = pi_name)
-    
-    follow_requests = TransientFollowup.objects.filter(too_resource = too_resource[0]).\
-        filter(valid_start__lte = too_resource[0].end_date_valid).\
-        filter(valid_stop__gte = too_resource[0].begin_date_valid).\
+    # evaluate once; an empty result is a 404, not a 500
+    too_resource = too_resource.first()
+    if too_resource is None:
+        raise Http404('No active ToO resource found for this telescope/PI')
+
+    follow_requests = TransientFollowup.objects.filter(too_resource = too_resource).\
+        filter(valid_start__lte = too_resource.end_date_valid).\
+        filter(valid_stop__gte = too_resource.begin_date_valid).\
         filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).select_related()
 
     followuptransientfilter = FollowupFilter(
@@ -772,8 +783,8 @@ def too_requests(request, telescope, pi_name):
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
     location = EarthLocation.from_geodetic(
-        too_resource[0].telescope.longitude*u.deg,too_resource[0].telescope.latitude*u.deg,
-        too_resource[0].telescope.elevation*u.m)
+        too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
+        too_resource.telescope.elevation*u.m)
     time = Time(str(nowdate).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
@@ -795,7 +806,7 @@ def too_requests(request, telescope, pi_name):
         'follow_requests': follow_requests,
         'telescope':telescope.replace('_',' '),
         'obs_date':nowdate.isoformat().split('T')[0],
-        'too_resource':too_resource[0],
+        'too_resource':too_resource,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
     return render(request, 'YSE_App/too_requests.html', context)
@@ -919,7 +930,7 @@ def yse_observing_calendar(request):
     tel = Observer(location=location, timezone="UTC")
 
     todaydate = dateutil.parser.parse(datetime.datetime.today().strftime('%Y-%m-%d 00:00:00'))
-    base = todaydate-datetime.timedelta(30)
+    base = todaydate-datetime.timedelta(10)
     date_list = [base + datetime.timedelta(days=x) for x in range(40)]
     obstuple = ()
     colors = ['#dd4b39', 
@@ -1048,13 +1059,17 @@ def observing_night(request, telescope, obs_date, pi_name):
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).filter(resource__telescope__name = telescope.replace('_',' ')).select_related()
     if pi_name != 'None':
         classical_obs_date = classical_obs_date.filter(resource__principal_investigator__name = pi_name)
-    
-    #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).\
-    #    filter(valid_start__lte = classical_obs_date[0].obs_date).\
-    #    filter(valid_stop__gte = classical_obs_date[0].obs_date).select_related()
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date[0].resource).\
-        filter(valid_start__lte = classical_obs_date[0].resource.begin_date_valid).\
-        filter(valid_stop__gte = classical_obs_date[0].resource.end_date_valid).select_related()
+    # evaluate once; an empty result is a 404, not a 500
+    classical_obs_date = classical_obs_date.first()
+    if classical_obs_date is None:
+        raise Http404('No classical observing date found for this telescope/date/PI')
+
+    #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+    #    filter(valid_start__lte = classical_obs_date.obs_date).\
+    #    filter(valid_stop__gte = classical_obs_date.obs_date).select_related()
+    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
+        filter(valid_start__lte = classical_obs_date.resource.begin_date_valid).\
+        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).select_related()
 
     followuptransientfilter = FollowupFilter(request.GET, queryset=follow_requests,prefix=telescope)
         
@@ -1063,9 +1078,9 @@ def observing_night(request, telescope, obs_date, pi_name):
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
     location = EarthLocation.from_geodetic(
-        classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-        classical_obs_date[0].resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date[0].obs_date).split('+')[0], format='iso')
+        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+        classical_obs_date.resource.telescope.elevation*u.m)
+    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
     tel = Observer(location=location, timezone="UTC")
 
     sunset = tel.sun_set_time(time,which="previous").isot.split('T')[-1][:-7]
@@ -1086,7 +1101,7 @@ def observing_night(request, telescope, obs_date, pi_name):
         'follow_requests': follow_requests,
         'telescope':telescope.replace('_',' '),
         'obs_date':obs_date,
-        'classical_obs_date':classical_obs_date[0],
+        'classical_obs_date':classical_obs_date,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
     return render(request, 'YSE_App/observing_night.html', context)

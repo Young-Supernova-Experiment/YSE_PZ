@@ -39,6 +39,24 @@ class MagnitudeColumn(tables.Column):
         return format_magnitude(value)
 
 
+class LastObsDateColumn(tables.Column):
+    """Dashboard 'Last Obs. Date' column rendered as MM/DD/YYYY.
+
+    ``annotate_dashboard_transient_fields`` supplies a raw datetime via a
+    Subquery, whereas ``Transient.recent_magdate()`` (used on un-annotated
+    querysets and on production before the annotation) returns a string that
+    is already ``strftime('%m/%d/%Y')``-formatted. Format the datetime here so
+    both paths render the same way.
+    """
+
+    DATE_FORMAT = '%m/%d/%Y'
+
+    def render(self, value):
+        if hasattr(value, 'strftime'):
+            return value.strftime(self.DATE_FORMAT)
+        return value
+
+
 class TransientTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
@@ -51,7 +69,7 @@ class TransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -165,7 +183,7 @@ class FieldTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -287,7 +305,7 @@ class AdjustFieldTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -410,7 +428,7 @@ class YSETransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -574,7 +592,7 @@ class YSEFullTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -723,7 +741,7 @@ class YSERisingTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -883,7 +901,7 @@ class NewTransientTable(tables.Table):
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
     recent_mag = MagnitudeColumn(accessor='recent_mag',
                                verbose_name='Last Mag',orderable=True)
-    recent_magdate = tables.Column(accessor='recent_magdate',
+    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
@@ -1125,10 +1143,10 @@ class ObsNightFollowupTable(tables.Table):
         #self.base_columns['status'].verbose_name = 'Followup Status'
 
         location = EarthLocation.from_geodetic(
-            classical_obs_date[0].resource.telescope.longitude*u.deg,classical_obs_date[0].resource.telescope.latitude*u.deg,
-            classical_obs_date[0].resource.telescope.elevation*u.m)
+            classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
+            classical_obs_date.resource.telescope.elevation*u.m)
         self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(classical_obs_date[0].obs_date).split()[0])
+        self.tme = Time(str(classical_obs_date.obs_date).split()[0])
 
     def render_rise_time(self, value):
         sc = SkyCoord('%s %s'%(value[0],value[1]),unit=(u.hourangle,u.deg))
@@ -1262,8 +1280,8 @@ class ToOFollowupTable(tables.Table):
         super().__init__(*args, **kwargs)
 
         location = EarthLocation.from_geodetic(
-            too_resource[0].telescope.longitude*u.deg,too_resource[0].telescope.latitude*u.deg,
-            too_resource[0].telescope.elevation*u.m)
+            too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
+            too_resource.telescope.elevation*u.m)
         self.tel = Observer(location=location, timezone="UTC")
         self.tme = Time(str(datetime.datetime.now()).split()[0])
 

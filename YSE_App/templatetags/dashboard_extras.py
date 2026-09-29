@@ -7,7 +7,7 @@ def str_to_num(name):
 	snid_numeric = ''
 	for i in range(len(name)):
 		try:
-			float(n)
+			float(name[i])
 			snid_numeric += str(int(name[i]))
 		except:
 			if i != len(name) - 1:
