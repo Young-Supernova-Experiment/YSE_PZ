@@ -655,6 +655,7 @@ def finder():
 # i.e. a tuple of (datetime, airmass) that ChartJS can plot on the 
 # client 
     
+@login_required
 def airmassplot(request, transient_id, obs_id, telescope_id):
     _load_heavy_plot_stack()
     #font = {'family' : 'normal',
@@ -800,16 +801,19 @@ def view_yse_fields(request):
     return response
 
 
+@login_required
 def salt2plot(request, transient_id, salt2fit):
 
     response = lightcurveplot_detail(request,transient_id,salt2=int(salt2fit))
     return response
 
+@login_required
 def salt2fluxplot(request, transient_id, salt2fit):
 
     response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
     return response
 
+@login_required
 def bazinplot(request, transient_id, bazinfit):
     """Detail light-curve plot with (1) or without (0) the per-band Bazin overlay (#225)."""
     return lightcurveplot_detail(request, transient_id, bazin=int(bazinfit))
@@ -897,6 +901,7 @@ def _add_legend_grid(ax, legend_items, plot_width):
     return ncols
 
 
+@login_required
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
 
@@ -1172,6 +1177,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     return _bokeh_ajax_response(ax, "my plot")
 
 
+@login_required
 def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     _load_heavy_plot_stack()
 
@@ -1491,6 +1497,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     return django.http.HttpResponse(html)
 
 
+@login_required
 def lightcurveplot_flux(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
     import time
@@ -1817,6 +1824,7 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
     return f'<p class="text-muted yse-plot-empty">{text}</p>'
 
 
+@login_required
 def spectrumplot(request, transient_id):
     cache_key = None
     if _plot_html_cache_enabled():
@@ -1828,7 +1836,7 @@ def spectrumplot(request, transient_id):
         if cached_html is not None:
             return django.http.HttpResponse(cached_html)
 
-    transient = Transient.objects.get(pk=transient_id)
+    transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
     ).select_related('instrument').prefetch_related(
@@ -1910,9 +1918,10 @@ def spectrumplot(request, transient_id):
         return _cached_plot_http_response(cache_key, html)
     return django.http.HttpResponse(html)
 
+@login_required
 def spectrumplot_summary(request, transient_id):
     _load_heavy_plot_stack()
-    transient = Transient.objects.get(pk=transient_id)
+    transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True).select_related()
     spectra = {}
 
@@ -2022,6 +2031,7 @@ def spectrumplot_summary(request, transient_id):
 #   time.sleep(5)
 #   return HttpResponse(g.replace('width: 90%','width: 100%'))
 
+@login_required
 def spectrumplotsingle(request, transient_id, spec_id):
     _load_heavy_plot_stack()
     
@@ -2029,7 +2039,7 @@ def spectrumplotsingle(request, transient_id, spec_id):
     #spec_id = request.GET.get('spec_id')
     
     print(transient_id,spec_id)
-    transient = Transient.objects.get(pk=transient_id)
+    transient = get_object_or_404(Transient, pk=transient_id)
     spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True)
     spectrum = spectra.filter(id=spec_id)
     
