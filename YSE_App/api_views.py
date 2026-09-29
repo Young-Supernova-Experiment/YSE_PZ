@@ -458,6 +458,30 @@ class TransientFilter(django_filters.FilterSet):
     dec_lte = django_filters.Filter(field_name="dec", lookup_expr='lte')
     tag_in = django_filters.BaseInFilter(field_name="tags__name")
     name = django_filters.Filter(field_name="name")
+    # Stored photometry statistics (TransientPhotStat, #268): filter and order
+    # on the summary row instead of the raw photometry.
+    peak_mag_lte = django_filters.NumberFilter(field_name="photstat__peak_mag", lookup_expr='lte')
+    peak_mag_gte = django_filters.NumberFilter(field_name="photstat__peak_mag", lookup_expr='gte')
+    last_det_mag_lte = django_filters.NumberFilter(field_name="photstat__last_detected_mag", lookup_expr='lte')
+    last_det_mag_gte = django_filters.NumberFilter(field_name="photstat__last_detected_mag", lookup_expr='gte')
+    last_det_mjd_gte = django_filters.NumberFilter(field_name="photstat__last_detected_mjd", lookup_expr='gte')
+    last_det_mjd_lte = django_filters.NumberFilter(field_name="photstat__last_detected_mjd", lookup_expr='lte')
+    first_det_mjd_gte = django_filters.NumberFilter(field_name="photstat__first_detected_mjd", lookup_expr='gte')
+    num_det_gte = django_filters.NumberFilter(field_name="photstat__num_det_global", lookup_expr='gte')
+    rise_rate_gte = django_filters.NumberFilter(field_name="photstat__rise_rate", lookup_expr='gte')
+    decay_rate_gte = django_filters.NumberFilter(field_name="photstat__decay_rate", lookup_expr='gte')
+    ordering = django_filters.OrderingFilter(
+        fields=(
+            ('created_date', 'created_date'), ('modified_date', 'modified_date'),
+            ('disc_date', 'disc_date'), ('name', 'name'),
+            ('photstat__peak_mag', 'peak_mag'), ('photstat__peak_mjd', 'peak_mjd'),
+            ('photstat__last_detected_mag', 'last_det_mag'),
+            ('photstat__last_detected_mjd', 'last_det_mjd'),
+            ('photstat__first_detected_mjd', 'first_det_mjd'),
+            ('photstat__num_det_global', 'num_det'),
+            ('photstat__rise_rate', 'rise_rate'), ('photstat__decay_rate', 'decay_rate'),
+        )
+    )
 
     class Meta:
         model = Transient
@@ -475,6 +499,49 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     def get_queryset(self):
         qs = Transient.objects.all()
         return filter_transients_by_user_access(self.request.user, qs)
+
+### `TransientPhotStat` (per-transient photometry statistics, #268) ###
+class TransientPhotStatFilter(django_filters.FilterSet):
+    transient_name = django_filters.CharFilter(field_name="transient__name")
+    peak_mag_lte = django_filters.NumberFilter(field_name="peak_mag", lookup_expr='lte')
+    peak_mag_gte = django_filters.NumberFilter(field_name="peak_mag", lookup_expr='gte')
+    last_det_mag_lte = django_filters.NumberFilter(field_name="last_detected_mag", lookup_expr='lte')
+    last_det_mag_gte = django_filters.NumberFilter(field_name="last_detected_mag", lookup_expr='gte')
+    last_det_mjd_gte = django_filters.NumberFilter(field_name="last_detected_mjd", lookup_expr='gte')
+    last_det_mjd_lte = django_filters.NumberFilter(field_name="last_detected_mjd", lookup_expr='lte')
+    first_det_mjd_gte = django_filters.NumberFilter(field_name="first_detected_mjd", lookup_expr='gte')
+    first_det_mjd_lte = django_filters.NumberFilter(field_name="first_detected_mjd", lookup_expr='lte')
+    num_det_gte = django_filters.NumberFilter(field_name="num_det_global", lookup_expr='gte')
+    rise_rate_gte = django_filters.NumberFilter(field_name="rise_rate", lookup_expr='gte')
+    decay_rate_gte = django_filters.NumberFilter(field_name="decay_rate", lookup_expr='gte')
+    ordering = django_filters.OrderingFilter(
+        fields=(
+            'peak_mag', 'peak_mjd', 'last_detected_mag', 'last_detected_mjd',
+            'first_detected_mjd', 'num_det_global', 'num_obs_global',
+            'rise_rate', 'decay_rate', 'last_updated', 'deepest_limit',
+        )
+    )
+
+    class Meta:
+        model = TransientPhotStat
+        fields = ('transient_name',)
+
+
+class TransientPhotStatViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ``/api/transientphotstats/`` rows for the transients the user may see."""
+    serializer_class = TransientPhotStatSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filter_class = TransientPhotStatFilter
+
+    def get_queryset(self):
+        allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
+        return (
+            TransientPhotStat.objects.filter(transient__in=allowed.values('pk'))
+            .select_related('transient', 'first_detected_band', 'last_detected_band', 'peak_band')
+            .order_by('-last_updated', '-pk')
+        )
+
 
 class AlternateTransientNamesViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = AlternateTransientNames.objects.all()

@@ -156,5 +156,7 @@ check the `CronJobLog` rows of
 Every one of these queries, and the dashboard's own `recent_mag` / `recent_magdate` annotations, rebuilds a per-transient
 summary (latest point, brightest point, first/last detection, point count) from the raw photometry table. The
 structural fix is a summary table maintained on upload, like SkyPortal's `PhotStat`: then each query becomes a join on
-a 10^5-row table and the two recent-photometry subqueries per dashboard row disappear. That is tracked as a
-SkyPortal-parity prerequisite in #270 and is not part of this change.
+a 10^5-row table and the two recent-photometry subqueries per dashboard row disappear. The table exists since #268
+(`YSE_App_transientphotstat`, one row per transient, kept current by signals and the ingest paths, backfilled with
+`manage.py rebuild_photstats`; see `docs/photstat.md`). Switching the dashboard columns and the saved queries to it is
+#270 / #331.

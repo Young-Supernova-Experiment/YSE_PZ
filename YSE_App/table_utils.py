@@ -301,6 +301,22 @@ class LastObsDateColumn(tables.Column):
         return value
 
 
+class PeakMagColumn(MagnitudeColumn):
+    """Brightest stored detection (``TransientPhotStat.peak_mag``, #268).
+
+    The value comes from the ``peak_mag`` annotation ``annotate_peak_mag``
+    adds (a LEFT JOIN on the one-row-per-transient stat table, no extra
+    query); a transient without a stat row shows the empty default.
+    """
+
+
+def annotate_peak_mag(qs):
+    """``peak_mag`` from the stored photometry statistics, once per queryset."""
+    if 'peak_mag' in qs.query.annotations:
+        return qs
+    return qs.annotate(peak_mag=F('photstat__peak_mag'))
+
+
 class TransientTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
@@ -315,6 +331,8 @@ class TransientTable(tables.Table):
                                verbose_name='Last Mag',orderable=True)
     recent_magdate = LastObsDateColumn(accessor='recent_magdate',
                                verbose_name='Last Obs. Date',orderable=True)
+    peak_mag = PeakMagColumn(accessor='peak_mag',
+                             verbose_name='Peak Mag',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
 
@@ -345,10 +363,16 @@ class TransientTable(tables.Table):
                                           verbose_name='Status',orderable=True,order_by='status')
 
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, data, *args, **kwargs):
+        if isinstance(data, QuerySet):
+            data = annotate_peak_mag(data)
+        super().__init__(data, *args, **kwargs)
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
+
+    def order_peak_mag(self, queryset, is_descending):
+        queryset = annotate_peak_mag(queryset)
+        return (stable_order_by(queryset, 'peak_mag', is_descending), True)
 
 
     def order_best_spec_class(self, queryset, is_descending):
@@ -383,7 +407,7 @@ class TransientTable(tables.Table):
 
     class Meta:
         model = Transient
-        fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','mw_ebv',
+        fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','peak_mag','mw_ebv',
                   'obs_group','best_spec_class','best_redshift','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
