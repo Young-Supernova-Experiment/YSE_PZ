@@ -50,6 +50,7 @@ from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
+from YSE_App.services import photstat
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -459,6 +460,19 @@ def add_transient(request):
                     transient=dbt)
 
     # add photometry, spectra, hosts
+    with photstat.deferred_updates():
+        _add_transient_data_stage(transient_data, user)
+
+    return_dict = {"message":"success"}
+    return JsonResponse(return_dict)
+
+
+def _add_transient_data_stage(transient_data, user):
+    """Photometry / spectra / host stage of ``add_transient``.
+
+    Runs inside ``photstat.deferred_updates()`` so each transient's stat row
+    is recomputed once after the bulk inserts (which fire no signals).
+    """
     phot_entries = []
     for transientlistkey in transient_data.keys():
         if transientlistkey == 'noupdatestatus': continue
@@ -507,11 +521,9 @@ def add_transient(request):
                 transient['transientphotometry'],dbtransient,user,do_photdata=True)
             for t in transientphot:
                 photdata_entries.append(t)
+            photstat.schedule_recompute(dbtransient.id)
     
     TransientPhotometry.objects.bulk_create(photdata_entries)
-    
-    return_dict = {"message":"success"}
-    return JsonResponse(return_dict)
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -1049,7 +1061,16 @@ def add_transient_phot(request):
 
     existingphot = TransientPhotData.objects.filter(photometry=transientphot)
 
-    # loop through new, comp against existing
+    # loop through new, comp against existing; one photstat recompute at the end
+    with photstat.deferred_updates():
+        _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user)
+
+    return_dict = {"message": "success"}
+
+    return JsonResponse(return_dict)
+
+
+def _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user):
     for k in phot_data.keys():
         if k == 'header' or k == 'transient' or k == 'photheader': continue
         p = phot_data[k]
@@ -1116,10 +1137,6 @@ def add_transient_phot(request):
                 # Set operator needs a list...
                 tpd.data_quality.set([dq])
                 tpd.save()
-
-    return_dict = {"message": "success"}
-
-    return JsonResponse(return_dict)
 
 @csrf_exempt
 @login_or_basic_auth_required

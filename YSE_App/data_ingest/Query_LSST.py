@@ -412,6 +412,14 @@ def store_points(transient, points: Iterable[dict], *, user, obs_group, instrume
     seen = existing_mjds_by_band(photometry)
     bad_dq = None
     created = 0
+    from YSE_App.services import photstat
+    with photstat.deferred_updates():  # one TransientPhotStat recompute per transient (#268)
+        created = _store_point_rows(points, photometry, bands, cfg, seen, bad_dq, user)
+    return created
+
+
+def _store_point_rows(points, photometry, bands, cfg, seen, bad_dq, user):
+    created = 0
     for p in points:
         band = bands[p["band"]]
         mjds = seen.setdefault(band.id, [])
