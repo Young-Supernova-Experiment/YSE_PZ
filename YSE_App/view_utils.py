@@ -1613,6 +1613,24 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     g = file_html(ax,CDN,"my plot")
     return HttpResponse(g.replace('width: 90%','width: 100%'))
 
+def _spectrum_plot_empty_message(n_spectra_without_points):
+    """Empty-state HTML for ``spectrumplot``.
+
+    The Summary-tab toolbar counts TransientSpectrum rows while the plot needs
+    TransientSpecData points, so say which of the two is missing (#208).
+    """
+    if n_spectra_without_points == 0:
+        text = 'No spectrum data on file for this transient.'
+    elif n_spectra_without_points == 1:
+        text = '1 spectrum on file, but it has no wavelength/flux points to plot.'
+    else:
+        text = (
+            f'{n_spectra_without_points} spectra on file, but none has '
+            'wavelength/flux points to plot.'
+        )
+    return f'<p class="text-muted yse-plot-empty">{text}</p>'
+
+
 def spectrumplot(request, transient_id):
     _load_heavy_plot_stack()
 
@@ -1634,11 +1652,13 @@ def spectrumplot(request, transient_id):
     )
     
     spectra = []
+    n_without_points = 0
     for spectrum in dbspectra:
         spec_data = list(spectrum.transientspecdata_set.all())
         wave = np.array([s.wavelength for s in spec_data])
         flux = np.array([s.flux for s in spec_data])
         if wave.size == 0 or flux.size == 0:
+            n_without_points += 1
             continue
         
         sort_idx = np.argsort(wave)
@@ -1656,9 +1676,7 @@ def spectrumplot(request, transient_id):
             'label': f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}',
         })
     if not spectra:
-        return django.http.HttpResponse(
-            '<p class="text-muted yse-plot-empty">No spectrum data on file for this transient.</p>'
-        )
+        return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
     
     # Process spectra and compute offsets
     dates = np.array([spec['mjd'] for spec in spectra])
