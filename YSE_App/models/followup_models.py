@@ -70,7 +70,12 @@ class TransientFollowupRequest(BaseModel):
 	class Meta:
 		ordering = ['requested_at', 'id']
 		indexes = [
-			models.Index(fields=['followup', 'requestor', '-requested_at']),
+			# Name pinned to the index created by migration 0008 so the
+			# autodetector does not try to rename it.
+			models.Index(
+				fields=['followup', 'requestor', '-requested_at'],
+				name='YSE_App_tra_followu_7c9a1e_idx',
+			),
 		]
 
 	followup = models.ForeignKey(
