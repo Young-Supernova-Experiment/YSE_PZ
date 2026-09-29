@@ -25,3 +25,4 @@ from YSE_App.serializers.candidate_serializers import *
 from YSE_App.serializers.allocation_serializers import *
 from YSE_App.serializers.collaboration_serializers import *
 from YSE_App.serializers.sharing_serializers import *
+from YSE_App.serializers.analysis_serializers import *

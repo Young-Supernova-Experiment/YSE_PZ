@@ -18,6 +18,8 @@ import YSE_App.services.facility_requests  # noqa: E402,F401
 import YSE_App.sharing.handlers  # noqa: E402,F401
 from YSE_App.models.transient_models import Transient
 from YSE_App.sharing.autopublish import on_transient_saved
+# ... and the analysis runner (#313) for in-process fits and webhook dispatch.
+import YSE_App.analysis.runners  # noqa: E402,F401
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 

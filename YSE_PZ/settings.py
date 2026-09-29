@@ -476,6 +476,13 @@ FACILITY_API_MODULES = [
 ]
 FACILITY_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'FACILITY_HTTP_TIMEOUT_SECONDS', fallback=30)
 
+# Analysis services (#312; docs/analysis-services.md): webhook POST timeout, size
+# cap per result file and files per run. Result files live under
+# MEDIA_ROOT/service_runs/<run uuid>/ and are served by an access-checked view.
+ANALYSIS_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'ANALYSIS_HTTP_TIMEOUT_SECONDS', fallback=30)
+ANALYSIS_MAX_ATTACHMENT_BYTES = config.getint('site_settings', 'ANALYSIS_MAX_ATTACHMENT_BYTES', fallback=25 * 1024 * 1024)
+ANALYSIS_MAX_FILES_PER_RUN = config.getint('site_settings', 'ANALYSIS_MAX_FILES_PER_RUN', fallback=20)
+
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
 # (the senders it replaced, alert.py and the comment-mention emails, sent
 # unconditionally); NOTIFICATION_EMAIL_ENABLED in settings.ini or env

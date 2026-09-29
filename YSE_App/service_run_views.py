@@ -11,6 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
 from YSE_App.models import ExternalService, ExternalServiceRun
+from YSE_App.services import analysis_services as analysis_svc
 from YSE_App.services import external_services as svc
 
 PAGE_SIZE = 100
@@ -77,10 +78,7 @@ def external_service_run_callback(request, run_uuid):
         run = ExternalServiceRun.objects.select_related("service").get(uuid=run_uuid)
     except (ExternalServiceRun.DoesNotExist, ValueError):
         raise Http404("unknown run")
-    try:
-        body = json.loads(request.body.decode("utf-8") or "{}")
-    except (ValueError, UnicodeDecodeError):
-        body = None
+    body, files = _callback_body(request)
     token = _presented_token(request, body)
     if not svc.verify_callback_token(run, token):
         return JsonResponse({"error": "invalid or missing run token"}, status=403)
@@ -100,6 +98,15 @@ def external_service_run_callback(request, run_uuid):
     result = body.get("result")
     if result is not None and not isinstance(result, (dict, list)):
         return JsonResponse({"error": "result must be a JSON object or array"}, status=400)
+    if run.is_finished:
+        return JsonResponse({"error": "run is already %s" % run.status}, status=409)
+    # Analysis services (#313) may attach plots / files: JSON base64 entries or multipart uploads.
+    stored, attachment_errors = analysis_svc.store_callback_attachments(run, body, files)
+    if stored and isinstance(result, dict):
+        result = dict(result)
+        result["_files"] = [f.name for f in stored]
+    elif stored and result is None:
+        result = {"_files": [f.name for f in stored]}
     try:
         svc.record_completion(
             run, status,
@@ -110,4 +117,30 @@ def external_service_run_callback(request, run_uuid):
         )
     except svc.InvalidTransition as exc:
         return JsonResponse({"error": str(exc)}, status=409)
-    return JsonResponse({"uuid": str(run.uuid), "status": run.status})
+    reply = {"uuid": str(run.uuid), "status": run.status}
+    if stored:
+        reply["files"] = [f.name for f in stored]
+    if attachment_errors:
+        reply["attachment_errors"] = attachment_errors
+    return JsonResponse(reply)
+
+
+def _callback_body(request):
+    """``(body dict or None, uploaded files)``: JSON, or multipart/form-data with a JSON ``result`` field."""
+    content_type = (request.content_type or "").lower()
+    if content_type.startswith("multipart/form-data") or content_type.startswith("application/x-www-form-urlencoded"):
+        body = {}
+        for key in request.POST:
+            value = request.POST.get(key)
+            if key in ("result", "plots", "files", "kinds", "meta") and isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    return None, None
+            body[key] = value
+        return body, (request.FILES if request.FILES else None)
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        body = None
+    return body, None
