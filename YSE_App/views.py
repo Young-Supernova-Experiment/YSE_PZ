@@ -841,17 +841,19 @@ def _yse_home_defer_enabled():
 
 def _yse_home_queryset(prefix):
     """Base queryset of one yse_home table, before the per-row annotations."""
+    # '-pk' breaks disc_date ties (NULL or same-day) so a page is the same set of
+    # rows on every database, as the personal dashboard already orders.
     yse = Transient.objects.filter(tags__name='YSE')
     if prefix == 'yse':
-        return yse.filter(~Q(status__name='Ignore')).order_by('-disc_date')
+        return yse.filter(~Q(status__name='Ignore')).order_by('-disc_date', '-pk')
     if prefix == 'yse_follow':
-        return yse.order_by('-disc_date').filter(Q(status__name='FollowupRequested') | Q(status__name='Following'))
+        return yse.order_by('-disc_date', '-pk').filter(Q(status__name='FollowupRequested') | Q(status__name='Following'))
     if prefix == 'yserise':
         return rising_transient_queryset(ndays=7).filter(tags__name='YSE')
     if prefix == 'ysefastrise':
         return fastrising_transient_queryset(ndays=7).filter(tags__name='YSE')
     if prefix == 'yseztf':
-        return Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date')
+        return Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date', '-pk')
     raise KeyError(prefix)
 
 
