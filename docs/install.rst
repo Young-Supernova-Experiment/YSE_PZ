@@ -55,8 +55,9 @@ Keys under ``[site_settings]`` worth knowing about before a production deploy
 * ``ALLOWED_HOSTS`` -- comma-separated hosts the stack answers for, e.g.
   ``ziggy.ucolick.org,localhost,127.0.0.1`` (or ``DJANGO_ALLOWED_HOSTS``).
   Absent means every host is accepted.
-* ``EXPLORER_QUERY_MAX_EXECUTION_MS`` -- MySQL time cap for saved Explorer SQL
-  run on a dashboard cache miss (default 20000; 0 disables).
+* ``EXPLORER_QUERY_MAX_EXECUTION_MS`` -- MySQL time cap (ms) for statements on
+  the explorer connection (saved dashboard SQL, SQL Explorer UI). Default 0 = no
+  cap; recommended 20000 once the saved dashboard queries are rewritten (#233).
 * ``[database] SSL_DISABLED`` -- ``True`` (default) keeps TLS off for the
   default MySQL connection; set ``False`` for a remote server that requires it.
 

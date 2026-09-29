@@ -532,29 +532,43 @@
     })();
 
 {% if transient_detail_defer %}
-        function yseUpdateArchiveTabLabel($tab, url, emptyLabel) {
+        /* Tab label: "No HST" only when the archive answered "nothing here".
+           A timeout or error (server-side `error`, or the request failing /
+           timing out client-side) is NOT "no data": say the lookup failed and
+           leave the tab usable so opening it retries. */
+        function yseMarkArchiveTabUnknown($tab, failLabel, message) {
+            $tab.text(failLabel);
+            $tab.attr('title', message || 'Archive lookup failed; open the tab to retry.');
+        }
+        function yseUpdateArchiveTabLabel($tab, url, emptyLabel, failLabel) {
             if (!$tab.length) {
                 return;
             }
-            $.ajax({ url: url, dataType: 'json', timeout: 10000 })
+            $.ajax({ url: url, dataType: 'json', timeout: 15000 })
                 .done(function(json) {
-                    if (!json || !json.has_data) {
+                    if (!json || json.error || json.has_data === null || json.has_data === undefined) {
+                        yseMarkArchiveTabUnknown($tab, failLabel, json && json.message);
+                    } else if (!json.has_data) {
                         $tab.text(emptyLabel);
                     }
                 })
-                .fail(function() {
-                    $tab.text(emptyLabel);
+                .fail(function(xhr, status) {
+                    yseMarkArchiveTabUnknown($tab, failLabel,
+                        'Archive lookup ' + (status === 'timeout' ? 'timed out' : 'failed') +
+                        '; open the tab to retry.');
                 });
         }
         yseUpdateArchiveTabLabel(
             $("#hst_tab_header"),
             "{% url 'get_hst_status' transient.id %}",
-            "No HST"
+            "No HST",
+            "HST (lookup failed)"
         );
         yseUpdateArchiveTabLabel(
             $("#chandra_tab_header"),
             "{% url 'get_chandra_status' transient.id %}",
-            "No Chandra"
+            "No Chandra",
+            "Chandra (lookup failed)"
         );
 
         var yseDetailFragmentsLoaded = {};
@@ -735,6 +749,11 @@
                 var htmltextfull = "<tr><td>" + json.obsdate[ju] + "</td><td>" + json.filters[ju] + "</td><td>" + json.inst[ju] + "</td><td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td></tr>";
                 $(rows_full).append(htmltextfull);
             }
+        }).fail(function (xhr) {
+            var message = (xhr && xhr.responseJSON && xhr.responseJSON.message) ||
+                "HST archive (MAST) lookup failed.";
+            $("#hst_tab_header").text("HST (lookup failed)").attr('title', message);
+            $("#hst_image_list").html('<tr><td colspan="4" class="text-warning">' + message + ' Reload the page to retry.</td></tr>');
         });
         $.get("{% url 'get_chandra_image' transient.id %}").done(function (json) {
             var rows = $("#chandra_image");
@@ -2031,17 +2050,18 @@
         });
 
         function loadHstImages() {
+            var rows_full = $("#hst_image_list")
+            var rows_tab = $("#hst_tab_header")
+            rows_full.html('<tr><td colspan="4" class="text-muted"><i class="fa fa-spinner fa-spin"></i> Querying the HST archive (MAST)…</td></tr>')
             $.get("{% url 'get_hst_image' transient.id %}").done(function(json){
                 var rows = $("#hst_image")
-                var rows_full = $("#hst_image_list")
-                var rows_tab = $("#hst_tab_header")
                 var htmltext = "<p class=\"text-muted\">No HST Images available</p>"
+                rows_full.empty()
                 if (json.jpegurl[0]) {
                     var htmltext = "<img src=\"" + json.jpegurl[0] + "\" style='width:240px' alt=\"\" /></a>"
-
+                    rows_tab.text("HST Data").removeAttr('title')
                 } else {
-                    var headertext = "No "
-                    $(rows_tab).prepend(headertext)
+                    rows_tab.text("No HST").removeAttr('title')
                 }
                 $(rows).append(htmltext)
 
@@ -2054,8 +2074,22 @@
                     "</tr>"
                     $(rows_full).append(htmltextfull)
                 }
+            }).fail(function(xhr){
+                /* MAST unreachable or slow: report it and offer a retry
+                   rather than leaving the table empty under a "No HST" label. */
+                var message = (xhr && xhr.responseJSON && xhr.responseJSON.message) ||
+                    "HST archive (MAST) lookup failed.";
+                yseHstImagesLoaded = false;
+                rows_tab.text("HST (lookup failed)").attr('title', message)
+                rows_full.html('<tr><td colspan="4" class="text-warning">' + message +
+                    ' <a href="#" class="yse-hst-retry">Retry</a></td></tr>')
             });
         }
+        $(document).on('click', '.yse-hst-retry', function(event) {
+            event.preventDefault();
+            yseHstImagesLoaded = true;
+            loadHstImages();
+        });
 
         function loadChandraImages() {
             $.get("{% url 'get_chandra_image' transient.id %}").done(function(json){

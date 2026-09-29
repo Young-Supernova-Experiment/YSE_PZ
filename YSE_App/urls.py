@@ -31,6 +31,11 @@ urlpatterns = [
         name='dashboard_section',
     ),
     re_path(r'^yse_home/$', views.yse_home, name='yse_home'),
+    re_path(
+        r'^yse_home/section/(?P<section_key>[a-zA-Z_]+)/$',
+        views.yse_home_section,
+        name='yse_home_section',
+    ),
     re_path(r'^personaldashboard/$', views.personaldashboard, name='personaldashboard'),
     re_path(
         r'^personaldashboard/section/(?P<user_query_id>[0-9]+)/$',

@@ -13,7 +13,14 @@ from django.db.models.query import QuerySet
 from .data import PhotometryService
 import time
 import django_filters
-from astropy.coordinates import get_moon, SkyCoord
+from astropy.coordinates import SkyCoord
+from YSE_App.services.night_astro import (
+    cached_rise_set,
+    moon_position,
+    observer_for,
+    rise_set_cache_key,
+    store_rise_set,
+)
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.dates import DateFormatter
@@ -189,25 +196,28 @@ class TargetVisibilityMixin:
     Rise/Set/Moon Angle columns for one observer and one night.
 
     The moon position is computed once per table (it was recomputed per row)
-    and rise/set times are solved for every target on the current page in one
-    vectorised astroplan call the first time a row asks, then served from a
-    dict keyed by (ra, dec) string. Values are formatted exactly as before.
+    and rise/set times and moon separations are solved for every target on the
+    current page in one vectorised astroplan call the first time a row asks,
+    then served from a dict keyed by (ra, dec) string. That dict is also kept in the Django cache
+    per (telescope, night), so a repeat load of the same night (or the same
+    targets on another page) does no astroplan work at all. Values are
+    formatted exactly as before.
     """
 
     horizon = 18 * u.deg
 
     def _set_observer(self, telescope, obs_date):
-        location = EarthLocation.from_geodetic(
-            telescope.longitude * u.deg, telescope.latitude * u.deg, telescope.elevation * u.m)
-        self.tel = Observer(location=location, timezone="UTC")
-        self.tme = Time(str(obs_date).split()[0])
+        self.tel = observer_for(telescope)
+        date_str = str(obs_date).split()[0]
+        self.tme = Time(date_str)
         self._moon = None
-        self._rise_set = {}
+        self._rise_set_key = rise_set_cache_key(telescope, date_str, self.horizon.to_value(u.deg))
+        self._rise_set = cached_rise_set(self._rise_set_key)
 
     @property
     def moon(self):
         if self._moon is None:
-            self._moon = get_moon(self.tme)
+            self._moon = moon_position(self.tme)
         return self._moon
 
     @staticmethod
@@ -237,8 +247,12 @@ class TargetVisibilityMixin:
         rise = self.tel.target_rise_time(self.tme, sc, horizon=self.horizon, which="previous")
         sett = self.tel.target_set_time(self.tme, sc, horizon=self.horizon, which="previous")
         rise, sett = rise.reshape(-1), sett.reshape(-1)
+        moon_angle = np.atleast_1d(sc.separation(self.moon).deg)
         for i, key in enumerate(keys):
-            self._rise_set[key] = (self._time_str(rise[i]), self._time_str(sett[i]))
+            self._rise_set[key] = (
+                self._time_str(rise[i]), self._time_str(sett[i]), '%.1f' % moon_angle[i]
+            )
+        store_rise_set(self._rise_set_key, self._rise_set)
 
     def _rise_set_for(self, value, bound_column):
         key = (value[0], value[1])
@@ -257,9 +271,8 @@ class TargetVisibilityMixin:
     def render_set_time(self, value, bound_column):
         return self._rise_set_for(value, bound_column)[1]
 
-    def render_moon_angle(self, value):
-        sc = SkyCoord('%s %s' % (value[0], value[1]), unit=(u.hourangle, u.deg))
-        return '%.1f' % sc.separation(self.moon).deg
+    def render_moon_angle(self, value, bound_column):
+        return self._rise_set_for(value, bound_column)[2]
 
 
 class MagnitudeColumn(tables.Column):
@@ -1436,9 +1449,11 @@ class YSEObsNightTable(TargetVisibilityMixin, tables.Table):
     #									  verbose_name='Followup Status',orderable=True,order_by='status')
 
 
-    def __init__(self,*args, obs_date=None, **kwargs):
+    def __init__(self,*args, obs_date=None, telescope=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self._set_observer(Telescope.objects.get(name='Pan-STARRS1'), obs_date)
+        if telescope is None:  # the view already has it; look it up only when called bare
+            telescope = Telescope.objects.get(name='Pan-STARRS1')
+        self._set_observer(telescope, obs_date)
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
@@ -1463,16 +1478,61 @@ class YSEObsNightTable(TargetVisibilityMixin, tables.Table):
             "order": [[ 2, "desc" ]],
         }
 
+class PageFirstQuerySet(QuerySet):
+    """
+    Annotated table queryset whose page slice selects the page's pks first.
+
+    ``qs[a:b]`` on the dashboard queryset used to be one statement carrying the
+    select_related joins and the two recent-photometry subqueries. MySQL 8 then
+    hash-joins the whole status bucket into a temporary table before it can
+    ORDER BY ... LIMIT, and evaluates both dependent subqueries for every
+    candidate row (loops = bucket size: 170 ms for a 2.7k-row bucket, growing
+    with the bucket). Slicing here runs a bare ``SELECT pk ... ORDER BY ... LIMIT``
+    (no joins, no subqueries: sorted on the base table, or on an index once P8
+    lands) and then loads the annotated, joined rows for those pks only, so the
+    subqueries run once per page row. Two cheap statements instead of one that
+    scales with the bucket. Everything else (count, values, further filtering)
+    is a plain QuerySet. See #256.
+    """
+
+    @classmethod
+    def wrap(cls, qs):
+        """A clone of ``qs`` of this class, keeping its prefetch lookups and other state."""
+        if isinstance(qs, cls):
+            return qs
+        clone = qs._chain()
+        clone.__class__ = cls
+        return clone
+
+    def __getitem__(self, k):
+        if (
+            isinstance(k, slice)
+            and self._fields is None  # not a values()/values_list() queryset
+            and not self.query.is_sliced
+            and self.query.annotations
+            and (k.start or 0) >= 0
+            and k.stop is not None
+            and k.step is None
+        ):
+            ids = list(self.values_list('pk', flat=True)[k])
+            return self.filter(pk__in=ids)
+        return super().__getitem__(k)
+
+
 def annotate_dashboard_transient_fields(qs):
     """
     Prefetch FKs and annotate recent photometry for dashboard tables.
 
     Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
+    Returns a PageFirstQuerySet so django-tables2's page slice does not evaluate the
+    subqueries for every row of the bucket (see PageFirstQuerySet).
     """
     recent_mag, recent_magdate = _recent_phot_subqueries('pk')
-    return qs.select_related('status', 'host', 'obs_group').annotate(
-        recent_mag=recent_mag,
-        recent_magdate=recent_magdate,
+    return PageFirstQuerySet.wrap(
+        qs.select_related('status', 'host', 'obs_group').annotate(
+            recent_mag=recent_mag,
+            recent_magdate=recent_magdate,
+        )
     )
 
 
