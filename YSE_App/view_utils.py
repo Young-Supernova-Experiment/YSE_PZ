@@ -2359,50 +2359,137 @@ def get_chandra_status(request, transient_id):
     )
 
 
+@login_required
+def get_jwst_status(request, transient_id):
+    """Lightweight JWST availability for the tab label (count only)."""
+    try:
+        t = Transient.objects.get(pk=transient_id)
+    except Transient.DoesNotExist:
+        raise Http404("Transient id does not exist")
+
+    def _lookup():
+        from . import common
+        jwst = common.mast_query.jwstObservations(t.ra, t.dec)
+        jwst.query()
+        return int(jwst.count)
+
+    return JsonResponse(_archive_status_payload(f'jwst_status_v1_{transient_id}', _lookup, 'JWST'))
+
+
+# The tab body (full observation list) gets longer than the label lookup: the
+# user asked for it by opening the tab, and the page offers Retry on failure.
+ARCHIVE_TABLE_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_TABLE_TIMEOUT', '45'))
+
+
+def _archive_table_response(transient_id, archive_name, lookup, empty_payload, cache_key=None):
+    """JSON for an archive tab body (HST images, JWST observations).
+
+    ``lookup`` runs in a worker with a wall-clock timeout and returns the
+    payload dict. On a MAST failure the answer is HTTP 502 (timeout: 504)
+    carrying ``error`` and ``message`` plus the empty payload shape, so the
+    page can say "lookup failed" with a Retry link instead of swallowing a
+    500. Successful answers are cached for an hour under ``cache_key``.
+    """
+    if cache_key:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return JsonResponse(cached)
+    started = datetime.datetime.now()
+    try:
+        payload = _archive_status_with_timeout(lookup, timeout_seconds=ARCHIVE_TABLE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        logger.warning('%s lookup failed for transient %s: %s', archive_name, transient_id, exc)
+        body = dict(empty_payload)
+        body.update({
+            'error': 'lookup_failed',
+            'message': f'{archive_name} archive (MAST) lookup failed; retry in a moment.',
+        })
+        return JsonResponse(body, status=502)
+    if payload is None:
+        logger.warning('%s lookup timed out for transient %s after %s s',
+                       archive_name, transient_id, ARCHIVE_TABLE_TIMEOUT_SECONDS)
+        body = dict(empty_payload)
+        body.update({
+            'error': 'timeout', 'timed_out': True,
+            'message': (f'{archive_name} archive (MAST) did not answer within '
+                        f'{ARCHIVE_TABLE_TIMEOUT_SECONDS} s; retry in a moment.'),
+        })
+        return JsonResponse(body, status=504)
+    logger.debug('%s lookup for transient %s took %.1f s', archive_name, transient_id,
+                 (datetime.datetime.now() - started).total_seconds())
+    if cache_key:
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_CACHE_SECONDS)
+    return JsonResponse(payload)
+
+
+HST_IMAGE_EMPTY = {"jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []}
+
+
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
     except Transient.DoesNotExist:
         raise Http404("Transient id does not exist")
 
-    startTime = datetime.datetime.now()
-    from . import common
-    hst=common.mast_query.hstImages(t.ra,t.dec,'Object')
-    try:
+    def _lookup():
+        from . import common
+        hst = common.mast_query.hstImages(t.ra, t.dec, 'Object')
         hst.getObstable()
         hst.getJPGurl()
-    except Exception as exc:
-        # MAST unreachable/slow: say so (HTTP 502) instead of a 500 the page
-        # silently swallows, so the tab can offer a retry.
-        logger.warning('HST image lookup failed for transient %s: %s', transient_id, exc)
-        return JsonResponse(
-            {"error": "lookup_failed",
-             "message": "HST archive (MAST) lookup failed; retry in a moment.",
-             "jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []},
-            status=502,
-        )
-    print("I found",hst.Nimages,"HST images of",hst.object,"located at coordinates",hst.ra,hst.dec)
-    print("The cut out images have the following URLs:")
-    fitsurllist = []
-    for jpg,i in zip(hst.jpglist,range(len(hst.jpglist))):
-        print(jpg)
-        fitsurllist += ["https://hla.stsci.edu/cgi-bin/getdata.cgi?config=ops&amp;dataset=%s"%str(hst.obstable["obs_id"][i]).lower()]
-    print("Run time was: ",(datetime.datetime.now() - startTime).total_seconds(),"seconds")
+        if not len(hst.jpglist):
+            return dict(HST_IMAGE_EMPTY)
+        fitsurllist = [
+            "https://hla.stsci.edu/cgi-bin/getdata.cgi?config=ops&amp;dataset=%s" % str(obs_id).lower()
+            for obs_id in hst.obstable["obs_id"][:len(hst.jpglist)]
+        ]
+        return {"jpegurl": list(hst.jpglist),
+                "fitsurl": fitsurllist,
+                "obsdate": list(Time(hst.obstable["t_min"], format='mjd').iso),
+                "filters": list(hst.obstable["filters"]),
+                "inst": list(hst.obstable["instrument_name"])}
 
-    if len(hst.jpglist):
-        jpegurldict = {"jpegurl":hst.jpglist,
-                       "fitsurl":fitsurllist,#list(hst.obstable["dataURL"]),
-                       "obsdate":list(Time(hst.obstable["t_min"],format='mjd').iso), #,out_subfmt='date'
-                       "filters":list(hst.obstable["filters"]),
-                       "inst":list(hst.obstable["instrument_name"])}
-    else:
-        jpegurldict = {"jpegurl":[],
-                       "fitsurl":[],
-                       "obsdate":[],
-                       "filters":[],
-                       "inst":[]}
+    return _archive_table_response(transient_id, 'HST', _lookup, HST_IMAGE_EMPTY)
 
-    return(JsonResponse(jpegurldict))
+
+JWST_OBSERVATION_FIELDS = ('obs_id', 'inst', 'filters', 'obsdate', 'mjd', 'exptime', 'program',
+                           'pi', 'target', 'product', 'calib_level', 'previewurl', 'dataurl',
+                           'portalurl')
+
+
+@login_required
+def get_jwst_observations(request, transient_id):
+    """JWST observations at the transient position for the JWST tab body.
+
+    Payload: ``{"count": N, "rows": [{obs_id, inst, filters, obsdate, mjd,
+    exptime, program, pi, target, product, calib_level, previewurl, dataurl,
+    portalurl}]}``.
+    """
+    try:
+        t = Transient.objects.get(pk=transient_id)
+    except Transient.DoesNotExist:
+        raise Http404("Transient id does not exist")
+
+    def _lookup():
+        from . import common
+        jwst = common.mast_query.jwstObservations(t.ra, t.dec)
+        rows = [
+            {
+                'obs_id': r.get('obs_id'), 'inst': r.get('instrument_name'),
+                'filters': r.get('filters'), 'obsdate': r.get('obsdate'), 'mjd': r.get('t_min'),
+                'exptime': r.get('t_exptime'), 'program': r.get('proposal_id'),
+                'pi': r.get('proposal_pi'), 'target': r.get('target_name'),
+                'product': r.get('dataproduct_type'), 'calib_level': r.get('calib_level'),
+                'previewurl': r.get('previewurl'), 'dataurl': r.get('dataurl'),
+                'portalurl': r.get('portalurl'),
+            }
+            for r in jwst.query()
+        ]
+        return {'count': len(rows), 'rows': rows}
+
+    return _archive_table_response(
+        transient_id, 'JWST', _lookup, {'count': 0, 'rows': []},
+        cache_key=f'jwst_observations_v1_{transient_id}',
+    )
 
 def get_chandra_image(request,transient_id):
     

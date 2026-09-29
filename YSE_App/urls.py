@@ -181,6 +181,7 @@ urlpatterns = [
         data_utils.box_search, name='box_search'),
     re_path(r'^search/$',
         SearchResultsView.as_view(), name='search'),
+    re_path(r'^search/save/$', views.save_search, name='save_search'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',
@@ -257,6 +258,10 @@ urlpatterns = [
         view_utils.get_hst_image, name='get_hst_image'),
     re_path(r'^get_hst_status/(?P<transient_id>[0-9]+)',
         view_utils.get_hst_status, name='get_hst_status'),
+    re_path(r'^get_jwst_observations/(?P<transient_id>[0-9]+)',
+        view_utils.get_jwst_observations, name='get_jwst_observations'),
+    re_path(r'^get_jwst_status/(?P<transient_id>[0-9]+)',
+        view_utils.get_jwst_status, name='get_jwst_status'),
     re_path(r'^get_chandra_image/(?P<transient_id>[0-9]+)',
         view_utils.get_chandra_image, name='get_chandra_image'),
     re_path(r'^get_chandra_status/(?P<transient_id>[0-9]+)',

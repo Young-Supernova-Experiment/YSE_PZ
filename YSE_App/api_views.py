@@ -524,6 +524,44 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         qs = Transient.objects.all()
         return filter_transients_by_user_access(self.request.user, qs)
 
+    @action(detail=False, methods=['post'], url_path='save_search')
+    def save_search(self, request):
+        """Save a search as an Explorer query (``POST /api/transients/save_search/``, #287).
+
+        Body (JSON or form): ``title`` (required), ``add_to_dashboard`` (bool,
+        default false) and the search filters either as ``params`` (an object
+        of filter name -> value or list of values, the same names as the list
+        endpoint) or as ``query_string`` (``status=New&has_spectrum=true``).
+        Returns the query id, its Explorer URL, the compiled SQL and, when
+        attached, the personal-dashboard section id.
+        """
+        from django.http import QueryDict
+        from YSE_App.services.search_queries import SearchSaveError, save_search_query
+
+        data = request.data
+        params = data.get('params')
+        if params is None:
+            params = QueryDict(str(data.get('query_string', '')), mutable=True)
+        add = data.get('add_to_dashboard', False)
+        if isinstance(add, str):
+            add = add.lower() in ('1', 'true', 'on', 'yes')
+        try:
+            result = save_search_query(
+                request.user, params, data.get('title', ''), add_to_dashboard=bool(add), request=request,
+            )
+        except SearchSaveError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        query = result['query']
+        user_query = result['user_query']
+        return Response({
+            'query_id': query.id,
+            'title': query.title,
+            'explorer_url': request.build_absolute_uri(reverse('query_detail', args=[query.id])),
+            'sql': result['sql'],
+            'user_query_id': user_query.id if user_query is not None else None,
+            'dashboard_url': request.build_absolute_uri(reverse('personaldashboard')),
+        }, status=status.HTTP_201_CREATED)
+
 ### `TransientPhotStat` (per-transient photometry statistics, #268) ###
 class TransientPhotStatFilter(django_filters.FilterSet):
     transient_name = django_filters.CharFilter(field_name="transient__name")
