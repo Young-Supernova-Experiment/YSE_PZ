@@ -3,17 +3,19 @@
 The statistics follow SkyPortal's ``PhotStat`` (skyportal/models/phot_stat.py,
 BSD-3-Clause; the logic is re-derived here for YSE-PZ's magnitude-based
 rows, no code is copied).  Which points count is decided the way the
-dashboards already decide it:
+light-curve plot on the detail page draws them (``services.phot_points``,
+the one classification both call, #368):
 
-* **detection**: ``mag`` set and no ``data_quality`` flag, the rule of
-  ``Transient.recent_mag()``, ``_recent_phot_subqueries`` and the
-  ``FollowupRecentMagMixin`` column, so ``last_detected_mag`` is the same
-  number the "Last Mag" columns show;
-* **upper limit**: unflagged point without ``mag`` whose ``flux``,
-  ``flux_err`` and ``flux_zero_point`` give ``-2.5 log10(flux + 3 flux_err)
-  + zp``, the light-curve plot's rule (``view_utils.lightcurveplot``);
-* flagged points are ignored; points that are neither (no mag and no usable
-  flux) count toward ``num_obs_global`` only.
+* **detection**: unflagged point with ``mag`` and ``mag_err`` and either no
+  flux information or ``mag_err <= 0.36`` (S/N 3), the marker the plot
+  draws; a noisier forced-photometry magnitude is not one;
+* **upper limit**: unflagged point with ``flux`` and ``flux_err``,
+  ``flux / flux_err < 3``, whose limit is ``-2.5 log10(flux + 3 flux_err) +
+  zp`` (zero point 27.5 when the row has none), the plot's inverted
+  triangle; a point that is also a detection counts as the detection;
+* flagged points are ignored (as ``Transient.recent_mag()`` and the Bazin
+  fit ignore them); points that are neither count toward
+  ``num_obs_global`` only.
 
 Rates are positive numbers in mag/day.  ``rise_rate`` uses the band of the
 first detection: ``(first_mag - peak_mag) / (peak_mjd - first_mjd)`` with the
@@ -54,7 +56,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import math
 import threading
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence
@@ -67,6 +68,7 @@ from YSE_App.models.phot_stat_models import (
     datetime_to_mjd,
     mjd_to_datetime,
 )
+from YSE_App.services import phot_points
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,8 @@ DEFAULT_BATCH_SIZE = 500
 
 # 1: #341 (all limits counted, no limit bands).  2: #349 (pre-detection
 # limits only, deepest_limit_band / last_non_detection_band, per-band limits).
-SCHEMA_VERSION = 2
+# 3: #368 (the light-curve plot's detection / upper-limit classification).
+SCHEMA_VERSION = 3
 
 _local = threading.local()
 
@@ -97,33 +100,25 @@ class PhotPoint:
     flagged: bool = False
 
 
-def _finite(value) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return None
-    return value if math.isfinite(value) else None
+_finite = phot_points.finite
 
 
 def is_detection(point: PhotPoint) -> bool:
-    """The dashboards' rule: a magnitude and no data-quality flag."""
-    return (not point.flagged) and _finite(point.mag) is not None
+    """The light-curve plot's detection rule, minus flagged points."""
+    return (not point.flagged) and phot_points.is_detection(
+        point.mag, point.mag_err, point.flux, point.flux_err
+    )
 
 
 def limiting_mag(point: PhotPoint) -> Optional[float]:
-    """The light-curve plot's upper limit for a non-detection, or ``None``."""
-    if point.flagged or _finite(point.mag) is not None:
+    """The light-curve plot's upper limit for an unflagged point, or ``None``.
+
+    Independent of :func:`is_detection`, as on the plot; ``compute_stats``
+    asks for the detection first.
+    """
+    if point.flagged:
         return None
-    flux, flux_err, zp = _finite(point.flux), _finite(point.flux_err), _finite(point.flux_zero_point)
-    if flux is None or zp is None or not flux:
-        return None
-    if flux_err is None:
-        flux_err = 0.0
-    if flux + 3.0 * flux_err <= 0:
-        return None
-    return -2.5 * math.log10(flux + 3.0 * flux_err) + zp
+    return phot_points.limiting_mag(point.flux, point.flux_err, point.flux_zero_point)
 
 
 @dataclass
