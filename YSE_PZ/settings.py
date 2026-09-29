@@ -161,6 +161,9 @@ CRON_CLASSES = [
     # Background job queue: one run_jobs pass per runcrons run (#263); no-op
     # when JOB_RUNNER_CRON_ENABLED is False (see the end of this file).
     'YSE_App.data_ingest.Job_Queue.RunQueuedJobs',
+    # Daily retention of notification and finished-job rows (#320); no-op when
+    # NOTIFICATION_PRUNE_CRON_ENABLED is False.
+    'YSE_App.data_ingest.Job_Queue.PruneNotifications',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -459,9 +462,18 @@ JOB_HANDLER_MODULES = [
     m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
 ]
 
+# Email delivery defaults to "on when [SMTP_provider] holds real credentials"
+# (the senders it replaced, alert.py and the comment-mention emails, sent
+# unconditionally); NOTIFICATION_EMAIL_ENABLED in settings.ini or env
+# YSE_NOTIFICATION_EMAIL=1/0 overrides.
+_smtp_configured = bool(
+    (SMTP_LOGIN or '').strip() and not (SMTP_LOGIN or '').strip().startswith('<')
+    and (SMTP_PASSWORD or '').strip() and not (SMTP_PASSWORD or '').strip().startswith('<')
+)
+_email_env = os.environ.get('YSE_NOTIFICATION_EMAIL', '').strip()
 NOTIFICATION_EMAIL_ENABLED = (
-    os.environ.get('YSE_NOTIFICATION_EMAIL', '').strip() == '1'
-    or config.getboolean('site_settings', 'NOTIFICATION_EMAIL_ENABLED', fallback=False)
+    _email_env == '1' if _email_env in ('0', '1')
+    else config.getboolean('site_settings', 'NOTIFICATION_EMAIL_ENABLED', fallback=_smtp_configured)
 )
 NOTIFICATION_SLACK_ENABLED = config.getboolean('site_settings', 'NOTIFICATION_SLACK_ENABLED', fallback=True)
 NOTIFICATION_SLACK_TIMEOUT_SECONDS = config.getint('site_settings', 'NOTIFICATION_SLACK_TIMEOUT_SECONDS', fallback=10)
@@ -473,6 +485,15 @@ NOTIFICATION_BASE_URL = (
     or YSE_PUBLIC_BASE_URL
 )
 NOTIFICATION_LIST_PAGE_SIZE = config.getint('site_settings', 'NOTIFICATION_LIST_PAGE_SIZE', fallback=50)
+# Retention (#320): the notifications.prune job / PruneNotifications cron deletes
+# read notifications, unread notifications and finished job rows older than
+# these many days (0 disables that part); the cron runs every
+# NOTIFICATION_PRUNE_CRON_MINUTES from `manage.py runcrons`.
+NOTIFICATION_RETENTION_DAYS = config.getint('site_settings', 'NOTIFICATION_RETENTION_DAYS', fallback=90)
+NOTIFICATION_UNREAD_RETENTION_DAYS = config.getint('site_settings', 'NOTIFICATION_UNREAD_RETENTION_DAYS', fallback=365)
+JOB_RETENTION_DAYS = config.getint('site_settings', 'JOB_RETENTION_DAYS', fallback=30)
+NOTIFICATION_PRUNE_CRON_ENABLED = config.getboolean('site_settings', 'NOTIFICATION_PRUNE_CRON_ENABLED', fallback=True)
+NOTIFICATION_PRUNE_CRON_MINUTES = config.getint('site_settings', 'NOTIFICATION_PRUNE_CRON_MINUTES', fallback=1440)
 
 # Django's mail backend, fed from the existing [SMTP_provider] block so
 # django.core.mail.send_mail (notification emails) uses the same account as

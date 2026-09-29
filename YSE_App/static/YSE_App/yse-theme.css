@@ -506,6 +506,49 @@ body.yse-theme .yse-mention {
   font-weight: 600;
 }
 
+body.yse-theme .yse-mention-instrument {
+  color: var(--yse-color-text);
+  opacity: 0.85;
+}
+
+/* @user / #instrument autocomplete under the comment box (#322). */
+.yse-mention-menu {
+  z-index: 1060;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--yse-color-surface, #fff);
+  color: var(--yse-color-text, #212529);
+  border: 1px solid var(--yse-color-border, rgba(0, 0, 0, 0.15));
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-size: 0.9em;
+}
+
+.yse-mention-menu .yse-mention-option {
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.yse-mention-menu .yse-mention-option.active,
+.yse-mention-menu .yse-mention-option:hover {
+  background: var(--yse-color-accent, #007bff);
+  color: #fff;
+}
+
+/* Preference matrix on /notifications/preferences/ (#321). */
+.yse-pref-matrix th,
+.yse-pref-matrix td {
+  vertical-align: middle;
+}
+
+.yse-pref-matrix input[type="checkbox"] {
+  width: 1.1em;
+  height: 1.1em;
+}
+
 body.yse-theme .yse-comment-composer-row {
   margin-left: 0;
   margin-right: 0;
