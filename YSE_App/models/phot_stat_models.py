@@ -145,3 +145,13 @@ class TransientPhotStat(models.Model):
     @property
     def has_detections(self):
         return self.num_det_global > 0
+
+    @property
+    def last_non_detection_date(self):
+        """Aware UTC datetime of the last upper limit before the first detection."""
+        return mjd_to_datetime(self.last_non_detection_mjd)
+
+    @property
+    def deepest_limit_date(self):
+        """Aware UTC datetime of the deepest upper limit."""
+        return mjd_to_datetime(self.deepest_limit_mjd)
