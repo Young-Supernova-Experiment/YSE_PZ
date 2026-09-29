@@ -103,6 +103,117 @@ admin.site.register(SurveyObservation)
 admin.site.register(CanvasFOV)
 
 
+# --- Encrypted credentials (#264): the secret is written through a form field
+# and never rendered back; list and change pages show only the payload's keys.
+class EncryptedCredentialForm(forms.ModelForm):
+	secret_json = forms.CharField(
+		label="New secret (JSON object)", required=False,
+		widget=forms.Textarea(attrs={"rows": 4, "cols": 80, "autocomplete": "off"}),
+		help_text="Paste a JSON object such as {\"username\": \"...\", \"password\": \"...\"}. "
+				  "Leave blank to keep the stored secret. It is encrypted on save and never shown again.",
+	)
+
+	class Meta:
+		model = EncryptedCredential
+		fields = ("name", "service", "kind", "description", "owner_group", "owner_user", "is_active")
+
+	def clean_secret_json(self):
+		raw = (self.cleaned_data.get("secret_json") or "").strip()
+		if not raw:
+			return None
+		import json
+		try:
+			payload = json.loads(raw)
+		except ValueError:
+			raise forms.ValidationError("Not valid JSON.")
+		if not isinstance(payload, dict):
+			raise forms.ValidationError("The secret must be a JSON object.")
+		return payload
+
+	def save(self, commit=True):
+		obj = super().save(commit=False)
+		payload = self.cleaned_data.get("secret_json")
+		if payload is not None:
+			obj.set_secret(payload)
+		if commit:
+			obj.save()
+			self.save_m2m()
+		return obj
+
+
+@admin.register(EncryptedCredential)
+class EncryptedCredentialAdmin(admin.ModelAdmin):
+	form = EncryptedCredentialForm
+	list_display = ("name", "service", "kind", "owner_group", "owner_user", "is_active",
+					"masked_display", "key_fingerprint", "last_used_at", "modified_date")
+	list_filter = ("kind", "service", "is_active")
+	search_fields = ("name", "service", "description")
+	readonly_fields = ("masked_display", "key_fingerprint", "last_used_at",
+					   "created_by", "created_date", "modified_by", "modified_date")
+	fieldsets = (
+		(None, {"fields": ("name", "service", "kind", "description", "owner_group", "owner_user", "is_active")}),
+		("Secret", {"fields": ("masked_display", "secret_json", "key_fingerprint", "last_used_at")}),
+		("Audit", {"fields": ("created_by", "created_date", "modified_by", "modified_date")}),
+	)
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+class ExternalServiceForm(forms.ModelForm):
+	# The TEXT-backed JSON column needs a JSON form field, or the admin would
+	# store the textarea contents as a JSON string instead of an object.
+	default_params = forms.JSONField(required=False, initial=dict,
+									 widget=forms.Textarea(attrs={"rows": 4, "cols": 80}))
+
+	class Meta:
+		model = ExternalService
+		exclude = ("created_by", "modified_by")
+
+	def clean_default_params(self):
+		value = self.cleaned_data.get("default_params")
+		if value in (None, ""):
+			return {}
+		if not isinstance(value, dict):
+			raise forms.ValidationError("Default params must be a JSON object.")
+		return value
+
+
+@admin.register(ExternalService)
+class ExternalServiceAdmin(admin.ModelAdmin):
+	form = ExternalServiceForm
+	list_display = ("name", "slug", "kind", "enabled", "base_url", "credential", "max_runs_per_user_per_day")
+	list_filter = ("kind", "enabled")
+	search_fields = ("name", "slug", "description")
+	prepopulated_fields = {"slug": ("name",)}
+	filter_horizontal = ("groups",)
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+	exclude = ()
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(ExternalServiceRun)
+class ExternalServiceRunAdmin(admin.ModelAdmin):
+	list_display = ("uuid", "service", "status", "transient", "target_ref", "created_by", "created_date", "finished_at")
+	list_filter = ("status", "service")
+	search_fields = ("uuid", "target_ref", "external_id", "transient__name")
+	readonly_fields = ("uuid", "callback_token_hash", "created_by", "created_date", "modified_by", "modified_date")
+	raw_id_fields = ("transient",)
+	exclude = ("target_content_type", "target_object_id")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
 # --- Background job queue (#263) and notifications (#266) -------------------
 from django.utils import timezone as _tz  # noqa: E402
 
