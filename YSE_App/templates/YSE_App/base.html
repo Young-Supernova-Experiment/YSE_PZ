@@ -76,6 +76,8 @@
 					{% if user.is_authenticated %}
 					<a class="dropdown-item" href="{% url 'notification_list' %}">Notifications</a>
 					<a class="dropdown-item" href="{% url 'notification_preferences' %}">Notification preferences</a>
+					<a class="dropdown-item" href="{% url 'my_interests' %}">My interests</a>
+					<a class="dropdown-item" id="yse-dar-menu-link" href="{% url 'data_access_requests' %}" data-count-url="{% url 'data_access_pending_count' %}">Data access requests <span class="badge badge-warning yse-dar-menu-badge" id="yse-dar-menu-badge" hidden></span></a>
 					{% if user.is_staff %}<a class="dropdown-item" href="{% url 'jobs_status' %}">Background jobs</a>{% endif %}
 					<div class="dropdown-divider"></div>
 					{% endif %}
@@ -275,6 +277,19 @@
 				badge.textContent = d.unread > 99 ? "99+" : String(d.unread);
 				badge.removeAttribute("hidden");
 				link.setAttribute("title", d.unread + " unread notification" + (d.unread === 1 ? "" : "s"));
+			})
+			.catch(function () {});
+	})();
+	// Pending data-access-request badge in the user menu (#291): same pattern, no query on page render.
+	(function () {
+		var link = document.getElementById("yse-dar-menu-link"), badge = document.getElementById("yse-dar-menu-badge");
+		if (!link || !badge || !window.fetch) { return; }
+		fetch(link.getAttribute("data-count-url"), { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
+			.then(function (r) { return r.ok ? r.json() : null; })
+			.then(function (d) {
+				if (!d || !d.pending) { return; }
+				badge.textContent = d.pending > 99 ? "99+" : String(d.pending);
+				badge.removeAttribute("hidden");
 			})
 			.catch(function () {});
 	})();

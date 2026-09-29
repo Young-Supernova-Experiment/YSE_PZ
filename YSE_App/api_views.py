@@ -1,5 +1,5 @@
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse
-from rest_framework import serializers, viewsets, status, permissions
+from rest_framework import serializers, viewsets, status, permissions, mixins
 from rest_framework.response import Response
 from rest_framework.decorators import action, api_view
 from rest_framework import generics
@@ -792,3 +792,131 @@ class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
     def reopen(self, request, pk=None):
         from YSE_App.brokers import ingest
         return self._act(request, pk, lambda c: ingest.reopen_candidate(c, request.user))
+
+
+### Transient interests (#289) and data access requests (#292) ###
+class TransientInterestViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Interests (intentions to publish) on transients the user may see.
+
+    Filters: ``?transient=<id|name>``, ``?user=<id|username>``, ``?mine=1``, ``?status=``;
+    withdrawn rows are left out unless ``?include_withdrawn=1``. Creating posts the
+    automatic comment; only the owner (or staff) may update, and a status change
+    goes through the service so withdrawn / published post their comment too.
+    """
+
+    serializer_class = TransientInterestSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.visibility import filter_transients_by_user_access
+
+        params = self.request.query_params
+        qs = TransientInterest.objects.select_related("transient", "user", "group")
+        if params.get("include_withdrawn") not in ("1", "true"):
+            qs = qs.filter(status__in=TransientInterest.VISIBLE_STATUSES)
+        transient = (params.get("transient") or "").strip()
+        if transient:
+            qs = qs.filter(transient_id=transient) if transient.isdigit() else qs.filter(transient__name=transient)
+        user = (params.get("user") or "").strip()
+        if user:
+            qs = qs.filter(user_id=user) if user.isdigit() else qs.filter(user__username=user)
+        if params.get("mine") in ("1", "true"):
+            qs = qs.filter(user=self.request.user)
+        status_value = (params.get("status") or "").strip()
+        if status_value:
+            qs = qs.filter(status=status_value)
+        if not (self.request.user.is_staff or self.request.user.is_superuser):
+            visible = filter_transients_by_user_access(
+                self.request.user, Transient.objects.filter(id__in=qs.values_list("transient_id", flat=True)),
+            )
+            qs = qs.filter(transient_id__in=visible.values_list("id", flat=True))
+        return qs
+
+    def perform_create(self, serializer):
+        from YSE_App.services.interests import register_interest
+
+        data = serializer.validated_data
+        serializer.instance = register_interest(
+            data["transient"], self.request.user, data.get("title", ""), group=data.get("group"),
+            role=data.get("role") or TransientInterest.ROLE_LEAD, description=data.get("description") or "",
+            status=data.get("status") or TransientInterest.STATUS_PLANNED,
+        )
+
+    def _update(self, serializer):
+        from YSE_App.services.interests import update_interest_status, user_can_edit_interest
+
+        interest = serializer.instance
+        if not user_can_edit_interest(self.request.user, interest):
+            raise PermissionDenied({"message": "Only the person who registered the interest (or staff) may change it."})
+        data = dict(serializer.validated_data)
+        for key in ("transient", "user"):
+            data.pop(key, None)
+        new_status = data.pop("status", None)
+        doi = data.pop("doi", None)
+        for key, value in data.items():
+            setattr(interest, key, value)
+        interest.modified_by = self.request.user
+        interest.save()
+        if new_status is not None or doi is not None:
+            update_interest_status(interest, self.request.user, new_status or interest.status, doi=doi)
+
+    def perform_update(self, serializer):
+        self._update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._update(serializer)
+
+
+class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
+                               viewsets.GenericViewSet):
+    """Data access requests: the user's own and those addressed to their groups (staff: all).
+
+    Filters ``?box=mine|inbox``, ``?status=``, ``?transient=``, ``?kind=``. ``POST`` creates
+    (``transient``, ``dataset_kind``, ``owner_group``, optional ``target_group`` / ``message`` /
+    ``dataset_id``); ``POST .../<id>/accept/`` and ``.../decline/`` (optional ``note``) decide.
+    """
+
+    serializer_class = DataAccessRequestSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services import data_access as dar
+
+        user = self.request.user
+        params = self.request.query_params
+        box = params.get("box") or ""
+        if box == "mine":
+            qs = dar.requests_by(user)
+        elif box == "inbox":
+            qs = dar.requests_to_decide(user, pending_only=False)
+        else:
+            qs = DataAccessRequest.objects.select_related(
+                "requester", "transient", "owner_group", "target_group", "decided_by")
+            if not (user.is_staff or user.is_superuser):
+                qs = qs.filter(Q(requester=user) | Q(owner_group__in=user.groups.all()))
+        return dar.filter_requests(qs, params).distinct()
+
+    def perform_create(self, serializer):
+        from YSE_App.services import data_access as dar
+
+        data = serializer.validated_data
+        serializer.instance = dar.request_access(
+            self.request.user, data["transient"], data.get("dataset_kind", ""), data["owner_group"],
+            target_group=data.get("target_group"), message=data.get("message") or "",
+            dataset_id=data.get("dataset_id"),
+        )
+
+    def _decide(self, request, accept):
+        from YSE_App.services import data_access as dar
+
+        obj = self.get_object()
+        dar.decide(obj, request.user, accept, note=request.data.get("note", "") if hasattr(request.data, "get") else "")
+        return Response(self.get_serializer(obj).data)
+
+    @action(detail=True, methods=["post"])
+    def accept(self, request, pk=None):
+        return self._decide(request, True)
+
+    @action(detail=True, methods=["post"])
+    def decline(self, request, pk=None):
+        return self._decide(request, False)

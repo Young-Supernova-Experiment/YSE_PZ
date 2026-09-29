@@ -1,0 +1,59 @@
+{% comment %}
+Restricted-data hint (#293): "N spectra are restricted to <group> - Request
+access". Context: transient, hidden_rows (from services.data_access.hidden_summary),
+access_target_groups (requester's non-Public groups), optional hint_compact.
+Only counts and owner-group names are shown, never the hidden rows.
+{% endcomment %}
+{% if hidden_rows %}
+<div class="yse-data-access-hint" data-transient-id="{{ transient.id }}" data-count="{{ hidden_rows|length }}">
+    {% for row in hidden_rows %}
+    <div class="alert alert-warning py-2 px-3 mb-2 yse-data-access-row" data-kind="{{ row.kind }}" data-group="{{ row.group.name }}" data-status="{% if row.request %}{{ row.request.status }}{% else %}none{% endif %}">
+        <i class="fa fa-lock" aria-hidden="true"></i>
+        <strong>{{ row.count }} {{ row.kind_label }}</strong> on this transient {% if row.count == 1 %}is{% else %}are{% endif %} restricted to <strong>{{ row.group.name }}</strong>.
+        {% if row.request and row.request.status == 'pending' %}
+            <span class="badge badge-info">Access request pending</span>
+            <span class="small text-muted">sent {{ row.request.created_date|date:"Y-m-d H:i" }} UTC, to be shared with {{ row.request.target_group.name }}</span>
+            <a class="small" href="{% url 'data_access_requests' %}?box=mine">view</a>
+        {% elif row.request and row.request.status == 'declined' %}
+            <span class="badge badge-secondary">Declined</span>
+            {% if row.request.note %}<span class="small text-muted">&ldquo;{{ row.request.note }}&rdquo;</span>{% endif %}
+            {% if row.can_request and not hint_compact %}
+            <a class="small" data-toggle="collapse" href="#yse-dar-form-{{ row.kind }}-{{ row.group.id }}" role="button" aria-expanded="false">Request again</a>
+            {% endif %}
+        {% elif row.request and row.request.status == 'accepted' %}
+            <span class="badge badge-success">Accepted</span> <span class="small text-muted">reload to see the data{% if row.request.note %}; &ldquo;{{ row.request.note }}&rdquo;{% endif %}</span>
+        {% elif row.can_request %}
+            {% if hint_compact %}
+            <a class="small" href="#spectra_tab" onclick="$('a[href=\'#{% if row.kind == 'spectrum' %}spectra_tab{% else %}photometry_tab{% endif %}\']').tab('show'); return false;">Request access on the {% if row.kind == 'spectrum' %}Spectra{% else %}Detailed Photometry{% endif %} tab</a>
+            {% else %}
+            <a class="btn btn-sm btn-outline-dark ml-1 yse-data-access-request-btn" data-toggle="collapse" href="#yse-dar-form-{{ row.kind }}-{{ row.group.id }}" role="button" aria-expanded="false">Request access</a>
+            {% endif %}
+        {% else %}
+            <span class="small text-muted">You belong to no collaboration group (other than Public) that access could be granted to; ask an administrator to add you to one.</span>
+        {% endif %}
+        {% if row.can_request and not hint_compact %}
+        <form method="post" action="{% url 'data_access_request_create' transient.id %}" class="collapse mt-2 yse-data-access-form" id="yse-dar-form-{{ row.kind }}-{{ row.group.id }}">
+            {% csrf_token %}
+            <input type="hidden" name="kind" value="{{ row.kind }}">
+            <input type="hidden" name="owner_group" value="{{ row.group.id }}">
+            <input type="hidden" name="next" value="{% url 'transient_detail' transient.slug %}#{% if row.kind == 'spectrum' %}spectra_tab{% else %}photometry_tab{% endif %}">
+            <div class="form-row">
+                <div class="form-group col-md-4 mb-1">
+                    <label class="small mb-0" for="yse-dar-target-{{ row.kind }}-{{ row.group.id }}">Share with my group</label>
+                    <select class="form-control form-control-sm" name="target_group" id="yse-dar-target-{{ row.kind }}-{{ row.group.id }}">
+                        {% for g in access_target_groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group col-md-8 mb-1">
+                    <label class="small mb-0" for="yse-dar-message-{{ row.kind }}-{{ row.group.id }}">Message to {{ row.group.name }} <span class="text-muted">(optional)</span></label>
+                    <input type="text" class="form-control form-control-sm" name="message" id="yse-dar-message-{{ row.kind }}-{{ row.group.id }}" maxlength="1000" placeholder="Why you need the data, planned use">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary">Send request</button>
+            <span class="small text-muted ml-2">Members of {{ row.group.name }} are notified and can accept or decline; on acceptance your group is added to the data's collaboration groups.</span>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

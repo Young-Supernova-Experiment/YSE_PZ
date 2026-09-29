@@ -1465,10 +1465,15 @@ def transient_detail_spectra_tab_fragment(request, transient_id):
     )
     for spectrum in spectra:
         spectrum.n_points = point_counts.get(spectrum.id, 0)
+    from YSE_App.collaboration_views import data_access_context
+
+    ctx = {'transient': transient_obj, 'all_transient_spectra': spectra}
+    # Restricted spectra the user cannot see: count + owner group + "Request access" (#293).
+    ctx.update(data_access_context(request, transient_obj, kinds=('spectrum',)))
     return render(
         request,
         'YSE_App/transient_detail_spectra_tab.html',
-        {'transient': transient_obj, 'all_transient_spectra': spectra},
+        ctx,
     )
 
 
@@ -1518,14 +1523,18 @@ def transient_detail_photometry_fragment(request, transient_id):
         'phot_data__photometry',
         'phot_data__band',
     )
+    from YSE_App.collaboration_views import data_access_context
+
+    ctx = {
+        'transient': transient_obj,
+        'allphotdata': allphotdata,
+        'diff_images': diff_images,
+    }
+    ctx.update(data_access_context(request, transient_obj, kinds=('photometry',)))
     return render(
         request,
         'YSE_App/transient_detail_photometry_tables.html',
-        {
-            'transient': transient_obj,
-            'allphotdata': allphotdata,
-            'diff_images': diff_images,
-        },
+        ctx,
     )
 
 
@@ -1731,6 +1740,11 @@ def transient_detail(request, slug):
         from YSE_App.services.photstat import stat_for_transient
 
         context['photstat'] = stat_for_transient(transient_obj.id)
+
+        # "Working on this" interests box (#290) and the restricted-data hints (#293).
+        from YSE_App.collaboration_views import collaboration_context
+
+        context.update(collaboration_context(request, transient_obj))
 
         if lastphotdata and firstphotdata:
             context['recent_mag'] = format_magnitude_with_error(

@@ -28,3 +28,5 @@ from YSE_App.models.job_models import *
 from YSE_App.models.notification_models import *
 from YSE_App.models.candidate_models import *
 from YSE_App.models.allocation_models import Allocation, FacilityRequest
+from YSE_App.models.interest_models import SourceInterest, TransientInterest
+from YSE_App.models.data_access_models import DataAccessRequest

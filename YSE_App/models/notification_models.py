@@ -33,9 +33,13 @@ KIND_GROUPS = (
     ("alert", "Alerts",
      "New-transient alerts and failures of data uploads you submitted.",
      ("alert", "upload_error")),
+    ("collaboration", "Interests and data access",
+     "Paper interests registered on transients you work on; data access requests you can decide and "
+     "decisions on your own requests.",
+     ("interest", "data_access")),
     ("system", "System and jobs",
      "Everything else: background-job results and site announcements.",
-     ("system", "job_result", "favorite_activity", "data_access", "interest", "sharing_result")),
+     ("system", "job_result", "favorite_activity", "sharing_result")),
 )
 
 # Sensible defaults (#321): in-app on for every group; email on for mentions,
@@ -44,6 +48,7 @@ KIND_GROUP_DEFAULTS = {
     "comment_mention": {"in_app": True, "email": True, "slack": True},
     "followup": {"in_app": True, "email": True, "slack": True},
     "alert": {"in_app": True, "email": True, "slack": True},
+    "collaboration": {"in_app": True, "email": True, "slack": True},
     "system": {"in_app": True, "email": False, "slack": False},
 }
 
