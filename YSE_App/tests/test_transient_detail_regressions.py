@@ -13,6 +13,7 @@ from unittest import mock
 from django.test import Client, TestCase
 from django.urls import reverse
 
+from YSE_App.models import TransientSpecData
 from YSE_App.tests.fixtures_minimal import (
     attach_synthetic_spectrum,
     create_minimal_transient,
@@ -217,3 +218,72 @@ class TemplateCommentRegressionTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 html = response.content.decode("utf-8", errors="replace")
                 self.assertNotIn("Summary-tab spectrum toolbar", html)
+
+
+class SpectrumPlotEmptyStateTests(TestCase):
+    """spectrumplot said "No spectrum data on file" for 2025aarm's 8 spectra (#208).
+
+    The Summary-tab toolbar counts TransientSpectrum rows; the plot needs
+    TransientSpecData points. The empty state must say which one is missing.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("specplot_empty_state_user")
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _plot_html(self, transient):
+        response = self.client.get(reverse("spectrumplot", args=[transient.id]))
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode("utf-8", errors="replace")
+
+    def _toolbar_html(self, transient):
+        url = reverse("transient_detail_summary_spectra_tools_fragment", args=[transient.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode("utf-8", errors="replace")
+
+    def test_no_spectra_says_no_spectrum_data(self):
+        transient = create_minimal_transient(self.user, name="2026specplotnone")
+        html = self._plot_html(transient)
+        self.assertIn("No spectrum data on file for this transient.", html)
+        self.assertNotIn("Download", self._toolbar_html(transient))
+
+    def test_spectra_without_points_are_counted_not_denied(self):
+        transient = create_minimal_transient(self.user, name="2026specplotnopoints")
+        for _ in range(2):
+            attach_synthetic_spectrum(self.user, transient)
+        html = self._plot_html(transient)
+        self.assertNotIn("No spectrum data on file", html)
+        self.assertIn(
+            "2 spectra on file, but none has wavelength/flux points to plot.", html
+        )
+        self.assertIn("Download 2 Spectra", self._toolbar_html(transient))
+
+    def test_single_spectrum_without_points(self):
+        transient = create_minimal_transient(self.user, name="2026specplotonenopoints")
+        attach_synthetic_spectrum(self.user, transient)
+        html = self._plot_html(transient)
+        self.assertIn(
+            "1 spectrum on file, but it has no wavelength/flux points to plot.", html
+        )
+        self.assertIn("Download 1 Spectrum", self._toolbar_html(transient))
+
+    def test_spectrum_with_points_is_plotted(self):
+        transient = create_minimal_transient(self.user, name="2026specplotpoints")
+        spectrum = attach_synthetic_spectrum(self.user, transient)
+        for i in range(20):
+            TransientSpecData.objects.create(
+                spectrum=spectrum,
+                wavelength=4000 + 10 * i,
+                flux=1.0 + 0.1 * i,
+                created_by=self.user,
+                modified_by=self.user,
+            )
+        html = self._plot_html(transient)
+        self.assertNotIn("yse-plot-empty", html)
+        self.assertNotIn("on file", html)
+        self.assertIn("<script", html)
