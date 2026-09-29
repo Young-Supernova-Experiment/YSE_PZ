@@ -8,10 +8,6 @@ import pandas as pd
 import os
 
 import sys
-from astro_ghost.PS1QueryFunctions import getAllPostageStamps
-from astro_ghost.TNSQueryFunctions import getTNSSpectra
-from astro_ghost.NEDQueryFunctions import getNEDSpectra
-from astro_ghost.ghostHelperFunctions import *
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from datetime import datetime
@@ -35,6 +31,8 @@ class YSE(CronJobBase):
             #nowdate = datetime.datetime.utcnow() - datetime.timedelta(1)
             from django.db.models import Q #HAS To Remain Here,
             #save time b/c the other cron jobs print a time for completion
+            # astro_ghost fetches the VO registry on import; keep it out of module import
+            from astro_ghost.ghostHelperFunctions import getGHOST, getTransientHosts
 
             if not os.path.exists(f'{djangoSettings.ghost_path}/database/GHOST.csv'):
                 getGHOST(real=True, verbose=False, installpath=djangoSettings.ghost_path)
