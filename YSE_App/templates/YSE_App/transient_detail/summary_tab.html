@@ -241,8 +241,28 @@
                                                         <td></td>
                                                         <td>{{ recent_filter }}</td>
                                                     </tr>
+                                                    {% if photstat and photstat.has_detections %}
+                                                    <tr id="photstat-peak-row">
+                                                        <td>Peak Mag</td>
+                                                        <td>{{ photstat.peak_date|date:"N j, Y, P" }}</td>
+                                                        <td>{{ photstat.peak_mag|floatformat:2 }}</td>
+                                                        <td></td>
+                                                        <td>{{ photstat.peak_band }}</td>
+                                                    </tr>
+                                                    {% endif %}
                                                 </tbody>
                                             </table>
+                                            {% if photstat %}
+                                            <p class="text-muted" id="photstat-summary" title="Stored photometry statistics: detections are unflagged points with a magnitude; rates are mag/day in the band of the first (rise) and last (decay) detection.">
+                                                <small>
+                                                    {{ photstat.num_det_global }} detection{{ photstat.num_det_global|pluralize }},
+                                                    {{ photstat.num_limits_global }} upper limit{{ photstat.num_limits_global|pluralize }}{% if photstat.deepest_limit %} (deepest {{ photstat.deepest_limit|floatformat:2 }}){% endif %}.
+                                                    {% if photstat.rise_rate is not None %}Rise {{ photstat.rise_rate|floatformat:3 }} mag/day{% if photstat.first_detected_band %} ({{ photstat.first_detected_band.name }}){% endif %}.{% endif %}
+                                                    {% if photstat.decay_rate is not None %}Decay {{ photstat.decay_rate|floatformat:3 }} mag/day{% if photstat.last_detected_band %} ({{ photstat.last_detected_band.name }}){% endif %}.{% endif %}
+                                                    {% if photstat.time_to_non_detection is not None %}Last limit {{ photstat.time_to_non_detection|floatformat:1 }} d before first detection.{% endif %}
+                                                </small>
+                                            </p>
+                                            {% endif %}
                                         </div>
                                     </div>
                                     <div>

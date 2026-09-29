@@ -1,0 +1,427 @@
+"""Compute and store ``TransientPhotStat`` rows (#268).
+
+The statistics follow SkyPortal's ``PhotStat`` (skyportal/models/phot_stat.py,
+BSD-3-Clause; the logic is re-derived here for YSE-PZ's magnitude-based
+rows, no code is copied).  Which points count is decided the way the
+dashboards already decide it:
+
+* **detection**: ``mag`` set and no ``data_quality`` flag, the rule of
+  ``Transient.recent_mag()``, ``_recent_phot_subqueries`` and the
+  ``FollowupRecentMagMixin`` column, so ``last_detected_mag`` is the same
+  number the "Last Mag" columns show;
+* **upper limit**: unflagged point without ``mag`` whose ``flux``,
+  ``flux_err`` and ``flux_zero_point`` give ``-2.5 log10(flux + 3 flux_err)
+  + zp``, the light-curve plot's rule (``view_utils.lightcurveplot``);
+* flagged points are ignored; points that are neither (no mag and no usable
+  flux) count toward ``num_obs_global`` only.
+
+Rates are positive numbers in mag/day.  ``rise_rate`` uses the band of the
+first detection: ``(first_mag - peak_mag) / (peak_mjd - first_mjd)`` with the
+peak in that band, ``None`` when the first detection is that band's peak.
+``decay_rate`` uses the band of the last detection: ``(last_mag - peak_mag)
+/ (last_mjd - peak_mjd)``, ``None`` when the last detection is the peak.
+``time_to_non_detection`` is ``first_detected_mjd`` minus the latest upper
+limit before it.
+
+Three ways to keep rows current:
+
+* :func:`recompute` for one transient (what the signals call);
+* :func:`recompute_many` for a batch with one photometry query per batch
+  (the ``rebuild_photstats`` command);
+* :func:`deferred_updates`, a context manager the ingest paths wrap their
+  work in, so N saved points cost one recompute per transient at the end.
+
+Deletions pass ``create=False``: while a ``Transient`` cascade is running
+the photometry rows disappear before the transient does, and inserting a new
+stat row at that moment would violate the foreign key when the transient
+row goes; updating an existing row is safe (the cascade removes it).
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import json
+import logging
+import math
+import threading
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Sequence
+
+from django.db import transaction
+from django.db.models import Count
+
+from YSE_App.models.phot_stat_models import (
+    TransientPhotStat,
+    datetime_to_mjd,
+    mjd_to_datetime,
+)
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_BATCH_SIZE = 500
+
+_local = threading.local()
+
+
+# ------------------------------------------------------------------- pure part
+
+
+@dataclass
+class PhotPoint:
+    """One photometry row as the statistics see it."""
+
+    mjd: float
+    band_id: Optional[int]
+    band_name: str = ''
+    mag: Optional[float] = None
+    mag_err: Optional[float] = None
+    flux: Optional[float] = None
+    flux_err: Optional[float] = None
+    flux_zero_point: Optional[float] = None
+    flagged: bool = False
+
+
+def _finite(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def is_detection(point: PhotPoint) -> bool:
+    """The dashboards' rule: a magnitude and no data-quality flag."""
+    return (not point.flagged) and _finite(point.mag) is not None
+
+
+def limiting_mag(point: PhotPoint) -> Optional[float]:
+    """The light-curve plot's upper limit for a non-detection, or ``None``."""
+    if point.flagged or _finite(point.mag) is not None:
+        return None
+    flux, flux_err, zp = _finite(point.flux), _finite(point.flux_err), _finite(point.flux_zero_point)
+    if flux is None or zp is None or not flux:
+        return None
+    if flux_err is None:
+        flux_err = 0.0
+    if flux + 3.0 * flux_err <= 0:
+        return None
+    return -2.5 * math.log10(flux + 3.0 * flux_err) + zp
+
+
+@dataclass
+class PhotStatValues:
+    """The computed statistics; ``None`` fields mean "not defined"."""
+
+    num_obs_global: int = 0
+    num_det_global: int = 0
+    num_limits_global: int = 0
+    last_obs_mjd: Optional[float] = None
+    first_detected_mjd: Optional[float] = None
+    first_detected_mag: Optional[float] = None
+    first_detected_band_id: Optional[int] = None
+    last_detected_mjd: Optional[float] = None
+    last_detected_mag: Optional[float] = None
+    last_detected_band_id: Optional[int] = None
+    peak_mjd: Optional[float] = None
+    peak_mag: Optional[float] = None
+    peak_band_id: Optional[int] = None
+    mean_mag: Optional[float] = None
+    faintest_mag: Optional[float] = None
+    deepest_limit: Optional[float] = None
+    deepest_limit_mjd: Optional[float] = None
+    last_non_detection_mjd: Optional[float] = None
+    time_to_non_detection: Optional[float] = None
+    rise_rate: Optional[float] = None
+    decay_rate: Optional[float] = None
+    per_band: Dict[str, dict] = field(default_factory=dict)
+
+    def fingerprint(self) -> str:
+        payload = {k: v for k, v in self.__dict__.items()}
+        text = json.dumps(payload, sort_keys=True, default=str)
+        return hashlib.sha1(text.encode('utf-8')).hexdigest()
+
+
+def compute_stats(points: Iterable[PhotPoint]) -> PhotStatValues:
+    """Statistics for ``points``; pure, no database access."""
+    out = PhotStatValues()
+    detections: List[PhotPoint] = []
+    limits: List[tuple] = []  # (mjd, limiting mag, point)
+    for p in points:
+        if p.flagged:
+            continue
+        mjd = _finite(p.mjd)
+        if mjd is None:
+            continue
+        out.num_obs_global += 1
+        out.last_obs_mjd = mjd if out.last_obs_mjd is None else max(out.last_obs_mjd, mjd)
+        if is_detection(p):
+            detections.append(p)
+            continue
+        lim = limiting_mag(p)
+        if lim is not None:
+            limits.append((mjd, lim, p))
+
+    if detections:
+        out.num_det_global = len(detections)
+        first = min(detections, key=lambda d: d.mjd)
+        last = max(detections, key=lambda d: d.mjd)
+        peak = min(detections, key=lambda d: (float(d.mag), d.mjd))
+        out.first_detected_mjd, out.first_detected_mag = float(first.mjd), float(first.mag)
+        out.first_detected_band_id = first.band_id
+        out.last_detected_mjd, out.last_detected_mag = float(last.mjd), float(last.mag)
+        out.last_detected_band_id = last.band_id
+        out.peak_mjd, out.peak_mag, out.peak_band_id = float(peak.mjd), float(peak.mag), peak.band_id
+        mags = [float(d.mag) for d in detections]
+        out.mean_mag = sum(mags) / len(mags)
+        out.faintest_mag = max(mags)
+
+        per_band: Dict[str, dict] = {}
+        for d in detections:
+            key = str(d.band_id)
+            entry = per_band.get(key)
+            if entry is None:
+                entry = per_band[key] = {
+                    'name': d.band_name or '',
+                    'n_det': 0,
+                    'peak_mag': None, 'peak_mjd': None,
+                    'first_mag': None, 'first_mjd': None,
+                    'last_mag': None, 'last_mjd': None,
+                }
+            entry['n_det'] += 1
+            mag, mjd = float(d.mag), float(d.mjd)
+            if entry['peak_mag'] is None or mag < entry['peak_mag']:
+                entry['peak_mag'], entry['peak_mjd'] = mag, mjd
+            if entry['first_mjd'] is None or mjd < entry['first_mjd']:
+                entry['first_mag'], entry['first_mjd'] = mag, mjd
+            if entry['last_mjd'] is None or mjd > entry['last_mjd']:
+                entry['last_mag'], entry['last_mjd'] = mag, mjd
+        out.per_band = per_band
+
+        first_band = per_band[str(first.band_id)]
+        if first_band['peak_mjd'] > out.first_detected_mjd:
+            out.rise_rate = (out.first_detected_mag - first_band['peak_mag']) / (
+                first_band['peak_mjd'] - out.first_detected_mjd
+            )
+        last_band = per_band[str(last.band_id)]
+        if last_band['peak_mjd'] < out.last_detected_mjd:
+            out.decay_rate = (out.last_detected_mag - last_band['peak_mag']) / (
+                out.last_detected_mjd - last_band['peak_mjd']
+            )
+
+    if limits:
+        out.num_limits_global = len(limits)
+        deepest = max(limits, key=lambda t: (t[1], t[0]))
+        out.deepest_limit, out.deepest_limit_mjd = deepest[1], deepest[0]
+        if out.first_detected_mjd is not None:
+            before = [t[0] for t in limits if t[0] < out.first_detected_mjd]
+            if before:
+                out.last_non_detection_mjd = max(before)
+                out.time_to_non_detection = out.first_detected_mjd - out.last_non_detection_mjd
+        else:
+            out.last_non_detection_mjd = max(t[0] for t in limits)
+
+    return out
+
+
+# --------------------------------------------------------------- database part
+
+
+def _phot_rows(transient_ids: Sequence[int]):
+    """Unflagged-or-flagged photometry rows for ``transient_ids`` in one query."""
+    from YSE_App.models.phot_models import TransientPhotData
+
+    return (
+        TransientPhotData.objects.filter(photometry__transient_id__in=list(transient_ids))
+        .annotate(n_dq=Count('data_quality'))
+        .values_list(
+            'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
+            'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point', 'n_dq',
+        )
+    )
+
+
+def points_by_transient(transient_ids: Sequence[int]) -> Dict[int, List[PhotPoint]]:
+    """``{transient_id: [PhotPoint, ...]}`` for ``transient_ids`` (one query)."""
+    ids = list({int(t) for t in transient_ids if t is not None})
+    grouped: Dict[int, List[PhotPoint]] = {tid: [] for tid in ids}
+    if not ids:
+        return grouped
+    for tid, band_id, band_name, obs_date, mag, mag_err, flux, flux_err, zp, n_dq in _phot_rows(ids):
+        grouped[tid].append(PhotPoint(
+            mjd=datetime_to_mjd(obs_date), band_id=band_id, band_name=band_name or '',
+            mag=mag, mag_err=mag_err, flux=flux, flux_err=flux_err, flux_zero_point=zp,
+            flagged=bool(n_dq),
+        ))
+    return grouped
+
+
+def apply_values(stat: TransientPhotStat, values: PhotStatValues) -> bool:
+    """Copy ``values`` onto ``stat``; returns whether anything changed."""
+    new_hash = values.fingerprint()
+    if stat.pk is not None and stat.phot_hash == new_hash:
+        return False
+    for name in (
+        'num_obs_global', 'num_det_global', 'num_limits_global', 'last_obs_mjd',
+        'first_detected_mjd', 'first_detected_mag', 'first_detected_band_id',
+        'last_detected_mjd', 'last_detected_mag', 'last_detected_band_id',
+        'peak_mjd', 'peak_mag', 'peak_band_id', 'mean_mag', 'faintest_mag',
+        'deepest_limit', 'deepest_limit_mjd', 'last_non_detection_mjd',
+        'time_to_non_detection', 'rise_rate', 'decay_rate',
+    ):
+        setattr(stat, name, getattr(values, name))
+    stat.last_obs_date = mjd_to_datetime(values.last_obs_mjd)
+    stat.first_detected_date = mjd_to_datetime(values.first_detected_mjd)
+    stat.last_detected_date = mjd_to_datetime(values.last_detected_mjd)
+    stat.peak_date = mjd_to_datetime(values.peak_mjd)
+    stat.per_band = values.per_band
+    stat.phot_hash = new_hash
+    return True
+
+
+def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPhotStat]:
+    """Recompute and store the stat row for ``transient_id``.
+
+    Returns the row (``None`` when the transient does not exist, or when
+    ``create`` is false and there is no row yet).  Writes only when a value
+    changed.
+    """
+    from YSE_App.models.transient_models import Transient
+
+    transient_id = int(transient_id)
+    stat = TransientPhotStat.objects.filter(transient_id=transient_id).first()
+    if stat is None:
+        if not create or not Transient.objects.filter(pk=transient_id).exists():
+            return None
+        stat = TransientPhotStat(transient_id=transient_id)
+    values = compute_stats(points_by_transient([transient_id]).get(transient_id, []))
+    if apply_values(stat, values):
+        stat.save()
+    return stat
+
+
+@dataclass
+class RecomputeResult:
+    processed: int = 0
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+
+
+def recompute_many(transient_ids: Sequence[int], *, batch_size: int = DEFAULT_BATCH_SIZE) -> RecomputeResult:
+    """Recompute ``transient_ids`` in batches: one photometry query and one
+    stat query per batch, bulk inserts for new rows, one UPDATE per changed row."""
+    result = RecomputeResult()
+    ids = [int(t) for t in transient_ids]
+    for start in range(0, len(ids), max(1, int(batch_size))):
+        batch = ids[start:start + batch_size]
+        existing = {s.transient_id: s for s in TransientPhotStat.objects.filter(transient_id__in=batch)}
+        grouped = points_by_transient(batch)
+        to_create: List[TransientPhotStat] = []
+        with transaction.atomic():
+            for tid in batch:
+                values = compute_stats(grouped.get(tid, []))
+                stat = existing.get(tid)
+                result.processed += 1
+                if stat is None:
+                    stat = TransientPhotStat(transient_id=tid)
+                    apply_values(stat, values)
+                    to_create.append(stat)
+                    result.created += 1
+                elif apply_values(stat, values):
+                    stat.save()
+                    result.updated += 1
+                else:
+                    result.unchanged += 1
+            if to_create:
+                TransientPhotStat.objects.bulk_create(to_create, batch_size=batch_size)
+    return result
+
+
+# --------------------------------------------------------------- scheduling
+
+
+def _state():
+    if not hasattr(_local, 'depth'):
+        _local.depth = 0
+        _local.pending_transients = set()
+        _local.pending_photometry = set()
+    return _local
+
+
+def deferred_active() -> bool:
+    return _state().depth > 0
+
+
+@contextlib.contextmanager
+def deferred_updates():
+    """Collect recompute requests and run each transient once on exit.
+
+    Nesting is fine; the outermost exit does the work.  An exception inside
+    the block still flushes what was collected (the saved rows are there).
+    """
+    state = _state()
+    state.depth += 1
+    try:
+        yield
+    finally:
+        state.depth -= 1
+        if state.depth == 0:
+            flush_pending()
+
+
+def _transient_ids_for_photometry(photometry_ids: Iterable[int]) -> List[int]:
+    from YSE_App.models.phot_models import TransientPhotometry
+
+    ids = [int(p) for p in photometry_ids if p is not None]
+    if not ids:
+        return []
+    return list(
+        TransientPhotometry.objects.filter(pk__in=ids)
+        .values_list('transient_id', flat=True).distinct()
+    )
+
+
+def flush_pending() -> int:
+    """Recompute every transient collected so far; returns how many."""
+    state = _state()
+    transient_ids = set(state.pending_transients)
+    photometry_ids = set(state.pending_photometry)
+    state.pending_transients.clear()
+    state.pending_photometry.clear()
+    if photometry_ids:
+        transient_ids.update(_transient_ids_for_photometry(photometry_ids))
+    for tid in sorted(t for t in transient_ids if t is not None):
+        try:
+            recompute(tid)
+        except Exception:  # one bad transient must not lose the others
+            logger.exception('photstat recompute failed for transient %s', tid)
+    return len(transient_ids)
+
+
+def schedule_recompute(transient_id: Optional[int] = None, *, photometry_id: Optional[int] = None,
+                       create: bool = True) -> None:
+    """Recompute now, or collect for the end of the enclosing :func:`deferred_updates`.
+
+    Callers pass ``transient_id`` when they have it; signal handlers on
+    ``TransientPhotData`` pass ``photometry_id`` and the transient is looked
+    up (once per flush when deferred).
+    """
+    state = _state()
+    if state.depth > 0:
+        if transient_id is not None:
+            state.pending_transients.add(int(transient_id))
+        elif photometry_id is not None:
+            state.pending_photometry.add(int(photometry_id))
+        return
+    if transient_id is None and photometry_id is not None:
+        ids = _transient_ids_for_photometry([photometry_id])
+        transient_id = ids[0] if ids else None
+    if transient_id is None:
+        return
+    try:
+        recompute(transient_id, create=create)
+    except Exception:
+        logger.exception('photstat recompute failed for transient %s', transient_id)
