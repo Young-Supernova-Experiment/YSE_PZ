@@ -8,7 +8,9 @@ Two layers:
    and has a ``Schedule`` plus a ``do`` method (what ``manage.py runcrons`` needs).
    An import that fails for *environment* reasons is reported, not failed: a
    missing or broken third-party package (SciServer; TensorFlow whose protobuf
-   pin is incompatible in the web image), a network fetch at import time
+   pin is incompatible in the web image -- fixed by the protobuf==3.20.3 pin,
+   issue #183, but the classifier stays so images built with the old pin still
+   report a skip rather than a failure), a network fetch at import time
    (astro_ghost), or a DB row read at import. Only a crash-class exception
    raised by the cron module's own code (or an ImportError naming a repo
    module) fails the inventory. See ``_import_failure_reason``.
@@ -142,7 +144,9 @@ def _import_failure_reason(exc: BaseException) -> Optional[str]:
     a network fetch or a DB lookup at import time); a SyntaxError in a
     dependency's file; a crash-class exception raised beneath an ``import``
     statement in repo code (a dependency such as TensorFlow/protobuf that is
-    installed but broken in this image) or with no repo frame at all.
+    installed but broken in this image; see issue #183 for the protobuf pin
+    that caused ``TypeError: Descriptors cannot be created directly``) or with
+    no repo frame at all.
 
     Own bug: an ImportError naming a YSE_App/YSE_PZ module, a SyntaxError in a
     repo file, or a crash-class exception whose innermost repo frame is ordinary

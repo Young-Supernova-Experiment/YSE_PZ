@@ -75,7 +75,7 @@ or logged). Network and data-shaped errors are recorded in the `-v2` output.
 
 An entry whose *import* fails for environment reasons is reported as skipped, not
 failed: a missing or broken third-party package (`SciServer`; TensorFlow, whose
-generated protobuf code is incompatible with the `protobuf==4.25.3` pin in the web
+generated protobuf code is incompatible with the former `protobuf==4.25.3` pin in the web
 image, so `Photo_Z`, `SDSS_Photo_Z`, `PS1_PhotoZ` and `rapid_classify` never
 import there), a network fetch at import time (`astro_ghost` downloads the VO
 cone-search registry, so `host_associate` and `DECam_upload` cannot import with the
@@ -112,6 +112,8 @@ naming a repo module, fails the inventory.
 | — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE`, `PS1_PhotoZ.YSE`, `rapid.rapid_classify_cron` | skipped in CI: TensorFlow does not import in the web image (`TypeError: Descriptors cannot be created directly`, protobuf pin); `Photo_Z`/`SDSS_Photo_Z` also need `SciServer` |
 | — (no crontab line) | `host_associate.YSE` | skipped in CI: `astro_ghost` fetches the VO cone-search registry at import |
 
+Note: #183 pins `protobuf==3.20.3` in `requirements.txt` and `docker/requirements.web.dev`; once the CI image is rebuilt with it, the four TensorFlow crons import and are smoke-tested like the others (`Photo_Z`/`SDSS_Photo_Z` still skip on missing `SciServer`).
+
 Known follow-ups surfaced by the smoke test (XFAIL or reported in the `-v2`
 output, not failures):
 
@@ -126,9 +128,9 @@ output, not failures):
   `QUB_data.YSE`'s; `ZTF_Forced_Phot_Cron.ForcedPhot` reuses
   `YSE_Forced_Phot.ForcedPhot`'s), which makes django_cron share one run history
   between two jobs.
-- The web image cannot import TensorFlow (`protobuf==4.25.3` vs the TF 2.13
-  generated code), so the four TensorFlow crons are untestable there; either pin
-  `protobuf<4` or set `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`.
+- The web image could not import TensorFlow (`protobuf==4.25.3` vs the TF 2.13
+  generated code), so the four TensorFlow crons were untestable there; fixed by
+  pinning `protobuf==3.20.3` (#183).
 - `PS1_cutouts` queries the `admin` user at import time; `runcrons` for that class
   crashes on any DB without that user.
 
