@@ -260,6 +260,54 @@ class ExternalServiceRunAdmin(admin.ModelAdmin):
 			obj.created_by = request.user
 		obj.modified_by = request.user
 		super().save_model(request, obj, form, change)
+# --- Analysis services (#312, #313) -------------------------------------------
+from YSE_App.models.analysis_models import AnalysisResultFile, AnalysisService  # noqa: E402
+
+
+class AnalysisServiceForm(forms.ModelForm):
+	input_spec = forms.JSONField(required=False, initial=list, widget=forms.Textarea(attrs={"rows": 2, "cols": 80}))
+	output_spec = forms.JSONField(required=False, initial=list, widget=forms.Textarea(attrs={"rows": 2, "cols": 80}))
+	param_schema = forms.JSONField(required=False, initial=dict, widget=forms.Textarea(attrs={"rows": 8, "cols": 80}))
+	summary_keys = forms.JSONField(required=False, initial=list, widget=forms.Textarea(attrs={"rows": 2, "cols": 80}))
+
+	class Meta:
+		model = AnalysisService
+		exclude = ("created_by", "modified_by")
+
+	def clean(self):
+		cleaned = super().clean()
+		for key, default in (("input_spec", []), ("output_spec", []), ("param_schema", {}), ("summary_keys", [])):
+			if cleaned.get(key) in (None, ""):
+				cleaned[key] = default
+		if cleaned.get("runner_kind") == AnalysisService.RUNNER_INPROCESS and not cleaned.get("runner_path"):
+			raise forms.ValidationError("An in-process service needs a runner_path.")
+		return cleaned
+
+
+@admin.register(AnalysisService)
+class AnalysisServiceAdmin(admin.ModelAdmin):
+	form = AnalysisServiceForm
+	list_display = ("service", "runner_kind", "runner_path", "timeout_seconds", "display_order")
+	list_filter = ("runner_kind",)
+	search_fields = ("service__name", "service__slug", "runner_path")
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(AnalysisResultFile)
+class AnalysisResultFileAdmin(admin.ModelAdmin):
+	list_display = ("name", "kind", "run", "content_type", "size", "created_date")
+	list_filter = ("kind",)
+	search_fields = ("name", "run__uuid")
+	readonly_fields = ("size", "created_by", "created_date", "modified_by", "modified_date")
+	raw_id_fields = ("run",)
+
+
 # --- Background job queue (#263) and notifications (#266) -------------------
 from django.utils import timezone as _tz  # noqa: E402
 

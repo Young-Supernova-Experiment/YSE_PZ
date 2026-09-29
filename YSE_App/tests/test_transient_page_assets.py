@@ -76,6 +76,7 @@ FRAGMENT_NAMES = (
     "transient_detail_summary_spectra_tools_fragment",
     "transient_detail_resources_fragment",
     "transient_detail_photometry_fragment",
+    "transient_detail_analysis_fragment",
 )
 
 # Assets the browser fetches while rendering the page.
