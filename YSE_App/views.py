@@ -770,10 +770,13 @@ def too_requests(request, telescope, pi_name):
     if too_resource is None:
         raise Http404('No active ToO resource found for this telescope/PI')
 
+    from YSE_App.services.followup_requests import requests_prefetch
+
     follow_requests = TransientFollowup.objects.filter(too_resource = too_resource).\
         filter(valid_start__lte = too_resource.end_date_valid).\
         filter(valid_stop__gte = too_resource.begin_date_valid).\
-        filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).select_related()
+        filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).\
+        select_related().prefetch_related(requests_prefetch())
 
     followuptransientfilter = FollowupFilter(
         request.GET, queryset=follow_requests,prefix=telescope.replace('_',''))
@@ -1067,9 +1070,12 @@ def observing_night(request, telescope, obs_date, pi_name):
     #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
     #    filter(valid_start__lte = classical_obs_date.obs_date).\
     #    filter(valid_stop__gte = classical_obs_date.obs_date).select_related()
+    from YSE_App.services.followup_requests import requests_prefetch
+
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
         filter(valid_start__lte = classical_obs_date.resource.begin_date_valid).\
-        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).select_related()
+        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).\
+        select_related().prefetch_related(requests_prefetch())
 
     followuptransientfilter = FollowupFilter(request.GET, queryset=follow_requests,prefix=telescope)
         

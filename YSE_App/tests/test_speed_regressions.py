@@ -222,3 +222,90 @@ class FollowupTableRecentMagTests(TestCase):
         expected = [t.name for t in sorted(with_mag, key=lambda t: float(t.recent_mag()), reverse=True)]
         self.assertEqual(names[: len(expected)], expected)
         self.assertEqual(names[-1], "p2mag5")  # NULL magnitude sorts last on descending
+
+
+# --------------------------------------------------------------------------- P5
+
+
+class ObservingPagesQueryCountTests(TestCase):
+    """P5: observing_night / too_requests prefetch child requests; rows add no queries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.models import ToOResource
+
+        cls.user = create_test_user("speed_obsnight_user")
+        cls.other = create_test_user("speed_obsnight_other", is_staff=False)
+        cls.obs_date = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        cls.night = _classical_night(cls.user, tag="p5-night", obs_date=cls.obs_date)
+        cls.too = ToOResource.objects.create(
+            telescope=cls.night.resource.telescope,
+            begin_date_valid=cls.obs_date - datetime.timedelta(days=3),
+            end_date_valid=cls.obs_date + datetime.timedelta(days=3),
+            **audit_fields(cls.user),
+        )
+        cls.transients = []
+        for i in range(10):
+            t = create_minimal_transient(cls.user, name=f"p5obs{i}", ra=20.0 + i, dec=-10.0 + i)
+            attach_synthetic_photometry(cls.user, t, n_points=2)
+            for resource_kw in ({"classical_resource": cls.night.resource}, {"too_resource": cls.too}):
+                resource = list(resource_kw.values())[0]
+                _request_followup(cls.user, t, resource=resource, comment=f"first {i}", **resource_kw)
+                _request_followup(cls.other, t, resource=resource, comment=f"second {i}", **resource_kw)
+            cls.transients.append(t)
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _queries_for(self, url, n_rows):
+        from YSE_App.models import TransientFollowup
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        keep = [t.id for t in self.transients[:n_rows]]
+        # Materialise the ids: MySQL rejects UPDATE ... WHERE pk IN (SELECT ... same table).
+        hidden_pks = list(
+            TransientFollowup.objects.exclude(transient_id__in=keep).values_list("pk", flat=True)
+        )
+        hidden = TransientFollowup.objects.filter(pk__in=hidden_pks)
+        # Park the other rows outside the resource window instead of deleting them.
+        far = self.obs_date + datetime.timedelta(days=400)
+        hidden.update(valid_start=far, valid_stop=far)
+        try:
+            with iers_offline(), CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(url)
+        finally:
+            hidden.update(
+                valid_start=self.obs_date - datetime.timedelta(days=4),
+                valid_stop=self.obs_date + datetime.timedelta(days=4),
+            )
+        self.assertEqual(response.status_code, 200)
+        for t in self.transients[:n_rows]:
+            self.assertContains(response, t.name)
+        self.assertContains(response, "second %d" % (n_rows - 1))
+        return len(ctx.captured_queries)
+
+    def test_observing_night_query_count_is_flat_in_rows(self):
+        from django.urls import reverse
+
+        url = reverse(
+            "observing_night",
+            kwargs={
+                "telescope": self.night.resource.telescope.name.replace(" ", "_"),
+                "obs_date": self.obs_date.strftime("%Y-%m-%d"),
+                "pi_name": "None",
+            },
+        )
+        self.assertEqual(self._queries_for(url, 2), self._queries_for(url, 10))
+
+    def test_too_requests_query_count_is_flat_in_rows(self):
+        from django.urls import reverse
+
+        url = reverse(
+            "too_requests",
+            kwargs={
+                "telescope": self.too.telescope.name.replace(" ", "_"),
+                "pi_name": "None",
+            },
+        )
+        self.assertEqual(self._queries_for(url, 2), self._queries_for(url, 10))
