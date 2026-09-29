@@ -54,6 +54,35 @@ else:
         '(required whenever IS_DEBUG is False).'
     )
 
+# Key that encrypts EncryptedCredential payloads at rest (Fernet; see
+# docs/credentials-and-external-services.md). YSE_CREDENTIALS_KEY env var or
+# [secrets] credentials_key in settings.ini; a comma-separated list is accepted,
+# the first key encrypts and every key decrypts (zero-downtime rotation).
+# Generate one with `manage.py generate_credentials_key`. With DEBUG on and no
+# key configured a key derived from SECRET_KEY is used so local docker and CI
+# work out of the box; with DEBUG off a missing key is a configuration error,
+# like SECRET_KEY above.
+_credentials_key = os.environ.get('YSE_CREDENTIALS_KEY', '').strip()
+if not _credentials_key:
+    _credentials_key = config.get('secrets', 'credentials_key', fallback='').strip()
+    if _credentials_key.startswith('<') and _credentials_key.endswith('>'):
+        _credentials_key = ''
+if _credentials_key:
+    CREDENTIALS_KEY = _credentials_key
+elif DEBUG:
+    import base64 as _b64
+    import hashlib as _hashlib
+    CREDENTIALS_KEY = _b64.urlsafe_b64encode(
+        _hashlib.sha256(('yse-credentials:' + SECRET_KEY).encode()).digest()
+    ).decode()
+else:
+    raise ImproperlyConfigured(
+        'CREDENTIALS_KEY is not configured. Set the YSE_CREDENTIALS_KEY environment '
+        'variable or credentials_key under [secrets] in YSE_PZ/settings.ini '
+        '(required whenever IS_DEBUG is False). Generate a key with '
+        '`python manage.py generate_credentials_key`.'
+    )
+
 # Hosts this stack answers for. DJANGO_ALLOWED_HOSTS env var or a comma-separated
 # [site_settings] ALLOWED_HOSTS in settings.ini, e.g.
 #   ALLOWED_HOSTS: ziggy.ucolick.org,localhost,127.0.0.1

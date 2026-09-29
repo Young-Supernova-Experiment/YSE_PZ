@@ -9,6 +9,9 @@ from django.dispatch import receiver
 
 from YSE_App.common.collaboration_groups import ensure_user_has_public_group
 from YSE_App.common.db_time_cap import cap_explorer_connection
+
+# Importing the module registers the external-service job handler (#265) in every process.
+import YSE_App.services.external_services  # noqa: E402,F401
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 
