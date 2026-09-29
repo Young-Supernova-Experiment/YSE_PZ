@@ -63,6 +63,7 @@ from .table_utils import (
     YSEObsNightTable,
     ToOFollowupTable,
     annotate_dashboard_transient_fields,
+    prefetch_followup_resources,
 )
 from .queries.yse_python_queries import *
 from .queries import yse_python_queries
@@ -820,29 +821,34 @@ def yse_home(request):
     classical_resource_form = ClassicalResourceForm()
     too_resource_form = ToOResourceForm()
 
-    fastrising_transients = fastrising_transient_queryset(ndays=7).filter(tags__name='YSE')
+    # recent_mag/recent_magdate as annotations and the follow-up resource
+    # columns from one prefetch, instead of ~8 queries per rendered row.
+    def _home_table_qs(qs):
+        return annotate_dashboard_transient_fields(prefetch_followup_resources(qs))
+
+    fastrising_transients = _home_table_qs(fastrising_transient_queryset(ndays=7).filter(tags__name='YSE'))
     fastrisingtransientfilter = TransientFilter(request.GET, queryset=fastrising_transients,prefix='ysefastrise')
     table_fastrising = YSERisingTransientTable(fastrisingtransientfilter.qs,prefix='ysefastrise')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_fastrising)
 
-    rising_transients = rising_transient_queryset(ndays=7).filter(tags__name='YSE')
+    rising_transients = _home_table_qs(rising_transient_queryset(ndays=7).filter(tags__name='YSE'))
     risingtransientfilter = TransientFilter(request.GET, queryset=rising_transients,prefix='yserise')
     table_rising = YSERisingTransientTable(risingtransientfilter.qs,prefix='yserise')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_rising)
 
     
-    transients = Transient.objects.filter(tags__name='YSE').filter(~Q(status__name='Ignore')).order_by('-disc_date')
+    transients = _home_table_qs(Transient.objects.filter(tags__name='YSE').filter(~Q(status__name='Ignore')).order_by('-disc_date'))
     transientfilter = TransientFilter(request.GET, queryset=transients,prefix='yse')
     table = YSEFullTransientTable(transientfilter.qs,prefix='yse')
     RequestConfig(request, paginate={'per_page': 10}).configure(table)
 
-    ztftransients = Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date')
+    ztftransients = _home_table_qs(Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date'))
     ztftransientfilter = TransientFilter(request.GET, queryset=ztftransients,prefix='yseztf')
     ztftable = YSEFullTransientTable(ztftransientfilter.qs,prefix='yseztf')
     RequestConfig(request, paginate={'per_page': 10}).configure(ztftable)
 
     
-    transients_follow = Transient.objects.filter(tags__name='YSE').order_by('-disc_date').filter(Q(status__name='FollowupRequested') | Q(status__name='Following'))
+    transients_follow = _home_table_qs(Transient.objects.filter(tags__name='YSE').order_by('-disc_date').filter(Q(status__name='FollowupRequested') | Q(status__name='Following')))
     transientfilter_follow = TransientFilter(request.GET, queryset=transients_follow,prefix='yse_follow')
     table_follow = YSETransientTable(transientfilter_follow.qs,prefix='yse_follow')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_follow)

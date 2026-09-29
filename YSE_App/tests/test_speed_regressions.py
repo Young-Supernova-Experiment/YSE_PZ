@@ -412,3 +412,91 @@ class ObservingTableAstroTests(TestCase):
         by_name = {cell[0].name: cell for cell in cells}
         self.assertIsNone(by_name["p3astro3"][1])
         self.assertTrue(all(by_name[f"p3astro{i}"][1] for i in (0, 1, 2, 4)))
+
+
+# ------------------------------------------------------------------------ P6/P7
+
+
+class YseHomeQueryCountTests(TestCase):
+    """P6: yse_home tables prefetch follow-up resources; rows add no queries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.models import ToOResource, TransientTag
+        from YSE_App.tests.deploy_checklist_helpers import (
+            create_instrument,
+            create_telescope,
+            ensure_observation_group,
+        )
+
+        cls.user = create_test_user("speed_home_user")
+        ensure_observation_group(cls.user, "YSE")
+        ps1 = create_telescope(cls.user, "Pan-STARRS1")
+        create_instrument(cls.user, ps1, "GPC1", band_names=("g", "r"))
+        tag, _ = TransientTag.objects.get_or_create(name="YSE", defaults=audit_fields(cls.user))
+        now = timezone.now()
+        cls.night = _classical_night(cls.user, tag="p6-classical", obs_date=now)
+        _obs_group, too_instrument, _band = create_instrument_stack(cls.user, obs_group_name="p6-too")
+        cls.too = ToOResource.objects.create(
+            telescope=too_instrument.telescope,
+            begin_date_valid=now - datetime.timedelta(days=3),
+            end_date_valid=now + datetime.timedelta(days=3),
+            **audit_fields(cls.user),
+        )
+        successful = _followup_status(cls.user, "Successful")
+        cls.transients = []
+        for i in range(12):
+            t = create_minimal_transient(cls.user, name=f"p6home{i}", ra=40.0 + i, dec=5.0 + i)
+            t.tags.add(tag)
+            attach_synthetic_photometry(cls.user, t, n_points=2)
+            _request_followup(cls.user, t, resource=cls.night.resource,
+                              classical_resource=cls.night.resource, comment=f"note {i}")
+            done = _request_followup(cls.user, t, resource=cls.too, too_resource=cls.too)
+            done.status = successful
+            done.save(update_fields=["status"])
+            cls.transients.append(t)
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _queries_for(self, n_rows):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        ignore = Transient.objects.get(name=self.transients[0].name).status.__class__.objects.get(name="Ignore")
+        hidden = Transient.objects.filter(name__startswith="p6home").exclude(
+            pk__in=[t.pk for t in self.transients[:n_rows]]
+        )
+        new_status = self.transients[0].status
+        hidden.update(status=ignore)
+        try:
+            with iers_offline(), CaptureQueriesContext(connection) as ctx:
+                response = self.client.get("/yse_home/")
+        finally:
+            hidden.update(status=new_status)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        for t in self.transients[:min(n_rows, 10)]:
+            self.assertIn(t.name, body)
+        self.assertIn(self.night.resource.telescope.name, body)
+        self.assertIn(self.too.telescope.name, body)
+        return len(ctx.captured_queries)
+
+    def test_yse_home_query_count_is_flat_in_rows(self):
+        self.assertEqual(self._queries_for(3), self._queries_for(12))
+
+    def test_resource_columns_fall_back_without_prefetch(self):
+        from YSE_App.table_utils import followup_comments_text, followup_resource_names
+
+        t = Transient.objects.get(name="p6home0")
+        self.assertEqual(followup_resource_names(t, ("Requested", "InProcess")), self.night.resource.telescope.name)
+        self.assertEqual(followup_resource_names(t, ("Successful",)), self.too.telescope.name)
+        self.assertIn("note 0", followup_comments_text(t))
+        prefetched = Transient.objects.filter(pk=t.pk)
+        from YSE_App.table_utils import prefetch_followup_resources
+
+        with CaptureQueriesContext(connection) as ctx:
+            row = prefetch_followup_resources(prefetched).get()
+            self.assertEqual(followup_resource_names(row, ("Requested", "InProcess")), self.night.resource.telescope.name)
+            self.assertIn("note 0", followup_comments_text(row))
+        self.assertEqual(len(ctx.captured_queries), 3)  # transient + followups + requests

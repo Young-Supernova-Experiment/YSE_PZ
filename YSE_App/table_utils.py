@@ -5,7 +5,7 @@ import django_tables2 as tables
 from django_tables2 import RequestConfig
 from django.db.models import F, Q
 from django.db.models.functions import Length, Substr
-from django.db.models import Count, OuterRef, Subquery, Value, Max, Min
+from django.db.models import Count, OuterRef, Prefetch, Subquery, Value, Max, Min
 from django.db.models.functions import Greatest, Coalesce
 from django_tables2 import A
 from django.db import models
@@ -71,6 +71,69 @@ class FollowupRecentMagMixin:
     def order_recent_mag(self, queryset, is_descending):
         queryset = annotate_followup_recent_mag(queryset)
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
+
+
+_REQUESTED_FOLLOWUP_STATUSES = ('Requested', 'InProcess')
+_SUCCESSFUL_FOLLOWUP_STATUSES = ('Successful',)
+_RESOURCE_SELECT_RELATED = (
+    'status',
+    'too_resource__telescope',
+    'classical_resource__telescope',
+    'queued_resource__telescope',
+)
+
+
+def prefetch_followup_resources(qs):
+    """
+    Prefetch what the Req. Followup / Followed By / Followup Comments columns read.
+
+    Without it each YSE table row ran six TransientFollowup queries (three
+    resource types x two status groups) plus one per follow-up for comments.
+    """
+    followups = TransientFollowup.objects.select_related(*_RESOURCE_SELECT_RELATED).order_by('-id')
+    return qs.prefetch_related(
+        Prefetch('transientfollowup_set', queryset=followups, to_attr='resource_followups'),
+        Prefetch(
+            'resource_followups__requests',
+            queryset=TransientFollowupRequest.objects.select_related('requestor').order_by(
+                'requested_at', 'id'
+            ),
+        ),
+    )
+
+
+def _resource_followups(record):
+    followups = getattr(record, 'resource_followups', None)
+    if followups is None:  # queryset was not prefetched: fall back to one query per row
+        followups = list(
+            TransientFollowup.objects.filter(transient__id=record.pk)
+            .select_related(*_RESOURCE_SELECT_RELATED)
+            .prefetch_related('requests__requestor')
+        )
+    return followups
+
+
+def followup_resource_names(record, status_names):
+    """Sorted, de-duplicated telescope names of follow-ups in ``status_names``."""
+    names = []
+    for followup in _resource_followups(record):
+        if followup.status.name not in status_names:
+            continue
+        for resource in (followup.too_resource, followup.classical_resource, followup.queued_resource):
+            if resource is not None:
+                names.append(resource.telescope.name)
+    return ', '.join(np.unique(names))
+
+
+def followup_comments_text(record):
+    from YSE_App.services.followup_requests import format_comments
+
+    comments = []
+    for followup in _resource_followups(record):
+        text = format_comments(followup)
+        if text:
+            comments.append(text)
+    return '; '.join(comments)
 
 
 class TargetVisibilityMixin:
@@ -601,49 +664,14 @@ class YSETransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def render_requested_followup_resources(self, value):
+    def render_requested_followup_resources(self, value, record):
+        return followup_resource_names(record, _REQUESTED_FOLLOWUP_STATUSES)
 
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('queued_resource__telescope__name',flat=True)
+    def render_successful_followup_resources(self, value, record):
+        return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_successful_followup_resources(self, value):
-
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_followup_comments(self, value):
-        from YSE_App.services.followup_requests import format_comments
-
-        comments = []
-        for followup in TransientFollowup.objects.filter(transient__id=value).prefetch_related(
-            'requests__requestor'
-        ):
-            text = format_comments(followup)
-            if text:
-                comments.append(text)
-        return '; '.join(comments)
+    def render_followup_comments(self, value, record):
+        return followup_comments_text(record)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -762,37 +790,11 @@ class YSEFullTransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def render_requested_followup_resources(self, value):
+    def render_requested_followup_resources(self, value, record):
+        return followup_resource_names(record, _REQUESTED_FOLLOWUP_STATUSES)
 
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_successful_followup_resources(self, value):
-
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
+    def render_successful_followup_resources(self, value, record):
+        return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
 
     def order_recent_mag(self, queryset, is_descending):
@@ -917,37 +919,11 @@ class YSERisingTransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def render_requested_followup_resources(self, value):
+    def render_requested_followup_resources(self, value, record):
+        return followup_resource_names(record, _REQUESTED_FOLLOWUP_STATUSES)
 
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(Q(status__name='Requested') | Q(status__name='InProcess')).\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
-
-    def render_successful_followup_resources(self, value):
-
-        qs_too = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('too_resource__telescope__name',flat=True)
-        qs_class = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('classical_resource__telescope__name',flat=True)
-        qs_queued = TransientFollowup.objects.filter(transient__id=value).filter(status__name='Successful').\
-            values_list('queued_resource__telescope__name',flat=True)
-
-        resource_list = []
-        for qs in [qs_too,qs_class,qs_queued]:
-            for q in qs:
-                if q is not None: resource_list += [q]
-
-        return ', '.join(np.unique(resource_list))
+    def render_successful_followup_resources(self, value, record):
+        return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
 
     def render_dt(self,value):
