@@ -6,7 +6,7 @@ from django.template import loader
 from django.views import generic
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.db.models import Q
 from rest_framework.renderers import JSONRenderer
 import requests
@@ -83,6 +83,7 @@ from urllib.parse import unquote
 
 from .common.utilities import date_to_mjd, mjd_to_date
 from django.views.generic.list import ListView
+from django.views.generic.base import TemplateView
 
 # Create your views here.
 
@@ -2313,50 +2314,97 @@ def delete_followup_request(request, request_id):
         parent.delete()
     return _followup_tab_redirect(slug)
     
+SEARCH_PER_PAGE_CHOICES = (25, 50, 100, 200)
+
+
+def search_results_queryset():
+    """Base queryset for the search page: the dashboard annotations plus the FKs the table shows."""
+    return annotate_dashboard_transient_fields(
+        Transient.objects.select_related('best_spec_class').order_by('-disc_date', '-pk')
+    )
+
+
 @method_decorator(login_required, name='dispatch')
-class SearchResultsView(ListView):
-    model = Transient
+class SearchResultsView(TemplateView):
+    """``/search/``: the shared ``TransientSearchFilterSet`` as a form over a sortable table (#284).
+
+    The query string is the whole state (filters, ``sort``, ``page``,
+    ``per_page``), so a URL reproduces a search. The header box's ``q`` is
+    expanded by ``quick_search_params`` (a name, or coordinates for a cone),
+    as before. Results are one query per page (bounding box + EXISTS
+    subqueries, the dashboard's recent-photometry annotations, the stat-row
+    LEFT JOIN) plus the paginator's COUNT and the form's choice lists.
+    """
+
     template_name = 'YSE_App/search_results.html'
 
-    def get_context_data(self):
-        query = self.request.GET.get('q')
+    def get_context_data(self, **kwargs):
+        from YSE_App.filters.transient_search import (
+            FIELD_GROUPS,
+            TransientSearchFilterSet,
+            quick_search_params,
+        )
+        from .table_utils import SearchTransientTable
 
-        transients = None
-        # a few use cases
-        # if there's a gap or a comma in the middle, assume RA/Dec
-        size = 5/3600. # box size
-        if ',' in query or len(query.split()) > 1:
-            if ',' in query:
-                if len(query.split(',')) == 2:
-                    ra,dec = query.split(',')
-                elif len(query.split(',')) == 3:
-                    ra,dec,size = query.split(',')
-            else:
-                if len(query.split()) == 2:
-                    ra,dec = query.split()
-                elif len(query.split()) == 3:
-                    ra,dec,size = query.split()
-            try:
-                ra,dec = float(ra),float(dec)
-                decimal = True
-            except:
-                sc = SkyCoord(ra,dec,unit=(u.hour,u.deg))
-                ra,dec = sc.ra.deg,sc.dec.deg
-                decimal = False
+        context = super().get_context_data(**kwargs)
+        params = quick_search_params(self.request.GET)
+        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(), request=self.request)
+        cone = filterset.cone
 
-            ramin,ramax,decmin,decmax = getRADecBox(ra,dec,size=float(size))
-            transients = Transient.objects.filter(Q(ra__gt=ramin) & Q(ra__lt=ramax) & Q(dec__gt=decmin) & Q(dec__lt=decmax))
-                
-        if transients is None:
-            # otherwise execute a simple search on name
-            transients = Transient.objects.filter(name__icontains=query)
-        
-        context = super().get_context_data()
-        transientfilter = TransientFilter(self.request.GET, queryset=transients,prefix='')
-        table = TransientTable(transientfilter.qs,prefix='')
-        RequestConfig(self.request, paginate={'per_page': 10}).configure(table)
-        context['transient_search_results'] = (table,'Search Results','Search Results',transientfilter)
+        try:
+            per_page = int(params.get('per_page', SEARCH_PER_PAGE_CHOICES[0]))
+        except (TypeError, ValueError):
+            per_page = SEARCH_PER_PAGE_CHOICES[0]
+        if per_page not in SEARCH_PER_PAGE_CHOICES:
+            per_page = SEARCH_PER_PAGE_CHOICES[0]
 
+        table = SearchTransientTable(
+            filterset.qs, prefix='', exclude=() if cone else ('separation',),
+        )
+        RequestConfig(self.request, paginate={'per_page': per_page}).configure(table)
+
+        visible = {name for _, names in FIELD_GROUPS for name in names}
+        form = filterset.form
+        groups = []
+        counts = filterset.group_counts()
+        for title, names in FIELD_GROUPS:
+            groups.append({
+                'title': title,
+                'key': title.lower(),
+                'fields': [form[name] for name in names],
+                'active': counts.get(title, 0),
+            })
+        # Parameters the form does not render (legacy API names, ``q``) travel
+        # as hidden inputs so a resubmitted form keeps them; ``page`` resets.
+        carried = [
+            (key, value)
+            for key in params
+            for value in params.getlist(key)
+            if key not in visible and key not in ('page', 'per_page', 'ordering', 'q') and value != ''
+        ]
+        chips = []
+        for name, label, value in filterset.active_filters():
+            without = params.copy()
+            without.pop(name, None)
+            without.pop('page', None)
+            chips.append({'name': name, 'label': label, 'value': value, 'remove_url': '?' + without.urlencode()})
+
+        context.update({
+            'filterset': filterset,
+            'filter_groups': groups,
+            'ordering_field': form['ordering'],
+            'carried_params': carried,
+            'active_chips': chips,
+            'cone': cone,
+            'table': table,
+            'result_count': table.page.paginator.count if hasattr(table, 'page') else None,
+            'per_page': per_page,
+            'per_page_choices': SEARCH_PER_PAGE_CHOICES,
+            'all_transient_statuses': TransientStatus.objects.order_by('name'),
+            'api_url': '%s?%s' % (reverse('transient-list'), params.urlencode()) if params else reverse('transient-list'),
+        })
+        # Backwards-compatible name used by older templates/tests.
+        context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         return context
 
 #@login_required

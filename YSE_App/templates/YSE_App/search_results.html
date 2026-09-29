@@ -1,39 +1,163 @@
 {% extends 'YSE_App/base.html' %}
 {% load static %}
-{% load dashboard_extras %}
 {% load widget_tweaks %}
 {% load render_table from django_tables2 %}
-{% load bootstrap3 %}
 
 {% block content_header %}
     <h1>
-        Young Supernova Experiment
-        <small>Search Results</small>
+        Transient Search
+        <small>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% endif %}</small>
     </h1>
     <ol class="breadcrumb">
-      <form action="{% url 'search' %}" method="get">
-        <input name="q" type="text" placeholder="Name or coord. search">
-      </form>
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item active">Search</li>
     </ol>
 {% endblock %}
 
+{% block styles %}
+<style>
+  .yse-search-form .form-group { margin-bottom: .5rem; }
+  .yse-search-form label { font-size: .85rem; margin-bottom: .1rem; font-weight: 600; }
+  .yse-search-form select[multiple] { min-height: 5.5rem; }
+  .yse-search-group .card-header { padding: .35rem .75rem; }
+  .yse-search-group .card-header .btn-link { padding: 0; font-weight: 600; text-decoration: none; }
+  .yse-search-group .card-body { padding: .5rem .75rem; }
+  .yse-search-chip { display: inline-block; margin: 0 .35rem .35rem 0; padding: .15rem .5rem; border-radius: 1rem; font-size: .85rem; background: rgba(60,141,188,.15); border: 1px solid rgba(60,141,188,.5); }
+  .yse-search-chip a { margin-left: .35rem; text-decoration: none; }
+  .yse-search-actions .form-group { margin-right: .75rem; }
+</style>
+{% endblock %}
+
 {% block content %}
-    
-  <div class="box" id="{{transient_cat.2}}">
-    <div class="box-header with-border">
-      <!--<h3 class="box-title">{{ transient_cat.1 }}</h3>-->
-    </div>
-    <div class="box-body">
-      {% render_table transient_search_results.0 %}
+<div class="box" id="search-filters">
+  <div class="box-body">
+    <form id="transient-search-form" class="yse-search-form" action="{% url 'search' %}" method="get">
+      {% for key, value in carried_params %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endfor %}
 
-    </div>
-    <!-- /.box-body -->
-    <div class="box-footer">
-    </div>
+      {% if filterset.form.errors %}
+      <div class="alert alert-warning py-1 px-2" role="alert" id="search-errors">
+        {% for error in filterset.form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+        {% for field in filterset.form %}{% for error in field.errors %}<div><strong>{{ field.label }}:</strong> {{ error }}</div>{% endfor %}{% endfor %}
+      </div>
+      {% endif %}
 
-  
+      <div class="accordion" id="search-filter-groups">
+        {% for group in filter_groups %}
+        <div class="card yse-search-group" id="search-group-{{ group.key }}">
+          <div class="card-header">
+            <button class="btn btn-link" type="button" data-toggle="collapse" data-target="#search-group-{{ group.key }}-body"
+                    aria-expanded="{% if group.active or forloop.first and not active_chips %}true{% else %}false{% endif %}"
+                    aria-controls="search-group-{{ group.key }}-body">
+              <i class="fa fa-caret-down" aria-hidden="true"></i> {{ group.title }}
+              {% if group.active %}<span class="badge badge-primary">{{ group.active }}</span>{% endif %}
+            </button>
+          </div>
+          <div id="search-group-{{ group.key }}-body" class="collapse{% if group.active or forloop.first and not active_chips %} show{% endif %}"
+               data-parent="#search-filter-groups-never">
+            <div class="card-body">
+              <div class="form-row">
+                {% for field in group.fields %}
+                <div class="form-group col-sm-6 col-md-3 col-xl-2">
+                  <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                  {% if field.field.widget.input_type == 'select' %}
+                    {% render_field field class+="form-control form-control-sm" %}
+                  {% else %}
+                    {% render_field field class+="form-control form-control-sm" %}
+                  {% endif %}
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="form-inline yse-search-actions mt-2">
+        <div class="form-group">
+          <label class="mr-1" for="{{ ordering_field.id_for_label }}">Order by</label>
+          {% render_field ordering_field class+="form-control form-control-sm" %}
+        </div>
+        <div class="form-group">
+          <label class="mr-1" for="search-per-page">Per page</label>
+          <select id="search-per-page" name="per_page" class="form-control form-control-sm">
+            {% for n in per_page_choices %}<option value="{{ n }}"{% if n == per_page %} selected{% endif %}>{{ n }}</option>{% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm mr-2" id="search-submit"><i class="fa fa-search" aria-hidden="true"></i> Search</button>
+        <a class="btn btn-outline-secondary btn-sm mr-2" href="{% url 'search' %}" id="search-reset">Reset</a>
+        <button type="button" class="btn btn-outline-secondary btn-sm mr-2" id="search-copy-link" title="Copy this search's URL">Copy link</button>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ api_url }}" id="search-api-link" title="The same search on the REST API">API</a>
+      </div>
+    </form>
+
+    {% if active_chips %}
+    <div class="mt-2" id="search-active-filters">
+      {% for chip in active_chips %}
+      <span class="yse-search-chip"><strong>{{ chip.label }}</strong>: {{ chip.value }}<a href="{{ chip.remove_url }}" title="Remove this filter" aria-label="Remove {{ chip.label }}">&times;</a></span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="box" id="search-results">
+  <div class="box-header with-border">
+    <h3 class="box-title">Results{% if cone %} within {{ cone.2|floatformat:1 }}&Prime; of {{ cone.0|floatformat:5 }}, {{ cone.1|floatformat:5 }}{% endif %}</h3>
+  </div>
+  <div class="box-body">
+    {% render_table table %}
+  </div>
+  <div class="box-footer"></div>
+</div>
 {% endblock %}
 
 {% block scripts %}
+<script type="text/javascript">
+$(function() {
+  $('#search-copy-link').on('click', function() {
+    var url = window.location.href;
+    var done = function() { $('#search-copy-link').text('Copied'); setTimeout(function() { $('#search-copy-link').text('Copy link'); }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done, function() { window.prompt('Copy this link', url); });
+    } else {
+      window.prompt('Copy this link', url);
+    }
+  });
 
+  function transientStatusChangeErr() {
+    alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.");
+  }
+  $('.transientStatusChange').on('click', function(event) {
+    event.preventDefault();
+    var status_id = $(this).attr('data-status_id');
+    var transient_id = $(this).attr('transient_id');
+    var status_name = $(this).attr('data-status_name');
+    var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);
+    var status_target = "{% url 'transientstatus-list' %}" + status_id + "/";
+    var base_url = window.location.protocol + "//" + window.location.host;
+    $.ajax({
+      type: "PATCH",
+      url: base_url + url_target,
+      headers: { "X-CSRFToken": "{{ csrf_token }}" },
+      data: { "status": base_url + status_target },
+      success: function(data, textStatus, jqXHR) {
+        if (jqXHR.status == 200 && textStatus == "success") {
+          var tokens = data.status.split("/");
+          if (tokens[tokens.length - 2] == status_id) {
+            $("#" + transient_id + "_status_name").text(status_name);
+          } else {
+            transientStatusChangeErr();
+          }
+        } else {
+          transientStatusChangeErr();
+        }
+      },
+      error: function() { transientStatusChangeErr(); }
+    });
+  });
+});
+</script>
 {% endblock %}

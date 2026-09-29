@@ -12,6 +12,7 @@ from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
 from YSE_App.services.visibility import filter_transients_by_user_access
+from YSE_App.filters.transient_search import TransientSearchFilterSet
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
@@ -498,44 +499,18 @@ class TelescopeViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     permission_classes = (permissions.IsAuthenticated,)
 
 ### `Transient` Filter Set ###
-class TransientFilter(django_filters.FilterSet):
-    created_date_gte = django_filters.DateTimeFilter(field_name="created_date", lookup_expr='gte')
-    modified_date_gte = django_filters.DateTimeFilter(field_name="modified_date", lookup_expr='gte')
-    status_in = django_filters.BaseInFilter(field_name="status__name")#, lookup_expr='in')
-    ra_gte = django_filters.Filter(field_name="ra", lookup_expr='gte')
-    ra_lte = django_filters.Filter(field_name="ra", lookup_expr='lte')
-    dec_gte = django_filters.Filter(field_name="dec", lookup_expr='gte')
-    dec_lte = django_filters.Filter(field_name="dec", lookup_expr='lte')
-    tag_in = django_filters.BaseInFilter(field_name="tags__name")
-    name = django_filters.Filter(field_name="name")
-    # Stored photometry statistics (TransientPhotStat, #268): filter and order
-    # on the summary row instead of the raw photometry.
-    peak_mag_lte = django_filters.NumberFilter(field_name="photstat__peak_mag", lookup_expr='lte')
-    peak_mag_gte = django_filters.NumberFilter(field_name="photstat__peak_mag", lookup_expr='gte')
-    last_det_mag_lte = django_filters.NumberFilter(field_name="photstat__last_detected_mag", lookup_expr='lte')
-    last_det_mag_gte = django_filters.NumberFilter(field_name="photstat__last_detected_mag", lookup_expr='gte')
-    last_det_mjd_gte = django_filters.NumberFilter(field_name="photstat__last_detected_mjd", lookup_expr='gte')
-    last_det_mjd_lte = django_filters.NumberFilter(field_name="photstat__last_detected_mjd", lookup_expr='lte')
-    first_det_mjd_gte = django_filters.NumberFilter(field_name="photstat__first_detected_mjd", lookup_expr='gte')
-    num_det_gte = django_filters.NumberFilter(field_name="photstat__num_det_global", lookup_expr='gte')
-    rise_rate_gte = django_filters.NumberFilter(field_name="photstat__rise_rate", lookup_expr='gte')
-    decay_rate_gte = django_filters.NumberFilter(field_name="photstat__decay_rate", lookup_expr='gte')
-    ordering = django_filters.OrderingFilter(
-        fields=(
-            ('created_date', 'created_date'), ('modified_date', 'modified_date'),
-            ('disc_date', 'disc_date'), ('name', 'name'),
-            ('photstat__peak_mag', 'peak_mag'), ('photstat__peak_mjd', 'peak_mjd'),
-            ('photstat__last_detected_mag', 'last_det_mag'),
-            ('photstat__last_detected_mjd', 'last_det_mjd'),
-            ('photstat__first_detected_mjd', 'first_det_mjd'),
-            ('photstat__num_det_global', 'num_det'),
-            ('photstat__rise_rate', 'rise_rate'), ('photstat__decay_rate', 'decay_rate'),
-        )
-    )
+class TransientFilter(TransientSearchFilterSet):
+    """``/api/transients/`` filters: the shared search FilterSet (#284).
 
-    class Meta:
-        model = Transient
-        fields = ('created_date','modified_date')
+    Every parameter of ``YSE_App.filters.transient_search`` works here,
+    including the legacy names this class used to define itself
+    (``created_date_gte``, ``modified_date_gte``, ``status_in``, ``ra_gte`` ...,
+    ``tag_in``, ``name``, the ``peak_mag_lte`` family from #341 and
+    ``ordering``). See docs/transient-search.md.
+    """
+
+    class Meta(TransientSearchFilterSet.Meta):
+        pass
 
 ### `Transient` ViewSets ###
 class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -543,8 +518,7 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSerializer
     permission_classes = (permissions.IsAuthenticated,)
     filter_backends = (DjangoFilterBackend,)
-    filter_class = TransientFilter
-    #filter_fields = ('status','created_date','modified_date','mw_ebv','status__name')
+    filterset_class = TransientFilter
 
     def get_queryset(self):
         qs = Transient.objects.all()

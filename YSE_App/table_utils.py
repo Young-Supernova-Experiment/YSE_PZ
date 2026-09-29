@@ -428,6 +428,32 @@ class TransientTable(tables.Table):
             "order": [[ 3, "desc" ]],
         }
 
+class SearchTransientTable(TransientTable):
+    """``TransientTable`` plus the cone-search separation for ``/search/`` (#284).
+
+    ``separation`` is the ``annotate_separation`` value in degrees; the
+    column shows arcseconds and is excluded (``exclude=('separation',)``)
+    when no cone search is active. ``best_spec_class`` is selected with the
+    row (``select_related``) by the search view, so the table renders a page
+    without per-row queries.
+    """
+
+    separation = tables.Column(accessor='separation', verbose_name='Sep. (arcsec)', orderable=True)
+
+    def render_separation(self, value):
+        return '%.1f' % (float(value) * 3600.0)
+
+    def order_separation(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'separation', is_descending), True)
+
+    class Meta(TransientTable.Meta):
+        fields = ('name_string', 'separation', 'ra_string', 'dec_string', 'disc_date_string', 'recent_mag',
+                  'recent_magdate', 'peak_mag', 'mw_ebv', 'obs_group', 'best_spec_class', 'best_redshift',
+                  'status_string')
+        sequence = fields
+        attrs = dict(TransientTable.Meta.attrs, id='search_transient_tbl')
+
+
 class FieldTransientTable(tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
