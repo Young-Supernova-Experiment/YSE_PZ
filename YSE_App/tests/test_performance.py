@@ -34,9 +34,12 @@ from YSE_App.tests.fixtures_minimal import (
 from YSE_App.tests.perf_tracking import LoadTimeRegistry
 
 # Query ceilings — tighten as views are optimized.
-MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 50
-MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 50
-MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 90  # audience form loads shared collaboration groups
+# The synthetic fixtures bulk-create photometry (no signals), so the first
+# view also computes and stores the transient's PhotStat row (#345): four
+# extra queries once per transient, none on later views.
+MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 54
+MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 54
+MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 94  # audience form loads shared collaboration groups
 MAX_QUERIES_PERSONAL_DASHBOARD = 40
 # Cold: five explorer SQL runs + five table builds (heavy; ceiling guards regressions).
 MAX_QUERIES_PERSONAL_DASHBOARD_FIVE_QUERIES_COLD = 33

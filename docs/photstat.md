@@ -51,8 +51,13 @@ Indexes: `peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, 
 
 ## Surfaces
 
-* Transient detail, Summary tab, "Photometric Summary": a **Peak Mag** row (date, mag, filter) and a line with
-  detections, upper limits (deepest), rise and decay rate, and the last limit before the first detection.
+* Transient detail, Summary tab, "Photometric Summary": a **Peak Mag** row (date, mag, filter) and, right
+  below the table, a **Photometry statistics** table: Detections (of N unflagged points), Upper limits (deepest,
+  with its date), Rise rate and Decay rate (mag/day, band), Last non-detection before discovery (date, MJD) and
+  Time to non-detection (days). A transient with **no stat row yet** gets one computed and stored on that first
+  page view (`services.photstat.stat_for_transient`: one pass over that transient's photometry, at most once per
+  request; a failure is logged and the block is left out, the page still renders). So the detail page does not
+  depend on the backfill below; the dashboard column, its ordering and the API filters do.
 * Dashboard tables (`TransientTable`): sortable **Peak Mag** column. The value is a `LEFT JOIN` on the stat
   table (`annotate_peak_mag`), no per-row query.
 * API: `/api/transientphotstats/` (read-only; filters `transient_name`, `peak_mag_lte/gte`,
@@ -81,8 +86,9 @@ Expected output: one `batch N-M of T: created ..., updated ..., unchanged ...` l
 final `rebuild_photstats: processed T transient(s); created T, updated 0, unchanged 0 in S s`. The command
 reads all photometry once (about 10^5 transients, 10^6-10^7 points): budget 10-30 minutes on Ziggy; it is
 safe to interrupt and re-run (`--missing-only` resumes without touching finished rows). Until the backfill
-has run, the Peak Mag column and the detail-page block are simply empty for transients that have not had a
-photometry upload since the deploy. Re-running the full command later is harmless: unchanged rows are
+has run, the Peak Mag column (and the `/api/transientphotstats/` filters and ordering) are simply empty for
+transients that have not had a photometry upload since the deploy; the detail page fills its own row the first
+time someone opens the transient (#345), so a page that has been visited also shows up in the column. Re-running the full command later is harmless: unchanged rows are
 skipped (`updated 0, unchanged T`).
 
 No new settings.

@@ -26,6 +26,8 @@ limit before it.
 Three ways to keep rows current:
 
 * :func:`recompute` for one transient (what the signals call);
+* :func:`stat_for_transient` for the detail page and the API: returns the row
+  and computes it first when the backfill has not reached that transient;
 * :func:`recompute_many` for a batch with one photometry query per batch
   (the ``rebuild_photstats`` command);
 * :func:`deferred_updates`, a context manager the ingest paths wrap their
@@ -299,6 +301,52 @@ def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPh
     values = compute_stats(points_by_transient([transient_id]).get(transient_id, []))
     if apply_values(stat, values):
         stat.save()
+    return stat
+
+
+DISPLAY_RELATED = ('peak_band', 'first_detected_band', 'last_detected_band')
+
+
+def stat_for_transient(transient_id: int, *, compute_missing: bool = True) -> Optional[TransientPhotStat]:
+    """The stat row for ``transient_id`` with its bands loaded, for a page or API view.
+
+    A transient that has had no photometry upload since the table was added
+    has no row until ``rebuild_photstats`` runs (#345).  With
+    ``compute_missing`` the row is then computed and stored on the spot, one
+    pass over that transient's photometry, so the detail page never waits on
+    the backfill.  A failure is logged and gives ``None``: the caller renders
+    the block empty instead of failing the page.
+    """
+    transient_id = int(transient_id)
+    queryset = TransientPhotStat.objects.filter(transient_id=transient_id).select_related(*DISPLAY_RELATED)
+    stat = queryset.first()
+    if stat is not None or not compute_missing:
+        return stat
+    try:
+        if compute_missing_stat(transient_id) is None:
+            return None
+    except Exception:
+        # Also the race with a concurrent upload whose signal inserted the row
+        # first: the reload below then finds it.
+        logger.exception('photstat on-demand compute failed for transient %s', transient_id)
+    return queryset.first()
+
+
+def compute_missing_stat(transient_id: int) -> Optional[TransientPhotStat]:
+    """Insert the stat row for ``transient_id``, which the caller found missing.
+
+    Three queries: the photometry pass, the transient existence check and the
+    INSERT (``recompute`` would look the row up again first).  ``None`` for
+    an unknown transient.
+    """
+    from YSE_App.models.transient_models import Transient
+
+    values = compute_stats(points_by_transient([transient_id]).get(transient_id, []))
+    if not Transient.objects.filter(pk=transient_id).exists():
+        return None
+    stat = TransientPhotStat(transient_id=transient_id)
+    apply_values(stat, values)
+    stat.save(force_insert=True)
     return stat
 
 

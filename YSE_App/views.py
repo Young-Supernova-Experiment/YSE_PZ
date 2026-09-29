@@ -1718,11 +1718,12 @@ def transient_detail(request, slug):
                  transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))           
         
         # Stored photometry statistics (#268): peak, detections, rise/decay.
-        context['photstat'] = (
-            TransientPhotStat.objects.filter(transient_id=transient_obj.id)
-            .select_related('peak_band', 'first_detected_band', 'last_detected_band')
-            .first()
-        )
+        # A transient the backfill has not reached yet gets its row computed
+        # here, once, from its own photometry (#345); a failure renders the
+        # block empty rather than failing the page.
+        from YSE_App.services.photstat import stat_for_transient
+
+        context['photstat'] = stat_for_transient(transient_obj.id)
 
         if lastphotdata and firstphotdata:
             context['recent_mag'] = format_magnitude_with_error(
