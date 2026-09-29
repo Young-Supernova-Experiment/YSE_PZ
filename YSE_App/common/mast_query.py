@@ -1,4 +1,6 @@
+import json
 import sys, numpy as np
+from urllib.parse import quote
 from astroquery.mast import Observations
 from astropy.coordinates import SkyCoord
 from astropy.table import Table,unique
@@ -97,6 +99,135 @@ class hstImages():
             url = self.options['jpg'].format(id=obsid,ra=self.coord.ra.degree,
                 dec=self.coord.dec.degree)
             self.jpglist.append(url)
+
+
+MAST_DOWNLOAD_URL = 'https://mast.stsci.edu/api/v0.1/Download/file?uri={uri}'
+MAST_PORTAL_URL = 'https://mast.stsci.edu/portal/Mashup/Clients/Mast/Portal.html?searchQuery={query}'
+
+
+def _plain(value):
+    """Return a JSON-friendly Python value for an astropy table cell.
+
+    Masked cells and the strings MAST uses for "nothing" become ``None``;
+    numpy scalars become their Python equivalents.
+    """
+    if value is None or value is np.ma.masked:
+        return None
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bytes):
+        value = value.decode('utf-8', errors='replace')
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value in ('', '--', 'nan', 'None'):
+            return None
+    return value
+
+
+def mast_file_url(uri):
+    """Turn a ``mast:...`` product URI into a browser-openable download link.
+
+    MAST lists JWST previews and products as ``mast:JWST/product/<file>``
+    URIs; the ``Download/file`` endpoint serves them (public data without
+    login). Plain http(s) links are returned unchanged.
+    """
+    uri = _plain(uri)
+    if not uri:
+        return None
+    if str(uri).lower().startswith(('http://', 'https://')):
+        return str(uri)
+    return MAST_DOWNLOAD_URL.format(uri=quote(str(uri), safe=''))
+
+
+def mast_portal_url(obs_id):
+    """MAST Portal deep link showing one observation by its ``obs_id``."""
+    query = json.dumps({
+        'service': 'CAOMFILTERED',
+        'inputText': [{'paramName': 'obs_id', 'niceName': 'obs_id', 'values': [str(obs_id)]}],
+        'paramsService': 'Mast.Caom.Filtered',
+        'title': f'MAST observation {obs_id}',
+        'columns': '*',
+    }, separators=(',', ':'))
+    return MAST_PORTAL_URL.format(query=quote(query, safe=''))
+
+
+class MastObservations():
+    """Archive-agnostic MAST observation search at a position.
+
+    ``hstImages`` above is the original HST-only lookup. This class covers
+    the collections MAST serves through the same CAOM interface (JWST first,
+    #329): one ``query_criteria`` cone search at the transient position (the
+    same 1 arcsec radius as the HST lookup) restricted to ``collections``,
+    science data products of the given ``product_types``, returned as plain
+    dicts the views can serialise without knowing about astropy tables.
+
+    Nothing here catches exceptions: callers wrap the lookup in the
+    archive-status timeout/error handling in ``view_utils``.
+    """
+
+    #: Observation-table columns copied into each row (missing ones are None).
+    columns = ('obs_id', 'obsid', 'obs_collection', 'instrument_name', 'filters',
+               't_min', 't_max', 't_exptime', 'proposal_id', 'proposal_pi',
+               'target_name', 'dataproduct_type', 'calib_level', 'jpegURL',
+               'dataURL', 'dataRights')
+
+    def __init__(self, ra, dec, collections, radius=None, product_types=('image', 'spectrum'),
+                 intent_type='science'):
+        if (':' in str(ra) and ':' in str(dec)):
+            self.coord = SkyCoord(ra, dec, unit=(u.hour, u.deg))
+        else:
+            self.coord = SkyCoord(ra, dec, unit=(u.deg, u.deg))
+        self.ra = self.coord.ra.degree
+        self.dec = self.coord.dec.degree
+        self.collections = list(collections)
+        self.radius = radius if radius is not None else instrument_defaults['radius']
+        self.product_types = list(product_types) if product_types else None
+        self.intent_type = intent_type
+        self.obstable = None
+        self.rows = []
+
+    @property
+    def count(self):
+        return len(self.rows)
+
+    def query(self):
+        """Run the MAST search and fill ``obstable`` / ``rows``; returns ``rows``."""
+        criteria = {'coordinates': self.coord, 'radius': self.radius,
+                    'obs_collection': self.collections}
+        if self.product_types:
+            criteria['dataproduct_type'] = self.product_types
+        if self.intent_type:
+            criteria['intentType'] = self.intent_type
+        table = Observations.query_criteria(**criteria)
+        self.obstable = table
+        self.rows = self.rows_from_table(table)
+        return self.rows
+
+    @classmethod
+    def rows_from_table(cls, table):
+        """Plain dict rows (sorted by start time) from a MAST observation table."""
+        if table is None or len(table) == 0:
+            return []
+        names = set(table.colnames)
+        rows = []
+        for record in table:
+            row = {name: _plain(record[name]) if name in names else None for name in cls.columns}
+            t_min = row.get('t_min')
+            row['obsdate'] = Time(t_min, format='mjd').iso[:19] if t_min is not None else None
+            row['previewurl'] = mast_file_url(row.get('jpegURL'))
+            row['dataurl'] = mast_file_url(row.get('dataURL'))
+            row['portalurl'] = mast_portal_url(row['obs_id']) if row.get('obs_id') else None
+            rows.append(row)
+        rows.sort(key=lambda r: (r.get('t_min') is None, r.get('t_min') or 0.0, r.get('obs_id') or ''))
+        return rows
+
+
+def jwstObservations(ra, dec, radius=None):
+    """JWST observations (images and spectra) covering the position."""
+    return MastObservations(ra, dec, collections=['JWST'], radius=radius)
+
 
 ## TEST TEST TEST
 if __name__=='__main__':
