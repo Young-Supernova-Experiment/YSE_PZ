@@ -1,0 +1,56 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Submission #{{ submission.pk }} <small class="text-muted">{{ submission.get_kind_display }} of <a href="{% url 'transient_detail' submission.transient.slug %}">{{ submission.transient.name }}</a></small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-lg-4 col-12">
+		<div class="card">
+			<div class="card-header"><strong>Summary</strong></div>
+			<div class="card-body p-0">
+				<table class="table table-sm mb-0">
+					<tr><th>Status</th><td data-status="{{ submission.status }}"><span class="badge badge-{% if submission.status == 'accepted' %}success{% elif submission.status == 'rejected' or submission.status == 'failed' %}danger{% elif submission.status == 'submitted' %}info{% else %}warning{% endif %}">{{ submission.get_status_display }}</span></td></tr>
+					<tr><th>Service</th><td>{{ submission.service.name }}{% if submission.service.testing %} <span class="badge badge-secondary">sandbox</span>{% endif %}</td></tr>
+					<tr><th>Endpoint</th><td><code>{{ submission.service.api_base_url }}/bulk-report</code></td></tr>
+					<tr><th>TNS name</th><td>{% if submission.tns_name %}<a href="{{ submission.tns_object_url }}" target="_blank" rel="noopener noreferrer">{{ submission.tns_name }}</a>{% else %}-{% endif %}</td></tr>
+					<tr><th>Report id</th><td>{% if submission.external_id %}<code>{{ submission.external_id }}</code>{% else %}-{% endif %}</td></tr>
+					<tr><th>Attempts</th><td>{{ submission.attempts }}</td></tr>
+					<tr><th>Requested by</th><td>{{ submission.created_by.username }}{% if submission.auto_publisher %} (rule: {{ submission.auto_publisher.name }}){% endif %}</td></tr>
+					<tr><th>Created</th><td>{{ submission.created_date|date:"Y-m-d H:i:s" }}</td></tr>
+					<tr><th>Submitted</th><td>{{ submission.submitted_at|date:"Y-m-d H:i:s"|default:"-" }}</td></tr>
+					<tr><th>Finished</th><td>{{ submission.finished_at|date:"Y-m-d H:i:s"|default:"-" }}</td></tr>
+					<tr><th>Queue job</th><td>{% if submission.job %}<a href="{% url 'admin:YSE_App_job_change' submission.job.pk %}">#{{ submission.job.pk }}</a> ({{ submission.job.status }}){% else %}-{% endif %}</td></tr>
+				</table>
+			</div>
+			<div class="card-footer">
+				{% if submission.can_retry %}
+				<form method="post" action="{% url 'sharing_submission_retry' submission.pk %}" class="d-inline">
+					{% csrf_token %}
+					<button class="btn btn-sm btn-primary" type="submit">Retry with the same payload</button>
+				</form>
+				{% endif %}
+				<a class="btn btn-sm btn-outline-secondary" href="{% url 'sharing_submissions' %}">All submissions</a>
+			</div>
+		</div>
+		{% if submission.error %}
+		<div class="card card-outline card-danger">
+			<div class="card-header"><strong>Error</strong></div>
+			<div class="card-body"><pre class="mb-0 small">{{ submission.error }}</pre></div>
+		</div>
+		{% endif %}
+	</div>
+	<div class="col-lg-8 col-12">
+		<div class="card">
+			<div class="card-header"><strong>Payload sent</strong> <small class="text-muted">bulk-report "data"</small></div>
+			<div class="card-body"><pre class="mb-0 small" id="sharing-payload">{{ payload_json }}</pre></div>
+		</div>
+		<div class="card">
+			<div class="card-header"><strong>Last reply from TNS</strong></div>
+			<div class="card-body"><pre class="mb-0 small" id="sharing-response">{{ response_json }}</pre></div>
+		</div>
+	</div>
+</div>
+{% endblock %}

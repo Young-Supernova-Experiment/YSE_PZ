@@ -1,0 +1,152 @@
+{% comment %}"Report to TNS" dialog (#326): choose a service and report kind, preview the exact payload, then queue it.{% endcomment %}
+{% if sharing_services %}
+<div class="modal fade" id="yse-report-modal" tabindex="-1" role="dialog" aria-labelledby="yse-report-modal-title" aria-hidden="true">
+	<div class="modal-dialog modal-lg" role="document">
+		<div class="modal-content">
+			<form id="yse-report-form" data-preview-url="{% url 'sharing_report_preview' transient.id %}" data-submit-url="{% url 'sharing_report_submit' transient.id %}">
+				{% csrf_token %}
+				<div class="modal-header">
+					<h5 class="modal-title" id="yse-report-modal-title">Report {{ transient.name }} to TNS</h5>
+					<button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+				</div>
+				<div class="modal-body">
+					<div class="form-row">
+						<div class="form-group col-md-6">
+							<label for="yse-report-service">Service</label>
+							<select class="form-control form-control-sm" id="yse-report-service" name="service">
+								{% for s in sharing_services %}
+								<option value="{{ s.id }}" data-coauthors="{{ s.default_coauthors }}" data-remarks="{{ s.default_remarks }}" data-testing="{{ s.testing|yesno:'1,0' }}">{{ s.name }}{% if s.testing %} (sandbox){% else %} (PRODUCTION){% endif %}{% if s.group %} - {{ s.group }}{% endif %}</option>
+								{% endfor %}
+							</select>
+						</div>
+						<div class="form-group col-md-6">
+							<label>Report type</label>
+							<div>
+								<div class="form-check form-check-inline">
+									<input class="form-check-input" type="radio" name="kind" id="yse-report-kind-discovery" value="discovery"{% if not sharing_has_tns_name %} checked{% endif %}{% if sharing_has_tns_name %} disabled{% endif %}>
+									<label class="form-check-label" for="yse-report-kind-discovery">Discovery (AT)</label>
+								</div>
+								<div class="form-check form-check-inline">
+									<input class="form-check-input" type="radio" name="kind" id="yse-report-kind-classification" value="classification"{% if sharing_has_tns_name %} checked{% endif %}>
+									<label class="form-check-label" for="yse-report-kind-classification">Classification</label>
+								</div>
+							</div>
+							<small class="form-text text-muted">{% if sharing_has_tns_name %}This transient already has a TNS name; only a classification can be reported.{% else %}A classification needs a TNS name first.{% endif %}</small>
+						</div>
+					</div>
+					<div id="yse-report-classification-fields" class="form-row"{% if not sharing_has_tns_name %} style="display:none"{% endif %}>
+						<div class="form-group col-md-5">
+							<label for="yse-report-spectrum">Spectrum</label>
+							<select class="form-control form-control-sm" id="yse-report-spectrum" name="spectrum">
+								{% for sp in sharing_spectra %}<option value="{{ sp.id }}">{{ sp.label }}</option>{% empty %}<option value="">(no spectrum on this transient)</option>{% endfor %}
+							</select>
+						</div>
+						<div class="form-group col-md-4">
+							<label for="yse-report-class">Classification</label>
+							<input class="form-control form-control-sm" id="yse-report-class" name="classification" list="yse-report-class-list" value="{{ sharing_default_class }}" placeholder="SN Ia">
+							<datalist id="yse-report-class-list">{% for c in sharing_classes %}<option value="{{ c }}">{% endfor %}</datalist>
+						</div>
+						<div class="form-group col-md-3">
+							<label for="yse-report-redshift">Redshift</label>
+							<input class="form-control form-control-sm" id="yse-report-redshift" name="redshift" value="{% if transient.redshift %}{{ transient.redshift|floatformat:5 }}{% endif %}" placeholder="from spectrum">
+						</div>
+					</div>
+					<div class="form-group">
+						<label for="yse-report-coauthors">Reporters / classifiers <small class="text-muted">(the service's default list; edit as needed; "on behalf of" the group is appended)</small></label>
+						<textarea class="form-control form-control-sm" id="yse-report-coauthors" name="coauthors" rows="2">{{ sharing_services.0.default_coauthors }}</textarea>
+					</div>
+					<div class="form-group">
+						<label for="yse-report-remarks">Remarks</label>
+						<input class="form-control form-control-sm" id="yse-report-remarks" name="remarks" value="{{ sharing_services.0.default_remarks }}">
+					</div>
+					<div id="yse-report-problems" class="alert alert-warning" style="display:none"></div>
+					<div id="yse-report-preview-wrap" style="display:none">
+						<div class="d-flex justify-content-between"><strong>Payload preview</strong> <small class="text-muted" id="yse-report-endpoint"></small></div>
+						<pre id="yse-report-preview" class="small border rounded p-2 bg-light" style="max-height: 20em; overflow:auto"></pre>
+					</div>
+					<div id="yse-report-result" class="alert alert-success" style="display:none"></div>
+					{% if sharing_recent %}
+					<div class="small text-muted mt-2">Previous reports:
+						{% for sub in sharing_recent %}<a href="{% url 'sharing_submission_detail' sub.pk %}">#{{ sub.pk }} {{ sub.kind }} {{ sub.status }}{% if sub.tns_name %} ({{ sub.tns_name }}){% endif %}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+					</div>
+					{% endif %}
+				</div>
+				<div class="modal-footer">
+					<span class="mr-auto small text-muted" id="yse-report-target"></span>
+					<button type="button" class="btn btn-outline-secondary" data-dismiss="modal">Close</button>
+					<button type="button" class="btn btn-primary" id="yse-report-preview-btn">Preview payload</button>
+					<button type="button" class="btn btn-success" id="yse-report-submit-btn" disabled>Submit report</button>
+				</div>
+			</form>
+		</div>
+	</div>
+</div>
+<script>
+(function () {
+	var form = document.getElementById('yse-report-form');
+	if (!form) { return; }
+	var previewBtn = document.getElementById('yse-report-preview-btn');
+	var submitBtn = document.getElementById('yse-report-submit-btn');
+	var problems = document.getElementById('yse-report-problems');
+	var previewWrap = document.getElementById('yse-report-preview-wrap');
+	var preview = document.getElementById('yse-report-preview');
+	var result = document.getElementById('yse-report-result');
+	var endpoint = document.getElementById('yse-report-endpoint');
+	var target = document.getElementById('yse-report-target');
+	var service = document.getElementById('yse-report-service');
+	var classFields = document.getElementById('yse-report-classification-fields');
+
+	function csrf() { var el = form.querySelector('input[name=csrfmiddlewaretoken]'); return el ? el.value : ''; }
+	function kind() { var k = form.querySelector('input[name=kind]:checked'); return k ? k.value : 'discovery'; }
+	function invalidate() { submitBtn.disabled = true; previewWrap.style.display = 'none'; result.style.display = 'none'; }
+	function updateTarget() {
+		var opt = service.options[service.selectedIndex];
+		target.textContent = opt && opt.getAttribute('data-testing') === '1' ? 'Goes to the TNS sandbox.' : 'Goes to the real TNS.';
+		target.className = 'mr-auto small ' + (opt && opt.getAttribute('data-testing') === '1' ? 'text-muted' : 'text-danger font-weight-bold');
+	}
+	function post(url) {
+		var body = new URLSearchParams(new FormData(form));
+		return fetch(url, {method: 'POST', credentials: 'same-origin', body: body,
+			headers: {'X-CSRFToken': csrf(), 'X-Requested-With': 'XMLHttpRequest'}}).then(function (r) {
+			return r.json().then(function (d) { d._status = r.status; return d; });
+		});
+	}
+	service.addEventListener('change', function () {
+		var opt = service.options[service.selectedIndex];
+		document.getElementById('yse-report-coauthors').value = opt.getAttribute('data-coauthors') || '';
+		document.getElementById('yse-report-remarks').value = opt.getAttribute('data-remarks') || '';
+		updateTarget(); invalidate();
+	});
+	form.querySelectorAll('input[name=kind]').forEach(function (r) {
+		r.addEventListener('change', function () { classFields.style.display = kind() === 'classification' ? '' : 'none'; invalidate(); });
+	});
+	['yse-report-coauthors', 'yse-report-remarks', 'yse-report-spectrum', 'yse-report-class', 'yse-report-redshift'].forEach(function (id) {
+		var el = document.getElementById(id); if (el) { el.addEventListener('input', invalidate); el.addEventListener('change', invalidate); }
+	});
+	previewBtn.addEventListener('click', function () {
+		problems.style.display = 'none'; result.style.display = 'none';
+		previewBtn.disabled = true;
+		post(form.getAttribute('data-preview-url')).then(function (d) {
+			previewBtn.disabled = false;
+			if (d.error) { problems.textContent = d.error; problems.style.display = ''; return; }
+			if (d.problems && d.problems.length) { problems.textContent = d.problems.join(' '); problems.style.display = ''; }
+			preview.textContent = JSON.stringify(d.payload, null, 2);
+			endpoint.textContent = 'POST ' + d.endpoint;
+			previewWrap.style.display = '';
+			submitBtn.disabled = !!(d.problems && d.problems.length);
+		}).catch(function () { previewBtn.disabled = false; problems.textContent = 'Preview failed.'; problems.style.display = ''; });
+	});
+	submitBtn.addEventListener('click', function () {
+		var opt = service.options[service.selectedIndex];
+		if (opt.getAttribute('data-testing') !== '1' && !window.confirm('This report goes to the REAL TNS. Continue?')) { return; }
+		submitBtn.disabled = true;
+		post(form.getAttribute('data-submit-url')).then(function (d) {
+			if (d.error) { problems.textContent = d.error; problems.style.display = ''; submitBtn.disabled = false; return; }
+			result.innerHTML = 'Queued as submission #' + d.id + ' (' + d.status + '). Follow it on the <a href="' + d.url + '">submission page</a>.';
+			result.style.display = '';
+		}).catch(function () { problems.textContent = 'Submit failed.'; problems.style.display = ''; submitBtn.disabled = false; });
+	});
+	updateTarget();
+})();
+</script>
+{% endif %}

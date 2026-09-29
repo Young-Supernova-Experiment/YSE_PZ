@@ -17,7 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views, candidate_views, job_views, notification_views
+from YSE_App import allocation_views, candidate_views, job_views, notification_views, sharing_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -114,6 +114,11 @@ urlpatterns = [
             allocation_views.transient_facility_requests_fragment, name='transient_facility_requests_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_submit/$',
             allocation_views.transient_facility_submit, name='transient_facility_submit'),
+    # Sharing services (#326): report dialog preview/submit for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/preview/$',
+            sharing_views.report_preview, name='sharing_report_preview'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/submit/$',
+            sharing_views.report_submit, name='sharing_report_submit'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -227,6 +232,16 @@ urlpatterns = [
     re_path(r'^allocations/(?P<allocation_id>[0-9]+)/edit/$', allocation_views.allocation_edit, name='allocation_edit'),
     re_path(r'^facility_requests/(?P<request_id>[0-9]+)/action/$',
             allocation_views.facility_request_action, name='facility_request_action'),
+    # Sharing services (#324): submissions page, detail, retry and the services/rules page.
+    re_path(r'^sharing/$', sharing_views.sharing_submissions, name='sharing_submissions'),
+    re_path(r'^sharing/submissions/$', sharing_views.sharing_submissions, name='sharing_submissions_list'),
+    re_path(r'^sharing/submissions/(?P<submission_id>[0-9]+)/$', sharing_views.sharing_submission_detail,
+            name='sharing_submission_detail'),
+    re_path(r'^sharing/submissions/(?P<submission_id>[0-9]+)/retry/$', sharing_views.sharing_submission_retry,
+            name='sharing_submission_retry'),
+    re_path(r'^sharing/services/$', sharing_views.sharing_services, name='sharing_services'),
+    re_path(r'^sharing/services/(?P<service_id>[0-9]+)/rules/(?P<rule_id>[0-9]+)/dry_run\.json$',
+            sharing_views.autopublisher_dry_run, name='sharing_autopublisher_dry_run'),
     re_path(r'^add_dashboard_query/', AddDashboardQueryFormView.as_view(), name='add_dashboard_query'),
     re_path(r'^remove_dashboard_query/(?P<pk>[0-9_-]+)/', RemoveDashboardQueryFormView.as_view(), name='remove_dashboard_query'),
     re_path(r'^add_followup_notice/', AddFollowupNoticeFormView.as_view(), name='add_followup_notice'),
@@ -334,6 +349,8 @@ router.register(r'transientphotstats', api_views.TransientPhotStatViewSet, basen
 router.register(r'brokerfilters', api_views.BrokerFilterViewSet, basename='brokerfilter')
 router.register(r'candidates', api_views.CandidateViewSet, basename='candidate')
 router.register(r'brokers', api_views.BrokerViewSet, basename='broker')
+router.register(r'sharingservices', api_views.SharingServiceViewSet, basename='sharingservice')
+router.register(r'sharingsubmissions', api_views.SharingSubmissionViewSet, basename='sharingsubmission')
 router.register(r'hostphotdata', api_views.HostPhotDataViewSet, basename='hostphotdata')
 
 router.register(r'transientimages', api_views.TransientImageViewSet)

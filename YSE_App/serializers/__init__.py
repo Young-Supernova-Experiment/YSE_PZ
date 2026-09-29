@@ -23,3 +23,4 @@ from YSE_App.serializers.gw_serializers import *
 from YSE_App.serializers.surveyfield_serializers import *
 from YSE_App.serializers.candidate_serializers import *
 from YSE_App.serializers.allocation_serializers import *
+from YSE_App.serializers.sharing_serializers import *
