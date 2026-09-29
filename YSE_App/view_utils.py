@@ -914,7 +914,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     legend_items = []
     salt2mjd, flux, fluxerr, salt2band, zpsys = [], [], [], [], []
 
-    # Upper limits (for the y-range): once, not once per band (#252)
+    # Upper limits (for the y-range): once, not once per band (#254)
     upperlimmjd, upperlimmag = [], []
     for idx, p in enumerate(phot_values):
         if p["flux"] and p["flux_zero_point"] and p["flux"] + 3 * p["flux_err"] > 0:
@@ -922,7 +922,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
             upperlimmag.append(-2.5 * np.log10(p["flux"] + 3 * p["flux_err"]) + p["flux_zero_point"])
 
     # Rows without a magnitude (forced-photometry non-detections) would put
-    # NaN into the ColumnDataSource, which Bokeh cannot serialise (#252).
+    # NaN into the ColumnDataSource, which Bokeh cannot serialise (#254).
     has_mag = np.isfinite(mag)
 
     for count, band_id in enumerate(unique_bands):
@@ -1258,8 +1258,10 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
                                                 telescope=[tel_label]*len(ulim_x),
                                                 filter=[short_filter]*len(ulim_x)))
 
+            # same size as the detections (asterisk series use 20 px for the
+            # thin marker; a 20 px triangle would swamp the plot)
             p_ulim = ax.inverted_triangle('x','y',source=source,
-                                     color=color,size=size,muted_alpha=0.2)
+                                     color=color,size=7,muted_alpha=0.2)
             g1_hover = HoverTool(renderers=[p_ulim],
                                  tooltips=TOOLTIPS,toggleable=False)
             ax.add_tools(g1_hover)
