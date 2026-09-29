@@ -18,25 +18,37 @@
     }
   },
   "benchmarks": {
-    "note": "Saved query 'YSE Magnitude-Limited Sample (min mag < 18.6)' on the personal dashboard (issue #204). Gating tier: test_mag_limited_query_regression seeds the dataset below and scales budgets linearly when YSE_PERF_MAG_LIMITED_TRANSIENTS is larger; each SELECT is capped server-side at the SQL budget. The 3000 x 20 run is record_perf_benchmark only (non-gating). baseline_ms null = not yet recorded; paste ttfb_ms from a CI run of the gating tier to enable the 2x regression check.",
+    "note": "Saved query 'YSE Magnitude-Limited Sample (min mag < 18.6)' on the personal dashboard (issue #204). Gating tier: test_mag_limited_query_regression seeds the dataset below and scales budgets linearly when YSE_PERF_MAG_LIMITED_TRANSIENTS is larger; each SELECT is capped server-side at the SQL budget. baseline_ms is compared unscaled against the gating tier (300 x 10); the test logs '<key>: <ms> ms' so it can be re-recorded from a CI run (see baseline_source). full_tier_reference_ms is the 3000 x 20 measurement from record_perf_benchmark (non-gating); the command warns when a full-tier run exceeds regression_factor times it.",
+    "baseline_source": "GitHub Actions run 36518134636, job docker-test (PR #207, first gating-tier run that printed timings): 1345.2 / 2500.1 / 1130.1 ms, rounded up with headroom",
     "dataset": {
       "n_transients": 300,
       "n_points_per_transient": 10
     },
     "regression_factor": 2.0,
+    "full_tier": {
+      "dataset": {
+        "n_transients": 3000,
+        "n_points_per_transient": 20
+      },
+      "baseline_source": "GitHub Actions run 36517297730 (first full-tier record_perf_benchmark after PR #206): 188.8 / 390.5 / 203.0 ms, rounded up",
+      "note": "Reference for entries.*.full_tier_reference_ms. Scaled linearly like max_ms when YSE_PERF_MAG_LIMITED_TRANSIENTS is above 3000."
+    },
     "entries": {
       "mag_limited_sample_sql": {
-        "baseline_ms": null,
+        "baseline_ms": 1500,
+        "full_tier_reference_ms": 200,
         "max_ms": 10000,
         "note": "Raw SQL via the dashboard cursor path, also the max_execution_time cap. Production budget is 60 s at ~300x this volume; a good plan runs this in well under a second, a per-candidate-row dependent-subquery plan takes tens of seconds."
       },
       "personal_dashboard_mag_limited_cold": {
-        "baseline_ms": null,
+        "baseline_ms": 3000,
+        "full_tier_reference_ms": 400,
         "max_ms": 15000,
         "note": "/personaldashboard/section/<id>/ with empty result cache: SQL + Transient table build + render."
       },
       "personal_dashboard_mag_limited_warm": {
-        "baseline_ms": null,
+        "baseline_ms": 1300,
+        "full_tier_reference_ms": 210,
         "max_ms": 3000,
         "note": "Same fragment with the SQL result cached (1 h TTL in the view); table build + render only."
       }

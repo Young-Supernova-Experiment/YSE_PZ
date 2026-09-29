@@ -7,7 +7,9 @@ Record page-load benchmarks, append metrics_history.json, and regenerate plots.
 
 from __future__ import annotations
 
+import json
 import subprocess
+from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
@@ -19,9 +21,12 @@ from YSE_App.perf.mag_limited import (
     configured_n_points,
     configured_n_transients,
     run_mag_limited_benchmark,
+    scale_budget_ms,
 )
 from YSE_App.perf.test_db import benchmark_test_database
 from YSE_App.perf.waterfall_collect import collect_all_timelines
+
+BASELINES_PATH = Path(__file__).resolve().parents[2] / "tests" / "perf_baselines.json"
 
 
 class Command(BaseCommand):
@@ -147,18 +152,51 @@ class Command(BaseCommand):
             f"  seeded {run.dataset.n_transients} transients / "
             f"{run.dataset.n_photdata_rows} photometry rows in {run.dataset.seed_ms:.0f} ms"
         )
+        references = _full_tier_references(n_transients)
         for p in run.pages:
             self.stdout.write(
                 f"  {p.page_key}: {p.ttfb_ms:.1f} ms, {p.sql_count} queries ({p.url})"
             )
             if p.sections:
                 sections_by_page[p.page_key] = p.sections
+            limit_ms = references.get(p.page_key)
+            if limit_ms is not None and p.ttfb_ms > limit_ms:
+                self.stderr.write(
+                    self.style.WARNING(
+                        f"  {p.page_key}: {p.ttfb_ms:.0f} ms exceeds "
+                        f"{limit_ms:.0f} ms (regression_factor x full_tier_reference_ms "
+                        "in tests/perf_baselines.json)"
+                    )
+                )
         self.stdout.write(
             f"  query matched {run.n_rows} of {run.dataset.n_transients} transients"
         )
         for note in run.notes:
             self.stderr.write(self.style.WARNING(f"  {note}"))
         return run.pages
+
+
+def _full_tier_references(n_transients: int) -> dict:
+    """
+    Warning thresholds per benchmark key: regression_factor x
+    full_tier_reference_ms from perf_baselines.json, scaled linearly when the
+    run is larger than the reference dataset. Empty when nothing is recorded.
+    """
+    try:
+        with BASELINES_PATH.open(encoding="utf-8") as fh:
+            benchmarks = json.load(fh)["benchmarks"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    factor = float(benchmarks.get("regression_factor", 2.0))
+    reference_n = int(benchmarks.get("full_tier", {}).get("dataset", {}).get("n_transients", 0))
+    thresholds = {}
+    for key, spec in benchmarks.get("entries", {}).items():
+        reference_ms = spec.get("full_tier_reference_ms")
+        if reference_ms:
+            thresholds[key] = factor * scale_budget_ms(
+                float(reference_ms), n_transients=n_transients, reference_n=reference_n
+            )
+    return thresholds
 
 
 def _git_short_sha() -> str:
