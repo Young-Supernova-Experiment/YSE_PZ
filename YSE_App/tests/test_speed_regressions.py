@@ -585,7 +585,11 @@ class YseHomeQueryCountTests(TestCase):
         self.assertIn(self.night.resource.telescope.name, follow)
         self.assertIn(self.too.telescope.name, follow)
         self.assertIn("note 0", follow)
-        self.assertFalse([q for q in ctx.captured_queries if "YSE_App_transientfollowup" in q["sql"] and "IN (" not in q["sql"]])
+        import re
+
+        # one prefetch of the follow-ups (plus one of their requests), never one per row
+        followup_queries = [q for q in ctx.captured_queries if re.search(r'FROM .YSE_App_transientfollowup(?!request)', q["sql"])]
+        self.assertEqual(len(followup_queries), 1, [q["sql"][:120] for q in followup_queries])
         self.assertEqual(
             self.client.get(reverse("yse_home_section", kwargs={"section_key": "nope"})).status_code, 404
         )
@@ -820,6 +824,99 @@ class OnCallUserPrefetchTests(TestCase):
 
     def test_yse_home_oncall_box_query_count_is_flat_in_dates(self):
         self.assertEqual(self._queries_for("/yse_home/", 2), self._queries_for("/yse_home/", 8))
+
+
+# ------------------------------------------------------------------------- #256
+
+
+class PageFirstQuerySetTests(TestCase):
+    """Dashboard page slices select the page pks first, then the annotated rows."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("speed_pagefirst_user")
+        cls.transients = []
+        for i in range(8):
+            t = create_minimal_transient(cls.user, name=f"pf{i}", ra=10.0 + i, dec=1.0 + i)
+            attach_synthetic_photometry(cls.user, t, n_points=2 + i % 3)
+            Transient.objects.filter(pk=t.pk).update(
+                disc_date=timezone.now() - datetime.timedelta(days=i)
+            )
+            cls.transients.append(t)
+
+    def _qs(self):
+        from YSE_App.table_utils import annotate_dashboard_transient_fields
+
+        return annotate_dashboard_transient_fields(
+            Transient.objects.filter(name__startswith="pf").order_by("-disc_date")
+        )
+
+    def _plain(self):
+        from YSE_App.table_utils import _recent_phot_subqueries
+
+        recent_mag, recent_magdate = _recent_phot_subqueries("pk")
+        return (
+            Transient.objects.filter(name__startswith="pf")
+            .order_by("-disc_date")
+            .select_related("status", "host", "obs_group")
+            .annotate(recent_mag=recent_mag, recent_magdate=recent_magdate)
+        )
+
+    def test_slice_runs_a_bare_pk_query_then_the_annotated_rows(self):
+        with CaptureQueriesContext(connection) as ctx:
+            rows = list(self._qs()[2:5])
+        self.assertEqual(len(ctx.captured_queries), 2)
+        ids_sql, rows_sql = (q["sql"] for q in ctx.captured_queries)
+        self.assertIn("LIMIT 3", ids_sql)
+        self.assertNotIn("JOIN", ids_sql)
+        self.assertNotIn("YSE_App_transientphotdata", ids_sql)
+        self.assertIn("IN (", rows_sql)
+        self.assertIn("YSE_App_transientphotdata", rows_sql)
+        self.assertIn("JOIN", rows_sql)
+        expected = list(self._plain()[2:5])
+        self.assertEqual([r.pk for r in rows], [r.pk for r in expected])
+        self.assertEqual(
+            [(r.recent_mag, r.recent_magdate, r.status.name) for r in rows],
+            [(r.recent_mag, r.recent_magdate, r.status.name) for r in expected],
+        )
+        # FKs came with the rows, not per row
+        with CaptureQueriesContext(connection) as ctx:
+            _names = [(r.status.name, r.obs_group.name, r.host) for r in rows]
+        self.assertEqual(len(ctx.captured_queries), 0)
+
+    def test_wrap_keeps_prefetch_lookups(self):
+        from YSE_App.table_utils import annotate_dashboard_transient_fields
+
+        qs = annotate_dashboard_transient_fields(
+            Transient.objects.filter(name__startswith="pf").order_by("-disc_date").prefetch_related("tags")
+        )
+        with CaptureQueriesContext(connection) as ctx:
+            rows = list(qs[:4])
+            tags = [list(r.tags.all()) for r in rows]
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(tags), 4)
+        self.assertEqual(len(ctx.captured_queries), 3)  # pk page, rows, one tags prefetch
+
+    def test_ordering_by_an_annotation_and_plain_operations_are_unchanged(self):
+        qs = self._qs()
+        by_mag = list(qs.order_by("-recent_mag", "-pk")[:3])
+        self.assertEqual([r.pk for r in by_mag], [r.pk for r in self._plain().order_by("-recent_mag", "-pk")[:3]])
+        with CaptureQueriesContext(connection) as ctx:
+            self.assertEqual(qs.count(), 8)
+            self.assertEqual(list(qs.values_list("pk", flat=True)[:2]), [t.pk for t in self.transients[:2]])
+            self.assertEqual(qs[0].pk, self.transients[0].pk)
+        self.assertEqual(len(ctx.captured_queries), 3)
+        self.assertEqual(list(self._qs().none()[:5]), [])
+        self.assertEqual(type(qs.filter(ra__gt=0)).__name__, "PageFirstQuerySet")
+
+    def test_dashboard_section_renders_the_same_rows(self):
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("dashboard_section", kwargs={"status_key": "new"}), {"newpage": 1})
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        for t in self.transients:
+            self.assertIn(t.name, body)
 
 
 # -------------------------------------------------------------------------- P13

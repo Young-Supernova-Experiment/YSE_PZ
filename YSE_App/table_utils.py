@@ -1412,16 +1412,61 @@ class YSEObsNightTable(TargetVisibilityMixin, tables.Table):
             "order": [[ 2, "desc" ]],
         }
 
+class PageFirstQuerySet(QuerySet):
+    """
+    Annotated table queryset whose page slice selects the page's pks first.
+
+    ``qs[a:b]`` on the dashboard queryset used to be one statement carrying the
+    select_related joins and the two recent-photometry subqueries. MySQL 8 then
+    hash-joins the whole status bucket into a temporary table before it can
+    ORDER BY ... LIMIT, and evaluates both dependent subqueries for every
+    candidate row (loops = bucket size: 170 ms for a 2.7k-row bucket, growing
+    with the bucket). Slicing here runs a bare ``SELECT pk ... ORDER BY ... LIMIT``
+    (no joins, no subqueries: sorted on the base table, or on an index once P8
+    lands) and then loads the annotated, joined rows for those pks only, so the
+    subqueries run once per page row. Two cheap statements instead of one that
+    scales with the bucket. Everything else (count, values, further filtering)
+    is a plain QuerySet. See #256.
+    """
+
+    @classmethod
+    def wrap(cls, qs):
+        """A clone of ``qs`` of this class, keeping its prefetch lookups and other state."""
+        if isinstance(qs, cls):
+            return qs
+        clone = qs._chain()
+        clone.__class__ = cls
+        return clone
+
+    def __getitem__(self, k):
+        if (
+            isinstance(k, slice)
+            and self._fields is None  # not a values()/values_list() queryset
+            and not self.query.is_sliced
+            and self.query.annotations
+            and (k.start or 0) >= 0
+            and k.stop is not None
+            and k.step is None
+        ):
+            ids = list(self.values_list('pk', flat=True)[k])
+            return self.filter(pk__in=ids)
+        return super().__getitem__(k)
+
+
 def annotate_dashboard_transient_fields(qs):
     """
     Prefetch FKs and annotate recent photometry for dashboard tables.
 
     Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
+    Returns a PageFirstQuerySet so django-tables2's page slice does not evaluate the
+    subqueries for every row of the bucket (see PageFirstQuerySet).
     """
     recent_mag, recent_magdate = _recent_phot_subqueries('pk')
-    return qs.select_related('status', 'host', 'obs_group').annotate(
-        recent_mag=recent_mag,
-        recent_magdate=recent_magdate,
+    return PageFirstQuerySet.wrap(
+        qs.select_related('status', 'host', 'obs_group').annotate(
+            recent_mag=recent_mag,
+            recent_magdate=recent_magdate,
+        )
     )
 
 
