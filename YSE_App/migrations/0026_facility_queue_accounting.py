@@ -11,7 +11,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('YSE_App', '0024_ai_summaries'),
+        ('YSE_App', '0025_favorites_slack_dm'),
     ]
 
     operations = [
