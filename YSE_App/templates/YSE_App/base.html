@@ -62,9 +62,23 @@
 			<li class="nav-item">
 				<button type="button" class="btn btn-sm btn-outline-light yse-theme-toggle" id="yse-theme-toggle" aria-pressed="false">Light mode</button>
 			</li>
+			{% if user.is_authenticated %}
+			<li class="nav-item yse-notif-nav">
+				<a class="nav-link" id="yse-notif-link" href="{% url 'notification_list' %}" title="Notifications" aria-label="Notifications" data-count-url="{% url 'notification_unread_count' %}">
+					<i class="fa fa-bell" aria-hidden="true"></i>
+					<span class="badge badge-warning navbar-badge yse-notif-badge" id="yse-notif-badge" hidden></span>
+				</a>
+			</li>
+			{% endif %}
 			<li class="nav-item dropdown">
 				<a class="nav-link dropdown-toggle" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">{{ user.get_username }}</a>
 				<div class="dropdown-menu dropdown-menu-right">
+					{% if user.is_authenticated %}
+					<a class="dropdown-item" href="{% url 'notification_list' %}">Notifications</a>
+					<a class="dropdown-item" href="{% url 'notification_preferences' %}">Notification preferences</a>
+					{% if user.is_staff %}<a class="dropdown-item" href="{% url 'jobs_status' %}">Background jobs</a>{% endif %}
+					<div class="dropdown-divider"></div>
+					{% endif %}
 					<a class="dropdown-item" href="{% url 'auth_logout' %}">Logout</a>
 				</div>
 			</li>
@@ -229,6 +243,22 @@
 <script src="{% static 'YSE_App/vendor/adminlte-3.2/js/adminlte.min.js' %}"></script>
 <script src="{% static 'YSE_App/bower_components/jquery/datatables/title-numeric.js' %}"></script>
 <script src="{% static 'YSE_App/yse-chrome.js' %}"></script>
+<script>
+	// Unread-notification badge (#266): one small fetch after load so page renders stay query-free.
+	(function () {
+		var link = document.getElementById("yse-notif-link"), badge = document.getElementById("yse-notif-badge");
+		if (!link || !badge || !window.fetch) { return; }
+		fetch(link.getAttribute("data-count-url"), { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } })
+			.then(function (r) { return r.ok ? r.json() : null; })
+			.then(function (d) {
+				if (!d || !d.unread) { return; }
+				badge.textContent = d.unread > 99 ? "99+" : String(d.unread);
+				badge.removeAttribute("hidden");
+				link.setAttribute("title", d.unread + " unread notification" + (d.unread === 1 ? "" : "s"));
+			})
+			.catch(function () {});
+	})();
+</script>
 {% block scripts %}
 {% endblock %}
 </body>
