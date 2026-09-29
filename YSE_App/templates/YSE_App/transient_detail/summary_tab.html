@@ -14,7 +14,8 @@
                                                 <strong>R.A./Dec (2000)</strong>
                                                 <p class="text-muted">
                                                     {{ transient.CoordString.0 }}&nbsp;&nbsp;&nbsp;{{ transient.CoordString.1 }}<br>
-                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small>
+                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small><br>
+                                                    <a class="btn btn-xs btn-outline-primary yse-observability-link" href="{% url 'observability' transient.id %}" title="Tonight's altitude, airmass and moon at every telescope">Observability</a>
                                                 </p>
                                             </div>
                                         </div>
