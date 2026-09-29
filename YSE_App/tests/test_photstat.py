@@ -6,7 +6,8 @@ numbers (first / last / peak, mean, faintest, deepest limit, rise and decay
 rates, time to non-detection, per-band JSON), the ``rebuild_photstats``
 command, the incremental updates through the ``TransientPhotData`` signals
 and ``deferred_updates()``, the read-only API and the surfaces that show
-the stored values (detail-page summary block, ``TransientTable`` Peak Mag
+the stored values (detail-page summary block, computed on demand for a
+transient the backfill has not reached (#345), ``TransientTable`` Peak Mag
 column and its ordering).
 """
 
@@ -410,23 +411,99 @@ class SurfaceTests(PhotStatFixture):
         self.client = Client()
         self.client.force_login(self.user)
 
+    def assert_stats_block(self, html):
+        """The Photometric Summary block shows the fixture's stored values."""
+        self.assertIn('id="photstat-peak-row"', html)
+        self.assertIn("17.50", html)
+        self.assertIn('id="photstat-summary"', html)
+        self.assertIn("Photometry statistics", html)
+        self.assertIn("<td>Detections</td>", html)
+        self.assertIn("<strong>8</strong> of 12 unflagged points", html)
+        self.assertIn("<td>Upper limits (deepest)</td>", html)
+        self.assertIn("<strong>3</strong> (deepest 23.74 mag on", html)
+        self.assertIn("<td>Rise rate</td>", html)
+        self.assertIn("<strong>0.250</strong> mag/day (%s)" % self.r.name, html)
+        self.assertIn("<td>Decay rate</td>", html)
+        self.assertIn("<strong>0.100</strong> mag/day (%s)" % self.r.name, html)
+        self.assertIn("<td>Last non-detection before discovery</td>", html)
+        self.assertIn("(MJD 60004.00)", html)
+        self.assertIn("<td>Time to non-detection</td>", html)
+        self.assertIn("<strong>2.0</strong> days before first detection", html)
+
     def test_detail_page_shows_the_stored_peak_and_rates(self):
         response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
         self.assertEqual(response.status_code, 200)
-        html = response.content.decode()
-        self.assertIn('id="photstat-peak-row"', html)
-        self.assertIn("17.50", html)
-        self.assertIn("8 detections", html)
-        self.assertIn("3 upper limits", html)
-        self.assertIn("Rise 0.250 mag/day", html)
-        self.assertIn("Decay 0.100 mag/day", html)
-        self.assertIn("Last limit 2.0 d before first detection", html)
+        self.assert_stats_block(response.content.decode())
 
-    def test_detail_page_without_a_stat_row_still_renders(self):
+    def test_detail_page_computes_a_missing_stat_row_on_demand(self):
+        """A transient the backfill has not reached gets its row on the first page view (#345)."""
         TransientPhotStat.objects.filter(transient=self.transient).delete()
-        response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        with mock.patch.object(photstat, "compute_missing_stat", wraps=photstat.compute_missing_stat) as spy:
+            response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(spy.call_count, 1)
+        self.assert_stats_block(response.content.decode())
+        stat = TransientPhotStat.objects.get(transient=self.transient)
+        self.assertAlmostEqual(stat.peak_mag, 17.5)
+        self.assertEqual(stat.num_det_global, 8)
+        # the second view finds the row and does not recompute
+        with mock.patch.object(photstat, "compute_missing_stat") as spy:
+            response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        self.assertEqual(response.status_code, 200)
+        spy.assert_not_called()
+
+    def test_detail_page_survives_a_failing_on_demand_compute(self):
+        TransientPhotStat.objects.filter(transient=self.transient).delete()
+        with mock.patch.object(photstat, "compute_missing_stat", side_effect=RuntimeError("boom")), \
+                self.assertLogs("YSE_App.services.photstat", level="ERROR") as logs:
+            response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(b'id="photstat-peak-row"', response.content)
+        self.assertNotIn(b'id="photstat-summary"', response.content)
+        self.assertFalse(TransientPhotStat.objects.filter(transient=self.transient).exists())
+        self.assertTrue(any("on-demand compute failed" in line for line in logs.output))
+
+    def test_detail_page_of_a_transient_without_photometry_shows_zero_detections(self):
+        bare = create_minimal_transient(self.user, name="2026nophotpage")
+        self.assertFalse(TransientPhotStat.objects.filter(transient=bare).exists())
+        response = self.client.get(reverse("transient_detail", kwargs={"slug": bare.slug}))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertNotIn('id="photstat-peak-row"', html)
+        self.assertIn('id="photstat-summary"', html)
+        self.assertIn("<strong>0</strong> of 0 unflagged points", html)
+        self.assertTrue(TransientPhotStat.objects.filter(transient=bare, num_det_global=0).exists())
+
+    def test_stat_for_transient_accessor(self):
+        stat = photstat.stat_for_transient(self.transient.id)
+        self.assertEqual(stat.peak_band, self.r)
+        TransientPhotStat.objects.filter(transient=self.transient).delete()
+        self.assertIsNone(photstat.stat_for_transient(self.transient.id, compute_missing=False))
+        # the miss path: lookup, photometry pass, existence check, INSERT, reload with bands
+        with CaptureQueriesContext(connection) as ctx:
+            stat = photstat.stat_for_transient(self.transient.id)
+        self.assertLessEqual(len(ctx.captured_queries), 5)
+        self.assertIsNotNone(stat)
+        self.assertAlmostEqual(stat.rise_rate, 0.25)
+        # a row inserted meanwhile (concurrent upload): the failed INSERT is
+        # logged and the reload returns that row
+        def insert_raced(transient_id):
+            photstat.recompute(transient_id)
+            raise RuntimeError("duplicate key")
+
+        TransientPhotStat.objects.filter(transient=self.transient).delete()
+        with mock.patch.object(photstat, "compute_missing_stat", side_effect=insert_raced), \
+                self.assertLogs("YSE_App.services.photstat", level="ERROR"):
+            raced = photstat.stat_for_transient(self.transient.id)
+        self.assertAlmostEqual(raced.peak_mag, 17.5)
+        # the bands come loaded with the row: no extra query per band in the template
+        with CaptureQueriesContext(connection) as ctx:
+            names = (stat.peak_band.name, stat.first_detected_band.name, stat.last_detected_band.name)
+        self.assertEqual(names, (self.r.name,) * 3)
+        self.assertEqual(len(ctx.captured_queries), 0)
+        # unknown transient: nothing to compute, nothing created
+        self.assertIsNone(photstat.stat_for_transient(10 ** 9))
+        self.assertAlmostEqual(stat.last_non_detection_date, mjd_dt(60004.0))
 
     def test_transient_table_peak_mag_column_and_ordering(self):
         other = create_minimal_transient(self.user, name="2026faint2")
