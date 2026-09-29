@@ -81,6 +81,19 @@ class Transient(BaseModel):
 	has_spitzer = models.BooleanField(null=True, blank=True)
 	has_chandra = models.BooleanField(null=True, blank=True)
 
+	class Meta:
+		# Dashboard/search hot paths (#248): name lookups from saved queries,
+		# ORDER BY disc_date per status bucket, Explorer ORDER BY modified_date,
+		# coordinate box searches. See docs/dashboard-performance.md.
+		indexes = [
+			models.Index(fields=['name'], name='yse_transient_name_idx'),
+			models.Index(fields=['disc_date'], name='yse_transient_disc_date_idx'),
+			models.Index(fields=['status', 'disc_date'], name='yse_transient_status_disc_idx'),
+			models.Index(fields=['modified_date'], name='yse_transient_mod_date_idx'),
+			models.Index(fields=['ra'], name='yse_transient_ra_idx'),
+			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
+		]
+
 	def CoordString(self):
 		return GetSexigesimalString(self.ra, self.dec)
 

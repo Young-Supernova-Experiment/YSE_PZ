@@ -20,6 +20,7 @@ from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
 from .common.magnitude_format import format_magnitude
+from YSE_App.queries.raw_sql import RECENT_MAG_SQL
 # Circular: table_utils is imported from yse_pa during views import, before
 # follow-up request helpers are safe to load. Import in render methods.
 rcParams['figure.figsize'] = (7,7)
@@ -302,18 +303,7 @@ class TransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
@@ -424,18 +414,7 @@ class FieldTransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
@@ -546,18 +525,7 @@ class AdjustFieldTransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
@@ -676,18 +644,7 @@ class YSETransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
@@ -799,18 +756,7 @@ class YSEFullTransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
@@ -932,18 +878,7 @@ class YSERisingTransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
@@ -1048,18 +983,7 @@ class NewTransientTable(tables.Table):
 
     def order_recent_mag(self, queryset, is_descending):
 
-        raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+        raw_query = RECENT_MAG_SQL
 
         queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)

@@ -50,6 +50,12 @@ from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
+from YSE_App.queries.raw_sql import RECENT_MAG_SQL
+from YSE_App.services.dashboard_queries import (
+    dashboard_sql_is_supported,
+    dashboard_sql_rejection_reason,
+    explorer_query_cache_seconds,
+)
 
 from .table_utils import (
     TransientTable,
@@ -219,15 +225,19 @@ def explorer_query_cache_key(query_id):
     return f'explorer_query_{QUERY_CACHE_VERSION}_{query_id}'
 
 
-def run_explorer_query_cached(query, timeout=3600):
+def run_explorer_query_cached(query, timeout=None, refresh=False):
     """
     Transient names selected by a saved Explorer query, cached per Query id.
 
     Shared by the personal dashboard, transient_summary, change_status_for_query
-    and download_bulk_photometry so one run serves every page for ``timeout``.
+    and download_bulk_photometry so one run serves every page for ``timeout``
+    seconds (default ``EXPLORER_QUERY_CACHE_SECONDS``). ``refresh=True`` runs
+    the query even when a cached entry exists (the cache warmer).
     """
+    if timeout is None:
+        timeout = explorer_query_cache_seconds()
     cache_key = explorer_query_cache_key(query.id)
-    names = cache.get(cache_key)
+    names = None if refresh else cache.get(cache_key)
     if names is None:
         # The explorer connection is capped at EXPLORER_QUERY_MAX_EXECUTION_MS
         # when it is opened (YSE_App.common.db_time_cap, #233); a capped run
@@ -286,8 +296,7 @@ def _personaldashboard_table_for_user_query(request, q):
     """Build one dashboard section tuple for a single UserQuery."""
     if q.query:
         try:
-            sql = q.query.sql.lower()
-            if 'yse_app_transient' not in sql or 'name' not in sql or not sql.startswith('select'):
+            if not dashboard_sql_is_supported(q.query.sql):
                 return None
             cached_result = run_explorer_query_cached(q.query)
             if not cached_result:
@@ -344,8 +353,7 @@ def _personaldashboard_build_all_tables(request, queries):
     for q in queries:
         if q.query:
             try:
-                sql = q.query.sql.lower()
-                if 'yse_app_transient' not in sql or 'name' not in sql or not sql.startswith('select'):
+                if not dashboard_sql_is_supported(q.query.sql):
                     continue
                 cached_result = run_explorer_query_cached(q.query)
                 all_transient_names.update(cached_result)
@@ -442,7 +450,18 @@ def personaldashboard_section(request, user_query_id):
     q = get_object_or_404(UserQuery, id=user_query_id, user=request.user)
     row = _personaldashboard_table_for_user_query(request, q)
     if row is None:
-        return HttpResponse(status=204)
+        # A saved query the dashboard cannot run (#258): say why instead of
+        # answering 204, which jQuery treats as success with an empty body
+        # and which left the section blank.
+        if q.query:
+            reason = dashboard_sql_rejection_reason(q.query.sql) or 'the query returned nothing'
+        else:
+            reason = 'no saved query or Python query is attached'
+        return render(
+            request,
+            'YSE_App/personaldashboard_section.html',
+            {'transient_cat': None, 'unsupported_reason': reason},
+        )
     return render(
         request,
         'YSE_App/personaldashboard_section.html',
@@ -487,9 +506,7 @@ def transient_summary(request,status_or_query_name,
 
             try:
                 query = query[0]
-                if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
-                if 'name' not in query.sql.lower(): return Http404('Invalid Query')
-                if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
+                if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
                 transients = Transient.objects.filter(name__in=run_explorer_query_cached(query)).order_by('-disc_date')
             except:
                 # Query bombed
@@ -517,18 +534,7 @@ def transient_summary(request,status_or_query_name,
             ).order_by(('-' if is_descending else '') + 'recent_magdate')
             
         elif request.GET['sort'] == 'last_mag' or request.GET['sort'] == '-last_mag':
-            raw_query = """
-SELECT pd.mag
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1
-     )
-"""
+            raw_query = RECENT_MAG_SQL
             if request.GET['sort'] == '-last_mag': is_descending = True
             else: is_descending = False
             transients = transients.annotate(last_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'last_mag')

@@ -22,6 +22,7 @@ from django.views.generic.edit import FormMixin
 from django.db.models import Q, F, Avg
 from django_tables2 import RequestConfig
 import YSE_App.yse_utils.utility_functions as utility
+from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
 
 # view for updating the obs status of a row in the DB
 @csrf_protect
@@ -510,9 +511,7 @@ def init_draw_transients(request):
 				query = Query.objects.filter(title=unquote(query_name))
 				if len(query):
 					query = query[0]
-					if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
-					if 'name' not in query.sql.lower(): return Http404('Invalid Query')
-					if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
+					if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
 					cursor = connections['explorer'].cursor()
 					cursor.execute(query.sql.replace('%','%%'), ())
 					transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')

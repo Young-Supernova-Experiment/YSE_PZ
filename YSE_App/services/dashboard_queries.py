@@ -70,3 +70,57 @@ def dedupe_user_queries(queryset=None, *, dry_run=False):
     if doomed and not dry_run:
         UserQuery.objects.filter(id__in=doomed).delete()
     return groups, doomed
+
+
+# --------------------------------------------------------------------------- #
+# Which saved SQL may run on the dashboard (issue #258)
+# --------------------------------------------------------------------------- #
+
+import re as _re
+
+from django.conf import settings as _settings
+
+# Leading whitespace and SQL comments: ``-- ...`` and ``# ...`` line comments,
+# ``/* ... */`` block comments, in any combination.
+_LEADING_NOISE_RE = _re.compile(r"(?:\s+|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|/\*.*?\*/)+", _re.S)
+_READ_STATEMENT_RE = _re.compile(r"^(?:select|with)\b", _re.I)
+
+
+def strip_leading_sql_comments(sql):
+    """``sql`` without its leading whitespace and comments."""
+    text = sql or ""
+    match = _LEADING_NOISE_RE.match(text)
+    return text[match.end():] if match else text
+
+
+def dashboard_sql_rejection_reason(sql):
+    """
+    Why a saved Explorer query cannot back a dashboard section, or None when
+    it can. The dashboard runs the text as-is and reads ``name`` from the
+    first column, so it must be a single read statement (``SELECT``, or a
+    ``WITH`` common-table expression that ends in one) over
+    ``YSE_App_transient`` that mentions ``name``. Leading whitespace and
+    comments are ignored (Explorer keeps whatever the author typed); a
+    statement that is not a SELECT/WITH is refused.
+    """
+    body = strip_leading_sql_comments(sql)
+    lowered = body.lower()
+    if not _READ_STATEMENT_RE.match(body):
+        return "the query must start with SELECT (or WITH ... SELECT)"
+    if "yse_app_transient" not in lowered:
+        return "the query must read from YSE_App_transient"
+    if "name" not in lowered:
+        return "the query must return the transient name column"
+    return None
+
+
+def dashboard_sql_is_supported(sql):
+    return dashboard_sql_rejection_reason(sql) is None
+
+
+def explorer_query_cache_seconds():
+    """TTL for cached saved-query results ([site_settings] EXPLORER_QUERY_CACHE_SECONDS)."""
+    try:
+        return int(getattr(_settings, "EXPLORER_QUERY_CACHE_SECONDS", 3600) or 3600)
+    except (TypeError, ValueError):
+        return 3600

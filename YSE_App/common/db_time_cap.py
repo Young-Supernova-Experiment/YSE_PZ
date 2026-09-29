@@ -31,11 +31,45 @@ class QueryTimeout(DatabaseError):
     """The statement exceeded the configured execution time cap."""
 
 
+# Process-wide override of the configured cap (None = use settings). Set by
+# ``explorer_cap_override`` for the cache warmer, which runs saved queries
+# from a cron process and must not be cut off by the interactive cap.
+_CAP_OVERRIDE_MS: Optional[int] = None
+
+
 def explorer_cap_ms() -> int:
+    if _CAP_OVERRIDE_MS is not None:
+        return _CAP_OVERRIDE_MS
     try:
         return int(getattr(settings, 'EXPLORER_QUERY_MAX_EXECUTION_MS', 0) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _close_explorer_connection() -> None:
+    from django.db import connections
+
+    if EXPLORER_ALIAS in connections:
+        connections[EXPLORER_ALIAS].close()
+
+
+@contextmanager
+def explorer_cap_override(max_ms: int) -> Iterator[None]:
+    """
+    Run the block with the explorer statement cap set to ``max_ms`` (0 = no
+    cap). The cap is applied when a connection is opened, so the current
+    explorer connection is closed on entry and again on exit; the next
+    statement in each phase opens a connection with the right cap.
+    """
+    global _CAP_OVERRIDE_MS
+    previous = _CAP_OVERRIDE_MS
+    _close_explorer_connection()
+    _CAP_OVERRIDE_MS = int(max_ms or 0)
+    try:
+        yield
+    finally:
+        _CAP_OVERRIDE_MS = previous
+        _close_explorer_connection()
 
 
 def is_timeout_error(exc: BaseException) -> bool:
