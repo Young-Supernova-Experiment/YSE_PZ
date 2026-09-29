@@ -9,6 +9,25 @@ from YSE_App.models import *
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from datetime import datetime
+import glob
+import logging
+import os
+import shutil
+
+logger = logging.getLogger(__name__)
+
+
+def _remove_dated_ghost_dirs():
+    """Remove the transients_<YYYYMMDD>* scratch trees GHOST writes in the cwd."""
+    stamp = datetime.utcnow().isoformat().split('T')[0].replace('-', '')
+    for path in glob.glob('transients_%s*' % stamp):
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as exc:
+            logger.warning("could not remove %s: %s", path, exc)
 
 def getGHOSTData(ghost_host):
     hostdict = {}; hostcoords = ''
@@ -48,7 +67,7 @@ def main(transients=None):
                 t.host = host
                 t.save()
 
-        os.system(f"rm -r transients_{datetime.utcnow().isoformat().split('T')[0].replace('-','')}*")
+        _remove_dated_ghost_dirs()
 
     return
 

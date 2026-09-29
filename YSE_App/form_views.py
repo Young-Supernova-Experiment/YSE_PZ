@@ -777,7 +777,7 @@ class AddFollowupNoticeFormView(FormView):
 			instance.created_by = self.request.user
 			instance.modified_by = self.request.user
 			try: instance.profile = Profile.objects.filter(user=self.request.user)[0]
-			except:
+			except (Profile.DoesNotExist, IndexError):
 				data = {
 					'message': """User %s has no profile object in the YSE_PZ database.	 
 Contact D. Jones or D. Coulter."""%self.request.user,

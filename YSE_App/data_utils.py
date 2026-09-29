@@ -49,6 +49,7 @@ from .queries.yse_python_queries import *
 from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
+from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -1362,9 +1363,7 @@ def query_api(request,query_name):
     query = Query.objects.filter(title=unquote(query_name))
     if len(query):
         query = query[0]
-        if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
-        if 'name' not in query.sql.lower(): return Http404('Invalid Query')
-        if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
+        if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
         cursor = connections['explorer'].cursor()
         cursor.execute(query.sql.replace('%','%%'), ())
         #transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')

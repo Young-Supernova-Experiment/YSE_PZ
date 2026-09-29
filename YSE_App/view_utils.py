@@ -2,7 +2,7 @@
 
 import multiprocessing as mp
 try: mp.set_start_method('fork')
-except: pass
+except (RuntimeError, ValueError): pass  # already set, or platform without fork
 from multiprocessing import Process, Queue
 
 import django
@@ -28,12 +28,26 @@ from .common.bandpassdict import bandpassdict
 from .common.filter_display import (
     band_display_color,
     display_filter_label,
+    legend_sort_key,
     plot_legend_label,
     telescope_display_name,
     telescope_display_symbol,
 )
+from .common.legend_layout import (
+    GLYPH_HEIGHT as LEGEND_GLYPH_HEIGHT,
+    GLYPH_WIDTH as LEGEND_GLYPH_WIDTH,
+    LABEL_STANDOFF as LEGEND_LABEL_STANDOFF,
+    PADDING as LEGEND_PADDING,
+    SPACING as LEGEND_SPACING,
+    legend_column_count,
+    legend_height_px,
+    legend_label_width_px,
+    legend_rows,
+    requested_plot_width,
+)
 from .common.utilities import date_to_mjd
 from .services.visibility import group_access_plot_cache_token
+from .services import bazin as bazin_fits
 
 import copy
 import functools
@@ -174,6 +188,74 @@ def _note_salt2_fit_failure(ax, exc, transient_id):
 MAX_LC_DISPLAY_POINTS = int(os.environ.get('YSE_LC_PLOT_MAX_POINTS', '3000'))
 MAX_SPEC_DISPLAY_PIXELS = int(os.environ.get('YSE_SPEC_PLOT_MAX_PIXELS', '800'))
 PLOT_HTML_CACHE_TIMEOUT = int(os.environ.get('YSE_PLOT_CACHE_SECONDS', '900'))
+
+
+BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections)" % bazin_fits.MIN_DETECTIONS
+BAZIN_LEGEND_LABEL = "Bazin fit"
+
+
+def _draw_bazin_fits(ax, series, today):
+    """Overlay per-band Bazin curves on the detail light-curve plot (#225).
+
+    ``series`` holds one dict per plotted band: ``label``, ``band_name``,
+    ``color``, ``leader`` (the detection renderer, so hiding the band in the
+    legend hides its fit), ``mjd`` / ``mag`` / ``magerr`` (flagged points
+    already removed).  All bands are fitted together (wavelength-correlated
+    shape, see ``services/bazin.py``).  The fitted span is drawn solid, the extrapolation past the
+    last detection dashed, in the band's colour, and labels list each band's
+    extrapolated magnitude today.  Returns ``(renderers, x_end)``: the fit
+    renderers for one shared legend entry and the last MJD of the
+    extrapolation grid (so the caller can widen the x-range); when no band
+    has a usable fit a note is drawn instead and ``([], None)`` returned.
+    """
+    renderers, notes = [], []
+    x_end = None
+    fits = bazin_fits.fit_bands(
+        {k: list(zip(e['mjd'], e['mag'], e['magerr'])) for k, e in enumerate(series)},
+        {k: bazin_fits.band_effective_wavelength(e.get('band_name')) for k, e in enumerate(series)},
+    )
+    for k, entry in enumerate(series):
+        fit = fits.get(k)
+        if fit is None:
+            continue
+        fitted, extrapolated = bazin_fits.bazin_plot_grid(fit, today)
+        fitted_mag = bazin_fits.flux_to_mag(fit.flux_at(fitted))
+        extrapolated_mag = bazin_fits.flux_to_mag(fit.flux_at(extrapolated))
+        # non-positive model flux has no magnitude; drop those grid points
+        ok_f, ok_e = np.isfinite(fitted_mag), np.isfinite(extrapolated_mag)
+        solid = ax.line(
+            fitted[ok_f].tolist(), fitted_mag[ok_f].tolist(),
+            color=entry['color'], line_width=2, muted_alpha=0.2,
+        )
+        dashed = ax.line(
+            extrapolated[ok_e].tolist(), extrapolated_mag[ok_e].tolist(),
+            color=entry['color'], line_width=2, line_dash='dashed', muted_alpha=0.2,
+        )
+        _link_series_visibility(entry['leader'], [solid, dashed])
+        renderers.extend([solid, dashed])
+        x_end = float(extrapolated[-1]) if x_end is None else max(x_end, float(extrapolated[-1]))
+        mag_today = fit.mag_at(today)
+        notes.append(
+            "%s: %s today" % (entry['label'], "%.2f" % mag_today if mag_today is not None else "no flux")
+        )
+    if not renderers:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#b00020',
+            text=BAZIN_FIT_UNAVAILABLE_TEXT,
+        ))
+        return renderers, None
+    y = 280
+    header = "Bazin fit (dashed = extrapolated)"
+    if any(fit.method == 'shared' for fit in fits.values()):
+        header = "Bazin fit, shared shape (dashed = extrapolated)"
+    for text in [header] + notes[:8]:
+        ax.add_layout(Label(
+            x=10, y=y, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text=text,
+        ))
+        y -= 15
+    return renderers, x_end
 
 
 def _plot_html_cache_enabled():
@@ -736,6 +818,93 @@ def salt2fluxplot(request, transient_id, salt2fit):
     response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
     return response
 
+def bazinplot(request, transient_id, bazinfit):
+    """Detail light-curve plot with (1) or without (0) the per-band Bazin overlay (#225)."""
+    return lightcurveplot_detail(request, transient_id, bazin=int(bazinfit))
+
+def _band_legend_key(band_obj):
+    """Stable legend sort key for a PhotometricBand (telescope family, then wavelength; #91)."""
+    inst = band_obj.instrument if getattr(band_obj, 'instrument_id', None) else None
+    tel_name = (
+        inst.telescope.name
+        if inst is not None and getattr(inst, 'telescope_id', None)
+        else None
+    )
+    return legend_sort_key(
+        band_obj.name,
+        instrument_name=inst.name if inst is not None else None,
+        telescope_name=tel_name,
+    )
+
+
+def _legend_series_order(band_objs):
+    """Indices that put band objects in stable legend order (#91).
+
+    ``np.unique`` orders series by primary key (or by ``str(band)``), which
+    changes from transient to transient; sorting by telescope family and
+    filter wavelength keeps ``PS1 g`` before ``PS1 r`` and every ZTF entry
+    after every PS1 entry no matter which bands have data.
+    """
+    band_objs = list(band_objs)
+    return np.array(
+        sorted(range(len(band_objs)), key=lambda k: _band_legend_key(band_objs[k])),
+        dtype=int,
+    )
+
+
+def _link_series_visibility(leader, followers):
+    """Hide/show ``followers`` (error bars, upper limits) with the legend-controlled ``leader`` (#249)."""
+    from bokeh.models import CustomJS
+
+    followers = [renderer for renderer in followers if renderer is not None]
+    if not followers:
+        return
+    leader.js_on_change(
+        'visible',
+        CustomJS(
+            args=dict(followers=followers),
+            code="for (const r of followers) { r.visible = cb_obj.visible; }",
+        ),
+    )
+
+
+def _requested_plot_width(request, default):
+    """Nominal figure width: the container width the page sends as ``?w=``, else ``default``."""
+    return requested_plot_width(request.GET.get('w'), default)
+
+
+def _add_legend_grid(ax, legend_items, plot_width):
+    """Lay ``legend_items`` out in columns below ``ax`` (#226).
+
+    Bokeh 2.4.2 has no ``Legend.ncols``; each row is a horizontal ``Legend``
+    whose labels are padded to the longest label so the columns align.  The
+    column count comes from :func:`legend_column_count` (documented in
+    ``YSE_App/common/legend_layout.py``).  Returns the column count so the
+    caller can size the plot with :func:`legend_height_px`.
+    """
+    labels = [label for label, _renderers in legend_items]
+    ncols = legend_column_count(labels, plot_width)
+    label_width = legend_label_width_px(labels)
+    for row in legend_rows(legend_items, ncols):
+        legend = Legend(
+            items=row,
+            orientation='horizontal',
+            click_policy='hide',
+            location='top_left',
+            label_width=label_width,
+            label_height=LEGEND_GLYPH_HEIGHT,
+            glyph_width=LEGEND_GLYPH_WIDTH,
+            glyph_height=LEGEND_GLYPH_HEIGHT,
+            label_standoff=LEGEND_LABEL_STANDOFF,
+            spacing=LEGEND_SPACING,
+            padding=LEGEND_PADDING,
+            margin=0,
+            border_line_color=None,
+        )
+        ax.add_layout(legend, 'below')
+    return ncols
+
+
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
 
@@ -808,14 +977,26 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         ("magsys", "@magsys"),
     ]
 
-    ax = figure(plot_width=500, plot_height=400, sizing_mode="scale_width")
+    plot_width = _requested_plot_width(request, 500)
+    ax = figure(plot_width=plot_width, plot_height=400, sizing_mode="scale_width")
 
-    # Group by unique bands
-    unique_bands, band_indices = np.unique(band_ids, return_index=True)
+    # Group by unique bands, in stable legend order (#91)
+    unique_bands = np.unique(band_ids)
+    unique_bands = unique_bands[_legend_series_order([band_lookup[b] for b in unique_bands])]
 
     legend_items = []
     salt2mjd, flux, fluxerr, salt2band, zpsys = [], [], [], [], []
+
+    # Upper limits (for the y-range): once, not once per band (#254)
     upperlimmjd, upperlimmag = [], []
+    for idx, p in enumerate(phot_values):
+        if p["flux"] and p["flux_zero_point"] and p["flux"] + 3 * p["flux_err"] > 0:
+            upperlimmjd.append(mjd[idx])
+            upperlimmag.append(-2.5 * np.log10(p["flux"] + 3 * p["flux_err"]) + p["flux_zero_point"])
+
+    # Rows without a magnitude (forced-photometry non-detections) would put
+    # NaN into the ColumnDataSource, which Bokeh cannot serialise (#254).
+    has_mag = np.isfinite(mag)
 
     for count, band_id in enumerate(unique_bands):
         band_obj = band_lookup[band_id]
@@ -844,17 +1025,11 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         size = 20 if symbol == "asterisk" else 7
 
         # Filter data for this band
-        band_filter = band_ids == band_id
+        band_filter = (band_ids == band_id) & has_mag
         band_mjd = mjd[band_filter]
         band_mag = mag[band_filter]
         band_mag_err = mag_err[band_filter]
         band_obs_date_str = np.array(obs_date_str)[band_filter]
-
-        # Handle inverted triangles (upper limits)
-        for idx, p in enumerate(phot_values):
-            if p["flux"] and p["flux_zero_point"] and p["flux"] + 3 * p["flux_err"] > 0:
-                upperlimmjd.append(mjd[idx])
-                upperlimmag.append(-2.5 * np.log10(p["flux"] + 3 * p["flux_err"]) + p["flux_zero_point"])
 
         # Plot data
         source = ColumnDataSource(
@@ -876,7 +1051,8 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         # Error bars
         err_xs = [(x, x) for x in band_mjd]
         err_ys = [(y - yerr, y + yerr) for y, yerr in zip(band_mag, band_mag_err)]
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(plot, [p_err])
 
         legend_items.append((legend_label, [plot]))
 
@@ -894,9 +1070,8 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     today_line = Span(location=today_mjd, dimension="height", line_color="black", line_width=3)
     ax.add_layout(today_line)
 
-    # Configure legend
-    legend = Legend(items=legend_items, click_policy="hide")
-    ax.add_layout(legend, "below")
+    # Configure legend: columns sized to the longest label (#226)
+    _add_legend_grid(ax, legend_items, plot_width)
 
     # Adaptive x/y ranges
     if discovery_point.any():
@@ -906,13 +1081,14 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         limmjd = None
         mjd_range = (mjd.min() - 10, mjd.max() + 10)
     ax.x_range = Range1d(*mjd_range)
+    finite_mag = mag[has_mag]
     if len(upperlimmag):
         y_hi = float(np.max(upperlimmag)) + 0.25
-    elif len(mag):
-        y_hi = float(np.max(mag)) + 0.5
+    elif len(finite_mag):
+        y_hi = float(np.max(finite_mag)) + 0.5
     else:
         y_hi = 20.0
-    y_lo = float(np.min(mag)) - 0.5 if len(mag) else y_hi - 2.0
+    y_lo = float(np.min(finite_mag)) - 0.5 if len(finite_mag) else y_hi - 2.0
     ax.y_range = Range1d(y_hi, y_lo)
 
     majorticks = []
@@ -1004,14 +1180,16 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     return _bokeh_ajax_response(ax, "my plot")
 
 
-def lightcurveplot_detail(request, transient_id, salt2=False):
+def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     _load_heavy_plot_stack()
 
+    plot_width = _requested_plot_width(request, 400)
     cache_key = None
     if not salt2 and _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_detail_v5_{transient_id}_{_transient_phot_cache_token(transient_id)}_{user_key}'
+            f'lc_detail_v6_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -1034,6 +1212,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
     salt2fluxerr = np.array([])
     zpsys = np.array([])
     salt2band = np.array([])
+    bazin_series = []
 
     band_lookup = {
         b.pk: b
@@ -1073,6 +1252,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
     bandunq,idx = np.unique(band,return_index=True)
+    series_order = _legend_series_order([band_lookup[b] for b in bandunq])
+    bandunq, idx = bandunq[series_order], idx[series_order]
     count = 0
     legend_it = []
     upperlimmag,upperlimmjd = np.array([]),np.array([])
@@ -1141,6 +1322,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
 
         ulim_x = mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3]
         ulim_y = mags_ulim[iPlotUlimFlux3]
+        p_ulim = None
         if len(ulim_x):
             source = ColumnDataSource(data=dict(x=ulim_x.tolist(),
                                                 y=ulim_y.tolist(),
@@ -1150,8 +1332,10 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
                                                 telescope=[tel_label]*len(ulim_x),
                                                 filter=[short_filter]*len(ulim_x)))
 
+            # same size as the detections (asterisk series use 20 px for the
+            # thin marker; a 20 px triangle would swamp the plot)
             p_ulim = ax.inverted_triangle('x','y',source=source,
-                                     color=color,size=5,muted_alpha=0.2)
+                                     color=color,size=7,muted_alpha=0.2)
             g1_hover = HoverTool(renderers=[p_ulim],
                                  tooltips=TOOLTIPS,toggleable=False)
             ax.add_tools(g1_hover)
@@ -1159,29 +1343,40 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         for x,y,yerr in zip(mjds[iPlot].tolist(),mags[iPlot].tolist(),mag_errs[iPlot].tolist()):
             err_xs.append((x, x))
             err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)#, legend='%s - %s'%(
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(p_det, [p_err, p_ulim])
 
         legend_it.append((legend_label, [p_det]))
+        if bazin:
+            # detections only, flagged (data_quality) points left out
+            iFit = iPlot & (data_quality == 'Good')
+            bazin_series.append(dict(
+                label=legend_label, band_name=bn, color=color, leader=p_det,
+                mjd=mjds[iFit].astype(float), mag=mags[iFit].astype(float),
+                magerr=mag_errs[iFit].astype(float),
+            ))
 
     today = Time(datetime.datetime.today()).mjd
+    x_end = np.max(mjds) + 10
+    if bazin:
+        bazin_renderers, bazin_x_end = _draw_bazin_fits(ax, bazin_series, today)
+        if bazin_renderers:
+            legend_it.append((BAZIN_LEGEND_LABEL, bazin_renderers))
+        if bazin_x_end is not None:
+            x_end = max(x_end, bazin_x_end)
     p_today = ax.line(today,20,line_width=3,line_color='black')
     legend_it.append(('today (%i)'%today, [p_today]))
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
-    legend = Legend(items=legend_it)
-    legend.click_policy="hide"
-    legend.label_height = 1
-    legend.glyph_height = 20
-
-    ax.add_layout(legend, 'below')
+    legend_ncols = _add_legend_grid(ax, legend_it, plot_width)
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
     if len(mjds[disc_points == 1]):
         limmjd = np.min(mjds[disc_points == 1])-30
-        ax.x_range=Range1d(limmjd,np.max(mjds)+10)
-        ax.extra_x_ranges = {"dateax": Range1d(limmjd,np.max(mjds)+10)}
+        ax.x_range=Range1d(limmjd,x_end)
+        ax.extra_x_ranges = {"dateax": Range1d(limmjd,x_end)}
         ax.y_range = Range1d(np.max(np.append(mags[mags != None][mjds[mags != None] > limmjd],upperlimmag[upperlimmjd > limmjd]))+0.25,
                              np.min(mags[mags != None][mjds[mags != None] > limmjd])-0.5)
     else:
@@ -1189,15 +1384,15 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
             minmjd = np.max([np.min(mjds)-10,date_to_mjd(transient.disc_date)-30])
         else:
             minmjd = np.min(mjds)-10
-        ax.x_range=Range1d(minmjd,np.max(mjds)+10)
-        ax.extra_x_ranges = {"dateax": Range1d(minmjd,np.max(mjds)+10)}
+        ax.x_range=Range1d(minmjd,x_end)
+        ax.extra_x_ranges = {"dateax": Range1d(minmjd,x_end)}
         ax.y_range=Range1d(np.max(np.append(mags[mags != None],upperlimmag))+0.25,np.min(mags[mags != None])-0.5)
         
     #ax.y_range=Range1d(np.max(mags[mags != None])+0.25,np.min(mags[mags != None])-0.5)
     ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 400+20*len(bandunq)
-    ax.plot_width = 400
+    ax.plot_height = 400 + legend_height_px(len(legend_it), legend_ncols)
+    ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
     mjdrange = range(int(np.min(mjds)-100),int(np.max(mjds)+100))
@@ -1309,6 +1504,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     import time
     tstart = time.time()
 
+    plot_width = _requested_plot_width(request, 400)
     transient = Transient.objects.get(pk=transient_id)
     photdata = (
         get_all_phot_for_transient(request.user, transient_id)
@@ -1427,6 +1623,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     allbandcolor = np.append(bandcolor,upperlimbandcolor)
     allbandsym = np.append(bandsym,[None]*len(upperlimbandcolor))
     bandunq,idx = np.unique(allbandstr,return_index=True)
+    series_order = _legend_series_order(allband[idx])
+    bandunq, idx = bandunq[series_order], idx[series_order]
 
     TOOLTIPS = [
         ('mag','$y'),
@@ -1483,7 +1681,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         for x,y,yerr in zip(mjd[bandstr == bs].tolist(),flux[bandstr == bs].tolist(),fluxerr[bandstr == bs].tolist()):
             err_xs.append((x, x))
             err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(p, [p_err])
 
         legend_it.append((legend_label, [p]))
         
@@ -1496,12 +1695,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     hline = Span(location=0, dimension='width', line_color='black',
                  line_width=3)
     ax.add_layout(hline)
-    legend = Legend(items=legend_it)
-    legend.click_policy="hide"
-    legend.label_height = 1
-    legend.glyph_height = 20
-    
-    ax.add_layout(legend, 'below')
+    legend_ncols = _add_legend_grid(ax, legend_it, plot_width)
     
 
     
@@ -1522,8 +1716,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ax.extra_x_ranges = {"dateax": Range1d(np.min(mjd)-10,np.max(mjd)+10)}
         ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 200+20*len(bandunq)
-    ax.plot_width = 400
+    ax.plot_height = 200 + legend_height_px(len(legend_it), legend_ncols)
+    ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
     mjdrange = range(int(np.min(mjd)-100),int(np.max(mjd)+100))
@@ -1632,8 +1826,6 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
 
 
 def spectrumplot(request, transient_id):
-    _load_heavy_plot_stack()
-
     cache_key = None
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
@@ -1677,7 +1869,11 @@ def spectrumplot(request, transient_id):
         })
     if not spectra:
         return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
-    
+
+    # bokeh/matplotlib/sncosmo are imported only now: a transient with nothing
+    # to plot answers in milliseconds instead of paying the cold import.
+    _load_heavy_plot_stack()
+
     # Process spectra and compute offsets
     dates = np.array([spec['mjd'] for spec in spectra])
     sorted_idx = np.argsort(-dates)
@@ -1846,13 +2042,17 @@ def spectrumplotsingle(request, transient_id, spec_id):
     spectrum = spectra.filter(id=spec_id)
     
     if not len(spectrum):
-        return django.http.HttpResponse('')
+        return django.http.HttpResponse(
+            '<p class="text-muted yse-plot-empty">'
+            'That spectrum is not on file for this transient (or you are not '
+            'authorized to see it).</p>'
+        )
     else:
         spectrum = spectrum[0]
     spec = TransientSpecData.objects.filter(spectrum=spectrum)
     
     if not len(spec):
-        return django.http.HttpResponse('')
+        return django.http.HttpResponse(_spectrum_plot_empty_message(1))
 
     wave,flux = [],[]
     for s in spec:
@@ -1894,7 +2094,7 @@ def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
 
     if target_set_time:
         try: settime = target_set_time.isot.split('T')[-1]
-        except: settime = None
+        except (AttributeError, ValueError): settime = None
     else: 
         settime = None
 
@@ -1923,7 +2123,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
 
     if target_rise_time:
         try: risetime = target_rise_time.isot.split('T')[-1]
-        except: risetime = None
+        except (AttributeError, ValueError): risetime = None
     else: 
         risetime = None
 
@@ -2002,7 +2202,7 @@ def tonight_rise_time(request,transient_id,too_id):
 
     if target_rise_time:
         try: returnstarttime = target_rise_time.isot.split('T')[-1]
-        except: returnstarttime = None
+        except (AttributeError, ValueError): returnstarttime = None
     else: returnstarttime = None
 
     risedict = {'rise_time':returnstarttime}
@@ -2027,7 +2227,7 @@ def tonight_set_time(request,transient_id,too_id):
 
     if target_set_time:
         try: returnstarttime = target_set_time.isot.split('T')[-1]
-        except: returnstarttime = None
+        except (AttributeError, ValueError): returnstarttime = None
     else: returnstarttime = None
 
     setdict = {'set_time':returnstarttime}
@@ -2054,7 +2254,8 @@ def get_ps1_image(request,transient_id):
     ps1url = ("http://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
     try:
         response = requests.get(url=ps1url,timeout=5)
-    except:
+    except requests.RequestException as exc:
+        logger.warning("PS1 cutout request failed for transient %s: %s", transient_id, exc)
         return(JsonResponse({"jpegurl":"","msg":"timeout"}))
     response_text = response.content.decode('utf-8')
     if "<td><img src=" in response.content.decode('utf-8'):
@@ -2066,24 +2267,75 @@ def get_ps1_image(request,transient_id):
     jpegurldict = {"jpegurl":jpegurl,"msg":"success"}
     return(JsonResponse(jpegurldict))
 
-def _archive_status_with_timeout(work, *, timeout_seconds=8):
-    """Run a blocking archive lookup with a wall-clock timeout."""
+ARCHIVE_STATUS_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_STATUS_TIMEOUT', '8'))
+ARCHIVE_STATUS_CACHE_SECONDS = 3600
+# A failed or timed-out archive lookup is remembered only briefly, so a
+# reload retries it instead of showing a stale negative for an hour.
+ARCHIVE_STATUS_FAILURE_CACHE_SECONDS = 60
+
+
+def _archive_status_with_timeout(work, *, timeout_seconds=None):
+    """Run a blocking archive lookup with a wall-clock timeout.
+
+    Returns ``None`` when the lookup does not finish in time. The worker
+    thread is left to finish on its own: ``ThreadPoolExecutor`` used as a
+    context manager would ``shutdown(wait=True)`` and block the response
+    until MAST answered, which made the timeout cosmetic.
+    """
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    if timeout_seconds is None:
+        timeout_seconds = ARCHIVE_STATUS_TIMEOUT_SECONDS
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
         future = pool.submit(work)
         try:
             return future.result(timeout=timeout_seconds)
         except FuturesTimeout:
             return None
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _archive_status_payload(cache_key, lookup, archive_name):
+    """JSON payload for the HST/Chandra tab labels.
+
+    ``has_data`` is ``True``/``False`` only when the archive answered; when the
+    lookup timed out or raised it is ``None`` and ``error`` says why, so the
+    page can say "lookup failed" instead of "No HST" (an upstream outage is
+    not the same as no data). Failures are cached for a minute, answers for
+    an hour.
+    """
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        count = _archive_status_with_timeout(lookup)
+    except Exception as exc:
+        logger.warning('%s archive status lookup failed: %s', archive_name, exc)
+        payload = {
+            'has_data': None, 'count': 0, 'error': 'lookup_failed',
+            'message': f'{archive_name} archive lookup failed; open the tab to retry.',
+        }
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_FAILURE_CACHE_SECONDS)
+        return payload
+    if count is None:
+        payload = {
+            'has_data': None, 'count': 0, 'error': 'timeout', 'timed_out': True,
+            'message': (
+                f'{archive_name} archive did not answer within '
+                f'{ARCHIVE_STATUS_TIMEOUT_SECONDS} s; open the tab to retry.'
+            ),
+        }
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_FAILURE_CACHE_SECONDS)
+        return payload
+    payload = {'has_data': count > 0, 'count': count}
+    cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_CACHE_SECONDS)
+    return payload
 
 
 def get_hst_status(request, transient_id):
     """Lightweight HST availability for tab label (no JPG fetch)."""
-    cache_key = f'hst_status_v2_{transient_id}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return JsonResponse(cached)
     try:
         t = Transient.objects.get(pk=transient_id)
     except Transient.DoesNotExist:
@@ -2098,24 +2350,11 @@ def get_hst_status(request, transient_id):
             count = len(hst.obstable)
         return count
 
-    try:
-        count = _archive_status_with_timeout(_lookup)
-        if count is None:
-            payload = {'has_data': False, 'count': 0, 'timed_out': True}
-        else:
-            payload = {'has_data': count > 0, 'count': count}
-    except Exception:
-        payload = {'has_data': False, 'count': 0}
-    cache.set(cache_key, payload, timeout=3600)
-    return JsonResponse(payload)
+    return JsonResponse(_archive_status_payload(f'hst_status_v3_{transient_id}', _lookup, 'HST'))
 
 
 def get_chandra_status(request, transient_id):
     """Lightweight Chandra availability for tab label (no image fetch)."""
-    cache_key = f'chandra_status_v2_{transient_id}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return JsonResponse(cached)
     try:
         t = Transient.objects.get(pk=transient_id)
     except Transient.DoesNotExist:
@@ -2127,29 +2366,33 @@ def get_chandra_status(request, transient_id):
         chr.search_chandra_database()
         return int(getattr(chr, 'n_obsid', 0) or 0)
 
-    try:
-        count = _archive_status_with_timeout(_lookup)
-        if count is None:
-            payload = {'has_data': False, 'count': 0, 'timed_out': True}
-        else:
-            payload = {'has_data': count > 0, 'count': count}
-    except Exception:
-        payload = {'has_data': False, 'count': 0}
-    cache.set(cache_key, payload, timeout=3600)
-    return JsonResponse(payload)
+    return JsonResponse(
+        _archive_status_payload(f'chandra_status_v3_{transient_id}', _lookup, 'Chandra')
+    )
 
 
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
-    except t.DoesNotExist:
+    except Transient.DoesNotExist:
         raise Http404("Transient id does not exist")
 
     startTime = datetime.datetime.now()
     from . import common
     hst=common.mast_query.hstImages(t.ra,t.dec,'Object')
-    hst.getObstable()
-    hst.getJPGurl()
+    try:
+        hst.getObstable()
+        hst.getJPGurl()
+    except Exception as exc:
+        # MAST unreachable/slow: say so (HTTP 502) instead of a 500 the page
+        # silently swallows, so the tab can offer a retry.
+        logger.warning('HST image lookup failed for transient %s: %s', transient_id, exc)
+        return JsonResponse(
+            {"error": "lookup_failed",
+             "message": "HST archive (MAST) lookup failed; retry in a moment.",
+             "jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []},
+            status=502,
+        )
     print("I found",hst.Nimages,"HST images of",hst.object,"located at coordinates",hst.ra,hst.dec)
     print("The cut out images have the following URLs:")
     fitsurllist = []

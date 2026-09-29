@@ -7,6 +7,7 @@
             <th>Instrument</th>
             <th>Telescope</th>
             <th>Redshift</th>
+            <th>Points</th>
             <th>Plot</th>
         </tr>
     </thead>
@@ -17,7 +18,8 @@
             <td>{{ spec.instrument.name }}</td>
             <td>{{ spec.instrument.telescope.name }}</td>
             <td>{{ spec.redshift|default:"—" }}</td>
-            <td><a href="#" class="specPlotChange" spec_plot-id="{{ spec.id }}">Plot on Summary tab</a></td>
+            <td>{{ spec.n_points }}</td>
+            <td>{% if spec.n_points %}<a href="#" class="specPlotChange" spec_plot-id="{{ spec.id }}">Plot on Summary tab</a>{% else %}<span class="text-muted" title="This spectrum has a record but no wavelength/flux points in the database, so there is nothing to plot.">No data points to plot</span>{% endif %}</td>
         </tr>
         {% endfor %}
     </tbody>
