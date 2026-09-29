@@ -475,10 +475,17 @@ class ATLASTests(_Base):
 @override_settings(CREDENTIALS_KEY=KEY)
 class OtherAdapterTests(_Base):
     def test_swift_jwt_and_submit(self):
-        import jwt as pyjwt
-
         payload = {"api_name": "Swift_TOO", "api_version": "1.2", "api_data": {"username": "u", "ra": 35.2}}
-        self.assertEqual(swift_mod.encode_jwt(payload, "s3cret"), pyjwt.encode(payload, "s3cret", algorithm="HS256"))
+        token = swift_mod.encode_jwt(payload, "s3cret")
+        self.assertEqual(_decode_jwt(token, "s3cret"), payload)
+        with self.assertRaises(ValueError):
+            _decode_jwt(token, "wrong")
+        try:  # PyJWT is not in the CI image; when present the tokens must be byte-identical
+            import jwt as pyjwt
+        except ImportError:
+            pyjwt = None
+        if pyjwt is not None:
+            self.assertEqual(token, pyjwt.encode(payload, "s3cret", algorithm="HS256"))
         cred = _credential(self.staff, {"username": "yse", "shared_secret": "s3cret"}, service="swift")
         a = _allocation(self.staff, self.telescope, name="Swift", facility="swift", credential=cred, hours=0)
         swift = get_facility("swift")
@@ -496,7 +503,7 @@ class OtherAdapterTests(_Base):
         self.assertIn("dry run accepted", result.detail)
         self.assertEqual(result.hours, 0.0)
         token = post.call_args[1]["data"]["jwt"]
-        self.assertEqual(pyjwt.decode(token, "s3cret", algorithms=["HS256"])["api_data"]["debug"], True)
+        self.assertEqual(_decode_jwt(token, "s3cret")["api_data"]["debug"], True)
         live = _allocation(self.staff, self.telescope, name="Swift live", facility="swift", credential=cred, hours=0,
                            params={"debug": False})
         req2 = self._request(live, {"exposure": 2000})
@@ -944,6 +951,19 @@ class PagesTests(_Base):
         response = self.member.post(reverse("automated_spectrum_request"), data, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
         self.assertEqual(response.json()["data"]["errorflag"], 1)
         self.assertIn("facility request refused", response.json()["data"]["errors"])
+
+
+def _decode_jwt(token, secret):
+    """Verify an HS256 JWT by hand and return its payload (ValueError on a bad signature)."""
+    import base64
+    import hashlib
+    import hmac
+
+    header, body, signature = token.split(".")
+    expected = hmac.new(secret.encode(), ("%s.%s" % (header, body)).encode(), hashlib.sha256).digest()
+    if base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)) != expected:
+        raise ValueError("bad signature")
+    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
 
 
 def _has_url(name):
