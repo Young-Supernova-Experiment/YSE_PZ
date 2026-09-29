@@ -162,7 +162,12 @@ def iers_quiet():
     """
     from astropy.utils import iers
 
-    with iers.conf.set_temp("auto_download", False), iers.conf.set_temp("iers_degraded_accuracy", "ignore"):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(iers.conf.set_temp("auto_download", False))
+        # astropy >= 5.1 raises on times outside the bundled table unless told
+        # otherwise; the deployed image pins 5.0, which only warns.
+        if hasattr(iers.conf, "iers_degraded_accuracy"):
+            stack.enter_context(iers.conf.set_temp("iers_degraded_accuracy", "ignore"))
         yield
 
 

@@ -5,6 +5,7 @@ than exact numbers, so a newer astropy ephemeris does not break the suite.
 """
 
 import datetime
+import warnings
 from unittest import mock
 
 from django.conf import settings
@@ -42,10 +43,12 @@ def _midnight_transiting_target(telescope, night):
     import astropy.units as u
     from astropy.time import Time
 
-    observer = svc.observer_for(telescope)
     midnight = Time("%sT12:00:00" % night.isoformat()) - (telescope.longitude / 15.0) * u.hour + 12 * u.hour
-    with svc.iers_quiet():
-        ra = observer.local_sidereal_time(midnight).to_value(u.deg)
+    # UT1 = UTC to within a second is plenty here and needs no IERS table.
+    midnight.delta_ut1_utc = 0.0
+    with svc.iers_quiet(), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ra = midnight.sidereal_time("mean", longitude=telescope.longitude * u.deg).to_value(u.deg)
     return _transient(pk=7, name="zenith", ra=float(ra), dec=telescope.latitude)
 
 
