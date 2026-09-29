@@ -32,7 +32,53 @@ admin.site.register(TransientClass)
 admin.site.register(Observatory)
 admin.site.register(OnCallDate)
 admin.site.register(YSEOnCallDate)
-admin.site.register(Telescope)
+
+
+@admin.register(Telescope)
+class TelescopeAdmin(admin.ModelAdmin):
+	list_display = ("name", "observatory", "latitude", "longitude", "elevation", "has_weather_widget")
+	search_fields = ("name", "observatory__name")
+	readonly_fields = ("weather", "weather_fetched_at", "created_by", "created_date", "modified_by", "modified_date")
+	fieldsets = (
+		(None, {"fields": ("observatory", "name", "latitude", "longitude", "elevation")}),
+		("Weather widget and SkyCam (#311)", {
+			"fields": ("weather_url", "weather_link", "skycam_url", "weather", "weather_fetched_at"),
+			"description": "weather_url: JSON endpoint (Open-Meteo or OpenWeatherMap shape; {lat}/{lon}/{elevation} "
+			               "placeholders). weather_link: the site's own weather page. skycam_url: all-sky image.",
+		}),
+		("Audit", {"fields": ("created_by", "created_date", "modified_by", "modified_date"), "classes": ("collapse",)}),
+	)
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(InstrumentLog)
+class InstrumentLogAdmin(admin.ModelAdmin):
+	list_display = ("id", "instrument", "start", "end", "source", "source_name", "short_message", "entry_count", "created_by")
+	list_filter = ("source", "instrument__telescope")
+	search_fields = ("message", "instrument__name", "instrument__telescope__name")
+	raw_id_fields = ("instrument", "run")
+	readonly_fields = ("fingerprint", "created_by", "created_date", "modified_by", "modified_date")
+	date_hierarchy = "start"
+	list_select_related = ("instrument", "instrument__telescope", "created_by")
+
+	def short_message(self, obj):
+		return (obj.summary or "")[:80]
+	short_message.short_description = "message"
+
+	def save_model(self, request, obj, form, change):
+		from YSE_App.services.instrument_logs import fingerprint, normalize_entries
+
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		obj.fingerprint = fingerprint(obj.instrument_id, obj.start, obj.message, normalize_entries(obj.log))
+		super().save_model(request, obj, form, change)
+
 admin.site.register(Instrument)
 
 

@@ -1,0 +1,99 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>{{ telescope.name }} <small class="text-muted">{{ observatory.name }}</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-12 col-lg-7">
+		<div class="card">
+			<div class="card-header"><span class="card-title">Telescope</span>
+				<div class="card-tools">
+					<form class="form-inline" method="get" onsubmit="window.location = this.elements.tel.value; return false;">
+						<label class="small mr-1" for="tel-switch">Other telescope</label>
+						<select class="form-control form-control-sm" id="tel-switch" name="tel" onchange="window.location = this.value;">
+							<option value="">choose&hellip;</option>
+							{% for t in telescopes %}<option value="{% url 'telescope_detail' t.id %}">{{ t.name }}</option>{% endfor %}
+						</select>
+					</form>
+				</div>
+			</div>
+			<div class="card-body">
+				<dl class="row mb-0 small">
+					<dt class="col-4">Observatory</dt><dd class="col-8">{{ observatory.name }} (UTC{{ observatory.utc_offset|stringformat:"+d" }}, {{ observatory.tz_name }})</dd>
+					<dt class="col-4">Latitude / longitude</dt><dd class="col-8">{{ telescope.latitude|floatformat:4 }}, {{ telescope.longitude|floatformat:4 }}</dd>
+					<dt class="col-4">Elevation</dt><dd class="col-8">{{ telescope.elevation|floatformat:0 }} m</dd>
+					{% if telescope.weather_link %}<dt class="col-4">Site weather page</dt><dd class="col-8"><a href="{{ telescope.weather_link }}" target="_blank" rel="noopener">{{ telescope.weather_link }}</a></dd>{% endif %}
+					{% if request.user.is_staff %}<dt class="col-4">Configure</dt><dd class="col-8"><a href="{% url 'admin:YSE_App_telescope_change' telescope.id %}">weather / SkyCam URLs in the admin</a></dd>{% endif %}
+				</dl>
+			</div>
+		</div>
+		<div class="card">
+			<div class="card-header"><span class="card-title">Instruments</span></div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-sm table-hover mb-0" id="telescope_instruments_tbl">
+					<thead><tr><th>Instrument</th><th>Description</th><th>Logs</th></tr></thead>
+					<tbody>
+						{% for row in instruments %}
+						<tr data-instrument-id="{{ row.i.id }}">
+							<td><a href="{% url 'instrument_logs' row.i.id %}">{{ row.i.name }}</a></td>
+							<td class="small text-muted">{{ row.i.description|default:""|truncatechars:100 }}</td>
+							<td><a class="badge badge-{% if row.n_logs %}primary{% else %}secondary{% endif %}" href="{% url 'instrument_logs' row.i.id %}">{{ row.n_logs }} log{{ row.n_logs|pluralize }}</a></td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="3" class="text-muted p-3">No instruments recorded for this telescope.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<div class="card card-outline card-secondary">
+			<div class="card-header"><span class="card-title">Instrument logs, last 7 days</span></div>
+			<div class="card-body p-2">
+				{% if recent_logs %}
+				<table class="table table-sm table-borderless mb-0 small" id="telescope_recent_logs_tbl">
+					<tbody>
+					{% for row in recent_logs %}
+					<tr data-source="{{ row.source }}">
+						<td class="text-nowrap text-muted">{{ row.start|date:"Y-m-d H:i" }}</td>
+						<td><a href="{% url 'instrument_logs' row.instrument_id %}">{{ row.instrument.name }}</a></td>
+						<td>{{ row.summary|truncatechars:140 }}{% if row.source == 'api' %} <span class="badge badge-info">api</span>{% endif %}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				{% else %}<div class="text-muted small">No instrument logs in the last 7 days.</div>{% endif %}
+			</div>
+		</div>
+		{% if allocations %}
+		<div class="card card-outline card-secondary">
+			<div class="card-header"><span class="card-title">Active allocations</span></div>
+			<div class="card-body p-0 table-responsive">
+				<table class="table table-sm mb-0 small">
+					<thead><tr><th>Allocation</th><th>Instrument</th><th>PI</th><th>Facility</th><th>Until</th></tr></thead>
+					<tbody>
+					{% for a in allocations %}
+					<tr><td>{% if request.user.is_staff %}<a href="{% url 'allocation_edit' a.id %}">{{ a.name }}</a>{% else %}{{ a.name }}{% endif %}</td><td>{{ a.instrument.name|default:"any" }}</td><td>{{ a.principal_investigator.name|default:"-" }}</td><td>{{ a.facility|default:"manual" }}</td><td>{{ a.end_date|date:"Y-m-d" }}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		{% endif %}
+	</div>
+	<div class="col-12 col-lg-5" id="telescope-weather-column">
+		{% if widget.has_weather or widget.has_skycam or widget.weather_link %}
+			{% include 'YSE_App/partials/weather_widget.html' with telescope=widget.telescope weather=widget.weather compact=False has_weather=widget.has_weather has_skycam=widget.has_skycam weather_link=widget.weather_link stale=widget.stale skycam_refresh_seconds=widget.skycam_refresh_seconds weather_refresh_seconds=widget.weather_refresh_seconds %}
+		{% else %}
+		<div class="card card-outline card-secondary" id="telescope-weather-unconfigured">
+			<div class="card-header"><span class="card-title"><i class="fa fa-cloud"></i> Weather and SkyCam</span></div>
+			<div class="card-body small text-muted">
+				Not configured for this telescope. {% if request.user.is_staff %}Set <code>weather_url</code> (an Open-Meteo or OpenWeatherMap JSON endpoint; <code>{lat}</code> / <code>{lon}</code> placeholders are filled from the coordinates above), <code>weather_link</code> and/or <code>skycam_url</code> on <a href="{% url 'admin:YSE_App_telescope_change' telescope.id %}">the telescope in the admin</a>.{% else %}Ask an administrator to set the weather and SkyCam URLs for this telescope.{% endif %}
+			</div>
+		</div>
+		{% endif %}
+	</div>
+</div>
+{% endblock %}

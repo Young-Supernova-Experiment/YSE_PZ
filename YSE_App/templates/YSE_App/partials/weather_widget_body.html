@@ -1,0 +1,38 @@
+{% comment %}Inner part of the weather widget; also what /telescopes/<id>/weather_fragment/ returns.{% endcomment %}
+<div class="yse-weather-inner{% if compact %} yse-weather-inner-compact{% endif %}">
+  {% if has_weather %}
+    {% if weather and weather.fetched_at %}
+    <div class="yse-weather-readings" data-status="{% if stale %}stale{% else %}fresh{% endif %}">
+      {% if weather.description %}<div class="yse-weather-desc"><strong>{{ weather.description }}</strong></div>{% endif %}
+      <dl class="row mb-1 yse-weather-values">
+        {% if weather.temperature_c is not None %}<dt class="col-6 col-sm-5">Temperature</dt><dd class="col-6 col-sm-7" data-field="temperature_c">{{ weather.temperature_c|floatformat:1 }} °C</dd>{% endif %}
+        {% if weather.humidity_pct is not None %}<dt class="col-6 col-sm-5">Humidity</dt><dd class="col-6 col-sm-7" data-field="humidity_pct">{{ weather.humidity_pct|floatformat:0 }} %</dd>{% endif %}
+        {% if weather.wind_speed_ms is not None %}<dt class="col-6 col-sm-5">Wind</dt><dd class="col-6 col-sm-7" data-field="wind_speed_ms">{{ weather.wind_speed_ms|floatformat:1 }} m/s{% if weather.wind_direction_deg is not None %} from {{ weather.wind_direction_deg|floatformat:0 }}°{% endif %}{% if weather.wind_gust_ms is not None %}, gusts {{ weather.wind_gust_ms|floatformat:1 }}{% endif %}</dd>{% endif %}
+        {% if weather.cloud_cover_pct is not None %}<dt class="col-6 col-sm-5">Cloud cover</dt><dd class="col-6 col-sm-7" data-field="cloud_cover_pct">{{ weather.cloud_cover_pct|floatformat:0 }} %</dd>{% endif %}
+        {% if weather.precipitation_mm is not None and not compact %}<dt class="col-6 col-sm-5">Precipitation</dt><dd class="col-6 col-sm-7" data-field="precipitation_mm">{{ weather.precipitation_mm|floatformat:1 }} mm</dd>{% endif %}
+        {% if weather.dew_point_c is not None and not compact %}<dt class="col-6 col-sm-5">Dew point</dt><dd class="col-6 col-sm-7" data-field="dew_point_c">{{ weather.dew_point_c|floatformat:1 }} °C</dd>{% endif %}
+        {% if weather.pressure_hpa is not None and not compact %}<dt class="col-6 col-sm-5">Pressure</dt><dd class="col-6 col-sm-7" data-field="pressure_hpa">{{ weather.pressure_hpa|floatformat:0 }} hPa</dd>{% endif %}
+      </dl>
+      <div class="text-muted small yse-weather-meta">
+        {% if weather.observed_at %}observed {{ weather.observed_at }} &middot; {% endif %}fetched {{ weather.fetched_at }} from {{ weather.source }}{% if stale %} <span class="badge badge-warning" title="Older than the cache window">stale</span>{% endif %}
+        {% if weather.error %}<br><span class="text-warning"><i class="fa fa-exclamation-triangle"></i> last fetch failed: {{ weather.error|truncatechars:120 }}</span>{% endif %}
+      </div>
+    </div>
+    {% elif weather.error %}
+    <div class="text-warning small yse-weather-error" data-status="error"><i class="fa fa-exclamation-triangle"></i> Weather unavailable: {{ weather.error|truncatechars:160 }}</div>
+    {% else %}
+    <div class="text-muted small yse-weather-pending" data-status="pending"><i class="fa fa-spinner fa-spin"></i> Fetching current conditions&hellip;</div>
+    {% endif %}
+  {% endif %}
+  {% if has_skycam %}
+  <div class="yse-skycam mt-2">
+    <a href="{{ telescope.skycam_url }}" target="_blank" rel="noopener" title="Open the SkyCam image">
+      <img class="yse-skycam-img img-fluid rounded" src="{{ telescope.skycam_url }}" data-src="{{ telescope.skycam_url }}" alt="All-sky camera at {{ telescope.name }}" loading="lazy">
+    </a>
+    <div class="text-muted small"><i class="fa fa-camera"></i> SkyCam{% if skycam_refresh_seconds %} &middot; reloads every {{ skycam_refresh_seconds }} s{% endif %} &middot; <span class="yse-skycam-stamp"></span></div>
+  </div>
+  {% endif %}
+  {% if not has_weather and not has_skycam and weather_link %}
+  <div class="small"><a href="{{ weather_link }}" target="_blank" rel="noopener"><i class="fa fa-external-link"></i> Site weather page</a></div>
+  {% endif %}
+</div>
