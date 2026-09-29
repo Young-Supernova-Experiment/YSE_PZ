@@ -186,8 +186,14 @@ def execute_check(run: ExternalServiceRun, check: Callable[[float, float, float]
     document[VERDICT_KEY] = verdict
     document[SUMMARY_KEY] = summary
     document["radius_arcsec"] = radius
-    annotation, _created = annotations_svc.upsert(
-        run.transient, origin, document, user=run.created_by, run=run, service=run.service,
-    )
+    try:
+        annotation, _created = annotations_svc.upsert(
+            run.transient, origin, document, user=run.created_by, run=run, service=run.service,
+        )
+    except Exception as exc:  # noqa: BLE001 - a write failure must not leave the run "running"
+        log.exception("annotation %s for run %s could not be written", origin, run.uuid)
+        error = "could not store the annotation: %s: %s" % (type(exc).__name__, exc)
+        runs.record_completion(run, ExternalServiceRun.STATUS_FAILED, result=document, error=error)
+        return {"status": run.status, "origin": origin, "error": error}
     runs.record_completion(run, ExternalServiceRun.STATUS_SUCCEEDED, result=document)
     return {"status": run.status, "origin": origin, "verdict": verdict, "annotation_id": annotation.pk}

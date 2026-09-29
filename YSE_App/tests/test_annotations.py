@@ -429,6 +429,17 @@ class RunnerTests(AnnotationBase):
         self.assertIn("ZeroDivisionError: boom", run3.error)
         self.assertEqual(result.failed, 0)
 
+    def test_write_failure_fails_the_run(self):
+        run = self._start("gaia_dr3")
+        with mock.patch.object(base.requests, "post", tap_responses(GAIA_STAR)), \
+                mock.patch.object(base.annotations_svc, "upsert", side_effect=RuntimeError("disk full")):
+            self._run_queue()
+        run.refresh_from_db()
+        self.assertEqual(run.status, ExternalServiceRun.STATUS_FAILED)
+        self.assertIn("disk full", run.error)
+        self.assertEqual(run.result["verdict"], "stellar")  # the computed document is kept on the run
+        self.assertFalse(TransientAnnotation.objects.filter(origin="gaia_dr3").exists())
+
     def test_unknown_annotation_slug_fails_cleanly(self):
         service = ExternalService.objects.create(name="Other", slug="other_cat", kind=ExternalService.KIND_ANNOTATION,
                                                  **audit_fields(self.staff))

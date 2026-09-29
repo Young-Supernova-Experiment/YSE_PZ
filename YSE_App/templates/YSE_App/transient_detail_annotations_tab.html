@@ -35,7 +35,7 @@
 							</div>
 							<details class="mt-1">
 								<summary class="small text-muted">JSON</summary>
-								<pre class="small mb-0" style="max-height: 14rem; overflow: auto;">{{ row.json }}</pre>
+								<pre class="small mb-0" style="max-height: 14rem; overflow: auto; white-space: pre-wrap; color: inherit; background: transparent;">{{ row.json }}</pre>
 							</details>
 						</td>
 						<td class="small">{% if row.a %}{{ row.a.modified_date|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">from the transient row</span>{% endif %}</td>
