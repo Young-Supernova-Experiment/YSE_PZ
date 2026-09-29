@@ -28,9 +28,22 @@ from .common.bandpassdict import bandpassdict
 from .common.filter_display import (
     band_display_color,
     display_filter_label,
+    legend_sort_key,
     plot_legend_label,
     telescope_display_name,
     telescope_display_symbol,
+)
+from .common.legend_layout import (
+    GLYPH_HEIGHT as LEGEND_GLYPH_HEIGHT,
+    GLYPH_WIDTH as LEGEND_GLYPH_WIDTH,
+    LABEL_STANDOFF as LEGEND_LABEL_STANDOFF,
+    PADDING as LEGEND_PADDING,
+    SPACING as LEGEND_SPACING,
+    legend_column_count,
+    legend_height_px,
+    legend_label_width_px,
+    legend_rows,
+    requested_plot_width,
 )
 from .common.utilities import date_to_mjd
 from .services.visibility import group_access_plot_cache_token
@@ -736,6 +749,89 @@ def salt2fluxplot(request, transient_id, salt2fit):
     response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
     return response
 
+def _band_legend_key(band_obj):
+    """Stable legend sort key for a PhotometricBand (telescope family, then wavelength; #91)."""
+    inst = band_obj.instrument if getattr(band_obj, 'instrument_id', None) else None
+    tel_name = (
+        inst.telescope.name
+        if inst is not None and getattr(inst, 'telescope_id', None)
+        else None
+    )
+    return legend_sort_key(
+        band_obj.name,
+        instrument_name=inst.name if inst is not None else None,
+        telescope_name=tel_name,
+    )
+
+
+def _legend_series_order(band_objs):
+    """Indices that put band objects in stable legend order (#91).
+
+    ``np.unique`` orders series by primary key (or by ``str(band)``), which
+    changes from transient to transient; sorting by telescope family and
+    filter wavelength keeps ``PS1 g`` before ``PS1 r`` and every ZTF entry
+    after every PS1 entry no matter which bands have data.
+    """
+    band_objs = list(band_objs)
+    return np.array(
+        sorted(range(len(band_objs)), key=lambda k: _band_legend_key(band_objs[k])),
+        dtype=int,
+    )
+
+
+def _link_series_visibility(leader, followers):
+    """Hide/show ``followers`` (error bars, upper limits) with the legend-controlled ``leader`` (#249)."""
+    from bokeh.models import CustomJS
+
+    followers = [renderer for renderer in followers if renderer is not None]
+    if not followers:
+        return
+    leader.js_on_change(
+        'visible',
+        CustomJS(
+            args=dict(followers=followers),
+            code="for (const r of followers) { r.visible = cb_obj.visible; }",
+        ),
+    )
+
+
+def _requested_plot_width(request, default):
+    """Nominal figure width: the container width the page sends as ``?w=``, else ``default``."""
+    return requested_plot_width(request.GET.get('w'), default)
+
+
+def _add_legend_grid(ax, legend_items, plot_width):
+    """Lay ``legend_items`` out in columns below ``ax`` (#226).
+
+    Bokeh 2.4.2 has no ``Legend.ncols``; each row is a horizontal ``Legend``
+    whose labels are padded to the longest label so the columns align.  The
+    column count comes from :func:`legend_column_count` (documented in
+    ``YSE_App/common/legend_layout.py``).  Returns the column count so the
+    caller can size the plot with :func:`legend_height_px`.
+    """
+    labels = [label for label, _renderers in legend_items]
+    ncols = legend_column_count(labels, plot_width)
+    label_width = legend_label_width_px(labels)
+    for row in legend_rows(legend_items, ncols):
+        legend = Legend(
+            items=row,
+            orientation='horizontal',
+            click_policy='hide',
+            location='top_left',
+            label_width=label_width,
+            label_height=LEGEND_GLYPH_HEIGHT,
+            glyph_width=LEGEND_GLYPH_WIDTH,
+            glyph_height=LEGEND_GLYPH_HEIGHT,
+            label_standoff=LEGEND_LABEL_STANDOFF,
+            spacing=LEGEND_SPACING,
+            padding=LEGEND_PADDING,
+            margin=0,
+            border_line_color=None,
+        )
+        ax.add_layout(legend, 'below')
+    return ncols
+
+
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
 
@@ -808,14 +904,26 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         ("magsys", "@magsys"),
     ]
 
-    ax = figure(plot_width=500, plot_height=400, sizing_mode="scale_width")
+    plot_width = _requested_plot_width(request, 500)
+    ax = figure(plot_width=plot_width, plot_height=400, sizing_mode="scale_width")
 
-    # Group by unique bands
-    unique_bands, band_indices = np.unique(band_ids, return_index=True)
+    # Group by unique bands, in stable legend order (#91)
+    unique_bands = np.unique(band_ids)
+    unique_bands = unique_bands[_legend_series_order([band_lookup[b] for b in unique_bands])]
 
     legend_items = []
     salt2mjd, flux, fluxerr, salt2band, zpsys = [], [], [], [], []
+
+    # Upper limits (for the y-range): once, not once per band (#254)
     upperlimmjd, upperlimmag = [], []
+    for idx, p in enumerate(phot_values):
+        if p["flux"] and p["flux_zero_point"] and p["flux"] + 3 * p["flux_err"] > 0:
+            upperlimmjd.append(mjd[idx])
+            upperlimmag.append(-2.5 * np.log10(p["flux"] + 3 * p["flux_err"]) + p["flux_zero_point"])
+
+    # Rows without a magnitude (forced-photometry non-detections) would put
+    # NaN into the ColumnDataSource, which Bokeh cannot serialise (#254).
+    has_mag = np.isfinite(mag)
 
     for count, band_id in enumerate(unique_bands):
         band_obj = band_lookup[band_id]
@@ -844,17 +952,11 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         size = 20 if symbol == "asterisk" else 7
 
         # Filter data for this band
-        band_filter = band_ids == band_id
+        band_filter = (band_ids == band_id) & has_mag
         band_mjd = mjd[band_filter]
         band_mag = mag[band_filter]
         band_mag_err = mag_err[band_filter]
         band_obs_date_str = np.array(obs_date_str)[band_filter]
-
-        # Handle inverted triangles (upper limits)
-        for idx, p in enumerate(phot_values):
-            if p["flux"] and p["flux_zero_point"] and p["flux"] + 3 * p["flux_err"] > 0:
-                upperlimmjd.append(mjd[idx])
-                upperlimmag.append(-2.5 * np.log10(p["flux"] + 3 * p["flux_err"]) + p["flux_zero_point"])
 
         # Plot data
         source = ColumnDataSource(
@@ -876,7 +978,8 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         # Error bars
         err_xs = [(x, x) for x in band_mjd]
         err_ys = [(y - yerr, y + yerr) for y, yerr in zip(band_mag, band_mag_err)]
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(plot, [p_err])
 
         legend_items.append((legend_label, [plot]))
 
@@ -894,9 +997,8 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     today_line = Span(location=today_mjd, dimension="height", line_color="black", line_width=3)
     ax.add_layout(today_line)
 
-    # Configure legend
-    legend = Legend(items=legend_items, click_policy="hide")
-    ax.add_layout(legend, "below")
+    # Configure legend: columns sized to the longest label (#226)
+    _add_legend_grid(ax, legend_items, plot_width)
 
     # Adaptive x/y ranges
     if discovery_point.any():
@@ -906,13 +1008,14 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         limmjd = None
         mjd_range = (mjd.min() - 10, mjd.max() + 10)
     ax.x_range = Range1d(*mjd_range)
+    finite_mag = mag[has_mag]
     if len(upperlimmag):
         y_hi = float(np.max(upperlimmag)) + 0.25
-    elif len(mag):
-        y_hi = float(np.max(mag)) + 0.5
+    elif len(finite_mag):
+        y_hi = float(np.max(finite_mag)) + 0.5
     else:
         y_hi = 20.0
-    y_lo = float(np.min(mag)) - 0.5 if len(mag) else y_hi - 2.0
+    y_lo = float(np.min(finite_mag)) - 0.5 if len(finite_mag) else y_hi - 2.0
     ax.y_range = Range1d(y_hi, y_lo)
 
     majorticks = []
@@ -1007,11 +1110,13 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
 def lightcurveplot_detail(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
 
+    plot_width = _requested_plot_width(request, 400)
     cache_key = None
     if not salt2 and _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_detail_v5_{transient_id}_{_transient_phot_cache_token(transient_id)}_{user_key}'
+            f'lc_detail_v6_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'_{user_key}_w{plot_width}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -1073,6 +1178,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
     bandunq,idx = np.unique(band,return_index=True)
+    series_order = _legend_series_order([band_lookup[b] for b in bandunq])
+    bandunq, idx = bandunq[series_order], idx[series_order]
     count = 0
     legend_it = []
     upperlimmag,upperlimmjd = np.array([]),np.array([])
@@ -1141,6 +1248,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
 
         ulim_x = mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3]
         ulim_y = mags_ulim[iPlotUlimFlux3]
+        p_ulim = None
         if len(ulim_x):
             source = ColumnDataSource(data=dict(x=ulim_x.tolist(),
                                                 y=ulim_y.tolist(),
@@ -1150,8 +1258,10 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
                                                 telescope=[tel_label]*len(ulim_x),
                                                 filter=[short_filter]*len(ulim_x)))
 
+            # same size as the detections (asterisk series use 20 px for the
+            # thin marker; a 20 px triangle would swamp the plot)
             p_ulim = ax.inverted_triangle('x','y',source=source,
-                                     color=color,size=5,muted_alpha=0.2)
+                                     color=color,size=7,muted_alpha=0.2)
             g1_hover = HoverTool(renderers=[p_ulim],
                                  tooltips=TOOLTIPS,toggleable=False)
             ax.add_tools(g1_hover)
@@ -1159,7 +1269,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         for x,y,yerr in zip(mjds[iPlot].tolist(),mags[iPlot].tolist(),mag_errs[iPlot].tolist()):
             err_xs.append((x, x))
             err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)#, legend='%s - %s'%(
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(p_det, [p_err, p_ulim])
 
         legend_it.append((legend_label, [p_det]))
 
@@ -1169,12 +1280,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
-    legend = Legend(items=legend_it)
-    legend.click_policy="hide"
-    legend.label_height = 1
-    legend.glyph_height = 20
-
-    ax.add_layout(legend, 'below')
+    legend_ncols = _add_legend_grid(ax, legend_it, plot_width)
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
@@ -1196,8 +1302,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
     #ax.y_range=Range1d(np.max(mags[mags != None])+0.25,np.min(mags[mags != None])-0.5)
     ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 400+20*len(bandunq)
-    ax.plot_width = 400
+    ax.plot_height = 400 + legend_height_px(len(legend_it), legend_ncols)
+    ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
     mjdrange = range(int(np.min(mjds)-100),int(np.max(mjds)+100))
@@ -1309,6 +1415,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     import time
     tstart = time.time()
 
+    plot_width = _requested_plot_width(request, 400)
     transient = Transient.objects.get(pk=transient_id)
     photdata = (
         get_all_phot_for_transient(request.user, transient_id)
@@ -1427,6 +1534,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     allbandcolor = np.append(bandcolor,upperlimbandcolor)
     allbandsym = np.append(bandsym,[None]*len(upperlimbandcolor))
     bandunq,idx = np.unique(allbandstr,return_index=True)
+    series_order = _legend_series_order(allband[idx])
+    bandunq, idx = bandunq[series_order], idx[series_order]
 
     TOOLTIPS = [
         ('mag','$y'),
@@ -1483,7 +1592,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         for x,y,yerr in zip(mjd[bandstr == bs].tolist(),flux[bandstr == bs].tolist(),fluxerr[bandstr == bs].tolist()):
             err_xs.append((x, x))
             err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(p, [p_err])
 
         legend_it.append((legend_label, [p]))
         
@@ -1496,12 +1606,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     hline = Span(location=0, dimension='width', line_color='black',
                  line_width=3)
     ax.add_layout(hline)
-    legend = Legend(items=legend_it)
-    legend.click_policy="hide"
-    legend.label_height = 1
-    legend.glyph_height = 20
-    
-    ax.add_layout(legend, 'below')
+    legend_ncols = _add_legend_grid(ax, legend_it, plot_width)
     
 
     
@@ -1522,8 +1627,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ax.extra_x_ranges = {"dateax": Range1d(np.min(mjd)-10,np.max(mjd)+10)}
         ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 200+20*len(bandunq)
-    ax.plot_width = 400
+    ax.plot_height = 200 + legend_height_px(len(legend_it), legend_ncols)
+    ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
     mjdrange = range(int(np.min(mjd)-100),int(np.max(mjd)+100))

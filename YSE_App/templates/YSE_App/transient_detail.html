@@ -221,6 +221,13 @@
 
     <script>
     /* Load plots and cutout XHRs immediately; do not wait on Aladin or tag UI setup. */
+    /* Container width for the Bokeh light curves: the server lays the legend out
+       in as many columns as fit this width (?w=, see legend_layout.py). */
+    window.ysePlotWidthQuery = function (selector) {
+        var width = Math.round($(selector).width()) || 0;
+        return width > 0 ? '?w=' + width : '';
+    };
+
     (function yseTransientDetailEarlyLoads() {
         function setPlotHtml(selector, html, emptyMessage) {
             var $el = $(selector);
@@ -235,7 +242,7 @@
             setPlotHtml("#specplot", html,
                 '<p class="text-muted yse-plot-empty">No spectrum data on file for this transient.</p>');
         });
-        $.get("{% url 'lightcurveplot_detail' transient.id %}").done(function (html) {
+        $.get("{% url 'lightcurveplot_detail' transient.id %}" + ysePlotWidthQuery("#lcplot")).done(function (html) {
             setPlotHtml("#lcplot", html,
                 '<p class="text-muted yse-plot-empty">No photometry to plot.</p>');
         });
@@ -1569,7 +1576,7 @@
                 //$(".plotSALT2").html(buttontext);
                 //$(".plotSALT2").html("Hide SALT2 Fit");
                 if (buttontext.indexOf("Show") > -1){
-                    url = "{% url 'salt2plot' transient.id 1 %}";
+                    url = "{% url 'salt2plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcplot").children().last();
                         lastNode.prev().remove();
@@ -1580,7 +1587,7 @@
                         $(".plotSALT2").html("Hide SALT3 Fit");
                     });
                 } else {
-                    url = "{% url 'salt2plot' transient.id 0 %}";
+                    url = "{% url 'salt2plot' transient.id 0 %}" + ysePlotWidthQuery("#lcplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcplot").children().last();
                         lastNode.prev().remove();
@@ -1601,7 +1608,7 @@
                 //$(".plotSALT2").html(buttontext);
                 //$(".plotSALT2").html("Hide SALT2 Fit");
                 if (buttontext.indexOf("Show") > -1){
-                    url = "{% url 'salt2fluxplot' transient.id 1 %}";
+                    url = "{% url 'salt2fluxplot' transient.id 1 %}" + ysePlotWidthQuery("#lcfluxplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcfluxplot").children().last();
                         lastNode.prev().remove();
@@ -1612,7 +1619,7 @@
                         $(".plotSALT2flux").html("Hide SALT3 Fit");
                     });
                 } else {
-                    url = "{% url 'salt2fluxplot' transient.id 0 %}";
+                    url = "{% url 'salt2fluxplot' transient.id 0 %}" + ysePlotWidthQuery("#lcfluxplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcfluxplot").children().last();
                         lastNode.prev().remove();
@@ -1626,7 +1633,7 @@
             });
 
             $('.plotFlux').on('click', function(event){
-                $.get("{% url 'lightcurveplot_flux' transient.id %}").done(function(htmlresponse){
+                $.get("{% url 'lightcurveplot_flux' transient.id %}" + ysePlotWidthQuery("#lcfluxplot")).done(function(htmlresponse){
                     $("#lcfluxplot").html(htmlresponse);
                 });
             });
