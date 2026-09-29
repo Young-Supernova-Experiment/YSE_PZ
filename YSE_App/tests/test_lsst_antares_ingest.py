@@ -27,6 +27,7 @@ from YSE_App.common.filter_display import (
     telescope_display_symbol,
 )
 from YSE_App.common.tns_photometry_map import resolve_tns_photometry
+from YSE_App.brokers import antares as antares_provider
 from YSE_App.data_ingest import Query_LSST
 from YSE_App.models import (
     DataQuality,
@@ -132,8 +133,8 @@ def make_ztf_only_locus():
 def _run_cron(loci):
     """Run the cron with ANTARES mocked to return ``loci`` for every cone search."""
     cron = Query_LSST.AntaresLSST(config=configparser.RawConfigParser())
-    with mock.patch.object(Query_LSST, "HAS_ANTARES", True), \
-            mock.patch.object(Query_LSST, "cone_search", side_effect=lambda sc, radius: list(loci), create=True):
+    with mock.patch.object(antares_provider, "HAS_ANTARES", True), \
+            mock.patch.object(antares_provider, "cone_search", side_effect=lambda sc, radius: list(loci), create=True):
         cron.do()
     return cron
 
@@ -156,17 +157,18 @@ class CronRegistrationTests(SimpleTestCase):
 
 
 class GuardedImportTests(TestCase):
-    """The module must import, and do() must exit cleanly, without antares_client."""
+    """The provider module must import, and do() must exit cleanly, without antares_client (#273)."""
 
     def tearDown(self):
-        importlib.reload(Query_LSST)
+        importlib.reload(antares_provider)
 
     def test_import_without_antares_client(self):
         with mock.patch.dict(sys.modules, {"antares_client": None, "antares_client.search": None}):
-            mod = importlib.reload(Query_LSST)
+            mod = importlib.reload(antares_provider)
             self.assertFalse(mod.HAS_ANTARES)
             self.assertIsNone(mod.cone_search)
-            cron = mod.AntaresLSST(config=configparser.RawConfigParser())
+            self.assertFalse(Query_LSST.antares_available())
+            cron = Query_LSST.AntaresLSST(config=configparser.RawConfigParser())
             with mock.patch("builtins.print") as fake_print:
                 cron.do()  # must not raise
         printed = " ".join(str(c.args[0]) for c in fake_print.call_args_list if c.args)
@@ -177,11 +179,14 @@ class GuardedImportTests(TestCase):
         fake_pkg = types.ModuleType("antares_client")
         fake_search = types.ModuleType("antares_client.search")
         fake_search.cone_search = lambda center, radius: []
+        fake_search.search = lambda query: []
+        fake_search.get_by_id = lambda locus_id: None
         fake_pkg.search = fake_search
         with mock.patch.dict(sys.modules, {"antares_client": fake_pkg, "antares_client.search": fake_search}):
-            mod = importlib.reload(Query_LSST)
+            mod = importlib.reload(antares_provider)
             self.assertTrue(mod.HAS_ANTARES)
             self.assertIs(mod.cone_search, fake_search.cone_search)
+            self.assertTrue(Query_LSST.antares_available())
 
 
 class ConfigTests(SimpleTestCase):
@@ -355,8 +360,8 @@ class IngestTests(TestCase):
             return [make_lsst_locus()]
 
         cron = Query_LSST.AntaresLSST(config=configparser.RawConfigParser())
-        with mock.patch.object(Query_LSST, "HAS_ANTARES", True), \
-                mock.patch.object(Query_LSST, "cone_search", side_effect=flaky, create=True):
+        with mock.patch.object(antares_provider, "HAS_ANTARES", True), \
+                mock.patch.object(antares_provider, "cone_search", side_effect=flaky, create=True):
             cron.do()
         self.assertEqual(calls["n"], 2)
         self.assertEqual(self._lsst_rows().count(), 3)
@@ -368,8 +373,8 @@ class IngestTests(TestCase):
         self.assertEqual(TransientPhotData.objects.count(), 0)
 
     def test_get_lsst_photometry_dict_shape(self):
-        with mock.patch.object(Query_LSST, "HAS_ANTARES", True), \
-                mock.patch.object(Query_LSST, "cone_search", return_value=[make_lsst_locus()], create=True):
+        with mock.patch.object(antares_provider, "HAS_ANTARES", True), \
+                mock.patch.object(antares_provider, "cone_search", return_value=[make_lsst_locus()], create=True):
             d = Query_LSST.getLSSTPhotometry_ANTARES(LSST_RA, LSST_DEC)
         self.assertEqual(d["instrument"], "LSSTCam")
         self.assertEqual(d["obs_group"], "LSST")

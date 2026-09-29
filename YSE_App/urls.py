@@ -17,8 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import job_views, notification_views
-from YSE_App import sharing_views
+from YSE_App import allocation_views, candidate_views, job_views, notification_views, sharing_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -110,6 +109,11 @@ urlpatterns = [
         views.transient_detail_photometry_fragment,
         name='transient_detail_photometry_fragment',
     ),
+    # Facility requests on the follow-up tab (#300); before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_requests_fragment/$',
+            allocation_views.transient_facility_requests_fragment, name='transient_facility_requests_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_submit/$',
+            allocation_views.transient_facility_submit, name='transient_facility_submit'),
     # Sharing services (#326): report dialog preview/submit for one transient; before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/preview/$',
             sharing_views.report_preview, name='sharing_report_preview'),
@@ -221,6 +225,12 @@ urlpatterns = [
             service_run_views.external_service_run_detail, name='external_service_run_detail'),
     re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
             service_run_views.external_service_run_callback, name='external_service_run_callback'),
+    # Allocations page (#305) and facility requests (#300)
+    re_path(r'^allocations/$', allocation_views.allocations, name='allocations'),
+    re_path(r'^allocations/new/$', allocation_views.allocation_create, name='allocation_create'),
+    re_path(r'^allocations/(?P<allocation_id>[0-9]+)/edit/$', allocation_views.allocation_edit, name='allocation_edit'),
+    re_path(r'^facility_requests/(?P<request_id>[0-9]+)/action/$',
+            allocation_views.facility_request_action, name='facility_request_action'),
     # Sharing services (#324): submissions page, detail, retry and the services/rules page.
     re_path(r'^sharing/$', sharing_views.sharing_submissions, name='sharing_submissions'),
     re_path(r'^sharing/submissions/$', sharing_views.sharing_submissions, name='sharing_submissions_list'),
@@ -276,6 +286,12 @@ urlpatterns = [
             name='notification_mark_all_read'),
     re_path(r'^notifications/preferences/$', notification_views.notification_preferences,
             name='notification_preferences'),
+    # Broker candidates (#276 / #279) and provider status (#272)
+    re_path(r'^candidates/$', candidate_views.candidate_list, name='candidate_list'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/save/$', candidate_views.candidate_save, name='candidate_save'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reject/$', candidate_views.candidate_reject, name='candidate_reject'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reopen/$', candidate_views.candidate_reopen, name='candidate_reopen'),
+    re_path(r'^brokers/status\.json$', candidate_views.brokers_status_json, name='brokers_status_json'),
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
@@ -325,6 +341,9 @@ router.register(r'transientphotometry', api_views.TransientPhotometryViewSet, ba
 router.register(r'hostphotometry', api_views.HostPhotometryViewSet, basename='hostphotometry')
 router.register(r'transientphotdata', api_views.TransientPhotDataViewSet, basename='transientphotdata')
 router.register(r'transientphotstats', api_views.TransientPhotStatViewSet, basename='transientphotstat')
+router.register(r'brokerfilters', api_views.BrokerFilterViewSet, basename='brokerfilter')
+router.register(r'candidates', api_views.CandidateViewSet, basename='candidate')
+router.register(r'brokers', api_views.BrokerViewSet, basename='broker')
 router.register(r'sharingservices', api_views.SharingServiceViewSet, basename='sharingservice')
 router.register(r'sharingsubmissions', api_views.SharingSubmissionViewSet, basename='sharingsubmission')
 router.register(r'hostphotdata', api_views.HostPhotDataViewSet, basename='hostphotdata')
@@ -344,6 +363,8 @@ router.register(r'tooresources', api_views.ToOResourceViewSet, basename='tooreso
 router.register(r'queuedresources', api_views.QueuedResourceViewSet, basename='queuedresource')
 router.register(r'classicalresources', api_views.ClassicalResourceViewSet, basename='classicalresource')
 router.register(r'classicalobservingdates', api_views.ClassicalObservingDateViewSet, basename='classicalobservingdate')
+router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
+router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

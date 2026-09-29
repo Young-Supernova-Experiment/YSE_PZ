@@ -1,9 +1,11 @@
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse
 from rest_framework import serializers, viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from rest_framework.decorators import action, api_view
 from rest_framework import generics
 from YSE_App.common import custom_viewsets
+from django.core.exceptions import PermissionDenied
+from django.db.models import Q
 from rest_framework.reverse import reverse
 
 from .models import *
@@ -416,6 +418,54 @@ class QueuedResourceViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         allowed_resource = ObservingResourceService.GetAuthorizedQueuedResource_ByUser(self.request.user)
         return allowed_resource
 
+class AllocationViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Allocations the user may see (#305): staff see all, others the active ones open to them; writes are staff-only."""
+
+    serializer_class = AllocationSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.allocations import allocations_for_user
+
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return Allocation.objects.select_related("telescope", "instrument", "principal_investigator", "credential")
+        return allocations_for_user(user, facility_only=False)
+
+    def _staff_only(self):
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser):
+            raise PermissionDenied({"message": "Only staff may create or edit allocations."})
+
+    def perform_create(self, serializer):
+        self._staff_only()
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._staff_only()
+        super().perform_update(serializer)
+
+
+class FacilityRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """Facility requests (#299), read-only; ``?transient=<id>``, ``?allocation=<id>``, ``?state=`` filters."""
+
+    serializer_class = FacilityRequestSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        from YSE_App.services.allocations import allocations_for_user
+
+        qs = FacilityRequest.objects.select_related("allocation", "transient", "submitted_by", "run")
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser):
+            qs = qs.filter(Q(submitted_by=user) | Q(allocation__in=allocations_for_user(user, facility_only=False)))
+        for key in ("transient", "allocation", "state"):
+            value = self.request.query_params.get(key)
+            if value:
+                qs = qs.filter(**{key if key == "state" else key + "_id": value})
+        return qs.distinct()
+
+
 ### `ClassicalResource` Filter Set ###
 class ClassicalResourceFilter(django_filters.FilterSet):
     telescope_name = django_filters.Filter(field_name="telescope__name")
@@ -619,6 +669,129 @@ class TransientCommentListCreate(generics.ListCreateAPIView):
         )
 
 
+### Broker providers, filters and candidates (#272 / #276) ###
+class BrokerViewSet(viewsets.ViewSet):
+    """``/api/brokers/``: enabled providers with their capabilities; ``/api/brokers/<slug>/``
+    one provider; ``?ra=&dec=&radius=`` on ``/api/brokers/<slug>/cone_search/`` proxies a cone search."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def list(self, request):
+        from YSE_App.brokers import registry
+        from YSE_App.brokers.filters import describe_criteria
+        return Response({"brokers": BrokerSerializer(registry.describe_all(), many=True).data,
+                         "criteria": describe_criteria()})
+
+    def retrieve(self, request, pk=None):
+        from YSE_App.brokers import registry
+        provider = registry.get_provider(pk)
+        if provider is None:
+            return Response({"detail": "unknown or disabled broker"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(BrokerSerializer(provider.describe()).data)
+
+    @action(detail=True, methods=["get"])
+    def cone_search(self, request, pk=None):
+        from YSE_App.brokers import registry
+        from YSE_App.brokers.base import CONE_SEARCH, BrokerError, BrokerUnavailable
+        provider = registry.get_provider(pk)
+        if provider is None:
+            return Response({"detail": "unknown or disabled broker"}, status=status.HTTP_404_NOT_FOUND)
+        if not provider.has(CONE_SEARCH):
+            return Response({"detail": "%s has no cone search" % pk}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ra, dec = float(request.query_params["ra"]), float(request.query_params["dec"])
+            radius = float(request.query_params.get("radius", 5.0))
+            limit = min(int(request.query_params.get("limit", 20)), 200)
+        except (KeyError, ValueError):
+            return Response({"detail": "ra, dec (deg) and optional radius (arcsec) are required"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            alerts = provider.cone_search(ra, dec, radius, limit=limit)
+        except BrokerUnavailable as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except BrokerError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({"broker": pk, "count": len(alerts), "results": [a.to_dict() for a in alerts]})
+
+
+class BrokerFilterViewSet(viewsets.ModelViewSet):
+    """``/api/brokerfilters/``: filters of the user's groups (staff: all); group-scoped writes."""
+    serializer_class = BrokerFilterSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = BrokerFilter.objects.select_related("group").order_by("broker", "name")
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(Q(group__isnull=True) | Q(group__in=user.groups.all()))
+
+    def _check_group(self, group):
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return
+        if group is None:
+            raise PermissionDenied("only staff may create filters without a group")
+        if not user.groups.filter(pk=group.pk).exists():
+            raise PermissionDenied("you are not a member of that group")
+
+    def perform_create(self, serializer):
+        self._check_group(serializer.validated_data.get("group"))
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._check_group(serializer.instance.group)
+        if "group" in serializer.validated_data:
+            self._check_group(serializer.validated_data.get("group"))
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._check_group(instance.group)
+        instance.delete()
+
+
+class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
+    """``/api/candidates/`` (read) with ``save`` / ``reject`` / ``reopen`` POST actions."""
+    serializer_class = CandidateSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_fields = ("broker", "status", "alert_id")
+
+    def get_queryset(self):
+        from YSE_App.candidate_views import visible_filters
+        allowed = visible_filters(self.request.user)
+        return (
+            Candidate.objects.filter(Q(filters__in=allowed) | Q(filters__isnull=True)).distinct()
+            .select_related("transient").prefetch_related("filters").order_by("-last_seen", "-id")
+        )
+
+    def _act(self, request, pk, fn):
+        from YSE_App.brokers.base import BrokerError
+        from YSE_App.brokers.ingest import IngestError
+        candidate = self.get_object()
+        try:
+            fn(candidate)
+        except (IngestError, BrokerError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        candidate.refresh_from_db()
+        return Response(self.get_serializer(candidate).data)
+
+    @action(detail=True, methods=["post"])
+    def save(self, request, pk=None):
+        from YSE_App.brokers import ingest
+        data = request.data or {}
+        return self._act(request, pk, lambda c: ingest.save_candidate(
+            c, request.user, status=data.get("status") or "New", obs_group=data.get("obs_group") or None,
+            import_photometry=data.get("import_photometry", True) not in (False, "0", "false", 0)))
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        from YSE_App.brokers import ingest
+        return self._act(request, pk, lambda c: ingest.reject_candidate(c, request.user, note=str((request.data or {}).get("note") or "")[:255]))
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        from YSE_App.brokers import ingest
+        return self._act(request, pk, lambda c: ingest.reopen_candidate(c, request.user))
 class SharingServiceViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only ``/api/sharingservices/``: the enabled services the user may report through (no secrets)."""
     serializer_class = SharingServiceSerializer

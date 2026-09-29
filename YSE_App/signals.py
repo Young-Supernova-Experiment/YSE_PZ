@@ -12,6 +12,8 @@ from YSE_App.common.db_time_cap import cap_explorer_connection
 
 # Importing the module registers the external-service job handler (#265) in every process.
 import YSE_App.services.external_services  # noqa: E402,F401
+# ... and the facility runner + poll job (#298) so every process can execute facility submissions.
+import YSE_App.services.facility_requests  # noqa: E402,F401
 # ... and the sharing handlers (#326, #327): sharing.submit / poll / tns_retrieval / autopublish_sweep.
 import YSE_App.sharing.handlers  # noqa: E402,F401
 from YSE_App.models.transient_models import Transient

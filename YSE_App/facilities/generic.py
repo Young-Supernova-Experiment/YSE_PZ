@@ -1,0 +1,222 @@
+"""GENERIC facility: reach a facility by HTTP POST, email or Slack webhook (#302).
+
+Configuration lives on the allocation:
+
+* ``default_request_params["notification_type"]``: ``api`` (default when an
+  endpoint is set), ``email`` or ``slack``;
+* ``allocation.endpoint_url`` or the credential's ``endpoint``: where the JSON
+  payload is POSTed; the credential's ``api_token`` (optional) is sent as
+  ``Authorization: token ...``;
+* ``default_request_params["recipients"]`` (list or comma-separated) for email;
+* the credential's ``slack_webhook_url`` for Slack;
+* ``default_request_params["payload_template"]``: optional JSON object whose
+  string values are filled from the request context (``{transient_name}``,
+  ``{ra}``, ``{dec}``, ``{requester}``, ``{param_<name>}``, ...); without it the
+  standard payload (transient, allocation, parameters, requester) is sent.
+
+Status is manual: a person marks the request complete (or cancelled) once the
+facility reports back. A submission that was sent is ``submitted``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Dict, List
+
+import requests
+from django.core.mail import send_mail
+
+from YSE_App.facilities.base import (
+    FacilityAPI,
+    FacilityError,
+    FacilityValidationError,
+    Field,
+    SubmitResult,
+    http_timeout,
+)
+from YSE_App.facilities.registry import register
+
+logger = logging.getLogger(__name__)
+
+MODE_API = "api"
+MODE_EMAIL = "email"
+MODE_SLACK = "slack"
+MODES = (MODE_API, MODE_EMAIL, MODE_SLACK)
+
+
+class _SafeDict(dict):
+    def __missing__(self, key):
+        return "{%s}" % key
+
+
+def render_template(template: Any, context: Dict[str, Any]) -> Any:
+    """Fill ``{name}`` placeholders in every string of a JSON-like structure."""
+    if isinstance(template, str):
+        return template.format_map(_SafeDict(context))
+    if isinstance(template, dict):
+        return {k: render_template(v, context) for k, v in template.items()}
+    if isinstance(template, list):
+        return [render_template(v, context) for v in template]
+    return template
+
+
+def recipients_from(value) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [v.strip() for v in value.replace(";", ",").split(",") if v.strip()]
+    return [str(v).strip() for v in value if str(v).strip()]
+
+
+@register
+class GenericFacility(FacilityAPI):
+    slug = "generic"
+    name = "Generic (API / email / Slack)"
+    description = (
+        "Sends the request as JSON to an HTTP endpoint, as an email to a list of observers, "
+        "or as a Slack webhook message. Status is updated by hand."
+    )
+    capabilities = frozenset({"submit"})
+    credential_keys = ["api_token", "endpoint", "slack_webhook_url"]
+    manual_status = True
+
+    def fields(self, allocation=None):
+        return [
+            Field("exposure_time", "number", label="Exposure time (s)", default=300, minimum=0),
+            Field("exposure_count", "integer", label="Exposures", default=1, minimum=1),
+            Field("filters", "list", label="Filters", default=[], help="Comma-separated, e.g. g,r,i"),
+            Field("priority", "integer", label="Priority (1 highest)", default=3, minimum=1, maximum=5),
+            Field("start", "datetime", label="Window start (UTC)"),
+            Field("end", "datetime", label="Window end (UTC)"),
+            Field("comment", "text", label="Comment"),
+        ]
+
+    # -- configuration -------------------------------------------------------
+    def mode(self, allocation) -> str:
+        params = allocation.default_request_params or {}
+        mode = str(params.get("notification_type") or "").strip().lower()
+        if mode:
+            return mode
+        return MODE_API if (allocation.endpoint_url or allocation.secret().get("endpoint")) else MODE_EMAIL
+
+    def validate_extra(self, params, allocation=None):
+        if allocation is None:
+            return params
+        mode = self.mode(allocation)
+        if mode not in MODES:
+            raise FacilityValidationError({"notification_type": "must be one of %s" % ", ".join(MODES)})
+        if mode == MODE_EMAIL and not recipients_from((allocation.default_request_params or {}).get("recipients")):
+            raise FacilityValidationError({"recipients": "the allocation has no email recipients configured"})
+        return params
+
+    def build_payload(self, request) -> Any:
+        context = self.transient_context(request)
+        params = dict(request.payload or {})
+        context.update({"param_%s" % k: v for k, v in params.items()})
+        template = (request.allocation.default_request_params or {}).get("payload_template")
+        if template:
+            return render_template(template, context)
+        return {
+            "transient": {"name": context["transient_name"], "ra": context["ra"], "dec": context["dec"]},
+            "allocation": {"id": context["allocation_id"], "name": context["allocation_name"],
+                           "proposal_id": context["proposal_id"], "telescope": context["telescope"],
+                           "instrument": context["instrument"]},
+            "parameters": {k: v for k, v in params.items()
+                           if k not in ("notification_type", "recipients", "payload_template")},
+            "requester": context["requester"],
+            "request_id": context["request_id"],
+        }
+
+    # -- transport -----------------------------------------------------------
+    def submit(self, request) -> SubmitResult:
+        allocation = request.allocation
+        mode = self.mode(allocation)
+        payload = self.build_payload(request)
+        if mode == MODE_API:
+            return self._submit_api(request, payload)
+        if mode == MODE_EMAIL:
+            return self._submit_email(request, payload)
+        if mode == MODE_SLACK:
+            return self._submit_slack(request, payload)
+        raise FacilityError("unknown notification_type %r" % mode)
+
+    def _submit_api(self, request, payload) -> SubmitResult:
+        allocation = request.allocation
+        secret = allocation.secret(touch=True)
+        endpoint = allocation.endpoint_url or secret.get("endpoint")
+        if not endpoint:
+            raise FacilityError("no endpoint configured for this allocation (endpoint_url or credential 'endpoint')")
+        headers = {"Content-Type": "application/json"}
+        if secret.get("api_token"):
+            headers["Authorization"] = "token %s" % secret["api_token"]
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=http_timeout())
+        except requests.RequestException as exc:
+            raise FacilityError("could not reach %s: %s" % (endpoint, exc)) from exc
+        body = _json_or_text(response)
+        if response.status_code >= 300:
+            raise FacilityError("endpoint answered %s: %s" % (response.status_code, _short(body)))
+        external_id = ""
+        if isinstance(body, dict):
+            external_id = str(body.get("id") or body.get("request_id") or (body.get("data") or {}).get("id") or "")
+        return SubmitResult("submitted", external_id=external_id, detail="POST %s -> %s" % (endpoint, response.status_code),
+                            response=body)
+
+    def _submit_email(self, request, payload) -> SubmitResult:
+        allocation = request.allocation
+        recipients = recipients_from((allocation.default_request_params or {}).get("recipients"))
+        if not recipients:
+            raise FacilityError("no email recipients configured for this allocation")
+        transient = request.transient
+        subject = "[YSE-PZ] Observation request: %s on %s" % (transient.name, allocation.telescope.name)
+        body = self.email_body(request, payload)
+        send_mail(subject, body, None, recipients, fail_silently=False)
+        return SubmitResult("submitted", detail="email sent to %s" % ", ".join(recipients),
+                            response={"subject": subject, "recipients": recipients, "body": body})
+
+    def email_body(self, request, payload) -> str:
+        transient = request.transient
+        lines = [
+            "Observation request from YSE-PZ",
+            "",
+            "Transient: %s  (RA %.6f, Dec %.6f)" % (transient.name, transient.ra, transient.dec),
+            "Allocation: %s  (%s%s)" % (request.allocation.name, request.allocation.telescope.name,
+                                        ", proposal %s" % request.allocation.proposal_id
+                                        if request.allocation.proposal_id else ""),
+            "Requested by: %s" % request.submitted_by.username,
+            "",
+            "Parameters:",
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+        ]
+        return "\n".join(lines)
+
+    def _submit_slack(self, request, payload) -> SubmitResult:
+        allocation = request.allocation
+        secret = allocation.secret(touch=True)
+        webhook = secret.get("slack_webhook_url") or (allocation.default_request_params or {}).get("slack_webhook_url")
+        if not webhook:
+            raise FacilityError("no slack_webhook_url in the allocation's credential")
+        transient = request.transient
+        text = "*Observation request* for *%s* (RA %.5f, Dec %.5f) on %s by %s\n```%s```" % (
+            transient.name, transient.ra, transient.dec, allocation.telescope.name,
+            request.submitted_by.username, json.dumps(payload, indent=1, sort_keys=True, default=str)[:2500])
+        try:
+            response = requests.post(webhook, json={"text": text}, timeout=http_timeout())
+        except requests.RequestException as exc:
+            raise FacilityError("could not reach the Slack webhook: %s" % exc) from exc
+        if response.status_code >= 300:
+            raise FacilityError("Slack webhook answered %s: %s" % (response.status_code, response.text[:300]))
+        return SubmitResult("submitted", detail="Slack webhook posted", response={"text": text})
+
+
+def _json_or_text(response):
+    try:
+        return response.json()
+    except ValueError:
+        return response.text
+
+
+def _short(value, n=300) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return text[:n]

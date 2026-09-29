@@ -7,9 +7,11 @@ to the run's callback URL (``external_service_run_callback`` view).
 
 Dispatch to a worker is intentionally thin: :func:`dispatch_run` enqueues a
 ``external_service.run`` job on the background job queue (#263,
-``YSE_App.services.job_queue``); :func:`execute_run` is the registered handler
-and, until a runner registry exists (#313), only logs and leaves the run
-pending for an in-process caller to complete.
+``YSE_App.services.job_queue``); :func:`execute_run` is the registered handler.
+It looks up a *runner* (:func:`register_runner`) by the service's slug, then by
+``kind:<kind>``; facility services (#298) register one in
+:mod:`YSE_App.services.facility_requests`. Without a runner (#313 will add the
+analysis ones) the run stays pending for an in-process caller to complete.
 """
 
 from __future__ import annotations
@@ -160,19 +162,47 @@ def dispatch_run(run: ExternalServiceRun) -> bool:
     return True
 
 
+# --- runner registry ----------------------------------------------------------
+# key: a service slug, or "kind:<kind>" for every service of that kind.
+_RUNNERS = {}
+
+
+def register_runner(key: str, func) -> None:
+    """Make ``func(run) -> dict`` execute runs of the service ``key`` (slug) or ``kind:<kind>``."""
+    if not key or not callable(func):
+        raise ValueError("register_runner needs a key and a callable")
+    _RUNNERS[key] = func
+
+
+def unregister_runner(key: str) -> None:
+    _RUNNERS.pop(key, None)
+
+
+def get_runner(service: ExternalService):
+    return _RUNNERS.get(service.slug) or _RUNNERS.get("kind:" + service.kind)
+
+
 @_job(JOB_KIND)
 def execute_run(payload, job=None):
-    """Job handler for :data:`JOB_KIND`.
+    """Job handler for :data:`JOB_KIND`: hand the run to its runner.
 
-    TODO(#313): look up a runner for ``run.service`` (kind/slug), post the
-    payload to ``service.base_url`` with the service credential, and record the
-    outcome with :func:`record_completion`. Until then the run stays pending
-    and the job finishes with ``handled=False``.
+    A runner takes the run, does the work and records the outcome with
+    :func:`record_completion` (or the run's ``mark_*`` methods); whatever it
+    returns is stored as the job result. Without a runner (TODO #313 for the
+    analysis services) the run stays pending and the job finishes with
+    ``handled=False``.
     """
     run_id = payload.get("run_id") if isinstance(payload, dict) else payload
     run = ExternalServiceRun.objects.select_related("service").get(pk=run_id)
-    log.info("execute_run: %s has no runner registered yet; leaving it %s", run, run.status)
-    return {"run": str(run.uuid), "handled": False}
+    runner = get_runner(run.service)
+    if runner is None:
+        log.info("execute_run: %s has no runner registered yet; leaving it %s", run, run.status)
+        return {"run": str(run.uuid), "handled": False}
+    result = runner(run)
+    out = {"run": str(run.uuid), "handled": True}
+    if isinstance(result, dict):
+        out.update(result)
+    return out
 
 
 def record_completion(

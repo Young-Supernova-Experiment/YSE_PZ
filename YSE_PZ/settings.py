@@ -164,6 +164,9 @@ CRON_CLASSES = [
     # Daily retention of notification and finished-job rows (#320); no-op when
     # NOTIFICATION_PRUNE_CRON_ENABLED is False.
     'YSE_App.data_ingest.Job_Queue.PruneNotifications',
+    # Broker polling ingest to candidates (#276): enqueues brokers.ingest jobs;
+    # no-op unless BROKER_INGEST_CRON_ENABLED is set ([brokers] in settings.ini).
+    'YSE_App.data_ingest.Broker_Ingest.BrokerPoll',
     # Sharing services (#324): queue the TNS retrieval and auto-publish sweep jobs;
     # no-ops unless enabled under [sharing] in settings.ini.
     'YSE_App.data_ingest.Sharing_Jobs.TNSRetrieval',
@@ -466,6 +469,13 @@ JOB_HANDLER_MODULES = [
     m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
 ]
 
+# Facility APIs (#298): extra adapter modules (comma-separated) and the HTTP
+# timeout for submissions / status polls (docs/facility-apis.md).
+FACILITY_API_MODULES = [
+    m.strip() for m in config.get('site_settings', 'FACILITY_API_MODULES', fallback='').split(',') if m.strip()
+]
+FACILITY_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'FACILITY_HTTP_TIMEOUT_SECONDS', fallback=30)
+
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
 # (the senders it replaced, alert.py and the comment-mention emails, sent
 # unconditionally); NOTIFICATION_EMAIL_ENABLED in settings.ini or env
@@ -522,6 +532,34 @@ DEFAULT_FROM_EMAIL = _ini_value(config.get('SMTP_provider', 'FROM_ADDRESS', fall
 )
 
 # ---------------------------------------------------------------------------
+# Alert brokers (YSE_App.brokers; issues #272, #276). All keys optional, under
+# [brokers] in settings.ini; docs/brokers.md explains each one.
+# Comma-separated provider slugs to offer (empty = every shipped provider:
+# antares, fink, alerce). A provider whose client package is missing is listed
+# as unavailable rather than erroring.
+BROKERS_ENABLED = [
+    s.strip() for s in config.get('brokers', 'enabled', fallback='').split(',') if s.strip()
+]
+# Extra modules whose import registers BrokerProvider subclasses (comma-separated).
+BROKER_PROVIDER_MODULES = [
+    m.strip() for m in config.get('brokers', 'PROVIDER_MODULES', fallback='').split(',') if m.strip()
+]
+# The BrokerPoll django_cron class enqueues one brokers.ingest job per broker
+# with enabled filters; off by default (env YSE_BROKER_INGEST_CRON=1 or ini).
+BROKER_INGEST_CRON_ENABLED = (
+    os.environ.get('YSE_BROKER_INGEST_CRON', '').strip() == '1'
+    or config.getboolean('brokers', 'INGEST_CRON_ENABLED', fallback=False)
+)
+BROKER_INGEST_CRON_MINUTES = config.getint('brokers', 'INGEST_CRON_MINUTES', fallback=60)
+BROKER_HTTP_TIMEOUT_SECONDS = config.getint('brokers', 'HTTP_TIMEOUT_SECONDS', fallback=30)
+# A candidate within this many arcsec of an existing transient is linked to it instead of creating a new one.
+BROKER_MATCH_RADIUS_ARCSEC = config.getfloat('brokers', 'MATCH_RADIUS_ARCSEC', fallback=2.0)
+# User that auto-saved transients are stamped with (falls back to any superuser).
+BROKER_AUTO_SAVE_USERNAME = config.get('brokers', 'AUTO_SAVE_USERNAME', fallback='admin')
+BROKER_CANDIDATES_PAGE_SIZE = config.getint('brokers', 'CANDIDATES_PAGE_SIZE', fallback=50)
+# Override the public REST endpoints (tests, mirrors).
+BROKER_FINK_API_URL = config.get('brokers', 'FINK_API_URL', fallback='') or None
+BROKER_ALERCE_API_URL = config.get('brokers', 'ALERCE_API_URL', fallback='') or None
 # Sharing services: TNS reporting, submission queue, TNS retrieval (#324;
 # docs/tns-sharing.md). All keys optional, under [sharing] in settings.ini.
 # The bot credentials live in EncryptedCredential rows, not here.
