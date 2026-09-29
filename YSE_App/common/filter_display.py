@@ -65,13 +65,33 @@ FILTER_ALIASES = {
     'y-ps1': 'y',
     'w': 'w',
     'w-ps1': 'w',
+    # Rubin / LSST (Rubin ingest adds bands named like g-LSST).
+    'u-lsst': 'u',
+    'g-lsst': 'g',
+    'r-lsst': 'r',
+    'i-lsst': 'i',
+    'z-lsst': 'z',
+    'y-lsst': 'y',
+    'lsstu': 'u',
+    'lsstg': 'g',
+    'lsstr': 'r',
+    'lssti': 'i',
+    'lsstz': 'z',
+    'lssty': 'y',
 }
+
+# Blue-to-red order of the canonical filters; legend entries are sorted by it
+# so the same band always sits in the same place (#91).  ``w`` (PS1 wide,
+# g+r+i) goes last.
+FILTER_WAVELENGTH_ORDER = ('u', 'B', 'g', 'V', 'r', 'i', 'z', 'y', 'w')
 
 _BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
 
 # Instrument / telescope name substrings -> short legend label (e.g. ZTF-Cam -> ZTF).
 TELESCOPE_SHORT_LABELS = (
-    (('ztf', 'uvot'), 'ZTF'),
+    (('ztf',), 'ZTF'),
+    (('swift', 'uvot'), 'Swift'),
+    (('lsst', 'rubin'), 'Rubin'),
     (('gpc1', 'ps1', 'pan-starrs', 'panstarrs'), 'PS1'),
     (('swope',), 'Swope'),
     (('acam', 'atlas'), 'ATLAS'),
@@ -96,6 +116,7 @@ TELESCOPE_SYMBOL_RULES = (
     (('ptf',), 'cross'),
     (('swift', 'uvot'), 'diamond'),
     (('hst', 'wfc3', 'acs'), 'square'),
+    (('lsst', 'rubin'), 'plus'),
 )
 
 _FALLBACK_COLORS = ('#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9')
@@ -134,6 +155,10 @@ def band_display_color(
         return FILTER_COLORS[canonical]
     if disp_color and disp_color != 'None':
         return disp_color
+    if band_name:
+        # Hash the name so an unknown filter keeps its colour across
+        # transients instead of taking whatever index it was plotted at (#91).
+        fallback_index = sum(ord(ch) for ch in str(band_name).strip().lower())
     return _FALLBACK_COLORS[fallback_index % len(_FALLBACK_COLORS)]
 
 
@@ -165,15 +190,24 @@ def telescope_display_name(
     instrument_name: str | None = None,
     telescope_name: str | None = None,
 ) -> str:
-    """Short telescope family label for plot legends (e.g. ZTF-Cam -> ZTF)."""
-    for candidate in (telescope_name, instrument_name):
-        if not candidate or not str(candidate).strip():
-            continue
-        lower = str(candidate).strip().lower()
+    """Short telescope family label for plot legends (e.g. ZTF-Cam -> ZTF).
+
+    Both names are checked against the family patterns before either is
+    used verbatim, so ``ZTF-Cam`` on a telescope row named ``Palomar 48``
+    still reads ``ZTF`` (#250).
+    """
+    candidates = [
+        str(candidate).strip()
+        for candidate in (telescope_name, instrument_name)
+        if candidate and str(candidate).strip()
+    ]
+    for candidate in candidates:
+        lower = candidate.lower()
         for patterns, label in TELESCOPE_SHORT_LABELS:
             if any(pat in lower for pat in patterns):
                 return label
-        return str(candidate).strip()
+    if candidates:
+        return candidates[0]
     return 'Unknown'
 
 
@@ -189,6 +223,29 @@ def plot_legend_label(
     return f'{tel} {filt}'
 
 
+def filter_sort_key(band_name: str | None) -> tuple:
+    """Blue-to-red sort key: canonical filters in FILTER_WAVELENGTH_ORDER, then the rest by name."""
+    canonical = normalize_filter_name(band_name)
+    if canonical in FILTER_WAVELENGTH_ORDER:
+        return (FILTER_WAVELENGTH_ORDER.index(canonical), '')
+    return (len(FILTER_WAVELENGTH_ORDER), (band_name or '').strip().lower())
+
+
+def legend_sort_key(
+    band_name: str | None,
+    *,
+    instrument_name: str | None = None,
+    telescope_name: str | None = None,
+) -> tuple:
+    """Order light-curve series by telescope family, then filter wavelength (#91).
+
+    Independent of which series have data on a given transient, so ``PS1 g``
+    always precedes ``PS1 r`` and every ZTF entry follows every PS1 entry.
+    """
+    tel = telescope_display_name(instrument_name, telescope_name)
+    return (tel.lower(), tel) + filter_sort_key(band_name)
+
+
 def filter_color_groups_for_display() -> list[dict]:
     """Human-readable color groups for docs / chat (filter family -> example names)."""
     groups = []
@@ -196,8 +253,8 @@ def filter_color_groups_for_display() -> list[dict]:
         'u': ['u', 'u-PS1', 'up (Sinistro)'],
         'B': ['B', 'B-Johnson'],
         'V': ['V', 'V-Johnson', 'V-crts'],
-        'g': ['g', 'g-ZTF', 'g-WFT', 'g-Sloan', 'g-PTF', 'cyan-ATLAS'],
-        'r': ['r', 'r-ZTF', 'r-WFT', 'r-Sloan', 'R-Cousins', 'orange-ATLAS'],
+        'g': ['g', 'g-ZTF', 'g-WFT', 'g-Sloan', 'g-PTF', 'g-LSST', 'cyan-ATLAS'],
+        'r': ['r', 'r-ZTF', 'r-WFT', 'r-Sloan', 'R-Cousins', 'r-LSST', 'orange-ATLAS'],
         'i': ['i', 'i-ZTF', 'i-Sloan', 'I-Cousins', 'ip'],
         'z': ['z', 'z-Sloan', 'zp'],
         'y': ['y', 'y-PS1'],
@@ -216,6 +273,7 @@ def telescope_symbol_groups_for_display() -> list[dict]:
     """Human-readable telescope -> symbol groups."""
     labels = {
         'diamond': 'ZTF, Swift/UVOT',
+        'plus': 'Rubin / LSST',
         'square': 'PS1 (GPC1), HST',
         'circle': 'Swope',
         'asterisk': 'ATLAS (ACAM)',
