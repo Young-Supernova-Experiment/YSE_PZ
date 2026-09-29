@@ -1195,3 +1195,46 @@ class SharingSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
         if params.get('transient'):
             qs = qs.filter(transient__name=params['transient'])
         return qs
+
+
+class InstrumentLogViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin,
+                           viewsets.GenericViewSet):
+    """``/api/instrumentlogs/`` (#310): list / retrieve for every authenticated user; POST for staff or accounts
+    holding ``YSE_App.add_instrumentlog`` (facility service accounts; ``Authorization: Token <key>`` accepted).
+    Filters: ``instrument`` (id), ``telescope`` (id), ``start_after``, ``end_before`` (ISO), ``source``."""
+
+    serializer_class = InstrumentLogSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_authenticators(self):
+        from rest_framework.authentication import TokenAuthentication
+
+        return super().get_authenticators() + [TokenAuthentication()]
+
+    def get_queryset(self):
+        from YSE_App.services.instrument_logs import logs_between
+
+        params = self.request.query_params
+        qs = logs_between(start=params.get("start_after") or None, end=params.get("end_before") or None,
+                          source=params.get("source") or "")
+        if params.get("instrument"):
+            qs = qs.filter(instrument_id=params["instrument"])
+        if params.get("telescope"):
+            qs = qs.filter(instrument__telescope_id=params["telescope"])
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        from YSE_App.services.instrument_logs import add_log, can_add_logs
+
+        if not can_add_logs(request.user):
+            raise PermissionDenied({"message": "Only staff or accounts with the add_instrumentlog permission may post logs."})
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        row, created = add_log(
+            data["instrument"], request.user, start=data.get("start"), end=data.get("end"),
+            message=data.get("message", ""), entries=data.get("log"),
+            source=data.get("source") or InstrumentLog.SOURCE_MANUAL, source_name=data.get("source_name", ""),
+        )
+        out = self.get_serializer(row)
+        return Response(out.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)

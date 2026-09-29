@@ -42,6 +42,11 @@ galaxy name, coordinates, and photometric redshift are also included
 though host galaxy matching could be improved.  External links on
 the right-hand side direct to the TNS page, Simbad, other archival results,
 and ZTF data through a `MARS <https://mars.lco.global/>`_ cone search.
+The **Observability** button under the coordinates opens
+``/observability/<id>/``: tonight's altitude and airmass curve, twilight
+bands and Moon at every telescope in the database, with a table of the
+hours each site can observe the transient and a date picker for other
+nights (see ``docs/observability.md``).
 
 .. image:: _static/yse_pz_detailsummary.png
 

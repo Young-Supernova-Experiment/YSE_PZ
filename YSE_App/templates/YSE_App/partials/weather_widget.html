@@ -1,0 +1,25 @@
+{% comment %}
+Weather + SkyCam widget for one telescope (#311). Include with the context from
+YSE_App.services.weather.widget_context(telescope): telescope, weather (snapshot or None),
+has_weather, has_skycam, weather_link, stale, compact, skycam_refresh_seconds,
+weather_refresh_seconds. Renders nothing when the telescope has no weather/skycam config.
+The body is re-fetched from the weather fragment endpoint by weather-widget.js.
+{% endcomment %}
+{% if has_weather or has_skycam or weather_link %}
+<div class="yse-weather-widget card card-outline card-info {% if compact %}yse-weather-compact mb-2{% else %}mb-3{% endif %}"
+     id="yse-weather-{{ telescope.id }}" data-telescope-id="{{ telescope.id }}"
+     data-fragment-url="{% url 'telescope_weather_fragment' telescope.id %}{% if compact %}?compact=1{% endif %}"
+     data-weather-refresh="{{ weather_refresh_seconds }}" data-skycam-refresh="{{ skycam_refresh_seconds }}"
+     data-status="{% if weather.error and not weather.fetched_at %}error{% elif weather %}{% if stale %}stale{% else %}fresh{% endif %}{% elif has_weather %}pending{% else %}skycam-only{% endif %}">
+  <div class="card-header py-1 px-2">
+    <span class="card-title"><i class="fa fa-cloud"></i> {% if compact %}{{ telescope.name }}{% else %}Weather at {{ telescope.name }}{% endif %}</span>
+    <div class="card-tools">
+      {% if weather_link %}<a class="btn btn-tool" href="{{ weather_link }}" target="_blank" rel="noopener" title="Site weather page"><i class="fa fa-external-link"></i></a>{% endif %}
+      <button type="button" class="btn btn-tool yse-weather-refresh" title="Refresh"><i class="fa fa-refresh"></i></button>
+    </div>
+  </div>
+  <div class="card-body p-2 yse-weather-body">
+    {% include 'YSE_App/partials/weather_widget_body.html' %}
+  </div>
+</div>
+{% endif %}

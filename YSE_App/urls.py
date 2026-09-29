@@ -17,7 +17,10 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, job_views, notification_views, sharing_views
+from YSE_App import (
+    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, instrument_views,
+    job_views, notification_views, observability_views, sharing_views,
+)
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -217,6 +220,9 @@ urlpatterns = [
     re_path(r'^logout/$', views.auth_logout, name='auth_logout'),
     re_path(r"^airmassplot/(?P<transient_id>[a-zA-Z0-9_-]+)/(?P<obs_id>[a-zA-Z0-9_-]+)/(?P<telescope_id>[a-zA-Z0-9_-]+)", 
         view_utils.airmassplot, name='airmassplot'),
+    # Observability page (#307): every telescope's altitude/airmass curve for one night.
+    re_path(r'^observability/(?P<transient_id>[0-9]+)/$', observability_views.observability_page, name='observability'),
+    re_path(r'^observability/(?P<transient_id>[0-9]+)/data/$', observability_views.observability_data, name='observability_data'),
     re_path(r'^lightcurveplot_detail/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_detail, name='lightcurveplot_detail'),
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),
@@ -245,6 +251,15 @@ urlpatterns = [
             service_run_views.external_service_run_detail, name='external_service_run_detail'),
     re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
             service_run_views.external_service_run_callback, name='external_service_run_callback'),
+    # Instrument logs (#310), telescope page and weather / SkyCam widget (#311)
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/$', instrument_views.instrument_logs, name='instrument_logs'),
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/add/$', instrument_views.instrument_log_add,
+            name='instrument_log_add'),
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/pull/$', instrument_views.instrument_log_pull,
+            name='instrument_log_pull'),
+    re_path(r'^telescopes/(?P<telescope_id>[0-9]+)/$', instrument_views.telescope_detail, name='telescope_detail'),
+    re_path(r'^telescopes/(?P<telescope_id>[0-9]+)/weather_fragment/$', instrument_views.telescope_weather_fragment,
+            name='telescope_weather_fragment'),
     # Analysis runs (#314): status polling, result files, own-run actions.
     re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/status\.json$',
             analysis_views.analysis_run_status, name='analysis_run_status'),
@@ -409,6 +424,7 @@ router.register(r'allocations', api_views.AllocationViewSet, basename='allocatio
 router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
 router.register(r'transientinterests', api_views.TransientInterestViewSet, basename='transientinterest')
 router.register(r'dataaccessrequests', api_views.DataAccessRequestViewSet, basename='dataaccessrequest')
+router.register(r'instrumentlogs', api_views.InstrumentLogViewSet, basename='instrumentlog')
 router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
 router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
