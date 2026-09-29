@@ -176,6 +176,7 @@ urlpatterns = [
         data_utils.box_search, name='box_search'),
     re_path(r'^search/$',
         SearchResultsView.as_view(), name='search'),
+    re_path(r'^search/save/$', views.save_search, name='save_search'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',
