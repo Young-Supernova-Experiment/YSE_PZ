@@ -299,7 +299,7 @@ body.yse-theme .nav-tabs-custom > .nav-tabs {
 }
 
 body.yse-theme .nav-tabs-custom > .nav-tabs > li > a,
-body.yse-theme .nav-tabs-custom > .nav-tabs > li.active > a {
+body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link.active {
   color: var(--yse-color-text);
 }
 
@@ -678,7 +678,6 @@ body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link {
   text-decoration: none;
 }
 
-body.yse-theme .nav-tabs-custom > .nav-tabs > li.active > a,
 body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.active,
 body.yse-theme .nav-tabs-custom > .nav-tabs > li > a.nav-link.active {
   color: var(--yse-color-text);
