@@ -43,22 +43,18 @@ RECORDED_ROWS = [
 ]
 
 
-class _FakeJwst:
-    """Stand-in for common.mast_query.jwstObservations answering two rows."""
+class _FakeJwst(mast_query.MastObservations):
+    """Stand-in for common.mast_query.jwstObservations: the real helper fed a
+    recorded MAST answer holding one NIRCam image and one NIRSpec spectrum.
+    Only the image may come out (#356)."""
 
     answer = RECORDED_ROWS
 
     def __init__(self, ra, dec, radius=None):
-        self.rows = []
-
-    @property
-    def count(self):
-        return len(self.rows)
+        super().__init__(ra, dec, collections=['JWST'], radius=radius, product_types=('image',))
 
     def query(self):
-        self.rows = [mast_query.MastObservations.rows_from_table(_table(self.answer))[i]
-                     for i in range(len(self.answer))]
-        return self.rows
+        return self.set_table(_table(self.answer))
 
 
 class _EmptyJwst(_FakeJwst):
@@ -85,19 +81,36 @@ def _table(rows):
 class MastObservationsHelperTests(SimpleTestCase):
     """common.mast_query.MastObservations with a recorded query_criteria answer."""
 
-    def test_query_uses_the_jwst_collection_and_the_hst_radius(self):
+    def test_query_asks_for_jwst_images_within_the_hst_radius(self):
         with mock.patch.object(mast_query.Observations, 'query_criteria',
-                               return_value=_table(RECORDED_ROWS)) as query:
+                               return_value=_table(RECORDED_ROWS[:1])) as query:
             jwst = mast_query.jwstObservations(199.8674542, -13.7236833)
             rows = jwst.query()
-        self.assertEqual(jwst.count, 2)
+        self.assertEqual(jwst.count, 1)
         kwargs = query.call_args.kwargs
         self.assertEqual(kwargs['obs_collection'], ['JWST'])
         self.assertEqual(kwargs['radius'], mast_query.instrument_defaults['radius'])
-        self.assertEqual(kwargs['dataproduct_type'], ['image', 'spectrum'])
+        self.assertEqual(kwargs['dataproduct_type'], ['image'], 'images only, no spectra (#356)')
         self.assertEqual(kwargs['intentType'], 'science')
         self.assertAlmostEqual(kwargs['coordinates'].ra.degree, 199.8674542)
-        self.assertEqual([r['obs_id'] for r in rows], [r['obs_id'] for r in RECORDED_ROWS])
+        self.assertEqual([r['obs_id'] for r in rows], [RECORDED_ROWS[0]['obs_id']])
+
+    def test_spectra_returned_by_mast_are_dropped(self):
+        """Even if MAST hands back a spectrum row, the tab never lists it."""
+        with mock.patch.object(mast_query.Observations, 'query_criteria',
+                               return_value=_table(RECORDED_ROWS)):
+            jwst = mast_query.jwstObservations(199.8674542, -13.7236833)
+            rows = jwst.query()
+        self.assertEqual(jwst.count, 1)
+        self.assertEqual([r['dataproduct_type'] for r in rows], ['image'])
+        self.assertEqual(len(jwst.obstable), 2, 'the raw MAST table is kept for inspection')
+
+    def test_product_types_can_be_widened_explicitly(self):
+        jwst = mast_query.MastObservations(10.0, 20.0, collections=['JWST'],
+                                           product_types=('image', 'spectrum'))
+        self.assertEqual(len(jwst.set_table(_table(RECORDED_ROWS))), 2)
+        self.assertEqual(len(mast_query.MastObservations(10.0, 20.0, collections=['JWST'],
+                                                         product_types=None).set_table(_table(RECORDED_ROWS))), 2)
 
     def test_rows_carry_dates_and_links(self):
         rows = mast_query.MastObservations.rows_from_table(_table(RECORDED_ROWS))
@@ -153,7 +166,7 @@ class JwstStatusViewTests(TestCase):
             view_utils.cache, "set", wraps=view_utils.cache.set
         ) as cache_set:
             payload = self.client.get(self.url).json()
-        self.assertEqual(payload, {"has_data": True, "count": 2})
+        self.assertEqual(payload, {"has_data": True, "count": 1}, "the NIRSpec spectrum is not counted")
         cache_set.assert_called_once()
         self.assertEqual(cache_set.call_args.args[0], f"jwst_status_v1_{self.transient.id}")
         self.assertEqual(cache_set.call_args.kwargs["timeout"], view_utils.ARCHIVE_STATUS_CACHE_SECONDS)
@@ -163,7 +176,7 @@ class JwstStatusViewTests(TestCase):
             self.client.get(self.url)
         with mock.patch("YSE_App.common.mast_query.jwstObservations", side_effect=_BrokenJwst) as broken:
             payload = self.client.get(self.url).json()
-        self.assertEqual(payload, {"has_data": True, "count": 2})
+        self.assertEqual(payload, {"has_data": True, "count": 1})
         broken.assert_not_called()
 
     def test_no_data_is_reported_as_no_data(self):
@@ -222,8 +235,8 @@ class JwstObservationsViewTests(TestCase):
             response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["count"], 2)
-        self.assertEqual(len(payload["rows"]), 2)
+        self.assertEqual(payload["count"], 1, "images only: the spectrum row is excluded (#356)")
+        self.assertEqual(len(payload["rows"]), 1)
         image = payload["rows"][0]
         self.assertEqual(set(image), set(view_utils.JWST_OBSERVATION_FIELDS))
         self.assertEqual(image["inst"], "NIRCAM/IMAGE")
@@ -236,7 +249,7 @@ class JwstObservationsViewTests(TestCase):
         self.assertIn("Download/file?uri=", image["previewurl"])
         self.assertIn("Download/file?uri=", image["dataurl"])
         self.assertIn("Portal.html", image["portalurl"])
-        self.assertIsNone(payload["rows"][1]["previewurl"])
+        self.assertEqual([r["product"] for r in payload["rows"]], ["image"])
 
     def test_successful_answer_is_cached_and_reused(self):
         with mock.patch("YSE_App.common.mast_query.jwstObservations", _FakeJwst):
@@ -319,6 +332,8 @@ class DetailPageJwstTabTests(TestCase):
         self.assertIn('id="jwst_observation_list"', html)
         self.assertIn("JWST (lookup failed)", html)
         self.assertIn("No JWST", html)
+        self.assertIn("JWST Images for", html)
+        self.assertNotIn("Filter / grating", html)
         self.assertIn("yse-jwst-retry", html)
         self.assertIn(reverse("get_jwst_observations", args=[self.transient.id]), html)
         # The JWST tab sits right after the HST one.

@@ -13,10 +13,12 @@ way, so a MAST outage looks the same everywhere and is never mistaken for "no da
 | `HST (lookup failed)`, `JWST (lookup failed)` | the archive timed out or the query raised; the tooltip says why and opening the tab retries |
 
 Opening a tab loads its body; while MAST answers the body shows a spinner. On a failure the body
-shows the message with a **Retry** link. The JWST body lists one row per observation: date
-(UT, tooltip MJD), instrument, filter / grating, program id and PI, target name, exposure time,
-data product type and calibration level, a preview thumbnail when MAST has one, and links to the
-observation in the MAST Portal, to the JWST program page and to the data product.
+shows the message with a **Retry** link. All three tabs list **images only**, no spectra (#356):
+the HST lookup whitelists the imaging instruments and filters, the JWST lookup asks MAST for
+`dataproduct_type='image'` and drops anything else that comes back. The JWST body lists one row
+per image: date (UT, tooltip MJD), instrument and calibration level, filter, program id and PI,
+target name, exposure time, a preview thumbnail when MAST has one, and links to the observation
+in the MAST Portal, to the JWST program page and to the data product.
 
 ## Endpoints
 
@@ -49,13 +51,15 @@ HTTP 502 (`error: lookup_failed`) and one that times out answers 504 (`error: ti
 
 - `hstImages(ra, dec, obj)` is the original HST lookup: `Observations.query_region` within
   1 arcsec, then instrument / filter / exposure-time masks and HLA cut-out URLs.
-- `MastObservations(ra, dec, collections, radius=1 arcsec, product_types=('image', 'spectrum'),
+- `MastObservations(ra, dec, collections, radius=1 arcsec, product_types=('image',),
   intent_type='science')` is the archive-agnostic form used for JWST (`jwstObservations(ra, dec)`
   sets `collections=['JWST']`): one `Observations.query_criteria` cone search, rows returned as
   plain dicts (`rows_from_table`) with `obsdate` (ISO from `t_min`), `previewurl` / `dataurl`
   (`mast:` product URIs turned into `https://mast.stsci.edu/api/v0.1/Download/file?uri=...`
-  links) and `portalurl` (a MAST Portal deep link filtered on `obs_id`). Masked cells are `None`.
-  The class does not catch exceptions; the views' timeout/error handling does.
+  links) and `portalurl` (a MAST Portal deep link filtered on `obs_id`). `set_table` keeps only
+  the rows whose `dataproduct_type` is in `product_types` (pass `('image', 'spectrum')` or `None`
+  to widen a one-off query). Masked cells are `None`. The class does not catch exceptions; the
+  views' timeout/error handling does.
 
 Tests: `YSE_App/tests/test_archive_status_views.py` (HST/Chandra) and
 `YSE_App/tests/test_jwst_tab.py` (helper with a recorded table, status and body endpoints, cache
