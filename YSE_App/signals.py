@@ -20,6 +20,9 @@ from YSE_App.models.transient_models import Transient
 from YSE_App.sharing.autopublish import on_transient_saved
 # ... and the analysis runner (#313) for in-process fits and webhook dispatch.
 import YSE_App.analysis.runners  # noqa: E402,F401
+# ... and the annotation checks (#318: Gaia DR3, WISE, quasar catalogue) as runners.
+import YSE_App.annotation_services  # noqa: E402,F401
+from YSE_App.services import annotations as annotations_svc
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 
@@ -30,6 +33,15 @@ connection_created.connect(cap_explorer_connection, dispatch_uid="yse_cap_explor
 
 # Auto-publisher rules (#325) look at every saved transient; a no-op unless a rule is enabled.
 post_save.connect(on_transient_saved, sender=Transient, dispatch_uid="yse_sharing_autopublish")
+
+
+@receiver(post_save, sender=Transient, dispatch_uid="yse_annotation_autorun")
+def autorun_annotation_checks(sender, instance, created, **kwargs):
+    """Queue the catalogue checks named in ANNOTATION_AUTORUN_SERVICES for a new transient (#318; off by default)."""
+    if not created or kwargs.get('raw'):
+        return
+    if annotations_svc.autorun_slugs():
+        annotations_svc.autorun_for_new_transient(instance)
 
 
 @receiver(post_save, sender=User, dispatch_uid="yse_ensure_user_public_group")

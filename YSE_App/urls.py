@@ -17,7 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
-from YSE_App import allocation_views, analysis_views, candidate_views, collaboration_views, job_views, notification_views, sharing_views
+from YSE_App import allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, job_views, notification_views, sharing_views
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -129,6 +129,15 @@ urlpatterns = [
             analysis_views.transient_analysis_fragment, name='transient_detail_analysis_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_run/$',
             analysis_views.transient_analysis_run, name='transient_analysis_run'),
+    # Annotations tab (#317, #318): fragment, summary JSON and actions for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_fragment/$',
+            annotation_views.transient_annotations_fragment, name='transient_detail_annotations_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_summary\.json$',
+            annotation_views.transient_annotations_summary, name='transient_annotations_summary'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_run/$',
+            annotation_views.transient_annotation_run, name='transient_annotation_run'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_delete/$',
+            annotation_views.transient_annotation_delete, name='transient_annotation_delete'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -402,6 +411,7 @@ router.register(r'transientinterests', api_views.TransientInterestViewSet, basen
 router.register(r'dataaccessrequests', api_views.DataAccessRequestViewSet, basename='dataaccessrequest')
 router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
+router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

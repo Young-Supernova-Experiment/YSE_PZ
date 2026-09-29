@@ -483,6 +483,16 @@ ANALYSIS_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'ANALYSIS_HTTP_TI
 ANALYSIS_MAX_ATTACHMENT_BYTES = config.getint('site_settings', 'ANALYSIS_MAX_ATTACHMENT_BYTES', fallback=25 * 1024 * 1024)
 ANALYSIS_MAX_FILES_PER_RUN = config.getint('site_settings', 'ANALYSIS_MAX_FILES_PER_RUN', fallback=20)
 
+# Annotations (#316; docs/annotations.md): catalogue-check HTTP timeout, cone radius,
+# how long a queued check may stay pending, which checks run for every new
+# transient (comma-separated slugs; empty = none) and TAP endpoint overrides.
+ANNOTATION_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'ANNOTATION_HTTP_TIMEOUT_SECONDS', fallback=30)
+ANNOTATION_SEARCH_RADIUS_ARCSEC = config.getfloat('site_settings', 'ANNOTATION_SEARCH_RADIUS_ARCSEC', fallback=3.0)
+ANNOTATION_RUN_STALE_MINUTES = config.getint('site_settings', 'ANNOTATION_RUN_STALE_MINUTES', fallback=60)
+ANNOTATION_AUTORUN_SERVICES = config.get('site_settings', 'ANNOTATION_AUTORUN_SERVICES', fallback='').strip()
+GAIA_TAP_URL = config.get('site_settings', 'GAIA_TAP_URL', fallback='').strip()
+VIZIER_TAP_URL = config.get('site_settings', 'VIZIER_TAP_URL', fallback='').strip()
+
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
 # (the senders it replaced, alert.py and the comment-mention emails, sent
 # unconditionally); NOTIFICATION_EMAIL_ENABLED in settings.ini or env
