@@ -300,8 +300,27 @@ class StableOrderingFilter(django_filters.OrderingFilter):
         return qs.order_by(*ordering, tie)
 
 
+class AnyBooleanWidget(filter_widgets.BooleanWidget):
+    """``BooleanWidget`` whose empty choice reads "Any" instead of "Unknown"."""
+
+    def __init__(self, attrs=None):
+        choices = (('', 'Any'), ('true', 'Yes'), ('false', 'No'))
+        super(filter_widgets.BooleanWidget, self).__init__(attrs, choices)
+
+
+class _NameChoiceField(forms.ModelMultipleChoiceField):
+    """Options labelled by ``name`` (``TransientTag.__str__`` says ``Name: x``)."""
+
+    def label_from_instance(self, obj):
+        return obj.name
+
+
+class NameMultipleChoiceFilter(django_filters.ModelMultipleChoiceFilter):
+    field_class = _NameChoiceField
+
+
 def _bool(method, label):
-    return django_filters.BooleanFilter(method=method, label=label, widget=filter_widgets.BooleanWidget())
+    return django_filters.BooleanFilter(method=method, label=label, widget=AnyBooleanWidget())
 
 
 def _num(field_name, lookup, label):
@@ -329,7 +348,7 @@ def _by_pk(field_name):
 
 def _names(model, label, **kwargs):
     """Multi-select of ``model`` rows addressed by ``name`` (``?status=New&status=Watch``)."""
-    return django_filters.ModelMultipleChoiceFilter(
+    return NameMultipleChoiceFilter(
         queryset=model.objects.order_by('name'), to_field_name='name', label=label,
         distinct=False, **kwargs,
     )
