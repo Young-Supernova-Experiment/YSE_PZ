@@ -10,8 +10,25 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveField(
-            model_name='transienttag',
-            name='associated_users',
+        # TransientTag.associated_users was added by migration 0002 but
+        # never existed in the model, so this only retires the phantom
+        # field. Ziggy's database has faked/half-applied migrations in
+        # its history, so the join table may or may not exist there: drop
+        # it with IF EXISTS instead of a plain RemoveField, which would
+        # fail if the table is missing. The state operation keeps the
+        # migration graph in sync with the model.
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    "DROP TABLE IF EXISTS `YSE_App_transienttag_associated_users`",
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.RemoveField(
+                    model_name='transienttag',
+                    name='associated_users',
+                ),
+            ],
         ),
     ]
