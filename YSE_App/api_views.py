@@ -599,6 +599,44 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         qs = Transient.objects.all()
         return filter_transients_by_user_access(self.request.user, qs)
 
+    @action(detail=False, methods=['post'], url_path='save_search')
+    def save_search(self, request):
+        """Save a search as an Explorer query (``POST /api/transients/save_search/``, #287).
+
+        Body (JSON or form): ``title`` (required), ``add_to_dashboard`` (bool,
+        default false) and the search filters either as ``params`` (an object
+        of filter name -> value or list of values, the same names as the list
+        endpoint) or as ``query_string`` (``status=New&has_spectrum=true``).
+        Returns the query id, its Explorer URL, the compiled SQL and, when
+        attached, the personal-dashboard section id.
+        """
+        from django.http import QueryDict
+        from YSE_App.services.search_queries import SearchSaveError, save_search_query
+
+        data = request.data
+        params = data.get('params')
+        if params is None:
+            params = QueryDict(str(data.get('query_string', '')), mutable=True)
+        add = data.get('add_to_dashboard', False)
+        if isinstance(add, str):
+            add = add.lower() in ('1', 'true', 'on', 'yes')
+        try:
+            result = save_search_query(
+                request.user, params, data.get('title', ''), add_to_dashboard=bool(add), request=request,
+            )
+        except SearchSaveError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        query = result['query']
+        user_query = result['user_query']
+        return Response({
+            'query_id': query.id,
+            'title': query.title,
+            'explorer_url': request.build_absolute_uri(reverse('query_detail', args=[query.id])),
+            'sql': result['sql'],
+            'user_query_id': user_query.id if user_query is not None else None,
+            'dashboard_url': request.build_absolute_uri(reverse('personaldashboard')),
+        }, status=status.HTTP_201_CREATED)
+
 ### `TransientPhotStat` (per-transient photometry statistics, #268) ###
 class TransientPhotStatFilter(django_filters.FilterSet):
     transient_name = django_filters.CharFilter(field_name="transient__name")
@@ -867,3 +905,33 @@ class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
     def reopen(self, request, pk=None):
         from YSE_App.brokers import ingest
         return self._act(request, pk, lambda c: ingest.reopen_candidate(c, request.user))
+class SharingServiceViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ``/api/sharingservices/``: the enabled services the user may report through (no secrets)."""
+    serializer_class = SharingServiceSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        visible = [s.pk for s in SharingService.for_user(self.request.user)]
+        return SharingService.objects.filter(pk__in=visible).prefetch_related(
+            'allowed_instruments', 'allowed_obs_groups', 'groups')
+
+
+class SharingSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ``/api/sharingsubmissions/`` for transients the user may see; filter by ``status``, ``kind``, ``service``."""
+    serializer_class = SharingSubmissionSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
+        qs = SharingSubmission.objects.filter(transient__in=allowed.values('pk')).select_related(
+            'service', 'transient', 'created_by')
+        params = self.request.query_params
+        if params.get('status'):
+            qs = qs.filter(status=params['status'])
+        if params.get('kind'):
+            qs = qs.filter(kind=params['kind'])
+        if params.get('service'):
+            qs = qs.filter(service__slug=params['service'])
+        if params.get('transient'):
+            qs = qs.filter(transient__name=params['transient'])
+        return qs

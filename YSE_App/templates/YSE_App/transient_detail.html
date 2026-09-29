@@ -41,6 +41,7 @@
                     <li class="nav-item"><a class="nav-link" href="#analysis_tab" data-toggle="tab" id="analysis_tab_header">Analysis</a></li>
                     <li class="nav-item"><a class="nav-link" href="#spectra_tab" data-toggle="tab">Spectra</a></li>
                     <li class="nav-item"><a class="nav-link" href="#hst_tab" data-toggle="tab" id="hst_tab_header">HST Data</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#jwst_tab" data-toggle="tab" id="jwst_tab_header">JWST Data</a></li>
                     <li class="nav-item"><a class="nav-link" href="#chandra_tab" data-toggle="tab" id="chandra_tab_header">Chandra Data</a></li>
                     {% if has_gw_candidate_tag %}
                         <li class="nav-item"><a class="nav-link" href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW Info</a></li>
@@ -188,6 +189,27 @@
                             </tbody>
                         </table>
                     </div>
+                    <div class="tab-pane" id="jwst_tab">
+                        <h4>JWST Observations for {{transient.name}}</h4>
+                        <p class="text-muted small" id="jwst_summary">Science images and spectra in the MAST archive within 1&Prime; of the transient position.</p>
+                        <table class="table table-bordered table-striped" id="jwst_observation_table">
+                            <thead>
+                                <tr>
+                                    <th>Date (UT)</th>
+                                    <th>Instrument</th>
+                                    <th>Filter / grating</th>
+                                    <th>Program</th>
+                                    <th>Target</th>
+                                    <th>Exp. (s)</th>
+                                    <th>Product</th>
+                                    <th>Preview</th>
+                                    <th>Links</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jwst_observation_list">
+                            </tbody>
+                        </table>
+                    </div>
                     <div class="tab-pane" id="chandra_tab">
                         <h4>Chandra Images for {{transient.name}}</h4>
                         <h4 id="totalchandraexp">total exposure time<h4>
@@ -221,6 +243,7 @@
             </div>
         </div>
     </div>
+    {% include "YSE_App/transient_detail/report_modal.html" %}
 {% endblock %}
 
 {% block scripts %}
@@ -551,7 +574,7 @@
             $tab.text(failLabel);
             $tab.attr('title', message || 'Archive lookup failed; open the tab to retry.');
         }
-        function yseUpdateArchiveTabLabel($tab, url, emptyLabel, failLabel) {
+        function yseUpdateArchiveTabLabel($tab, url, emptyLabel, failLabel, countLabel) {
             if (!$tab.length) {
                 return;
             }
@@ -561,6 +584,10 @@
                         yseMarkArchiveTabUnknown($tab, failLabel, json && json.message);
                     } else if (!json.has_data) {
                         $tab.text(emptyLabel);
+                    } else if (countLabel && json.count) {
+                        /* e.g. "JWST Data (2)": the count is cheap here and
+                           saves opening the tab to see whether it is worth it. */
+                        $tab.text(countLabel + ' (' + json.count + ')').removeAttr('title');
                     }
                 })
                 .fail(function(xhr, status) {
@@ -580,6 +607,13 @@
             "{% url 'get_chandra_status' transient.id %}",
             "No Chandra",
             "Chandra (lookup failed)"
+        );
+        yseUpdateArchiveTabLabel(
+            $("#jwst_tab_header"),
+            "{% url 'get_jwst_status' transient.id %}",
+            "No JWST",
+            "JWST (lookup failed)",
+            "JWST Data"
         );
 
         var yseDetailFragmentsLoaded = {};
@@ -651,6 +685,7 @@
         };
 
         var yseHstImagesLoaded = false;
+        var yseJwstObservationsLoaded = false;
         var yseChandraImagesLoaded = false;
         $(function() {
             if (window.location.hash === '#followup_tab') {
@@ -681,6 +716,11 @@
                     yseHstImagesLoaded = true;
                     if (window.yseLoadHstImages) {
                         window.yseLoadHstImages();
+                    }
+                } else if (target === '#jwst_tab' && !yseJwstObservationsLoaded) {
+                    yseJwstObservationsLoaded = true;
+                    if (window.yseLoadJwstObservations) {
+                        window.yseLoadJwstObservations();
                     }
                 } else if (target === '#chandra_tab' && !yseChandraImagesLoaded) {
                     yseChandraImagesLoaded = true;
@@ -2104,6 +2144,85 @@
             loadHstImages();
         });
 
+        /* JWST tab body (#330): the same lookup-failed / Retry handling as the
+           HST tab, one loader for both page modes. Values come from MAST, so
+           they are escaped before being written into the table. */
+        function yseEscapeHtml(value) {
+            if (value === null || value === undefined) {
+                return '';
+            }
+            return String(value).replace(/[&<>"']/g, function(ch) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
+            });
+        }
+        function yseJwstRowHtml(row) {
+            var links = [];
+            if (row.portalurl) {
+                links.push('<a href="' + yseEscapeHtml(row.portalurl) + '" target="_blank" rel="noopener" title="Open this observation in the MAST Portal">MAST</a>');
+            }
+            if (row.program) {
+                links.push('<a href="https://www.stsci.edu/jwst/science-execution/program-information?id=' +
+                    encodeURIComponent(row.program) + '" target="_blank" rel="noopener" title="JWST program page">Program ' + yseEscapeHtml(row.program) + '</a>');
+            }
+            if (row.dataurl) {
+                links.push('<a href="' + yseEscapeHtml(row.dataurl) + '" target="_blank" rel="noopener" title="Download the data product">Data</a>');
+            }
+            var preview = '<span class="text-muted">&mdash;</span>';
+            if (row.previewurl) {
+                preview = '<a href="' + yseEscapeHtml(row.previewurl) + '" target="_blank" rel="noopener">' +
+                    '<img src="' + yseEscapeHtml(row.previewurl) + '" style="width:160px" alt="" loading="lazy" ' +
+                    'onerror="this.parentNode.textContent=\'preview\'" /></a>';
+            }
+            var exptime = (row.exptime === null || row.exptime === undefined) ? '' : Math.round(Number(row.exptime));
+            var product = yseEscapeHtml(row.product || '');
+            if (row.calib_level !== null && row.calib_level !== undefined) {
+                product += ' <span class="text-muted">(L' + yseEscapeHtml(row.calib_level) + ')</span>';
+            }
+            return '<tr>' +
+                '<td title="MJD ' + yseEscapeHtml(row.mjd) + '">' + yseEscapeHtml(row.obsdate || '') + '</td>' +
+                '<td>' + yseEscapeHtml(row.inst || '') + '</td>' +
+                '<td>' + yseEscapeHtml(row.filters || '') + '</td>' +
+                '<td>' + yseEscapeHtml(row.program || '') + (row.pi ? '<br><span class="text-muted small">' + yseEscapeHtml(row.pi) + '</span>' : '') + '</td>' +
+                '<td>' + yseEscapeHtml(row.target || '') + '</td>' +
+                '<td class="text-right">' + exptime + '</td>' +
+                '<td>' + product + '</td>' +
+                '<td>' + preview + '</td>' +
+                '<td>' + (links.length ? links.join(' &middot; ') : '<span class="text-muted">&mdash;</span>') + '</td>' +
+                '</tr>';
+        }
+        function loadJwstObservations() {
+            var rows_full = $("#jwst_observation_list");
+            var rows_tab = $("#jwst_tab_header");
+            rows_full.html('<tr><td colspan="9" class="text-muted"><i class="fa fa-spinner fa-spin"></i> Querying the JWST archive (MAST)…</td></tr>');
+            $.get("{% url 'get_jwst_observations' transient.id %}").done(function(json) {
+                var rows = (json && json.rows) || [];
+                rows_full.empty();
+                if (!rows.length) {
+                    rows_tab.text("No JWST").removeAttr('title');
+                    rows_full.html('<tr><td colspan="9" class="text-muted">No JWST observations of this position in MAST.</td></tr>');
+                    return;
+                }
+                rows_tab.text("JWST Data (" + rows.length + ")").removeAttr('title');
+                for (var i = 0; i < rows.length; i++) {
+                    rows_full.append(yseJwstRowHtml(rows[i]));
+                }
+            }).fail(function(xhr) {
+                /* MAST unreachable or slow: report it and offer a retry
+                   rather than leaving the table empty under a "No JWST" label. */
+                var message = (xhr && xhr.responseJSON && xhr.responseJSON.message) ||
+                    "JWST archive (MAST) lookup failed.";
+                yseJwstObservationsLoaded = false;
+                rows_tab.text("JWST (lookup failed)").attr('title', message);
+                rows_full.html('<tr><td colspan="9" class="text-warning">' + yseEscapeHtml(message) +
+                    ' <a href="#" class="yse-jwst-retry">Retry</a></td></tr>');
+            });
+        }
+        $(document).on('click', '.yse-jwst-retry', function(event) {
+            event.preventDefault();
+            yseJwstObservationsLoaded = true;
+            loadJwstObservations();
+        });
+
         function loadChandraImages() {
             $.get("{% url 'get_chandra_image' transient.id %}").done(function(json){
                 var rows = $("#chandra_image")
@@ -2132,10 +2251,12 @@
             });
         }
         window.yseLoadHstImages = loadHstImages;
+        window.yseLoadJwstObservations = loadJwstObservations;
         window.yseLoadChandraImages = loadChandraImages;
 
 {% if not transient_detail_defer %}
         loadHstImages();
+        loadJwstObservations();
         loadChandraImages();
 {% endif %}
     </script>

@@ -78,6 +78,7 @@ from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from django.template import RequestContext
 from urllib.parse import unquote
 
@@ -1790,6 +1791,11 @@ def transient_detail(request, slug):
         context['submit_to_tns'] = submit_to_tns
         if tns_sandbox_comment:
             context['tns_sandbox_url'] = tns_sandbox_comment.split()[2]
+
+        # "Report to TNS" dialog (#326): the sharing services this user may report through.
+        from YSE_App.sharing_views import report_dialog_context
+
+        context.update(report_dialog_context(request.user, transient_obj))
         
         return render(request,
             'YSE_App/transient_detail.html',
@@ -2403,9 +2409,76 @@ class SearchResultsView(TemplateView):
             'all_transient_statuses': TransientStatus.objects.order_by('name'),
             'api_url': '%s?%s' % (reverse('transient-list'), params.urlencode()) if params else reverse('transient-list'),
         })
+        context.update(self._save_search_context(params, filterset))
         # Backwards-compatible name used by older templates/tests.
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         return context
+
+    def _save_search_context(self, params, filterset):
+        """The "Save as SQL query" modal: compiled SQL preview, title suggestion, last result."""
+        from explorer.models import Query
+        from YSE_App.services.search_queries import (
+            SearchSaveError,
+            compile_search_sql,
+            default_search_title,
+        )
+
+        search_params = params.copy()
+        for key in ('page', 'saved_query', 'saved_user_query', 'save_error'):
+            search_params.pop(key, None)
+        ctx = {
+            'save_search_params': search_params.urlencode(),
+            'save_search_sql': None,
+            'save_search_error': None,
+            'save_search_title': default_search_title(filterset) if filterset.is_valid() else '',
+            'saved_query': None,
+            'saved_user_query_id': None,
+            'save_error': self.request.GET.get('save_error') or None,
+            'can_open_explorer': self.request.user.is_staff or self.request.user.is_superuser,
+        }
+        try:
+            ctx['save_search_sql'] = compile_search_sql(search_params, request=self.request)
+        except SearchSaveError as exc:
+            ctx['save_search_error'] = str(exc)
+        saved_id = self.request.GET.get('saved_query')
+        if saved_id and saved_id.isdigit():
+            ctx['saved_query'] = Query.objects.filter(pk=int(saved_id)).first()
+            uq = self.request.GET.get('saved_user_query')
+            ctx['saved_user_query_id'] = int(uq) if uq and uq.isdigit() else None
+        return ctx
+
+
+@login_required
+@require_POST
+def save_search(request):
+    """POST from the search page: save the current search as an Explorer query (#287).
+
+    Fields: ``title``, ``params`` (the search page's query string),
+    ``add_to_dashboard`` (checkbox). Redirects back to the same search with
+    ``saved_query=<id>`` (and ``saved_user_query=<id>``) for the confirmation,
+    or with ``save_error=<message>``.
+    """
+    from django.http import QueryDict
+    from YSE_App.services.search_queries import SearchSaveError, save_search_query
+
+    params = QueryDict(request.POST.get('params', ''), mutable=True)
+    for key in ('page', 'saved_query', 'saved_user_query', 'save_error'):
+        params.pop(key, None)
+    search_url = request.build_absolute_uri('%s?%s' % (reverse('search'), params.urlencode()))
+    back = params.copy()
+    try:
+        result = save_search_query(
+            request.user, params, request.POST.get('title', ''),
+            add_to_dashboard=request.POST.get('add_to_dashboard') in ('on', 'true', '1'),
+            request=request, search_url=search_url,
+        )
+    except SearchSaveError as exc:
+        back['save_error'] = str(exc)
+        return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
+    back['saved_query'] = str(result['query'].id)
+    if result['user_query'] is not None:
+        back['saved_user_query'] = str(result['user_query'].id)
+    return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
 
 #@login_required
 #def atlas_forced_phot(request,slug):

@@ -551,7 +551,13 @@
                                                 </div>
                                             </div>
                                             {% endif %}
-                                            {% if submit_to_tns %}
+                                            {% if sharing_services %}
+                                                <div class="col-6">
+                                                    <div class="form-group">
+                                                        <a class="btn btn-block btn-primary yse-report-tns" href="#yse-report-modal" data-toggle="modal" data-target="#yse-report-modal">Report to TNS</a>
+                                                    </div>
+                                                </div>
+                                            {% elif submit_to_tns %}
                                                 <div class="col-6">
                                                     <div class="form-group">
                                                         <a class="btn btn-block btn-primary submit_to_tns">Submit to TNS</a>
