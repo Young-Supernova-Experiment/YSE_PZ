@@ -116,7 +116,11 @@ jobs:
       - name: Page load regression and benchmark plots
         run: |
           docker exec ysepz_web_container python3 manage.py test YSE_App.tests.test_page_load_regression -v2
-          docker exec ysepz_web_container python3 manage.py record_perf_benchmark --label "ci-${{ github.sha }}"
+          # Non-gating trend record. The command caps its own saved-query benchmark
+          # (--mag-limited-max-seconds, default 600 s) and records what it has; the
+          # outer timeout is a last resort so this step can never hang the job.
+          timeout -k 30s 20m docker exec ysepz_web_container python3 manage.py record_perf_benchmark --label "ci-${{ github.sha }}" \
+            || echo "::warning::record_perf_benchmark exited $? (timed out or failed); perf history not updated for this run"
 
       - name: Upload perf metrics artifacts
         if: always()

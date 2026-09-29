@@ -13,17 +13,24 @@ attaches the real saved query to a user's dashboard and times:
                                        result cache (SQL + table build + render)
   personal_dashboard_mag_limited_warm  the same fragment with the SQL result cached
 
+Two tiers share this code:
+
+  * the gating test (YSE_App.tests.test_mag_limited_query_regression) seeds
+    SUITE_N_TRANSIENTS x SUITE_N_POINTS so the whole suite stays fast;
+  * ``manage.py record_perf_benchmark`` seeds FULL_N_TRANSIENTS x FULL_N_POINTS
+    for the trend history and is not a merge gate.
+
+Both are overridable with YSE_PERF_MAG_LIMITED_TRANSIENTS and
+YSE_PERF_MAG_LIMITED_POINTS. Every SELECT is capped server-side with MySQL's
+``max_execution_time`` so a bad plan cannot hang a CI job (the first CI run of
+this benchmark sat in the query for 15+ minutes at 3000 x 20).
+
 The SQL text is the production saved query (explorer_query id 62 in
 docker/db_init/YSE_rest_of_tables_insert.sql), verbatim. Migration 0002 turned
 TransientPhotData.data_quality into a ManyToMany, so on a migrated schema the
 column ``pd2.data_quality_id`` does not exist; ``mag_limited_sample_sql`` picks
 the variant that matches the connected schema (the only difference is that one
 predicate).
-
-Dataset size is controlled by YSE_PERF_MAG_LIMITED_TRANSIENTS and
-YSE_PERF_MAG_LIMITED_POINTS (defaults below); budgets in
-YSE_App/tests/perf_baselines.json are stated for the defaults and scaled linearly
-by the regression test when the size is overridden.
 """
 
 from __future__ import annotations
@@ -33,14 +40,16 @@ import os
 import random
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 from unittest.mock import patch
 
+from autoslug.fields import AutoSlugField
 from django.core.cache import cache
-from django.db import connection, connections
+from django.db import DatabaseError, connection, connections
 from django.test import Client, override_settings
 from django.utils import timezone
+from django.utils.text import slugify
 
 from YSE_App.models import (
     Transient,
@@ -90,22 +99,25 @@ BENCHMARK_KEY_COLD = "personal_dashboard_mag_limited_cold"
 BENCHMARK_KEY_WARM = "personal_dashboard_mag_limited_warm"
 BENCHMARK_KEYS = (BENCHMARK_KEY_SQL, BENCHMARK_KEY_COLD, BENCHMARK_KEY_WARM)
 
-DEFAULT_N_TRANSIENTS = 3000
-DEFAULT_N_POINTS = 20
+# Gating tier (test suite) and full tier (record_perf_benchmark).
+SUITE_N_TRANSIENTS = 300
+SUITE_N_POINTS = 10
+FULL_N_TRANSIENTS = 3000
+FULL_N_POINTS = 20
 ENV_N_TRANSIENTS = "YSE_PERF_MAG_LIMITED_TRANSIENTS"
 ENV_N_POINTS = "YSE_PERF_MAG_LIMITED_POINTS"
 
 TRANSIENT_NAME_PREFIX = "2024perf"  # matches the query's t.name LIKE '202%'
 YSE_TAG_NAME = "YSE"
-BULK_BATCH = 2000
+BULK_BATCH = 5000
 
 
-def configured_n_transients() -> int:
-    return int(os.environ.get(ENV_N_TRANSIENTS, DEFAULT_N_TRANSIENTS))
+def configured_n_transients(default: int = SUITE_N_TRANSIENTS) -> int:
+    return int(os.environ.get(ENV_N_TRANSIENTS, default))
 
 
-def configured_n_points() -> int:
-    return int(os.environ.get(ENV_N_POINTS, DEFAULT_N_POINTS))
+def configured_n_points(default: int = SUITE_N_POINTS) -> int:
+    return int(os.environ.get(ENV_N_POINTS, default))
 
 
 def photdata_has_data_quality_column(conn=None) -> bool:
@@ -147,6 +159,51 @@ def explorer_routed_to_default() -> Iterator[None]:
         yield
 
 
+@contextmanager
+def statement_time_cap(max_ms: Optional[int]) -> Iterator[None]:
+    """
+    Cap every SELECT on the default connection at ``max_ms`` (MySQL
+    max_execution_time; MariaDB max_statement_time). A capped statement fails
+    with a DatabaseError instead of hanging the process. No-op elsewhere.
+    """
+    conn = connections["default"]
+    if not max_ms or conn.vendor != "mysql":
+        yield
+        return
+    is_mariadb = getattr(conn, "mysql_is_mariadb", False)
+    try:
+        with conn.cursor() as cursor:
+            if is_mariadb:
+                cursor.execute("SET SESSION max_statement_time = %s", [max_ms / 1000.0])
+            else:
+                cursor.execute("SET SESSION max_execution_time = %s", [int(max_ms)])
+    except DatabaseError:
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            with conn.cursor() as cursor:
+                if is_mariadb:
+                    cursor.execute("SET SESSION max_statement_time = 0")
+                else:
+                    cursor.execute("SET SESSION max_execution_time = 0")
+        except DatabaseError:
+            pass
+
+
+@contextmanager
+def _preset_slugs() -> Iterator[None]:
+    """Skip AutoSlugField's per-row uniqueness SELECT; slugs are set explicitly."""
+    with patch.object(
+        AutoSlugField,
+        "pre_save",
+        lambda self, instance, add: getattr(instance, self.attname),
+    ):
+        yield
+
+
 @dataclass
 class MagLimitedDataset:
     n_transients: int
@@ -154,6 +211,7 @@ class MagLimitedDataset:
     n_photdata_rows: int
     user_query: UserQuery
     user_query_url: str
+    seed_ms: float = 0.0
 
 
 def seed_mag_limited_dataset(
@@ -169,10 +227,11 @@ def seed_mag_limited_dataset(
     objects, each with one photometry set of ``n_points`` epochs. Peak
     magnitudes are uniform in [17.0, 21.0], so roughly 40% pass the 18.6 cut,
     and the S/N per point is drawn from [1.5, 60] so the flux/flux_err > 3
-    predicate does real work.
+    predicate does real work. Four bulk_create calls; no per-row queries.
     """
     n_transients = n_transients or configured_n_transients()
     n_points = n_points or configured_n_points()
+    started = time.perf_counter()
     rng = random.Random(seed)
     audit = audit_fields(user)
     statuses = ensure_transient_statuses(user)
@@ -185,20 +244,23 @@ def seed_mag_limited_dataset(
 
     transients = []
     for i in range(n_transients):
-        disc = now - datetime.timedelta(days=rng.uniform(1, 900))
+        name = f"{TRANSIENT_NAME_PREFIX}{i:05d}"
         transients.append(
             Transient(
-                name=f"{TRANSIENT_NAME_PREFIX}{i:05d}",
+                name=name,
+                slug=slugify(name),
                 ra=rng.uniform(0.0, 360.0),
                 dec=rng.uniform(-30.0, 80.0),
                 status=status_cycle[i % len(status_cycle)],
                 obs_group=obs_group,
-                disc_date=disc,
+                disc_date=now - datetime.timedelta(days=rng.uniform(1, 900)),
                 **audit,
             )
         )
-    # bulk_create skips post_save (no TESS lookup) but still runs AutoSlugField.pre_save.
-    Transient.objects.bulk_create(transients, batch_size=BULK_BATCH)
+    # bulk_create skips post_save (no TESS lookup); _preset_slugs skips autoslug's
+    # uniqueness SELECT per row.
+    with _preset_slugs():
+        Transient.objects.bulk_create(transients, batch_size=BULK_BATCH)
     transients = list(
         Transient.objects.filter(name__startswith=TRANSIENT_NAME_PREFIX).order_by("id")
     )
@@ -246,19 +308,16 @@ def seed_mag_limited_dataset(
                     **audit,
                 )
             )
-        if len(points) >= BULK_BATCH * 5:
-            TransientPhotData.objects.bulk_create(points, batch_size=BULK_BATCH)
-            points = []
-    if points:
-        TransientPhotData.objects.bulk_create(points, batch_size=BULK_BATCH)
+    TransientPhotData.objects.bulk_create(points, batch_size=BULK_BATCH)
 
     user_query = attach_mag_limited_query(user, sql=sql)
     return MagLimitedDataset(
         n_transients=len(transients),
         n_points=n_points,
-        n_photdata_rows=len(transients) * n_points,
+        n_photdata_rows=len(points),
         user_query=user_query,
         user_query_url=f"/personaldashboard/section/{user_query.id}/",
+        seed_ms=(time.perf_counter() - started) * 1000.0,
     )
 
 
@@ -282,13 +341,31 @@ def attach_mag_limited_query(user, *, sql: Optional[str] = None) -> UserQuery:
 
 
 def time_raw_sql(sql: str) -> tuple:
-    """Run ``sql`` exactly as _personaldashboard_table_for_user_query does."""
-    with connections["default"].cursor() as cursor:
-        start = time.perf_counter()
-        cursor.execute(sql.replace("%", "%%"), ())
-        names = [row[0] for row in cursor.fetchall()]
-        elapsed = time.perf_counter() - start
-    return elapsed * 1000.0, names
+    """
+    Run ``sql`` exactly as _personaldashboard_table_for_user_query does.
+
+    Returns (elapsed_ms, names, error). ``error`` is the DatabaseError text
+    when the statement failed (e.g. hit the statement time cap).
+    """
+    start = time.perf_counter()
+    names: List[str] = []
+    error = None
+    try:
+        with connections["default"].cursor() as cursor:
+            cursor.execute(sql.replace("%", "%%"), ())
+            names = [row[0] for row in cursor.fetchall()]
+    except DatabaseError as exc:
+        error = str(exc)
+    return (time.perf_counter() - start) * 1000.0, names, error
+
+
+@dataclass
+class MagLimitedRun:
+    pages: List[PageBenchmark]
+    dataset: MagLimitedDataset
+    n_rows: int
+    sql_error: Optional[str] = None
+    notes: List[str] = field(default_factory=list)
 
 
 @override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS)
@@ -297,64 +374,83 @@ def run_mag_limited_benchmark(
     n_transients: Optional[int] = None,
     n_points: Optional[int] = None,
     user=None,
-) -> tuple:
+    max_execution_ms: Optional[int] = None,
+    deadline_s: Optional[float] = None,
+) -> MagLimitedRun:
     """
-    Seed, attach and time. Returns (List[PageBenchmark], MagLimitedDataset, n_rows).
+    Seed, attach and time.
 
-    ``sections`` on the SQL benchmark carries the matched-row count so the
-    history shows the list size alongside the time.
+    ``max_execution_ms`` caps each SELECT server-side; ``deadline_s`` is a
+    wall-clock budget for the whole run (seeding included) after which the
+    remaining measurements are skipped and noted. Whatever was measured is
+    returned so the caller can record it.
     """
+    started = time.perf_counter()
     user = user or create_test_user("perf_benchmark_mag_limited")
     dataset = seed_mag_limited_dataset(
         user, n_transients=n_transients, n_points=n_points
     )
     sql = dataset.user_query.query.sql
+    run = MagLimitedRun(pages=[], dataset=dataset, n_rows=0)
 
-    sql_ms, names = time_raw_sql(sql)
-    results: List[PageBenchmark] = [
-        PageBenchmark(
-            page_key=BENCHMARK_KEY_SQL,
-            url=f"explorer:{MAG_LIMITED_SAMPLE_TITLE}",
-            ttfb_ms=sql_ms,
-            total_ms=sql_ms,
-            sql_count=1,
-            sections={"rows": float(len(names)), "transients": float(dataset.n_transients)},
-        )
-    ]
+    def over_deadline() -> bool:
+        return deadline_s is not None and (time.perf_counter() - started) > deadline_s
 
-    client = Client()
-    client.force_login(user)
-    with explorer_routed_to_default():
-        cache.clear()
-        response, n_queries, cold_ms = _profile_get(client, dataset.user_query_url)
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"personaldashboard section returned {response.status_code}"
-            )
-        results.append(
+    with statement_time_cap(max_execution_ms):
+        sql_ms, names, error = time_raw_sql(sql)
+        run.n_rows = len(names)
+        run.sql_error = error
+        sections = {
+            "rows": float(len(names)),
+            "transients": float(dataset.n_transients),
+            "phot_rows": float(dataset.n_photdata_rows),
+            "seed_ms": round(dataset.seed_ms, 1),
+        }
+        if error:
+            sections["failed"] = 1.0
+            run.notes.append(f"raw SQL failed after {sql_ms:.0f} ms: {error}")
+        run.pages.append(
             PageBenchmark(
-                page_key=BENCHMARK_KEY_COLD,
-                url=dataset.user_query_url,
-                ttfb_ms=cold_ms,
-                total_ms=cold_ms,
-                sql_count=n_queries,
+                page_key=BENCHMARK_KEY_SQL,
+                url=f"explorer:{MAG_LIMITED_SAMPLE_TITLE}",
+                ttfb_ms=sql_ms,
+                total_ms=sql_ms,
+                sql_count=1,
+                sections=sections,
             )
         )
-        response, n_queries, warm_ms = _profile_get(client, dataset.user_query_url)
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"personaldashboard section (warm) returned {response.status_code}"
-            )
-        results.append(
-            PageBenchmark(
-                page_key=BENCHMARK_KEY_WARM,
-                url=dataset.user_query_url,
-                ttfb_ms=warm_ms,
-                total_ms=warm_ms,
-                sql_count=n_queries,
-            )
-        )
-    return results, dataset, len(names)
+        if over_deadline():
+            run.notes.append("deadline reached after raw SQL; dashboard fragment skipped")
+            return run
+
+        client = Client()
+        client.force_login(user)
+        with explorer_routed_to_default():
+            cache.clear()
+            for key in (BENCHMARK_KEY_COLD, BENCHMARK_KEY_WARM):
+                if over_deadline():
+                    run.notes.append(f"deadline reached; {key} skipped")
+                    break
+                response, n_queries, ms = _profile_get(client, dataset.user_query_url)
+                if response.status_code != 200:
+                    raise RuntimeError(
+                        f"personaldashboard section returned {response.status_code}"
+                    )
+                page_sections = None
+                if TRANSIENT_NAME_PREFIX.encode() not in response.content:
+                    page_sections = {"failed": 1.0}
+                    run.notes.append(f"{key}: fragment rendered without result rows")
+                run.pages.append(
+                    PageBenchmark(
+                        page_key=key,
+                        url=dataset.user_query_url,
+                        ttfb_ms=ms,
+                        total_ms=ms,
+                        sql_count=n_queries,
+                        sections=page_sections,
+                    )
+                )
+    return run
 
 
 def scale_budget_ms(max_ms: float, *, n_transients: int, reference_n: int) -> float:
