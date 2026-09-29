@@ -35,6 +35,7 @@ astro-prost==1.2.13
 astroplan==0.8
 astropy==5.2.2
 astropy-helpers==4.0.1
+async-timeout==4.0.3
 astroquery==0.4.6
 astunparse==1.6.3
 attrs==21.2.0
@@ -69,6 +70,7 @@ django-el-pagination==3.3.0
 django-filter==2.4.0
 django-jsonfield==1.4.1
 django-jsonfield-backport==1.0.5
+django-redis==5.4.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
@@ -155,6 +157,7 @@ pytest==6.2.4
 python-dateutil==2.8.2
 python-utils==2.5.6
 pytz==2018.3
+redis==5.0.8
 pyvo==1.6.2
 PyYAML==5.4.1
 requests==2.28.2

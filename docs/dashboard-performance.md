@@ -67,18 +67,28 @@ crons).
 
 ### Shared cache: `REDIS_URL` (speed plan item P14)
 
-`YSE_PZ/settings.py` switches `CACHES['default']` from `LocMemCache` to `django.core.cache.backends.redis.RedisCache`
-when the `REDIS_URL` environment variable is set. Without it every Apache/mod_wsgi process (and every `runcrons`
-process) has its own cache, so the warmer warms only its own process and each web process still pays a cold run
-once per TTL and after every restart. With it, one warm serves every process and survives restarts.
+`YSE_PZ/settings.py` switches `CACHES['default']` from `LocMemCache` to `django_redis.cache.RedisCache` (the
+`django-redis` package; Django 3.2 has no built-in Redis backend, see #338) when the `REDIS_URL` environment
+variable is set. Without it every Apache/mod_wsgi process (and every `runcrons` process) has its own cache, so the
+warmer warms only its own process and each web process still pays a cold run once per TTL and after every restart.
+With it, one warm serves every process and survives restarts.
 
-On Ziggy: install Redis (`apt install redis-server`, bind to localhost) and export `REDIS_URL=redis://127.0.0.1:6379/1`
-in the environment the WSGI application and the cron user see. For mod_wsgi that is
-`WSGIDaemonProcess ... ` plus a `SetEnv`/`os.environ` line in `YSE_PZ/wsgi.py` (`os.environ.setdefault('REDIS_URL', ...)`),
-or the `/etc/apache2/envvars` file; for the docker stack, an entry in the web container's environment. Use a
-different Redis database number per stack (`/1` experimental, `/2` test, ...) so they do not share cached results.
-Check it took: `python manage.py shell -c "from django.conf import settings; print(settings.CACHES['default']['BACKEND'])"`
-should print `RedisCache`.
+If `REDIS_URL` is set but `django-redis` is not installed in that stack's virtualenv, the site still starts: settings
+logs `REDIS_URL is set but no Redis cache backend is importable ... using the per-process LocMemCache instead`
+(Apache error log / cron output) and behaves as if `REDIS_URL` were unset.
+
+On Ziggy, in this order:
+
+1. Install the packages into the stack's virtualenv (`requirements.txt` pins them; the deploy workflow skips pip on the
+   shared interpreters): `<venv>/bin/pip install django-redis==5.4.0 redis==5.0.8`.
+2. Install Redis (`apt install redis-server`, bind to localhost).
+3. Export `REDIS_URL=redis://127.0.0.1:6379/1` in the environment the WSGI application and the cron user see. For
+   mod_wsgi that is `WSGIDaemonProcess ... ` plus a `SetEnv`/`os.environ` line in `YSE_PZ/wsgi.py`
+   (`os.environ.setdefault('REDIS_URL', ...)`), or the `/etc/apache2/envvars` file; for the docker stack, an entry in
+   the web container's environment. Use a different Redis database number per stack (`/1` experimental, `/2` test,
+   ...) so they do not share cached results.
+4. Check it took: `REDIS_URL=redis://127.0.0.1:6379/1 python manage.py shell -c "from django.conf import settings; print(settings.CACHES['default']['BACKEND'])"`
+   should print `django_redis.cache.RedisCache`; `...locmem.LocMemCache` plus the warning above means step 1 is missing.
 
 ## Ziggy runbook (David)
 
@@ -137,7 +147,8 @@ A saved query whose text differs from the fixture original is reported as `SKIP 
 proven against` with a diff; paste it into an issue for a second pass rather than editing by hand.
 
 Finally turn the warmer on in that stack's `settings.ini` (`DASHBOARD_CACHE_WARM_ENABLED: True`,
-`EXPLORER_QUERY_CACHE_SECONDS: 7200`), set `REDIS_URL`, restart Apache, and check the `CronJobLog` rows of
+`EXPLORER_QUERY_CACHE_SECONDS: 7200`), install `django-redis` and set `REDIS_URL` (steps above), restart Apache, and
+check the `CronJobLog` rows of
 `YSE_App.Dashboard_Cache_Warm.WarmDashboardQueries` (or the `dashboard warm:` log lines) for per-query timings.
 
 ## Next step: a per-transient photometry summary table
