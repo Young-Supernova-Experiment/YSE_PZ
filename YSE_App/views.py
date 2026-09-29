@@ -214,6 +214,30 @@ def dashboard_section(request, status_key):
             )
     raise Http404(f"Unknown dashboard section: {status_key}")
 
+def explorer_query_cache_key(query_id):
+    return f'explorer_query_{QUERY_CACHE_VERSION}_{query_id}'
+
+
+def run_explorer_query_cached(query, timeout=3600):
+    """
+    Transient names selected by a saved Explorer query, cached per Query id.
+
+    Shared by the personal dashboard, transient_summary, change_status_for_query
+    and download_bulk_photometry so one run serves every page for ``timeout``.
+    """
+    cache_key = explorer_query_cache_key(query.id)
+    names = cache.get(cache_key)
+    if names is None:
+        cursor = connections['explorer'].cursor()
+        try:
+            cursor.execute(query.sql.replace('%', '%%'), ())
+            names = [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+        cache.set(cache_key, names, timeout=timeout)
+    return names
+
+
 def _personal_dashboard_defer_enabled():
     """Progressive first paint: shell HTML then per-section fragments (default on)."""
     return os.environ.get('YSE_PERSONAL_DASHBOARD_DEFER', '1') != '0'
@@ -260,14 +284,7 @@ def _personaldashboard_table_for_user_query(request, q):
             sql = q.query.sql.lower()
             if 'yse_app_transient' not in sql or 'name' not in sql or not sql.startswith('select'):
                 return None
-            cache_key = f'user_query_{QUERY_CACHE_VERSION}_{q.id}'
-            cached_result = cache.get(cache_key)
-            if cached_result is None:
-                cursor = connections['explorer'].cursor()
-                cursor.execute(q.query.sql.replace('%', '%%'), ())
-                cached_result = [row[0] for row in cursor.fetchall()]
-                cache.set(cache_key, cached_result, timeout=3600)
-                cursor.close()
+            cached_result = run_explorer_query_cached(q.query)
             if not cached_result:
                 prefix = _personaldashboard_sql_query_prefix(q.query.title)
                 empty_qs = annotate_dashboard_transient_fields(Transient.objects.none())
@@ -285,7 +302,7 @@ def _personaldashboard_table_for_user_query(request, q):
             )
             return (table, q.query.title, prefix, transient_filter, q.id, len(cached_result))
         except Exception as e:
-            cache.delete(f'user_query_{QUERY_CACHE_VERSION}_{q.id}')
+            cache.delete(explorer_query_cache_key(q.query.id))
             logger.error(f"Error processing query {q.id}: {e}")
             return _personaldashboard_failed_row(q, f"{q.query.title} [QUERY FAILED]")
     if q.python_query:
@@ -324,18 +341,11 @@ def _personaldashboard_build_all_tables(request, queries):
                 sql = q.query.sql.lower()
                 if 'yse_app_transient' not in sql or 'name' not in sql or not sql.startswith('select'):
                     continue
-                cache_key = f'user_query_{QUERY_CACHE_VERSION}_{q.id}'
-                cached_result = cache.get(cache_key)
-                if cached_result is None:
-                    cursor = connections['explorer'].cursor()
-                    cursor.execute(q.query.sql.replace('%', '%%'), ())
-                    cached_result = [row[0] for row in cursor.fetchall()]
-                    cache.set(cache_key, cached_result, timeout=3600)
-                    cursor.close()
+                cached_result = run_explorer_query_cached(q.query)
                 all_transient_names.update(cached_result)
                 sql_dashboard_sections.append((q, cached_result))
             except Exception as e:
-                cache.delete(f'user_query_{QUERY_CACHE_VERSION}_{q.id}')
+                cache.delete(explorer_query_cache_key(q.query.id))
                 logger.error(f"Error processing query {q.id}: {e}")
                 tables.append(_personaldashboard_failed_row(q, f"{q.query.title} [QUERY FAILED]"))
         elif q.python_query:
@@ -474,10 +484,7 @@ def transient_summary(request,status_or_query_name,
                 if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
                 if 'name' not in query.sql.lower(): return Http404('Invalid Query')
                 if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
-                cursor = connections['explorer'].cursor()
-                cursor.execute(query.sql.replace('%','%%'), ())
-                transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-                cursor.close()
+                transients = Transient.objects.filter(name__in=run_explorer_query_cached(query)).order_by('-disc_date')
             except:
                 # Query bombed
                 pass
@@ -1917,10 +1924,7 @@ def download_bulk_photometry(request, query_title):
 
     query = Query.objects.filter(title=unquote(query_title))
     if len(query):
-        cursor = connections['explorer'].cursor()
-        cursor.execute(query[0].sql.replace('%','%%'), ())
-        transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-        cursor.close()
+        transients = Transient.objects.filter(name__in=run_explorer_query_cached(query[0])).order_by('-disc_date')
         from YSE_App.services.visibility import filter_transients_by_user_access
 
         transients = filter_transients_by_user_access(user, transients)
@@ -2151,10 +2155,7 @@ def change_status_for_query(request, query_id, status_id):
     q = UserQuery.objects.get(pk=query_id)
     if q.query:
         try:
-            cursor = connections['explorer'].cursor()
-            cursor.execute(q.query.sql.replace('%', '%%'), ())
-            transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-            cursor.close()
+            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query)).order_by('-disc_date')
         except:
             # Query bombed
             pass

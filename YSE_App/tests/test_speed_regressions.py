@@ -11,6 +11,7 @@ from unittest import mock
 
 from django.db import connection
 from django.test import Client, TestCase
+from django.urls import reverse
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -500,3 +501,94 @@ class YseHomeQueryCountTests(TestCase):
             self.assertEqual(followup_resource_names(row, ("Requested", "InProcess")), self.night.resource.telescope.name)
             self.assertIn("note 0", followup_comments_text(row))
         self.assertEqual(len(ctx.captured_queries), 3)  # transient + followups + requests
+
+
+# -------------------------------------------------------------------------- P13
+
+
+class _ExplorerToDefault:
+    """Route the 'explorer' alias to 'default' so the saved SQL sees the seeded rows.
+
+    CI has no test database for the explorer alias (its MySQL user cannot open
+    test_YSE), and inside a TestCase transaction only 'default' sees the rows.
+    """
+
+    def __getitem__(self, alias):
+        from django.db import connections
+
+        return connections["default" if alias == "explorer" else alias]
+
+
+class ExplorerQueryCacheReuseTests(TestCase):
+    """P13: one Explorer SQL run serves the dashboard section and transient_summary."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.tests.fixtures_minimal import seed_personal_dashboard_queries
+
+        cls.user = create_test_user("speed_explorer_cache_user")
+        cls.user_query = seed_personal_dashboard_queries(cls.user, n_queries=1)[0]
+        cls.query = cls.user_query.query
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        from YSE_App import views as views_module
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        patcher = mock.patch.object(views_module, "connections", _ExplorerToDefault())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _explorer_runs(self, url, expect_status=200):
+        """(response, number of times the saved SQL itself was executed)."""
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, expect_status)
+        saved_sql = self.query.sql.lower()
+        runs = [q for q in ctx.captured_queries if q["sql"].lower().strip() == saved_sql]
+        return response, len(runs)
+
+    def test_summary_reuses_dashboard_result_within_ttl(self):
+        from django.core.cache import cache
+        from urllib.parse import quote
+
+        from YSE_App.views import explorer_query_cache_key
+
+        _section, cold = self._explorer_runs(f"/personaldashboard/section/{self.user_query.id}/")
+        self.assertEqual(cold, 1)
+        self.assertEqual(cache.get(explorer_query_cache_key(self.query.id)), ["perf-pdash-q0"])
+
+        summary, warm = self._explorer_runs(f"/transient_summary/{quote(self.query.title)}/")
+        self.assertEqual(warm, 0)
+        self.assertContains(summary, "perf-pdash-q0")
+
+        _again, warm_section = self._explorer_runs(f"/personaldashboard/section/{self.user_query.id}/")
+        self.assertEqual(warm_section, 0)
+
+    def test_summary_runs_sql_once_when_cache_is_cold(self):
+        from urllib.parse import quote
+
+        url = f"/transient_summary/{quote(self.query.title)}/"
+        first, cold = self._explorer_runs(url)
+        _second, warm = self._explorer_runs(url)
+        self.assertEqual((cold, warm), (1, 0))
+        self.assertContains(first, "perf-pdash-q0")
+
+    def test_change_status_for_query_uses_cached_names(self):
+        from django.core.cache import cache
+
+        from YSE_App.models import TransientStatus
+        from YSE_App.views import explorer_query_cache_key
+
+        cache.set(explorer_query_cache_key(self.query.id), ["perf-pdash-q0"], timeout=3600)
+        watch = TransientStatus.objects.get(name="Watch")
+        _response, runs = self._explorer_runs(
+            reverse("change_status_for_query", kwargs={"query_id": self.user_query.id, "status_id": watch.id}),
+            expect_status=302,
+        )
+        self.assertEqual(runs, 0)
+        self.assertEqual(Transient.objects.get(name="perf-pdash-q0").status, watch)

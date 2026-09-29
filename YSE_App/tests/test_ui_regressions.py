@@ -25,7 +25,7 @@ from YSE_App.tests.fixtures_minimal import (
     create_minimal_transient,
     create_test_user,
 )
-from YSE_App.views import QUERY_CACHE_VERSION
+from YSE_App.views import explorer_query_cache_key
 
 
 class FilterDisplayTests(TestCase):
@@ -113,7 +113,7 @@ class PersonalDashboardPaginationTests(TestCase):
             **audit_fields(self.user),
         )
         cache.set(
-            f'user_query_{QUERY_CACHE_VERSION}_{self.user_query.id}',
+            explorer_query_cache_key(self.user_query.query.id),
             self.transient_names,
             timeout=3600,
         )
