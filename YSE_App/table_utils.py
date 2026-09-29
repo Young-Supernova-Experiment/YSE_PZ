@@ -80,6 +80,54 @@ class FollowupRecentMagMixin:
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
 
+class BazinMagMixin:
+    """
+    "Bazin Mag" column for follow-up tables: the magnitude the per-band Bazin
+    fit extrapolates to the table's epoch (#225).
+
+    The fits for every transient on the current page are computed the first
+    time a row asks (one photometry query for the page, fits cached per
+    transient in the Django cache by ``YSE_App.services.bazin``), so the query
+    count does not grow with rows.  The cell shows the magnitude in the band
+    with the most recent detection that has a usable fit, e.g. ``18.71 r``,
+    and is blank when no band has one.  The column cannot be a SQL
+    annotation, so it is not orderable.
+    """
+
+    def _set_bazin_epoch(self, at_mjd):
+        self._bazin_mjd = float(at_mjd)
+        self._bazin_mags = {}
+        self._bazin_seen = set()
+
+    def _page_transient_ids(self, first):
+        ids = {first}
+        rows = self.page.object_list if getattr(self, 'page', None) is not None else self.rows
+        try:
+            for row in rows:
+                ids.add(row.record.transient_id)
+        except Exception:
+            pass
+        return ids
+
+    def _bazin_mag_for(self, transient_id):
+        from YSE_App.services.bazin import extrapolated_mags
+
+        if transient_id not in self._bazin_seen:
+            ids = self._page_transient_ids(transient_id)
+            self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd))
+            self._bazin_seen |= ids
+        return self._bazin_mags.get(transient_id)
+
+    def render_bazin_mag(self, record):
+        from .common.filter_display import display_filter_label
+
+        picked = self._bazin_mag_for(record.transient_id)
+        if picked is None:
+            return ''
+        mag, band_name = picked
+        return '%s %s' % (format_magnitude(mag), display_filter_label(band_name))
+
+
 _REQUESTED_FOLLOWUP_STATUSES = ('Requested', 'InProcess')
 _SUCCESSFUL_FOLLOWUP_STATUSES = ('Successful',)
 _RESOURCE_SELECT_RELATED = (
@@ -1174,7 +1222,7 @@ class FollowupTable(FollowupRecentMagMixin, tables.Table):
             "order": [[ 2, "desc" ]],
         }
 
-class ObsNightFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Table):
+class ObsNightFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='transient__name')
@@ -1184,6 +1232,10 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, table
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
     recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
+    # Bazin extrapolation to local midnight of the observing night (#225)
+    bazin_mag = tables.Column(accessor='transient_id', verbose_name='Bazin Mag @ Night',
+                              orderable=False, empty_values=(),
+                              attrs={'th': {'title': 'Per-band Bazin fit extrapolated to local midnight of the night; band shown after the magnitude'}})
 
 
     #observation_window = tables.Column(accessor='observation_window',
@@ -1227,8 +1279,14 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, table
     #						 verbose_name='Disc. Mag',orderable=True)
 
     def __init__(self,*args, classical_obs_date=None, **kwargs):
+        from YSE_App.services.bazin import local_midnight_mjd
+
         super().__init__(*args, **kwargs)
-        self._set_observer(classical_obs_date.resource.telescope, classical_obs_date.obs_date)
+        telescope = classical_obs_date.resource.telescope
+        self._set_observer(telescope, classical_obs_date.obs_date)
+        observatory = telescope.observatory if telescope.observatory_id else None
+        self._set_bazin_epoch(local_midnight_mjd(
+            classical_obs_date.obs_date, observatory.utc_offset if observatory else 0))
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
@@ -1245,7 +1303,7 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, table
 
     class Meta:
         model = TransientFollowup
-        fields = ('name_string','ra_string','dec_string','recent_mag',
+        fields = ('name_string','ra_string','dec_string','recent_mag','bazin_mag',
                   'rise_time','set_time','moon_angle','transient_status_string',
                   'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
@@ -1265,7 +1323,7 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, table
             "order": [[ 2, "desc" ]],
         }
 
-class ToOFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Table):
+class ToOFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.transient.slug %}\">{{ record.transient.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -1275,6 +1333,10 @@ class ToOFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Tab
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
     recent_mag = tables.Column(accessor='recent_mag',
                                verbose_name='Recent Mag',orderable=True)
+    # Bazin extrapolation to now: a ToO is triggered at request time (#225)
+    bazin_mag = tables.Column(accessor='transient_id', verbose_name='Bazin Mag Now',
+                              orderable=False, empty_values=(),
+                              attrs={'th': {'title': 'Per-band Bazin fit extrapolated to now; band shown after the magnitude'}})
 
 
     #observation_window = tables.Column(accessor='observation_window',
@@ -1314,8 +1376,12 @@ class ToOFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Tab
 
     
     def __init__(self,*args, too_resource=None, **kwargs):
+        from YSE_App.services.bazin import datetime_to_mjd
+
         super().__init__(*args, **kwargs)
-        self._set_observer(too_resource.telescope, datetime.datetime.now())
+        now = datetime.datetime.now()
+        self._set_observer(too_resource.telescope, now)
+        self._set_bazin_epoch(datetime_to_mjd(datetime.datetime.now(datetime.timezone.utc)))
 
     def render_airmass(self, value):
         from astroplan.plots import plot_airmass
@@ -1332,7 +1398,7 @@ class ToOFollowupTable(FollowupRecentMagMixin, TargetVisibilityMixin, tables.Tab
 
     class Meta:
         model = TransientFollowup
-        fields = ('name_string','ra_string','dec_string','recent_mag',
+        fields = ('name_string','ra_string','dec_string','recent_mag','bazin_mag',
                   'rise_time','set_time','moon_angle','transient_status_string',
                   'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'

@@ -47,6 +47,7 @@ from .common.legend_layout import (
 )
 from .common.utilities import date_to_mjd
 from .services.visibility import group_access_plot_cache_token
+from .services import bazin as bazin_fits
 
 import copy
 import functools
@@ -187,6 +188,66 @@ def _note_salt2_fit_failure(ax, exc, transient_id):
 MAX_LC_DISPLAY_POINTS = int(os.environ.get('YSE_LC_PLOT_MAX_POINTS', '3000'))
 MAX_SPEC_DISPLAY_PIXELS = int(os.environ.get('YSE_SPEC_PLOT_MAX_PIXELS', '800'))
 PLOT_HTML_CACHE_TIMEOUT = int(os.environ.get('YSE_PLOT_CACHE_SECONDS', '900'))
+
+
+BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections per band)" % bazin_fits.MIN_DETECTIONS
+BAZIN_LEGEND_LABEL = "Bazin fit"
+
+
+def _draw_bazin_fits(ax, series, today):
+    """Overlay per-band Bazin curves on the detail light-curve plot (#225).
+
+    ``series`` holds one dict per plotted band: ``label``, ``color``,
+    ``leader`` (the detection renderer, so hiding the band in the legend
+    hides its fit), ``mjd`` / ``mag`` / ``magerr`` (flagged points already
+    removed).  The fitted span is drawn solid, the extrapolation past the
+    last detection dashed, in the band's colour, and labels list each band's
+    extrapolated magnitude today.  Returns ``(renderers, x_end)``: the fit
+    renderers for one shared legend entry and the last MJD of the
+    extrapolation grid (so the caller can widen the x-range); when no band
+    has a usable fit a note is drawn instead and ``([], None)`` returned.
+    """
+    renderers, notes = [], []
+    x_end = None
+    for entry in series:
+        fit = bazin_fits.fit_bazin(entry['mjd'], entry['mag'], entry['magerr'])
+        if fit is None:
+            continue
+        fitted, extrapolated = bazin_fits.bazin_plot_grid(fit, today)
+        fitted_mag = bazin_fits.flux_to_mag(fit.flux_at(fitted))
+        extrapolated_mag = bazin_fits.flux_to_mag(fit.flux_at(extrapolated))
+        # non-positive model flux has no magnitude; drop those grid points
+        ok_f, ok_e = np.isfinite(fitted_mag), np.isfinite(extrapolated_mag)
+        solid = ax.line(
+            fitted[ok_f].tolist(), fitted_mag[ok_f].tolist(),
+            color=entry['color'], line_width=2, muted_alpha=0.2,
+        )
+        dashed = ax.line(
+            extrapolated[ok_e].tolist(), extrapolated_mag[ok_e].tolist(),
+            color=entry['color'], line_width=2, line_dash='dashed', muted_alpha=0.2,
+        )
+        _link_series_visibility(entry['leader'], [solid, dashed])
+        renderers.extend([solid, dashed])
+        x_end = float(extrapolated[-1]) if x_end is None else max(x_end, float(extrapolated[-1]))
+        mag_today = fit.mag_at(today)
+        notes.append(
+            "%s: %s today" % (entry['label'], "%.2f" % mag_today if mag_today is not None else "no flux")
+        )
+    if not renderers:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#b00020',
+            text=BAZIN_FIT_UNAVAILABLE_TEXT,
+        ))
+        return renderers, None
+    y = 280
+    for text in ["Bazin fit (dashed = extrapolated)"] + notes[:8]:
+        ax.add_layout(Label(
+            x=10, y=y, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text=text,
+        ))
+        y -= 15
+    return renderers, x_end
 
 
 def _plot_html_cache_enabled():
@@ -749,6 +810,10 @@ def salt2fluxplot(request, transient_id, salt2fit):
     response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
     return response
 
+def bazinplot(request, transient_id, bazinfit):
+    """Detail light-curve plot with (1) or without (0) the per-band Bazin overlay (#225)."""
+    return lightcurveplot_detail(request, transient_id, bazin=int(bazinfit))
+
 def _band_legend_key(band_obj):
     """Stable legend sort key for a PhotometricBand (telescope family, then wavelength; #91)."""
     inst = band_obj.instrument if getattr(band_obj, 'instrument_id', None) else None
@@ -1107,7 +1172,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     return _bokeh_ajax_response(ax, "my plot")
 
 
-def lightcurveplot_detail(request, transient_id, salt2=False):
+def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     _load_heavy_plot_stack()
 
     plot_width = _requested_plot_width(request, 400)
@@ -1116,7 +1181,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
             f'lc_detail_v6_{transient_id}_{_transient_phot_cache_token(transient_id)}'
-            f'_{user_key}_w{plot_width}'
+            f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -1139,6 +1204,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
     salt2fluxerr = np.array([])
     zpsys = np.array([])
     salt2band = np.array([])
+    bazin_series = []
 
     band_lookup = {
         b.pk: b
@@ -1273,8 +1339,23 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         _link_series_visibility(p_det, [p_err, p_ulim])
 
         legend_it.append((legend_label, [p_det]))
+        if bazin:
+            # detections only, flagged (data_quality) points left out
+            iFit = iPlot & (data_quality == 'Good')
+            bazin_series.append(dict(
+                label=legend_label, color=color, leader=p_det,
+                mjd=mjds[iFit].astype(float), mag=mags[iFit].astype(float),
+                magerr=mag_errs[iFit].astype(float),
+            ))
 
     today = Time(datetime.datetime.today()).mjd
+    x_end = np.max(mjds) + 10
+    if bazin:
+        bazin_renderers, bazin_x_end = _draw_bazin_fits(ax, bazin_series, today)
+        if bazin_renderers:
+            legend_it.append((BAZIN_LEGEND_LABEL, bazin_renderers))
+        if bazin_x_end is not None:
+            x_end = max(x_end, bazin_x_end)
     p_today = ax.line(today,20,line_width=3,line_color='black')
     legend_it.append(('today (%i)'%today, [p_today]))
     vline = Span(location=today, dimension='height', line_color='black',
@@ -1286,8 +1367,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
     ax.yaxis.axis_label = 'Mag'
     if len(mjds[disc_points == 1]):
         limmjd = np.min(mjds[disc_points == 1])-30
-        ax.x_range=Range1d(limmjd,np.max(mjds)+10)
-        ax.extra_x_ranges = {"dateax": Range1d(limmjd,np.max(mjds)+10)}
+        ax.x_range=Range1d(limmjd,x_end)
+        ax.extra_x_ranges = {"dateax": Range1d(limmjd,x_end)}
         ax.y_range = Range1d(np.max(np.append(mags[mags != None][mjds[mags != None] > limmjd],upperlimmag[upperlimmjd > limmjd]))+0.25,
                              np.min(mags[mags != None][mjds[mags != None] > limmjd])-0.5)
     else:
@@ -1295,8 +1376,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
             minmjd = np.max([np.min(mjds)-10,date_to_mjd(transient.disc_date)-30])
         else:
             minmjd = np.min(mjds)-10
-        ax.x_range=Range1d(minmjd,np.max(mjds)+10)
-        ax.extra_x_ranges = {"dateax": Range1d(minmjd,np.max(mjds)+10)}
+        ax.x_range=Range1d(minmjd,x_end)
+        ax.extra_x_ranges = {"dateax": Range1d(minmjd,x_end)}
         ax.y_range=Range1d(np.max(np.append(mags[mags != None],upperlimmag))+0.25,np.min(mags[mags != None])-0.5)
         
     #ax.y_range=Range1d(np.max(mags[mags != None])+0.25,np.min(mags[mags != None])-0.5)

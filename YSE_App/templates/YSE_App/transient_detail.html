@@ -1604,6 +1604,7 @@
                         $(rows).html(htmlresponse);
 
                         $(".plotSALT2").html("Hide SALT3 Fit");
+                        $(".plotBazin").html("Show Bazin Fit");
                     });
                 } else {
                     url = "{% url 'salt2plot' transient.id 0 %}" + ysePlotWidthQuery("#lcplot");
@@ -1615,6 +1616,27 @@
                         $(rows).html(htmlresponse);
 
                         $(".plotSALT2").html("Show SALT3 Fit");
+                    });
+                }
+            });
+
+            /* Bazin fit overlay (#225): same toggle as the SALT3 button; the
+               two fits replace the plot, so showing one resets the other. */
+            $('.plotBazin').on('click', function(event){
+                var buttontext = $("#bazinplot").html();
+                var url;
+                if (buttontext.indexOf("Show") > -1){
+                    url = "{% url 'bazinplot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot");
+                    $.get(url).done(function(htmlresponse){
+                        $("#lcplot").html(htmlresponse);
+                        $(".plotBazin").html("Hide Bazin Fit");
+                        $(".plotSALT2").html("Show SALT3 Fit");
+                    });
+                } else {
+                    url = "{% url 'bazinplot' transient.id 0 %}" + ysePlotWidthQuery("#lcplot");
+                    $.get(url).done(function(htmlresponse){
+                        $("#lcplot").html(htmlresponse);
+                        $(".plotBazin").html("Show Bazin Fit");
                     });
                 }
             });
