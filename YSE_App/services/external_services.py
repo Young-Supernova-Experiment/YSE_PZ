@@ -5,16 +5,17 @@ fetches #298) call :func:`start_run` and, when the work is done, either
 :func:`record_completion` (in-process runners) or let the remote service POST
 to the run's callback URL (``external_service_run_callback`` view).
 
-Dispatch to a worker is intentionally thin: :func:`dispatch_run` hands the run
-to the background job queue when one exists (#263) and otherwise leaves the run
-pending for a poller or an in-process runner.
+Dispatch to a worker is intentionally thin: :func:`dispatch_run` enqueues a
+``external_service.run`` job on the background job queue (#263,
+``YSE_App.services.job_queue``); :func:`execute_run` is the registered handler
+and, until a runner registry exists (#313), only logs and leaves the run
+pending for an in-process caller to complete.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
-import importlib
 import logging
 import secrets
 from typing import Optional, Tuple
@@ -29,6 +30,16 @@ from YSE_App.models.external_service_models import ExternalService, ExternalServ
 log = logging.getLogger(__name__)
 
 CALLBACK_TOKEN_HEADER = "HTTP_X_RUN_TOKEN"  # the header a callback may carry: X-Run-Token
+JOB_KIND = "external_service.run"  # job-queue kind that executes a run
+
+try:  # the background job queue (#263)
+    from YSE_App.services.job_queue import enqueue as _enqueue
+    from YSE_App.services.job_queue import job as _job
+except ImportError:  # pragma: no cover - queue package absent
+    _enqueue = None
+
+    def _job(kind, **options):
+        return lambda func: func
 
 
 class ExternalServiceError(Exception):
@@ -135,35 +146,33 @@ def start_run(
 
 
 def dispatch_run(run: ExternalServiceRun) -> bool:
-    """Hand the run to the background job queue if one is installed.
+    """Enqueue a ``external_service.run`` job for ``run``; False if no queue is installed.
 
-    TODO(#263): once the job-queue PR lands, replace the lookup below with a
-    direct ``from YSE_App.services.job_queue import enqueue`` and enqueue
-    ``YSE_App.services.external_services.execute_run`` with ``run.pk``.
-    Until then the run stays ``pending`` and returns False; an in-process
-    runner calls :func:`record_completion` itself.
+    With ``JOB_RUNNER_INLINE`` the handler runs immediately in this process.
     """
-    try:
-        module = importlib.import_module("YSE_App.services.job_queue")
-        enqueue = getattr(module, "enqueue")
-    except (ImportError, AttributeError):
+    if _enqueue is None:
         return False
     try:
-        enqueue("YSE_App.services.external_services.execute_run", run_id=run.pk)
+        _enqueue(JOB_KIND, {"run_id": run.pk}, created_by=run.created_by, transient=run.transient)
     except Exception:  # pragma: no cover - depends on the queue backend
         log.exception("Could not enqueue external service run %s", run.uuid)
         return False
     return True
 
 
-def execute_run(run_id: int) -> None:
-    """Worker entry point (no-op placeholder until a runner registry exists, #313).
+@_job(JOB_KIND)
+def execute_run(payload, job=None):
+    """Job handler for :data:`JOB_KIND`.
 
-    A runner for ``run.service.kind``/``slug`` will be looked up here and its
-    result recorded with :func:`record_completion`.
+    TODO(#313): look up a runner for ``run.service`` (kind/slug), post the
+    payload to ``service.base_url`` with the service credential, and record the
+    outcome with :func:`record_completion`. Until then the run stays pending
+    and the job finishes with ``handled=False``.
     """
+    run_id = payload.get("run_id") if isinstance(payload, dict) else payload
     run = ExternalServiceRun.objects.select_related("service").get(pk=run_id)
-    log.info("execute_run called for %s; no runner registered yet", run)
+    log.info("execute_run: %s has no runner registered yet; leaving it %s", run, run.status)
+    return {"run": str(run.uuid), "handled": False}
 
 
 def record_completion(

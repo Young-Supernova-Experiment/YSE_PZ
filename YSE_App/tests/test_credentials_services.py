@@ -376,9 +376,36 @@ class ExternalServiceRunTests(TestCase):
         run.mark_cancelled()
         svc.start_run(self.service, self.user, dispatch=False)  # cancelled runs do not count
 
-    def test_dispatch_without_queue_leaves_pending(self):
-        run, _ = svc.start_run(self.service, self.user)
-        self.assertFalse(svc.dispatch_run(run))
+    def test_dispatch_enqueues_a_job(self):
+        from YSE_App.models import Job
+
+        run, _ = svc.start_run(self.service, self.user, transient=self.transient)
+        jobs = Job.objects.filter(kind=svc.JOB_KIND)
+        self.assertEqual(jobs.count(), 1)
+        job = jobs.get()
+        self.assertEqual(job.payload, {"run_id": run.pk})
+        self.assertEqual(job.created_by, self.user)
+        self.assertEqual(job.transient, self.transient)
+        self.assertEqual(ExternalServiceRun.objects.get(pk=run.pk).status, "pending")
+
+    def test_dispatch_inline_runs_handler_and_leaves_run_pending(self):
+        from YSE_App.models import Job
+        from YSE_App.services.job_queue import get_handler
+
+        self.assertIsNotNone(get_handler(svc.JOB_KIND))
+        with override_settings(JOB_RUNNER_INLINE=True):
+            run, _ = svc.start_run(self.service, self.user)
+        job = Job.objects.get(kind=svc.JOB_KIND)
+        self.assertEqual(job.status, Job.DONE)
+        self.assertEqual(job.result, {"run": str(run.uuid), "handled": False})
+        self.assertEqual(ExternalServiceRun.objects.get(pk=run.pk).status, "pending")
+
+    def test_dispatch_without_queue_returns_false(self):
+        from unittest import mock
+
+        with mock.patch.object(svc, "_enqueue", None):
+            run, _ = svc.start_run(self.service, self.user)
+            self.assertFalse(svc.dispatch_run(run))
         self.assertEqual(ExternalServiceRun.objects.get(pk=run.pk).status, "pending")
 
     def test_expire_runs(self):
@@ -545,14 +572,24 @@ class StaffRunPagesTests(TestCase):
                 self.assertNotIn(value, resp.content.decode(), url)
 
 
-class JSONTextFieldTests(TestCase):
-    def test_roundtrip_and_text_input(self):
-        from YSE_App.models.json_text_field import JSONTextField
-
-        field = JSONTextField()
-        self.assertEqual(field.to_python(None), {})
-        self.assertEqual(field.to_python('{"a": [1, 2]}'), {"a": [1, 2]})
-        self.assertEqual(field.get_prep_value({"b": 1, "a": 2}), '{"a": 2, "b": 1}')
-        self.assertEqual(field.get_prep_value('{"x": 1}'), '{"x": 1}')
-        with self.assertRaises(ValueError):
-            field.get_prep_value("{not json")
+class ExternalServiceAdminFormTests(TestCase):
+    def test_default_params_round_trip_through_admin(self):
+        admin = User.objects.create_superuser("svc_admin", "a@example.com", "pw")
+        client = Client()
+        client.force_login(admin)
+        resp = client.post(reverse("admin:YSE_App_externalservice_add"), {
+            "name": "Fitter", "slug": "fitter", "kind": "analysis", "description": "", "base_url": "",
+            "credential": "", "enabled": "on", "default_params": '{"model": "salt2", "n": 3}',
+            "max_runs_per_user_per_day": "0",
+        }, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        service = ExternalService.objects.get(slug="fitter")
+        self.assertEqual(service.default_params, {"model": "salt2", "n": 3})
+        self.assertEqual(service.created_by, admin)
+        resp = client.get(reverse("admin:YSE_App_externalservice_change", args=[service.pk]))
+        self.assertContains(resp, "&quot;salt2&quot;")
+        resp = client.post(reverse("admin:YSE_App_externalservice_change", args=[service.pk]), {
+            "name": "Fitter", "slug": "fitter", "kind": "analysis", "description": "", "base_url": "",
+            "credential": "", "enabled": "on", "default_params": "[1, 2]", "max_runs_per_user_per_day": "0",
+        })
+        self.assertContains(resp, "must be a JSON object")

@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from YSE_App.models.base import BaseModel
 from YSE_App.models.credential_models import EncryptedCredential
-from YSE_App.models.json_text_field import JSONTextField
+from YSE_App.models.fields import JSONTextField
 from YSE_App.models.transient_models import Transient
 
 
@@ -57,7 +57,7 @@ class ExternalService(BaseModel):
         related_name="external_services",
     )
     enabled = models.BooleanField(default=True)
-    default_params = JSONTextField(help_text="JSON merged under every run's request payload.")
+    default_params = JSONTextField(default=dict, help_text="JSON merged under every run's request payload.")
     max_runs_per_user_per_day = models.PositiveIntegerField(
         default=0, help_text="0 = unlimited.",
     )
@@ -116,11 +116,11 @@ class ExternalServiceRun(BaseModel):
     target = GenericForeignKey("target_content_type", "target_object_id")
     target_ref = models.CharField(max_length=255, blank=True, default="")
 
-    request_payload = JSONTextField()
+    request_payload = JSONTextField(default=dict)
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
-    result = JSONTextField()
+    result = JSONTextField(default=dict)
     error = models.TextField(blank=True, default="")
     artifact_file = models.FileField(upload_to=_artifact_upload_to, blank=True, null=True, max_length=500)
     artifact_url = models.URLField(max_length=1000, blank=True, default="")

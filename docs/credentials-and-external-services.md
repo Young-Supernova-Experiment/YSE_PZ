@@ -66,7 +66,8 @@ generic FK `target` for anything else, free-form `target_ref` for things with no
 (`mast:jw01234`), `request_payload`, `status` (pending / running / succeeded / failed / cancelled),
 `started_at`, `finished_at`, `result` JSON, `error`, `artifact_file` / `artifact_url`,
 `external_id`, `attempts`, `callback_token_hash`; `created_by` is the requester. JSON columns are
-TEXT (`YSE_App/models/json_text_field.py`) so they work on every MySQL/MariaDB Ziggy might run.
+TEXT (`YSE_App.models.fields.JSONTextField`, shared with the job queue) so they work on every
+MySQL/MariaDB Ziggy might run.
 
 Service layer `YSE_App/services/external_services.py`:
 
@@ -77,10 +78,12 @@ record_completion(run, "succeeded", result={...}, artifact_url="https://...")  #
 ```
 
 `start_run` raises `ServiceDisabled` (disabled or not visible to the user) or `RunLimitExceeded`
-(daily cap; map to HTTP 429 in an API). `dispatch_run(run)` hands the run to the background job
-queue if `YSE_App.services.job_queue.enqueue` exists (#263) and otherwise returns `False`, leaving
-the run pending; `execute_run(run_id)` is the worker entry point that #313 fills with a runner
-registry. `expire_runs(days)` / `manage.py expire_service_runs --days 90 [--dry-run]` deletes old
+(daily cap; map to HTTP 429 in an API). `dispatch_run(run)` enqueues an `external_service.run`
+job on the background job queue (#263, `YSE_App.services.job_queue`) carrying `{"run_id": ...}`;
+`execute_run(payload, job)` is the registered handler (imported from `YSE_App/signals.py` so every
+process registers it) and, until #313 adds a runner registry, only logs and leaves the run
+pending, finishing the job with `handled=False`. With `JOB_RUNNER_INLINE` the handler runs in
+the requesting process. `expire_runs(days)` / `manage.py expire_service_runs --days 90 [--dry-run]` deletes old
 finished runs and their artifact files.
 
 ### Callback endpoint

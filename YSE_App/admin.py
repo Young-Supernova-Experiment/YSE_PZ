@@ -163,8 +163,28 @@ class EncryptedCredentialAdmin(admin.ModelAdmin):
 		super().save_model(request, obj, form, change)
 
 
+class ExternalServiceForm(forms.ModelForm):
+	# The TEXT-backed JSON column needs a JSON form field, or the admin would
+	# store the textarea contents as a JSON string instead of an object.
+	default_params = forms.JSONField(required=False, initial=dict,
+									 widget=forms.Textarea(attrs={"rows": 4, "cols": 80}))
+
+	class Meta:
+		model = ExternalService
+		exclude = ("created_by", "modified_by")
+
+	def clean_default_params(self):
+		value = self.cleaned_data.get("default_params")
+		if value in (None, ""):
+			return {}
+		if not isinstance(value, dict):
+			raise forms.ValidationError("Default params must be a JSON object.")
+		return value
+
+
 @admin.register(ExternalService)
 class ExternalServiceAdmin(admin.ModelAdmin):
+	form = ExternalServiceForm
 	list_display = ("name", "slug", "kind", "enabled", "base_url", "credential", "max_runs_per_user_per_day")
 	list_filter = ("kind", "enabled")
 	search_fields = ("name", "slug", "description")
