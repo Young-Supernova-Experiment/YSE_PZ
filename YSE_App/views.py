@@ -1716,6 +1716,13 @@ def transient_detail(request, slug):
                 (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
                  transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))           
         
+        # Stored photometry statistics (#268): peak, detections, rise/decay.
+        context['photstat'] = (
+            TransientPhotStat.objects.filter(transient_id=transient_obj.id)
+            .select_related('peak_band', 'first_detected_band', 'last_detected_band')
+            .first()
+        )
+
         if lastphotdata and firstphotdata:
             context['recent_mag'] = format_magnitude_with_error(
                 lastphotdata.mag, lastphotdata.mag_err
