@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Modules whose import registers the handlers the application itself ships.
 DEFAULT_HANDLER_MODULES = ("YSE_App.services.notify", "YSE_App.brokers.jobs",
                            "YSE_App.services.external_services", "YSE_App.sharing.handlers",
-                           "YSE_App.analysis.runners")
+                           "YSE_App.analysis.runners", "YSE_App.annotation_services")
 
 _registry: Dict[str, "Handler"] = {}
 _lock = threading.Lock()

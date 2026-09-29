@@ -1,0 +1,79 @@
+{# Annotations tab body (#317, #318): loaded into #annotations_container; the page's JS (transient_detail.html) drives the buttons and polling. #}
+<div class="yse-annotations-tab" id="yse_annotations_tab_body" style="clear: both;"
+     data-run-url="{% url 'transient_annotation_run' transient.id %}"
+     data-delete-url="{% url 'transient_annotation_delete' transient.id %}"
+     data-fragment-url="{% url 'transient_detail_annotations_fragment' transient.id %}"
+     data-active="{% if annotation_active %}1{% else %}0{% endif %}"
+     data-poll-seconds="{{ annotation_poll_seconds }}">
+	<div class="row">
+		<div class="col-md-8">
+			{% if annotation_rows %}
+			<table class="table table-bordered table-condensed table-sm" id="tbl_annotations">
+				<thead>
+					<tr>
+						<th style="width: 18%;">Origin</th>
+						<th>Values</th>
+						<th style="width: 14%;">Updated</th>
+						<th style="width: 10%;">By</th>
+						<th style="width: 12%;"></th>
+					</tr>
+				</thead>
+				<tbody>
+					{% for row in annotation_rows %}
+					<tr class="annotation-row" data-origin="{{ row.origin }}"{% if row.verdict %} data-verdict="{{ row.verdict }}"{% endif %}>
+						<td>
+							<strong>{{ row.title }}</strong><br>
+							<code class="small">{{ row.origin }}</code>
+							{% if row.verdict %}<br><span class="badge badge-{% if row.verdict == 'stellar' %}danger{% elif row.verdict == 'AGN-like' %}warning{% elif row.verdict == 'clean' %}success{% else %}secondary{% endif %} annotation-verdict">{{ row.verdict }}</span>{% endif %}
+							{% if row.groups %}<br><small class="text-muted"><i class="fa fa-lock"></i> {{ row.groups|join:", " }}</small>{% endif %}
+						</td>
+						<td>
+							{% if row.summary %}<p class="mb-1 small">{{ row.summary }}</p>{% endif %}
+							{% if row.run_failed %}<p class="mb-1 small text-danger"><i class="fa fa-exclamation-triangle"></i> Last run failed: {{ row.run.error|truncatechars:200 }}</p>{% endif %}
+							<div class="annotation-values small">
+								{% for key, value in row.items %}{% if key != 'summary' and key != 'verdict' %}<span class="mr-3 text-nowrap"><span class="text-muted">{{ key }}</span> = <strong>{% if value is None %}null{% else %}{{ value }}{% endif %}</strong></span>{% endif %}{% endfor %}
+							</div>
+							<details class="mt-1">
+								<summary class="small text-muted">JSON</summary>
+								<pre class="small mb-0" style="max-height: 14rem; overflow: auto;">{{ row.json }}</pre>
+							</details>
+						</td>
+						<td class="small">{% if row.a %}{{ row.a.modified_date|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">from the transient row</span>{% endif %}</td>
+						<td class="small">{{ row.by|default:"-" }}</td>
+						<td class="text-nowrap">
+							{% if row.can_rerun %}<button type="button" class="btn btn-xs btn-sm btn-outline-primary" data-annotation-action="run" data-service="{{ row.service.slug }}" title="Run {{ row.service.name }} again"><i class="fa fa-refresh"></i> Rerun</button>{% endif %}
+							{% if row.can_manage %}<button type="button" class="btn btn-xs btn-sm btn-outline-danger" data-annotation-action="delete" data-origin="{{ row.origin }}" title="Delete this annotation"><i class="fa fa-trash"></i></button>{% endif %}
+						</td>
+					</tr>
+					{% endfor %}
+				</tbody>
+			</table>
+			{% else %}
+			<p class="text-muted" id="annotations_empty"><i class="fa fa-info-circle"></i> No annotations yet.</p>
+			{% endif %}
+		</div>
+		<div class="col-md-4">
+			<div class="card card-outline card-primary" id="annotation_services_box">
+				<div class="card-header"><h3 class="card-title"><i class="fa fa-search"></i> Catalogue checks</h3></div>
+				<div class="card-body">
+					{% if annotation_services %}
+					<ul class="list-unstyled mb-1" id="annotation_service_list">
+						{% for e in annotation_services %}
+						<li class="mb-2 annotation-service" data-service="{{ e.slug }}" data-status="{% if e.run %}{{ e.run.status }}{% else %}none{% endif %}">
+							<strong>{{ e.name }}</strong>
+							{% if e.active %}<i class="fa fa-spinner fa-spin text-muted" title="running"></i>{% elif e.run and e.run.status == 'failed' %}<span class="badge badge-danger" title="{{ e.run.error }}">failed</span>{% elif e.run %}<span class="badge badge-light">{{ e.run.finished_at|date:"Y-m-d H:i" }}</span>{% endif %}
+							<br><small class="text-muted">{{ e.description }}</small>
+							{% if e.can_run %}<br><button type="button" class="btn btn-xs btn-sm btn-primary mt-1" data-annotation-action="run" data-service="{{ e.slug }}"{% if e.active %} disabled{% endif %}><i class="fa fa-play"></i> {% if e.run %}Rerun{% else %}Check{% endif %}</button>{% endif %}
+						</li>
+						{% endfor %}
+					</ul>
+					{% if not annotation_can_run_any %}<p class="text-muted small mb-0"><i class="fa fa-lock"></i> Staff (or a group named on a service) can start these checks.</p>{% endif %}
+					{% else %}
+					<p class="text-muted small mb-0">No annotation service is registered. Staff: <code>manage.py register_annotation_services</code> (see <em>docs/annotations.md</em>).</p>
+					{% endif %}
+					<p class="text-danger small mt-1 mb-0" id="annotation_run_error"></p>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
