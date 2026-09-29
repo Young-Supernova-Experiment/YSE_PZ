@@ -161,7 +161,13 @@
           {% endif %}
         </div>
         <div class="box-body">
+          {% if transient_table.0 %}
           {% render_table transient_table.0 %}
+          {% elif yse_home_defer %}
+          <div class="yhome-section-loading" data-url="{% url 'yse_home_section' 'yse' %}">
+            <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
+          </div>
+          {% endif %}
 
         </div>
     <!-- /.box-body -->
@@ -182,7 +188,13 @@
           {% endif %}
         </div>
         <div class="box-body">
+          {% if transient_follow_table.0 %}
           {% render_table transient_follow_table.0 %}
+          {% elif yse_home_defer %}
+          <div class="yhome-section-loading" data-url="{% url 'yse_home_section' 'yse_follow' %}">
+            <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
+          </div>
+          {% endif %}
 
         </div>
     <!-- /.box-body -->
@@ -204,7 +216,13 @@
           {% endif %}
         </div>
         <div class="box-body">
+          {% if transient_rising_table.0 %}
           {% render_table transient_rising_table.0 %}
+          {% elif yse_home_defer %}
+          <div class="yhome-section-loading" data-url="{% url 'yse_home_section' 'yserise' %}">
+            <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
+          </div>
+          {% endif %}
 
         </div>
     <!-- /.box-body -->
@@ -229,7 +247,13 @@
           {% endif %}
         </div>
         <div class="box-body">
+          {% if transient_fastrising_table.0 %}
           {% render_table transient_fastrising_table.0 %}
+          {% elif yse_home_defer %}
+          <div class="yhome-section-loading" data-url="{% url 'yse_home_section' 'ysefastrise' %}">
+            <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
+          </div>
+          {% endif %}
 
         </div>
     <!-- /.box-body -->
@@ -250,7 +274,13 @@
           {% endif %}
         </div>
         <div class="box-body">
+          {% if ztf_transient_table.0 %}
           {% render_table ztf_transient_table.0 %}
+          {% elif yse_home_defer %}
+          <div class="yhome-section-loading" data-url="{% url 'yse_home_section' 'yseztf' %}">
+            <p><i class="fa fa-spinner fa-spin"></i> Loading…</p>
+          </div>
+          {% endif %}
 
         </div>
     <!-- /.box-body -->
@@ -316,6 +346,30 @@
   <script src="{% static 'YSE_App/bower_components/bootstrap-timepicker/js/bootstrap-timepicker.js' %}"></script>
 
   <script>
+{% if yse_home_defer %}
+    $(document).ready(function() {
+      // Forward the page query string (e.g. yserisesort=..., yserisepage=...,
+      // yserise-ex=...) so django-tables2 sorting, pagination and the filter
+      // form keep working on sections loaded by AJAX.
+      function yseHomeSectionUrl($slot) {
+        var url = $slot.data('url');
+        var search = window.location.search;
+        if (search && search.length > 1) {
+          url += (url.indexOf('?') >= 0 ? '&' : '?') + search.substring(1);
+        }
+        return url;
+      }
+
+      $('.yhome-section-loading').each(function() {
+        var $slot = $(this);
+        $.get(yseHomeSectionUrl($slot), function(html) {
+          $slot.replaceWith(html);
+        }).fail(function() {
+          $slot.html('<p class="text-danger">Failed to load section.</p>');
+        });
+      });
+    });
+{% endif %}
     $( document ).ready(function(){
         {% for too_resource in too_resources %}
           {% if too_resource.used_too_hours < too_resource.awarded_too_hours %}
@@ -491,7 +545,7 @@
         alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.")
       }
 
-      $('.transientStatusChange').on('click', function(event){
+      $(document).on('click', '.transientStatusChange', function(event){
         var status_id = $(this).attr('data-status_id')
         var transient_id = $(this).attr('transient_id')
         var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);

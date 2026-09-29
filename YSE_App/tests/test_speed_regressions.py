@@ -334,6 +334,13 @@ class ObservingTableAstroTests(TestCase):
                               classical_resource=cls.night.resource)
             cls.transients.append(t)
 
+    def setUp(self):
+        from django.core.cache import cache
+
+        # rise/set and the moon are cached per (telescope, night); every test starts cold
+        cache.clear()
+        self.addCleanup(cache.clear)
+
     def _render(self):
         from django.test import RequestFactory
         from YSE_App.table_utils import ObsNightFollowupTable
@@ -370,7 +377,7 @@ class ObservingTableAstroTests(TestCase):
             set_calls.append(a)
             return orig_set(obs, *a, **k)
 
-        with mock.patch("YSE_App.table_utils.get_moon", wraps=__import__("astropy.coordinates", fromlist=["get_moon"]).get_moon) as moon, \
+        with mock.patch("YSE_App.services.night_astro.get_moon", wraps=__import__("astropy.coordinates", fromlist=["get_moon"]).get_moon) as moon, \
              mock.patch.object(Observer, "target_rise_time", counted_rise), \
              mock.patch.object(Observer, "target_set_time", counted_set):
             _table, cells = self._render()
@@ -378,6 +385,28 @@ class ObservingTableAstroTests(TestCase):
         self.assertEqual(moon.call_count, 1)
         self.assertEqual(len(rise_calls), 1)
         self.assertEqual(len(set_calls), 1)
+
+    def test_second_render_of_the_same_night_is_served_from_the_cache(self):
+        """P3 follow-up (#216): rise/set and the moon are cached per (telescope, night)."""
+        from astroplan import Observer
+
+        _table, first = self._render()
+        with mock.patch("YSE_App.services.night_astro.get_moon") as moon, \
+             mock.patch.object(Observer, "target_rise_time") as rise, \
+             mock.patch.object(Observer, "target_set_time") as sett:
+            table, second = self._render()
+        self.assertEqual(second, first)
+        self.assertEqual((moon.call_count, rise.call_count, sett.call_count), (0, 0, 0))
+        self.assertEqual(len(table._rise_set), 4)
+
+    def test_cache_key_changes_with_the_telescope_site(self):
+        from YSE_App.services.night_astro import rise_set_cache_key
+
+        tel = self.night.resource.telescope
+        before = rise_set_cache_key(tel, "2026-01-01", 18.0)
+        tel.latitude += 1.0
+        self.assertNotEqual(before, rise_set_cache_key(tel, "2026-01-01", 18.0))
+        self.assertNotEqual(before, rise_set_cache_key(tel, "2026-01-02", 18.0))
 
     def test_vectorised_values_match_per_row_astroplan(self):
         import astropy.units as u
@@ -461,7 +490,9 @@ class YseHomeQueryCountTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
 
-    def _queries_for(self, n_rows):
+    SECTION_KEYS = ("yse", "yse_follow", "yserise", "ysefastrise", "yseztf")
+
+    def _queries_for(self, n_rows, url="/yse_home/"):
         from YSE_App.tests.deploy_checklist_helpers import iers_offline
 
         ignore = Transient.objects.get(name=self.transients[0].name).status.__class__.objects.get(name="Ignore")
@@ -472,19 +503,100 @@ class YseHomeQueryCountTests(TestCase):
         hidden.update(status=ignore)
         try:
             with iers_offline(), CaptureQueriesContext(connection) as ctx:
-                response = self.client.get("/yse_home/")
+                response = self.client.get(url)
         finally:
             hidden.update(status=new_status)
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
         for t in self.transients[:min(n_rows, 10)]:
             self.assertIn(t.name, body)
-        self.assertIn(self.night.resource.telescope.name, body)
-        self.assertIn(self.too.telescope.name, body)
+        if url == "/yse_home/":  # Next Telescope Nights / ToO Resources boxes
+            self.assertIn(self.night.resource.telescope.name, body)
+            self.assertIn(self.too.telescope.name, body)
         return len(ctx.captured_queries)
 
     def test_yse_home_query_count_is_flat_in_rows(self):
         self.assertEqual(self._queries_for(3), self._queries_for(12))
+
+    def test_yse_home_query_count_is_flat_in_rows_without_deferral(self):
+        import os
+
+        with mock.patch.dict(os.environ, {"YSE_HOME_DEFER": "0"}):
+            self.assertEqual(self._queries_for(3), self._queries_for(12))
+
+    def test_section_fragment_query_count_is_flat_in_rows(self):
+        url = reverse("yse_home_section", kwargs={"section_key": "yse"})
+        self.assertEqual(self._queries_for(3, url), self._queries_for(12, url))
+
+    def test_shell_defers_four_sections_and_is_cheaper_than_the_synchronous_page(self):
+        """P7 (#217): Latest Transients renders inline; the other four tables load via AJAX."""
+        import os
+
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        with iers_offline(), CaptureQueriesContext(connection) as shell_ctx:
+            shell = self.client.get("/yse_home/")
+        self.assertEqual(shell.status_code, 200)
+        body = shell.content.decode()
+        for key in self.SECTION_KEYS[1:]:
+            self.assertIn(
+                'data-url="%s"' % reverse("yse_home_section", kwargs={"section_key": key}), body
+            )
+        self.assertNotIn(reverse("yse_home_section", kwargs={"section_key": "yse"}), body)
+        self.assertIn("yhome-section-loading", body)
+        self.assertIn("yseHomeSectionUrl", body)
+        # the synchronous table still carries its rows and the status dropdown
+        self.assertIn(self.transients[0].name, body)
+        self.assertIn('class="transientStatusChange"', body)
+        # the deferred sections keep their (query-free) filter forms
+        for key in self.SECTION_KEYS[1:]:
+            self.assertIn('name="%s-ex"' % key, body)
+
+        with mock.patch.dict(os.environ, {"YSE_HOME_DEFER": "0"}), iers_offline(), \
+             CaptureQueriesContext(connection) as sync_ctx:
+            sync = self.client.get("/yse_home/")
+        self.assertEqual(sync.status_code, 200)
+        self.assertNotIn("yhome-section-loading", sync.content.decode())
+        self.assertLess(len(shell_ctx.captured_queries), len(sync_ctx.captured_queries))
+
+    def test_each_section_fragment_renders_its_table(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        for key in self.SECTION_KEYS:
+            with iers_offline():
+                response = self.client.get(reverse("yse_home_section", kwargs={"section_key": key}))
+            self.assertEqual(response.status_code, 200, key)
+            self.assertIn("<table", response.content.decode(), key)
+        fragment = self.client.get(reverse("yse_home_section", kwargs={"section_key": "yse"})).content.decode()
+        self.assertIn(self.transients[0].name, fragment)
+        # the status dropdown needs all_transient_statuses in the fragment context
+        self.assertIn('data-status_name="Ignore"', fragment)
+        # the follow-up table (Req. Followup / Followed By columns) reads the prefetch
+        from YSE_App.models import TransientStatus
+
+        following, _ = TransientStatus.objects.get_or_create(name="Following", defaults=audit_fields(self.user))
+        Transient.objects.filter(pk=self.transients[0].pk).update(status=following)
+        try:
+            with CaptureQueriesContext(connection) as ctx:
+                follow = self.client.get(reverse("yse_home_section", kwargs={"section_key": "yse_follow"})).content.decode()
+        finally:
+            Transient.objects.filter(pk=self.transients[0].pk).update(status=self.transients[0].status)
+        self.assertIn(self.transients[0].name, follow)
+        self.assertIn(self.night.resource.telescope.name, follow)
+        self.assertIn(self.too.telescope.name, follow)
+        self.assertIn("note 0", follow)
+        self.assertFalse([q for q in ctx.captured_queries if "YSE_App_transientfollowup" in q["sql"] and "IN (" not in q["sql"]])
+        self.assertEqual(
+            self.client.get(reverse("yse_home_section", kwargs={"section_key": "nope"})).status_code, 404
+        )
+
+    def test_section_fragment_honours_search_and_sort_parameters(self):
+        url = reverse("yse_home_section", kwargs={"section_key": "yse"})
+        response = self.client.get(url, {"yse-ex": "p6home1", "ysesort": "-name_string"})
+        body = response.content.decode()
+        self.assertIn("p6home11", body)
+        self.assertNotIn("p6home2", body)
+        self.assertLess(body.index("p6home11"), body.index("p6home10"))
 
     def test_resource_columns_fall_back_without_prefetch(self):
         from YSE_App.table_utils import followup_comments_text, followup_resource_names
@@ -501,6 +613,213 @@ class YseHomeQueryCountTests(TestCase):
             self.assertEqual(followup_resource_names(row, ("Requested", "InProcess")), self.night.resource.telescope.name)
             self.assertIn("note 0", followup_comments_text(row))
         self.assertEqual(len(ctx.captured_queries), 3)  # transient + followups + requests
+
+
+# ------------------------------------------------------------------- P10 (#245)
+
+
+class FollowupPageTelescopeLoopTests(TestCase):
+    """followup: only telescopes with a visible follow-up cost a query and a table."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.tests.deploy_checklist_helpers import create_telescope
+
+        cls.user = create_test_user("speed_followup_page_user")
+        cls.obs_date = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        cls.night = _classical_night(cls.user, tag="p10-night", obs_date=cls.obs_date)
+        cls.transient = create_minimal_transient(cls.user, name="p10follow", ra=70.0, dec=2.0)
+        attach_synthetic_photometry(cls.user, cls.transient, n_points=2)
+        _request_followup(cls.user, cls.transient, resource=cls.night.resource,
+                          classical_resource=cls.night.resource)
+        cls.empty = [create_telescope(cls.user, f"p10-empty-{i}") for i in range(10)]
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _queries_with_empty_telescopes(self, n_empty):
+        """Page query count with ``n_empty`` follow-up-less telescopes in the catalogue."""
+        from YSE_App.models import Telescope
+        from YSE_App.tests.deploy_checklist_helpers import create_telescope
+
+        surplus = Telescope.objects.filter(pk__in=[t.pk for t in self.empty[n_empty:]])
+        removed = list(surplus.values_list("name", flat=True))
+        surplus.delete()
+        try:
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(reverse("followup"))
+        finally:
+            self.empty[n_empty:] = [create_telescope(self.user, name) for name in removed]
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("p10follow", body)
+        self.assertIn(self.night.resource.telescope.name, body)
+        self.assertNotIn("p10-empty-", body)
+        return len(ctx.captured_queries)
+
+    def test_query_count_does_not_grow_with_empty_telescopes(self):
+        self.assertEqual(self._queries_with_empty_telescopes(2), self._queries_with_empty_telescopes(10))
+
+
+# ------------------------------------------------------------------- P11 (#246)
+
+
+class YseObservingNightTwilightTests(TestCase):
+    """yse_observing_night: one telescope lookup and cached twilight times."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.tests.deploy_checklist_helpers import create_instrument, create_telescope
+
+        cls.user = create_test_user("speed_twilight_user")
+        cls.ps1 = create_telescope(cls.user, "Pan-STARRS1")
+        create_instrument(cls.user, cls.ps1, "GPC1", band_names=("g",))
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _get(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        with iers_offline(), CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(reverse("yse_observing_night", kwargs={"obs_date": "2026-03-15"}))
+        self.assertEqual(response.status_code, 200)
+        return response, ctx.captured_queries
+
+    def test_telescope_is_fetched_once_and_twilight_is_solved_once(self):
+        from astroplan import Observer
+
+        first, queries = self._get()
+        self.assertEqual(sum("Pan-STARRS1" in q["sql"] for q in queries), 1)
+
+        with mock.patch.object(Observer, "sun_set_time") as sunset, \
+             mock.patch.object(Observer, "twilight_evening_nautical") as nautical:
+            second, _queries = self._get()
+        self.assertEqual((sunset.call_count, nautical.call_count), (0, 0))
+
+        def without_csrf(response):
+            import re
+
+            return re.sub(r"[A-Za-z0-9]{64}", "", response.content.decode())  # CSRF tokens differ
+
+        self.assertEqual(without_csrf(second), without_csrf(first))
+        from YSE_App.services.night_astro import twilight_times
+
+        night = twilight_times(self.ps1, "2026-03-15 00:00:00")
+        for key in ("sunset", "night_start_12", "night_end_18", "sunrise", "moon_illum"):
+            self.assertIn("<td>%s</td>" % night[key], first.content.decode())
+
+    def test_cached_twilight_values_match_the_inline_astroplan_expressions(self):
+        import astropy.units as u
+        from astroplan import Observer, moon_illumination
+        from astropy.coordinates import EarthLocation
+        from astropy.time import Time
+
+        from YSE_App.common.utilities import date_to_mjd
+        from YSE_App.services.night_astro import twilight_times
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        ut_obs_date = "2026-03-15 00:00:00"
+        with iers_offline():
+            night = twilight_times(self.ps1, ut_obs_date)
+            location = EarthLocation.from_geodetic(
+                self.ps1.longitude * u.deg, self.ps1.latitude * u.deg, self.ps1.elevation * u.m
+            )
+            time = Time(ut_obs_date, format="iso")
+            tel = Observer(location=location, timezone="UTC")
+            expected = {
+                "sunset": tel.sun_set_time(time, which="next").isot.split("T")[-1][:-7],
+                "night_start_12": tel.twilight_evening_nautical(time, which="next").isot.split("T")[-1][:-7],
+                "night_start_18": tel.twilight_evening_astronomical(time, which="next").isot.split("T")[-1][:-7],
+                "night_end_18": tel.twilight_morning_astronomical(time, which="next").isot.split("T")[-1][:-7],
+                "night_end_12": tel.twilight_morning_nautical(time, which="next").isot.split("T")[-1][:-7],
+                "sunrise": tel.sun_rise_time(time, which="next").isot.split("T")[-1][:-7],
+                "moon_illum": "%.3f" % moon_illumination(time),
+                "sunset_mjd": float(date_to_mjd(tel.sun_set_time(time, which="next"))),
+                "sunrise_mjd": float(date_to_mjd(tel.sun_rise_time(time, which="next"))),
+            }
+        self.assertEqual(night, expected)
+        self.assertRegex(night["sunset"], r"^\d\d:\d\d$")
+
+    def test_obs_night_table_falls_back_to_the_lookup_without_a_telescope(self):
+        from YSE_App.models import SurveyObservation
+        from YSE_App.table_utils import YSEObsNightTable
+
+        with CaptureQueriesContext(connection) as ctx:
+            table = YSEObsNightTable(SurveyObservation.objects.none(), obs_date="2026-03-15")
+        self.assertEqual(sum("Pan-STARRS1" in q["sql"] for q in ctx.captured_queries), 1)
+        with CaptureQueriesContext(connection) as ctx:
+            YSEObsNightTable(SurveyObservation.objects.none(), obs_date="2026-03-15", telescope=self.ps1)
+        self.assertEqual(len(ctx.captured_queries), 0)
+        self.assertAlmostEqual(table.tel.location.lat.deg, self.ps1.latitude, places=6)
+
+
+# ------------------------------------------------------------------- P15 (#247)
+
+
+class OnCallUserPrefetchTests(TestCase):
+    """yse_oncall_calendar / yse_home on-call box: users come from one prefetch."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.models import YSEOnCallDate
+        from YSE_App.tests.deploy_checklist_helpers import create_instrument, create_telescope
+
+        cls.user = create_test_user("speed_oncall_user")
+        ps1 = create_telescope(cls.user, "Pan-STARRS1")
+        create_instrument(cls.user, ps1, "GPC1", band_names=("g",))
+        cls.observers = [create_test_user(f"speed_oncall_obs{i}", is_staff=False) for i in range(8)]
+        now = timezone.now()
+        cls.dates = []
+        for i, observer in enumerate(cls.observers):
+            row = YSEOnCallDate.objects.create(on_call_date=now, **audit_fields(cls.user))
+            row.user.add(observer, cls.user)
+            cls.dates.append(row)
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _queries_for(self, url, n_dates):
+        from YSE_App.models import YSEOnCallDate
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        far = timezone.now() + datetime.timedelta(days=400)
+        hidden = YSEOnCallDate.objects.filter(pk__in=[d.pk for d in self.dates[n_dates:]])
+        if url == "/yse_home/":
+            hidden.update(on_call_date=far)  # only today's dates are on the page
+        else:
+            hidden_pks = list(hidden.values_list("pk", flat=True))
+            hidden_users = {pk: list(YSEOnCallDate.objects.get(pk=pk).user.all()) for pk in hidden_pks}
+            hidden.delete()
+        try:
+            with iers_offline(), CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(url)
+        finally:
+            if url == "/yse_home/":
+                hidden.update(on_call_date=timezone.now())
+            else:
+                for pk, users in hidden_users.items():
+                    row = YSEOnCallDate.objects.create(pk=pk, on_call_date=timezone.now(), **audit_fields(self.user))
+                    row.user.add(*users)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        for observer in self.observers[:n_dates]:
+            self.assertIn(observer.email if url == "/yse_home/" else observer.username, body)
+        return len(ctx.captured_queries)
+
+    def test_oncall_calendar_query_count_is_flat_in_dates(self):
+        url = reverse("yse_oncall_calendar")
+        self.assertEqual(self._queries_for(url, 2), self._queries_for(url, 8))
+
+    def test_yse_home_oncall_box_query_count_is_flat_in_dates(self):
+        self.assertEqual(self._queries_for("/yse_home/", 2), self._queries_for("/yse_home/", 8))
 
 
 # -------------------------------------------------------------------------- P13
