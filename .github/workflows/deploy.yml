@@ -58,6 +58,11 @@ jobs:
       - name: Deploy Application
         run: |
           cd "${{ steps.target.outputs.dir }}"
+          # A person may have run git in this checkout by hand, leaving it owned
+          # by another Unix user; git then refuses to touch it. Trust this path
+          # and log both users so a permissions failure below is easy to read.
+          echo "runner user: $(id -un); checkout owner: $(stat -c %U .)"
+          git config --global --add safe.directory "$PWD"
           PYTHON="${{ steps.target.outputs.python }}"
 
           git fetch origin
