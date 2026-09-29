@@ -12,6 +12,14 @@ class FacilityError(Exception):
     """The facility rejected the request or could not be reached."""
 
 
+class FacilityUnreachable(FacilityError):
+    """The facility could not be reached (network error, timeout) before anything was accepted.
+
+    The ``facility.submit`` job retries on this and only this error: nothing
+    reached the facility, so a second attempt cannot submit twice.
+    """
+
+
 class FacilityValidationError(FacilityError):
     """Request parameters are invalid; ``errors`` maps field -> message."""
 
@@ -109,14 +117,48 @@ class SubmitResult:
 
 
 class StatusResult:
-    def __init__(self, state: str, *, detail: str = "", response: Any = None):
+    """What ``get_status`` / ``delete`` return; ``external_id`` when the facility assigned one late (ZTF)."""
+
+    def __init__(self, state: str, *, detail: str = "", response: Any = None, external_id: str = "",
+                 external_url: str = ""):
         self.state = state
         self.detail = detail or ""
         self.response = response
+        self.external_id = str(external_id or "")
+        self.external_url = external_url or ""
 
 
 def http_timeout() -> float:
     return float(getattr(settings, "FACILITY_HTTP_TIMEOUT_SECONDS", 30) or 30)
+
+
+def http_request(method: str, url: str, *, what: str = "", **kwargs):
+    """``requests.request`` with the facility timeout; a transport error becomes :class:`FacilityUnreachable`."""
+    import requests
+
+    kwargs.setdefault("timeout", http_timeout())
+    try:
+        return requests.request(method.upper(), url, **kwargs)
+    except requests.RequestException as exc:
+        raise FacilityUnreachable("could not reach %s: %s" % (what or url, exc)) from exc
+
+
+def json_or_text(response):
+    try:
+        return response.json()
+    except ValueError:
+        return response.text
+
+
+def short(value, n: int = 300) -> str:
+    import json
+
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return text[:n]
+
+
+KIND_OBSERVATION = "observation"
+KIND_PHOTOMETRY = "photometry"
 
 
 class FacilityAPI:
@@ -130,12 +172,19 @@ class FacilityAPI:
     slug: str = ""
     name: str = ""
     description: str = ""
-    #: subset of {"submit", "update", "delete", "status", "instrument_log"}
+    #: ``observation`` (a telescope request) or ``photometry`` (a forced-photometry
+    #: job whose results are ingested into the transient's light curve when complete)
+    kind: str = KIND_OBSERVATION
+    #: subset of {"submit", "update", "delete", "status", "results", "instrument_log"}
     capabilities = frozenset({"submit"})
     #: names the credential payload should hold (documentation and the allocations page)
     credential_keys: List[str] = []
     #: whether the state must be advanced by a person (no API to poll)
     manual_status: bool = True
+    #: short operator notes: how to bind an allocation to this facility (docs and the allocations page)
+    setup_notes: str = ""
+    #: minutes between two polls of the same open request (0 = every poll pass)
+    poll_interval_minutes: int = 0
 
     # -- form ---------------------------------------------------------------
     def fields(self, allocation=None) -> List[Field]:
@@ -199,6 +248,22 @@ class FacilityAPI:
     def get_status(self, request) -> StatusResult:
         raise FacilityError("%s has no status endpoint; mark the request complete by hand" % self.slug)
 
+    # -- results (forced photometry, #301) --------------------------------------
+    def fetch_results(self, request) -> List[Dict[str, Any]]:
+        """Photometry points of a *complete* ``photometry``-kind request.
+
+        Capability ``"results"``. Each point is a dict with ``mjd``, ``obs_date``
+        (aware datetime), ``band`` (a YSE-PZ band name), ``mag`` / ``mag_err``
+        (``None`` for a non-detection), ``flux`` / ``flux_err`` /
+        ``flux_zero_point`` and ``forced`` = True; optional ``instrument`` and
+        ``obs_group`` override the adapter defaults.
+        """
+        raise FacilityError("%s does not return photometry" % self.slug)
+
+    #: instrument / observation group the ingested points are filed under (photometry adapters)
+    results_instrument: str = ""
+    results_obs_group: str = ""
+
     # -- instrument logs (#310) -----------------------------------------------
     def fetch_instrument_log(self, allocation, instrument, start: datetime.datetime,
                              end: datetime.datetime) -> List[Dict[str, Any]]:
@@ -216,11 +281,21 @@ class FacilityAPI:
     def can(self, capability: str) -> bool:
         return capability in self.capabilities
 
-    def describe(self) -> Dict[str, Any]:
+    def supports(self, capability: str, allocation=None) -> bool:
+        """Like :meth:`can`, but an adapter may depend on the allocation's configuration (GENERIC)."""
+        return self.can(capability)
+
+    @property
+    def is_photometry(self) -> bool:
+        return self.kind == KIND_PHOTOMETRY
+
+    def describe(self, allocation=None) -> Dict[str, Any]:
+        caps = sorted(c for c in self.capabilities if allocation is None or self.supports(c, allocation))
         return {
             "slug": self.slug, "name": self.name or self.slug, "description": self.description,
-            "capabilities": sorted(self.capabilities), "credential_keys": list(self.credential_keys),
-            "manual_status": self.manual_status,
+            "kind": self.kind, "capabilities": caps, "credential_keys": list(self.credential_keys),
+            "manual_status": self.manual_status and not (allocation is not None and self.supports("status", allocation)),
+            "setup_notes": self.setup_notes, "poll_interval_minutes": self.poll_interval_minutes,
         }
 
     @staticmethod

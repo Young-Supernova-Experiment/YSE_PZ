@@ -214,7 +214,7 @@ class RegistryTests(TestCase):
         choices = dict(facility_choices())
         self.assertIn("", choices)
         self.assertEqual(choices["lco"], "Las Cumbres Observatory")
-        self.assertEqual(get_facility("lco").describe()["capabilities"], ["delete", "status", "submit"])
+        self.assertEqual(get_facility("lco").describe()["capabilities"], ["delete", "status", "submit", "update"])
 
     def test_register_and_unregister_custom(self):
         @register

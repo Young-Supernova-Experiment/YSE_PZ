@@ -175,6 +175,9 @@ CRON_CLASSES = [
     # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
     'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
     'YSE_App.data_ingest.Instrument_Logs.WeatherRefresh',
+    # Facility queue (#300): queue one facility.poll job for open LCO / ZTF / ATLAS
+    # requests; no-op unless FACILITY_POLL_CRON_ENABLED is set ([site_settings]).
+    'YSE_App.data_ingest.Facility_Queue.FacilityPoll',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -479,6 +482,21 @@ FACILITY_API_MODULES = [
     m.strip() for m in config.get('site_settings', 'FACILITY_API_MODULES', fallback='').split(',') if m.strip()
 ]
 FACILITY_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'FACILITY_HTTP_TIMEOUT_SECONDS', fallback=30)
+# Facility queue (#300): submission attempts on transport errors (bounded by the
+# job's own max attempts), their backoff, the poll cron (off by default) and whether
+# the allocation's audience groups are notified when a request finishes.
+FACILITY_SUBMIT_MAX_ATTEMPTS = config.getint('site_settings', 'FACILITY_SUBMIT_MAX_ATTEMPTS', fallback=3)
+FACILITY_SUBMIT_BACKOFF_SECONDS = config.getint('site_settings', 'FACILITY_SUBMIT_BACKOFF_SECONDS', fallback=120)
+FACILITY_POLL_CRON_ENABLED = (
+    os.environ.get('YSE_FACILITY_POLL_CRON', '').strip() == '1'
+    or config.getboolean('site_settings', 'FACILITY_POLL_CRON_ENABLED', fallback=False)
+)
+FACILITY_POLL_CRON_MINUTES = config.getint('site_settings', 'FACILITY_POLL_CRON_MINUTES', fallback=10)
+FACILITY_POLL_LIMIT = config.getint('site_settings', 'FACILITY_POLL_LIMIT', fallback=200)
+FACILITY_NOTIFY_GROUPS = config.getboolean('site_settings', 'FACILITY_NOTIFY_GROUPS', fallback=False)
+# Liverpool Telescope RTML socket (facility 'lt').
+LT_RTML_HOST = config.get('site_settings', 'LT_RTML_HOST', fallback='telescope.livjm.ac.uk')
+LT_RTML_PORT = config.getint('site_settings', 'LT_RTML_PORT', fallback=8080)
 
 # Instrument logs, weather widget and SkyCam (#309: #310, #311). All keys optional,
 # under [observatory] in settings.ini; docs/instrument-logs-weather.md explains each.

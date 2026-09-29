@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import logging
 import secrets
 from typing import Optional, Tuple
@@ -184,6 +185,14 @@ def get_runner(service: ExternalService):
     return _RUNNERS.get(service.slug) or _RUNNERS.get("kind:" + service.kind)
 
 
+def _accepts_job(func) -> bool:
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+    return "job" in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 @_job(JOB_KIND)
 def execute_run(payload, job=None):
     """Job handler for :data:`JOB_KIND`: hand the run to its runner.
@@ -200,7 +209,8 @@ def execute_run(payload, job=None):
     if runner is None:
         log.info("execute_run: %s has no runner registered yet; leaving it %s", run, run.status)
         return {"run": str(run.uuid), "handled": False}
-    result = runner(run)
+    # a runner that takes ``job`` sees the attempt counter (facility submissions retry on transport errors)
+    result = runner(run, job=job) if _accepts_job(runner) else runner(run)
     out = {"run": str(run.uuid), "handled": True}
     if isinstance(result, dict):
         out.update(result)

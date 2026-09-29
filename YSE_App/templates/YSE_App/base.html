@@ -187,6 +187,12 @@
 							<p>TNS Reports</p>
 						</a>
 					</li>
+					<li class="nav-item">
+						<a href="{% url 'facility_requests' %}" class="nav-link{% if url_name == 'facility_requests' %} active{% endif %}">
+							<i class="nav-icon fa fa-paper-plane-o"></i>
+							<p>Facility Requests</p>
+						</a>
+					</li>
 					{% if user.is_staff %}
 					<li class="nav-item">
 						<a href="{% url 'external_service_runs' %}" class="nav-link{% if url_name == 'external_service_runs' or url_name == 'external_service_run_detail' %} active{% endif %}">

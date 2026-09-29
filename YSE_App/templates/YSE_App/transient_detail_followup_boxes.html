@@ -43,7 +43,9 @@
                                     {% if f.classical_resource %}{{ f.classical_resource }}<br>{% endif %}
                                     {% if f.queued_resource %}{{ f.queued_resource }}{% endif %}
                                 </td>
-                                <td>{{ f.status }}</td>
+                                <td>{{ f.status }}
+                                    {% for fr in f.facility_requests.all %}<br><span class="badge badge-{% if fr.state == 'complete' %}success{% elif fr.state == 'failed' or fr.state == 'cancelled' %}danger{% else %}info{% endif %} facility-followup-badge" title="{{ fr.state_detail }}">{{ fr.allocation.facility }}: {{ fr.get_state_display }}{% if fr.external_id %} {{ fr.external_id|truncatechars:20 }}{% endif %}</span>{% endfor %}
+                                </td>
                                 <td>{{ f.requestors }}</td>
                                 <td><a target='_blank' href="{% url 'admin:YSE_App_transientfollowup_change' f.id %}">Edit</a></td>
                                 <td>

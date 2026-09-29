@@ -23,6 +23,7 @@ import YSE_App.analysis.runners  # noqa: E402,F401
 # ... and the annotation checks (#318: Gaia DR3, WISE, quasar catalogue) as runners.
 import YSE_App.annotation_services  # noqa: E402,F401
 from YSE_App.services import annotations as annotations_svc
+from YSE_App.models.followup_models import TransientFollowup
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 
@@ -42,6 +43,16 @@ def autorun_annotation_checks(sender, instance, created, **kwargs):
         return
     if annotations_svc.autorun_slugs():
         annotations_svc.autorun_for_new_transient(instance)
+
+
+@receiver(post_save, sender=TransientFollowup, dispatch_uid="yse_followup_usage_accounting")
+def account_followup_usage(sender, instance, created, **kwargs):
+    """A follow-up reaching Successful charges its ToO / queued resource once; leaving it refunds (#304)."""
+    if kwargs.get('raw') or not (instance.too_resource_id or instance.queued_resource_id):
+        return
+    from YSE_App.services.allocations import sync_followup_usage
+
+    sync_followup_usage(instance)
 
 
 @receiver(post_save, sender=User, dispatch_uid="yse_ensure_user_public_group")

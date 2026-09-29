@@ -29,6 +29,8 @@ from django.views.decorators.csrf import csrf_exempt
 from .basicauth import *
 
 from YSE_App.util import lcogt
+from YSE_App.facilities import FacilityValidationError
+from YSE_App.services.facility_requests import FacilityRequestError, submit_request as submit_facility_request
 from YSE_App.services.dashboard_queries import duplicates_of, matching_user_queries
 from YSE_App.services.followup_requests import (
 	DEFAULT_PRIORITY,
@@ -810,6 +812,16 @@ class RemoveFollowupNoticeFormView(DeleteView):
 		else:
 			return response
 
+def facility_allocation_for(resource, user, slugs=('lco', 'soar')):
+	"""The allocation a legacy resource is bound to (#304), else an open one on its telescope with an LCO-family facility."""
+	from YSE_App.services.allocations import allocations_for_user
+
+	allocation = getattr(resource, 'allocation', None)
+	if allocation is not None and allocation.facility in slugs and allocation.usable_by(user):
+		return allocation
+	return allocations_for_user(user).filter(telescope=resource.telescope, facility__in=slugs).order_by('-end_date').first()
+
+
 class AddAutomatedSpectrumRequestFormView(FormView):
 	form_class = AutomatedSpectrumRequest
 	template_name = 'YSE_App/form_snippets/spectrum_request_form.html'
@@ -878,6 +890,28 @@ class AddAutomatedSpectrumRequestFormView(FormView):
 				classical_resource=resource if is_goodman else None,
 				too_resource=None if is_goodman else resource,
 			)
+
+			# A facility allocation bound to the resource (or open on the telescope) sends the request
+			# through the lco / soar adapter (#301): recorded, polled and cancellable. Otherwise the
+			# legacy settings-credential path.
+			allocation = facility_allocation_for(resource, self.request.user)
+			if allocation is not None:
+				try:
+					facility_request = submit_facility_request(
+						allocation, tf.transient, self.request.user,
+						{'strategy': 'instrument' if allocation.facility == 'soar' else 'spectroscopy',
+						 'exposure_time': form.cleaned_data['exp_time'],
+						 'start': form.cleaned_data['spectrum_valid_start'].replace(tzinfo=None).isoformat(),
+						 'end': form.cleaned_data['spectrum_valid_stop'].replace(tzinfo=None).isoformat()},
+						followup=tf, attach_followup=False)
+				except (FacilityValidationError, FacilityRequestError) as exc:
+					data = {'data': {'errors': 'facility request refused: %s' % exc, 'errorflag': 1},
+							'message': "Successfully submitted form data."}
+					return JsonResponse(data)
+				data = {'data': {'errors': '', 'errorflag': 0, 'facility_request_id': facility_request.pk,
+								 'state': facility_request.state},
+						'message': "Successfully submitted form data."}
+				return JsonResponse(data)
 
 			# now charlie's code
 			lcogt.main(

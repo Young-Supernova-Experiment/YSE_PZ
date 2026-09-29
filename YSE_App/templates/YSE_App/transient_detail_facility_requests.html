@@ -14,23 +14,29 @@
 	<tbody>
 		{% for row in facility_requests %}
 		{% with r=row.r %}
-		<tr class="facility-request-row" data-request-id="{{ r.id }}" data-status="{{ r.state }}">
-			<td>{{ r.allocation.name }} <small class="text-muted">({{ r.allocation.facility }})</small></td>
+		<tr class="facility-request-row" data-request-id="{{ r.id }}" data-status="{{ r.state }}" data-kind="{{ r.kind }}" data-schema='{{ row.schema_json|escape }}' data-payload='{{ row.payload_json|escape }}' data-log='{{ row.log_json|escape }}'>
+			<td>{{ r.allocation.name }} <small class="text-muted">({{ r.allocation.facility }}{% if r.is_photometry %}, forced photometry{% endif %})</small></td>
 			<td>
 				<span class="badge badge-{% if r.state == 'complete' %}success{% elif r.state == 'failed' %}danger{% elif r.state == 'cancelled' %}secondary{% elif r.state == 'queued' or r.state == 'draft' %}warning{% else %}info{% endif %}" title="{{ r.state_detail }}">{{ r.get_state_display }}</span>
+				{% if r.attempts > 1 %}<small class="text-muted" title="submission attempts">x{{ r.attempts }}</small>{% endif %}
+				{% if r.is_photometry and r.results_ingested_at %}<span class="badge badge-light" title="points ingested {{ r.results_ingested_at|date:'Y-m-d H:i' }}">{{ r.n_results }} pts</span>{% endif %}
 				{% if r.state_detail %}<br><small class="text-muted">{{ r.state_detail|truncatechars:90 }}</small>{% endif %}
 			</td>
-			<td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank" rel="noopener noreferrer">{{ r.external_id }}</a>{% else %}{{ r.external_id|default:"-" }}{% endif %}
+			<td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank" rel="noopener noreferrer">{{ r.external_id|truncatechars:40 }}</a>{% else %}{{ r.external_id|default:"-"|truncatechars:40 }}{% endif %}
 				{% if r.run and user.is_staff %}<br><a href="{% url 'external_service_run_detail' r.run.uuid %}"><small>run {{ r.run.uuid|slice:":8" }}</small></a>{% endif %}</td>
 			<td>{{ r.submitted_by.username }}</td>
 			<td>{{ r.created_date|date:"Y-m-d H:i" }}</td>
 			<td>{{ r.hours_charged|floatformat:2 }}{% if r.charged_at %} <i class="fa fa-check text-success" title="charged to the allocation"></i>{% endif %}</td>
 			<td class="facility-request-actions">
+				<button type="button" class="btn btn-xs btn-outline-secondary" data-fr-log="{{ r.id }}" title="show the request log">Log</button>
 				{% if row.can_manage and not r.is_final %}
 					{% if row.can_poll %}<button type="button" class="btn btn-xs btn-outline-info" data-fr-action="poll">Refresh</button>{% endif %}
+					{% if row.can_update %}<button type="button" class="btn btn-xs btn-outline-primary" data-fr-modify="{{ r.id }}">Modify</button>{% endif %}
 					{% if row.manual and r.is_open %}<button type="button" class="btn btn-xs btn-outline-success" data-fr-action="complete">Mark complete</button>{% endif %}
 					<button type="button" class="btn btn-xs btn-outline-danger" data-fr-action="cancel">Cancel</button>
-				{% else %}<span class="text-muted">&mdash;</span>{% endif %}
+				{% elif row.can_manage and row.can_results %}
+					<button type="button" class="btn btn-xs btn-outline-success" data-fr-action="results">Fetch photometry</button>
+				{% endif %}
 			</td>
 		</tr>
 		{% endwith %}
@@ -39,3 +45,4 @@
 		{% endfor %}
 	</tbody>
 </table>
+<div class="small text-muted"><a href="{% url 'facility_requests' %}?transient={{ transient.name|urlencode }}&amp;state=all">All requests for this transient</a></div>

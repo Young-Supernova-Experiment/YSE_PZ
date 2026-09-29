@@ -173,6 +173,14 @@ class FacilityRequest(BaseModel):
     )
     charged_at = models.DateTimeField(null=True, blank=True, editable=False)
     log = JSONTextField(default=list, help_text="Chronological list of {at, event, detail}.")
+    # Queue bookkeeping (#300) and forced-photometry results (#301).
+    KIND_OBSERVATION = "observation"
+    KIND_PHOTOMETRY = "photometry"
+    KIND_CHOICES = ((KIND_OBSERVATION, "Observation"), (KIND_PHOTOMETRY, "Forced photometry"))
+    kind = models.CharField(max_length=12, choices=KIND_CHOICES, default=KIND_OBSERVATION)
+    attempts = models.PositiveIntegerField(default=0, help_text="Submission attempts made by the job runner.")
+    results_ingested_at = models.DateTimeField(null=True, blank=True, editable=False)
+    n_results = models.PositiveIntegerField(default=0, help_text="Photometry points ingested from the facility.")
 
     class Meta:
         ordering = ("-created_date",)
@@ -195,6 +203,15 @@ class FacilityRequest(BaseModel):
     @property
     def is_final(self) -> bool:
         return self.state in self.FINAL_STATES
+
+    @property
+    def is_photometry(self) -> bool:
+        return self.kind == self.KIND_PHOTOMETRY
+
+    @property
+    def can_retry(self) -> bool:
+        """A failed or cancelled request may be resubmitted as a new request; this one is history."""
+        return self.state in (self.STATE_FAILED, self.STATE_CANCELLED)
 
     def add_log(self, event: str, detail: str = "", save: bool = False) -> None:
         entries = list(self.log or [])
