@@ -240,6 +240,17 @@ def add_transient(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
+    return add_transient_payload(transient_data, user)
+
+
+def add_transient_payload(transient_data, user):
+    """Body of ``/add_transient`` for an already-authenticated ``user``.
+
+    Shared with the broker save path (``YSE_App.brokers.ingest``), which
+    builds the same upload document from a broker alert so aliases, the
+    position-based duplicate check and the photometry passthrough behave
+    exactly like a TNS or ZTF upload.
+    """
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 

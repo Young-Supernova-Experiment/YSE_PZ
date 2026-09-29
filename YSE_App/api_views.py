@@ -1,7 +1,7 @@
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse
 from rest_framework import serializers, viewsets, status, permissions
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
+from rest_framework.decorators import action, api_view
 from rest_framework import generics
 from YSE_App.common import custom_viewsets
 from django.core.exceptions import PermissionDenied
@@ -667,3 +667,128 @@ class TransientCommentListCreate(generics.ListCreateAPIView):
             self.get_serializer(log).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+### Broker providers, filters and candidates (#272 / #276) ###
+class BrokerViewSet(viewsets.ViewSet):
+    """``/api/brokers/``: enabled providers with their capabilities; ``/api/brokers/<slug>/``
+    one provider; ``?ra=&dec=&radius=`` on ``/api/brokers/<slug>/cone_search/`` proxies a cone search."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def list(self, request):
+        from YSE_App.brokers import registry
+        from YSE_App.brokers.filters import describe_criteria
+        return Response({"brokers": BrokerSerializer(registry.describe_all(), many=True).data,
+                         "criteria": describe_criteria()})
+
+    def retrieve(self, request, pk=None):
+        from YSE_App.brokers import registry
+        provider = registry.get_provider(pk)
+        if provider is None:
+            return Response({"detail": "unknown or disabled broker"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(BrokerSerializer(provider.describe()).data)
+
+    @action(detail=True, methods=["get"])
+    def cone_search(self, request, pk=None):
+        from YSE_App.brokers import registry
+        from YSE_App.brokers.base import CONE_SEARCH, BrokerError, BrokerUnavailable
+        provider = registry.get_provider(pk)
+        if provider is None:
+            return Response({"detail": "unknown or disabled broker"}, status=status.HTTP_404_NOT_FOUND)
+        if not provider.has(CONE_SEARCH):
+            return Response({"detail": "%s has no cone search" % pk}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ra, dec = float(request.query_params["ra"]), float(request.query_params["dec"])
+            radius = float(request.query_params.get("radius", 5.0))
+            limit = min(int(request.query_params.get("limit", 20)), 200)
+        except (KeyError, ValueError):
+            return Response({"detail": "ra, dec (deg) and optional radius (arcsec) are required"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            alerts = provider.cone_search(ra, dec, radius, limit=limit)
+        except BrokerUnavailable as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except BrokerError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({"broker": pk, "count": len(alerts), "results": [a.to_dict() for a in alerts]})
+
+
+class BrokerFilterViewSet(viewsets.ModelViewSet):
+    """``/api/brokerfilters/``: filters of the user's groups (staff: all); group-scoped writes."""
+    serializer_class = BrokerFilterSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = BrokerFilter.objects.select_related("group").order_by("broker", "name")
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(Q(group__isnull=True) | Q(group__in=user.groups.all()))
+
+    def _check_group(self, group):
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            return
+        if group is None:
+            raise PermissionDenied("only staff may create filters without a group")
+        if not user.groups.filter(pk=group.pk).exists():
+            raise PermissionDenied("you are not a member of that group")
+
+    def perform_create(self, serializer):
+        self._check_group(serializer.validated_data.get("group"))
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        self._check_group(serializer.instance.group)
+        if "group" in serializer.validated_data:
+            self._check_group(serializer.validated_data.get("group"))
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._check_group(instance.group)
+        instance.delete()
+
+
+class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
+    """``/api/candidates/`` (read) with ``save`` / ``reject`` / ``reopen`` POST actions."""
+    serializer_class = CandidateSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_fields = ("broker", "status", "alert_id")
+
+    def get_queryset(self):
+        from YSE_App.candidate_views import visible_filters
+        allowed = visible_filters(self.request.user)
+        return (
+            Candidate.objects.filter(Q(filters__in=allowed) | Q(filters__isnull=True)).distinct()
+            .select_related("transient").prefetch_related("filters").order_by("-last_seen", "-id")
+        )
+
+    def _act(self, request, pk, fn):
+        from YSE_App.brokers.base import BrokerError
+        from YSE_App.brokers.ingest import IngestError
+        candidate = self.get_object()
+        try:
+            fn(candidate)
+        except (IngestError, BrokerError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        candidate.refresh_from_db()
+        return Response(self.get_serializer(candidate).data)
+
+    @action(detail=True, methods=["post"])
+    def save(self, request, pk=None):
+        from YSE_App.brokers import ingest
+        data = request.data or {}
+        return self._act(request, pk, lambda c: ingest.save_candidate(
+            c, request.user, status=data.get("status") or "New", obs_group=data.get("obs_group") or None,
+            import_photometry=data.get("import_photometry", True) not in (False, "0", "false", 0)))
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        from YSE_App.brokers import ingest
+        return self._act(request, pk, lambda c: ingest.reject_candidate(c, request.user, note=str((request.data or {}).get("note") or "")[:255]))
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        from YSE_App.brokers import ingest
+        return self._act(request, pk, lambda c: ingest.reopen_candidate(c, request.user))

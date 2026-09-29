@@ -66,8 +66,10 @@ is a config change.
 python manage.py runcrons YSE_App.data_ingest.Query_LSST.AntaresLSST --force
 ```
 
-The `antares_client` import is guarded: a venv without the package imports the
-module and `runcrons` fine; the cron logs
+The `antares_client` import is guarded in the broker provider
+(`YSE_App/brokers/antares.py`, which also does the cone search; see
+docs/brokers.md): a venv without the package imports the module and `runcrons`
+fine; the cron logs
 `antares_client is not installed in this environment; nothing to do` and exits.
 On Ziggy the cron venv needs `antares-client` (already pinned in
 `requirements.txt`, which `requirements-ingest.txt` includes). Failures inside a
