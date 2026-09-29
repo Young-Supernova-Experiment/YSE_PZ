@@ -11,7 +11,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('YSE_App', '0023_feeds'),
+        ('YSE_App', '0024_ai_summaries'),
     ]
 
     operations = [

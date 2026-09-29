@@ -22,7 +22,14 @@ from YSE_App.common.band_order import (
     legend_sort_key,
 )
 from YSE_App.common.filter_display import telescope_display_name
-from YSE_App.common.legend_layout import ROW_HEIGHT_PX, legend_column_grid, legend_grid_height_px
+from YSE_App.common.legend_layout import (
+    COLUMN_GAP,
+    legend_block_height_px,
+    legend_blocks_height_px,
+    legend_column_blocks,
+    legend_column_width_px,
+    legend_usable_width_px,
+)
 
 # (band, instrument, telescope) in the expected legend order.
 ORDERED_SERIES = [
@@ -187,23 +194,31 @@ class LegendSortKeyTests(SimpleTestCase):
         self.assertEqual(group_consecutive([], key=lambda item: item), [])
 
 
-class LegendColumnGridTests(SimpleTestCase):
-    def test_columns_read_down_with_blank_cells(self):
-        columns = [["PS1 g", "PS1 r", "PS1 i"], ["ZTF g", "ZTF r"], ["today"]]
+class LegendColumnBlocksTests(SimpleTestCase):
+    """Columns are packed by their own width and wrap only when the next one would not fit (#372)."""
+
+    def test_columns_pack_left_to_right_by_their_own_width(self):
+        columns = [["PS1 g", "PS1 r", "PS1 i"], ["ZTF g", "ZTF r"], ["today (61312)"]]
+        widths = [legend_column_width_px(column) for column in columns]
+        self.assertEqual(widths, [61, 60, 107])
         self.assertEqual(
-            legend_column_grid(columns, 3),
-            [["PS1 g", "ZTF g", "today"], ["PS1 r", "ZTF r", None], ["PS1 i", None, None]],
+            legend_column_blocks(columns, 400),
+            [[(0, 0), (1, 61 + COLUMN_GAP), (2, 61 + COLUMN_GAP + 60 + COLUMN_GAP)]],
         )
 
-    def test_extra_columns_wrap_to_a_new_block_of_rows(self):
+    def test_extra_columns_wrap_to_a_new_block(self):
         columns = [["a1", "a2"], ["b1"], ["c1", "c2", "c3"], ["d1"]]
-        self.assertEqual(
-            legend_column_grid(columns, 2, placeholder=""),
-            [["a1", "b1"], ["a2", ""], ["c1", "d1"], ["c2", ""], ["c3", ""]],
-        )
-        self.assertEqual(legend_grid_height_px(5), 5 * ROW_HEIGHT_PX)
+        # 40 px columns ('c' is a narrow glyph: 39); 320 px leaves 236 usable, so all
+        # four fit (the last ends at 183) -- wrapping needs a narrower plot
+        self.assertEqual([legend_column_width_px(column) for column in columns], [40, 40, 39, 40])
+        self.assertEqual(legend_usable_width_px(320), 236)
+        self.assertEqual(legend_column_blocks(columns, 320), [[(0, 0), (1, 48), (2, 96), (3, 143)]])
+        narrow = 320 - (236 - 135)  # room for exactly the first three columns (they end at 135)
+        self.assertEqual(legend_column_blocks(columns, narrow), [[(0, 0), (1, 48), (2, 96)], [(3, 0)]])
+        self.assertEqual(legend_column_blocks(columns, narrow - 1), [[(0, 0), (1, 48)], [(2, 0), (3, 47)]])
+        self.assertEqual(legend_blocks_height_px([3, 1]), legend_block_height_px(3) + legend_block_height_px(1))
 
-    def test_empty_columns_are_skipped_and_ncols_is_at_least_one(self):
-        self.assertEqual(legend_column_grid([[], ["x"], []], 0), [["x"]])
-        self.assertEqual(legend_column_grid([], 3), [])
-        self.assertEqual(legend_grid_height_px(0), 0)
+    def test_empty_columns_are_skipped(self):
+        self.assertEqual(legend_column_blocks([[], ["x"], []], 400), [[(1, 0)]])
+        self.assertEqual(legend_column_blocks([], 400), [])
+        self.assertEqual(legend_blocks_height_px([]), 0)

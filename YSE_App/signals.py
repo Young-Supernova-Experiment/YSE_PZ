@@ -28,6 +28,8 @@ import YSE_App.feeds  # noqa: E402,F401
 from YSE_App.feeds.jobs import enqueue_screen
 from YSE_App.services import annotations as annotations_svc
 from YSE_App.models.followup_models import TransientFollowup
+# ... and the AI summariser runner + summaries.refresh_stale job (#296).
+import YSE_App.services.summaries  # noqa: E402,F401
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.services import photstat
 

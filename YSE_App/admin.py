@@ -641,3 +641,41 @@ class FeedSourceAdmin(admin.ModelAdmin):
 		if not change and not obj.created_by_id:
 			obj.created_by = request.user
 		super().save_model(request, obj, form, change)
+
+
+# --- AI summaries (#295, #297) --------------------------------------------------
+from YSE_App.models.summary_models import (  # noqa: E402
+	TransientSummaryEmbedding, TransientSummaryHistory, TransientSummaryPreference,
+)
+
+
+@admin.register(TransientSummaryHistory)
+class TransientSummaryHistoryAdmin(admin.ModelAdmin):
+	list_display = ("transient", "source", "provider", "model_name", "prompt_version", "is_current", "created_by", "created_date")
+	list_filter = ("source", "provider", "is_current")
+	search_fields = ("transient__name", "text", "model_name")
+	raw_id_fields = ("transient", "run")
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date", "inputs_hash")
+
+	def save_model(self, request, obj, form, change):
+		if not change or not obj.created_by_id:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(TransientSummaryEmbedding)
+class TransientSummaryEmbeddingAdmin(admin.ModelAdmin):
+	list_display = ("transient", "model_name", "dim", "modified_date")
+	list_filter = ("model_name",)
+	search_fields = ("transient__name",)
+	raw_id_fields = ("transient",)
+	readonly_fields = ("vector", "dim", "model_name", "text_hash", "created_date", "modified_date")
+
+
+@admin.register(TransientSummaryPreference)
+class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
+	list_display = ("user", "ai_enabled", "modified_date")
+	list_filter = ("ai_enabled",)
+	search_fields = ("user__username",)
+	raw_id_fields = ("user",)

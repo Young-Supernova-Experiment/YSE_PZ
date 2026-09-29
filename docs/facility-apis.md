@@ -322,7 +322,7 @@ Facility HTTP calls run in the job runner, so the web process never waits on a f
 ## Deploy notes
 
 - Migrations `0016_allocations_facility_requests` (two tables, two indexes; depends on
-  `0015_photstat_limit_bands`) and `0024_facility_queue_accounting` (columns only: `FacilityRequest.kind` /
+  `0015_photstat_limit_bands`) and `0025_facility_queue_accounting` (columns only: `FacilityRequest.kind` /
   `attempts` / `results_ingested_at` / `n_results`, `TransientFollowup.usage_hours` / `usage_charged_at`,
   `allocation` FK on `ToOResource` / `QueuedResource` / `ClassicalResource`). Deploy Stack runs `migrate`.
 - Nothing to install: `requests` and `cryptography` are already pinned; the Swift adapter signs its JWT
