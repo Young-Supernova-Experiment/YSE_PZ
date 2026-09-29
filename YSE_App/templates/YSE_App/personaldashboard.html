@@ -351,7 +351,13 @@ $(document).ready(function(){
 
       function add_dashboard_query() {
         // Grab the form, and associate it with the current transient detail page
-        var data = $('#add_dashboard_query').serialize()
+        var $form = $('#add_dashboard_query')
+        var $submit = $form.find('button[type=submit]')
+        // The page stays interactive until the reload below finishes; a second
+        // click meanwhile would attach the same query again (issue #203).
+        if ($submit.prop('disabled')) { return; }
+        $submit.prop('disabled', true)
+        var data = $form.serialize()
 
         $.ajax({
           url : "{% url 'add_dashboard_query' %}", // the endpoint
@@ -365,6 +371,7 @@ $(document).ready(function(){
 
           // handle a non-successful response
           error : function(xhr,errmsg,err) {
+            $submit.prop('disabled', false)
             alert(xhr.status + ": " + xhr.responseText);
           }
         });
@@ -400,7 +407,11 @@ $(document).ready(function(){
 
       function remove_dashboard_query_{{ transient_cat.4 }}() {
         // Grab the form, and associate it with the current transient detail page
-        var data = $('#remove_dashboard_query_{{ transient_cat.4 }}').serialize()
+        var $form = $('#remove_dashboard_query_{{ transient_cat.4 }}')
+        var $submit = $form.find('button[type=submit]')
+        if ($submit.prop('disabled')) { return; }
+        $submit.prop('disabled', true)
+        var data = $form.serialize()
         var query_id = $('#query_{{ transient_cat.4 }}').val()
         //data = (data + "&query=" + query)
 
@@ -409,13 +420,15 @@ $(document).ready(function(){
           type : "POST", // http method
           data : data, // data sent with the post request
 
-          // handle a successful response
+          // handle a successful response (JSON; the view no longer redirects
+          // AJAX callers through a full dashboard render)
           success : function(json) {
             window.location.reload()
           },
 
           // handle a non-successful response
           error : function(xhr,errmsg,err) {
+            $submit.prop('disabled', false)
             alert(xhr.status + ": " + xhr.responseText);
           }
         });
