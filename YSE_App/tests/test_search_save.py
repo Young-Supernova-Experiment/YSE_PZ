@@ -47,8 +47,9 @@ class _ExplorerToDefault:
 def run_sql(sql):
     """Names the saved statement returns, the way the dashboard runs it.
 
-    Runs on the default connection: the test rows live in its transaction, and
-    the settings point ``explorer`` at the same database (same vendor).
+    Runs on the default connection: the test rows live in its transaction, the
+    settings point ``explorer`` at the same database (same vendor), and in CI
+    the explorer user has no rights on the test database.
     """
     cursor = connections['default'].cursor()
     try:
@@ -59,9 +60,6 @@ def run_sql(sql):
 
 
 class CompileEquivalenceTests(SearchFixture):
-    # compiling for the explorer alias may open that connection (MySQL asks its
-    # version for REGEXP); the saved SQL itself runs on default (run_sql).
-    databases = {'default', 'explorer'}
 
 
     PARAMS = (
@@ -195,9 +193,6 @@ class LiteralTests(TestCase):
 
 
 class SaveServiceTests(SearchFixture):
-    # compiling for the explorer alias may open that connection (MySQL asks its
-    # version for REGEXP); the saved SQL itself runs on default (run_sql).
-    databases = {'default', 'explorer'}
 
 
     def test_save_creates_query_and_dashboard_link(self):
@@ -261,9 +256,6 @@ class SaveServiceTests(SearchFixture):
 
 
 class SavePageTests(SearchFixture):
-    # compiling for the explorer alias may open that connection (MySQL asks its
-    # version for REGEXP); the saved SQL itself runs on default (run_sql).
-    databases = {'default', 'explorer'}
 
 
     def setUp(self):
@@ -340,9 +332,6 @@ class SavePageTests(SearchFixture):
 
 
 class SaveApiTests(SearchFixture):
-    # compiling for the explorer alias may open that connection (MySQL asks its
-    # version for REGEXP); the saved SQL itself runs on default (run_sql).
-    databases = {'default', 'explorer'}
 
 
     def setUp(self):

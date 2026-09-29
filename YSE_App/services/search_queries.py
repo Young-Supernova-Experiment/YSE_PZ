@@ -40,6 +40,7 @@ from YSE_App.services.dashboard_queries import (
 
 __all__ = [
     'SearchSaveError',
+    'compile_alias',
     'compile_search_sql',
     'compiled_search',
     'default_search_title',
@@ -110,12 +111,29 @@ def inline_sql_params(sql, params, connection):
     return ''.join(out)
 
 
-def compiled_search(params, request=None, using=EXPLORER_ALIAS):
+def compile_alias():
+    """The connection whose dialect the saved SQL is written in.
+
+    The saved text runs on the ``explorer`` alias, which points at the same
+    server as ``default`` with a read-only user. When both aliases share a
+    vendor the SQL is identical, so it is compiled with the default
+    connection: that avoids opening the explorer connection during a page
+    render (MySQL asks the server version for ``REGEXP``), and in the test
+    suites the explorer user may not touch the test database at all.
+    """
+    if EXPLORER_ALIAS in connections and connections[EXPLORER_ALIAS].vendor != connections['default'].vendor:
+        return EXPLORER_ALIAS
+    return 'default'
+
+
+def compiled_search(params, request=None, using=None):
     """``(filterset, sql)`` for ``params`` (a ``QueryDict`` or dict of lists/strings).
 
     Raises :class:`SearchSaveError` when the parameters do not validate or the
     resulting statement is one the dashboard would refuse.
     """
+    if using is None:
+        using = compile_alias()
     from django.http import QueryDict
 
     if not hasattr(params, 'getlist'):
@@ -151,7 +169,7 @@ def compiled_search(params, request=None, using=EXPLORER_ALIAS):
     return filterset, sql
 
 
-def compile_search_sql(params, request=None, using=EXPLORER_ALIAS):
+def compile_search_sql(params, request=None, using=None):
     """The SQL text alone (see :func:`compiled_search`)."""
     return compiled_search(params, request=request, using=using)[1]
 
