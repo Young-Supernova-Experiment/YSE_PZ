@@ -160,8 +160,11 @@ class MastObservations():
     the collections MAST serves through the same CAOM interface (JWST first,
     #329): one ``query_criteria`` cone search at the transient position (the
     same 1 arcsec radius as the HST lookup) restricted to ``collections``,
-    science data products of the given ``product_types``, returned as plain
-    dicts the views can serialise without knowing about astropy tables.
+    science data products of the given ``product_types`` (images only by
+    default: the archive tabs show images, not spectra, #356), returned as
+    plain dicts the views can serialise without knowing about astropy tables.
+    Rows whose ``dataproduct_type`` is not in ``product_types`` are dropped
+    even when MAST returns them.
 
     Nothing here catches exceptions: callers wrap the lookup in the
     archive-status timeout/error handling in ``view_utils``.
@@ -173,7 +176,7 @@ class MastObservations():
                'target_name', 'dataproduct_type', 'calib_level', 'jpegURL',
                'dataURL', 'dataRights')
 
-    def __init__(self, ra, dec, collections, radius=None, product_types=('image', 'spectrum'),
+    def __init__(self, ra, dec, collections, radius=None, product_types=('image',),
                  intent_type='science'):
         if (':' in str(ra) and ':' in str(dec)):
             self.coord = SkyCoord(ra, dec, unit=(u.hour, u.deg))
@@ -200,9 +203,16 @@ class MastObservations():
             criteria['dataproduct_type'] = self.product_types
         if self.intent_type:
             criteria['intentType'] = self.intent_type
-        table = Observations.query_criteria(**criteria)
+        return self.set_table(Observations.query_criteria(**criteria))
+
+    def set_table(self, table):
+        """Take a MAST answer: keep the rows of the wanted product types."""
         self.obstable = table
-        self.rows = self.rows_from_table(table)
+        rows = self.rows_from_table(table)
+        if self.product_types:
+            wanted = {p.lower() for p in self.product_types}
+            rows = [r for r in rows if (r.get('dataproduct_type') or '').lower() in wanted]
+        self.rows = rows
         return self.rows
 
     @classmethod
@@ -225,8 +235,8 @@ class MastObservations():
 
 
 def jwstObservations(ra, dec, radius=None):
-    """JWST observations (images and spectra) covering the position."""
-    return MastObservations(ra, dec, collections=['JWST'], radius=radius)
+    """JWST science images covering the position (no spectra, #356)."""
+    return MastObservations(ra, dec, collections=['JWST'], radius=radius, product_types=('image',))
 
 
 ## TEST TEST TEST
