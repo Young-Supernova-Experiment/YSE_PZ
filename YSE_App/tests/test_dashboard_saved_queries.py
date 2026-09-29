@@ -383,6 +383,8 @@ class DashboardCacheWarmerTests(TestCase):
                 mock.patch.object(db_time_cap, "_close_explorer_connection"), \
                 mock.patch.object(views_module.cache, "set", wraps=views_module.cache.set) as cache_set:
             results = warmer.warm_dashboard_saved_queries()
+            # the override is lifted once the warm run ends
+            self.assertEqual(db_time_cap.explorer_cap_ms(), 20000)
 
         by_id = {r.query_id: r for r in results}
         self.assertEqual(set(by_id), {self.q1.id, self.q2.id, self.q_bad.id, self.q_error.id})
@@ -391,7 +393,6 @@ class DashboardCacheWarmerTests(TestCase):
         self.assertIn("SELECT", by_id[self.q_bad.id].skipped)
         self.assertIsNotNone(by_id[self.q_error.id].error)
         self.assertEqual(seen_caps, [0, 0, 0])  # q1, q2, q_error ran uncapped; q_bad skipped before running
-        self.assertEqual(db_time_cap.explorer_cap_ms(), 20000)
         self.assertTrue(all(c.kwargs["timeout"] == 555 for c in cache_set.call_args_list))
         # the entries the views read are now warm
         self.assertEqual(cache.get(views_module.explorer_query_cache_key(self.q1.id)), ["warm-1"])
