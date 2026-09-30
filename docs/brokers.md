@@ -4,8 +4,9 @@ YSE-PZ talks to alert brokers through one interface (`YSE_App/brokers/`,
 issue #272) and can poll them on a schedule, run each group's saved filters on
 the incoming alerts and put the ones that pass on a scanning page as
 *candidates*, separate from the dashboard, until someone saves or rejects them
-(issue #276). This is the polling half of that design; Kafka stream consumers
-(#278) are not part of it. The non-optical feeds (Hermes / SCiMMA, Einstein Probe,
+(issue #276). This page covers the providers, the filters, the polling ingest,
+the scanning page and the API; the Kafka / ANTARES stream consumers (#278) are
+in docs/broker-streams.md and feed the same tables. The non-optical feeds (Hermes / SCiMMA, Einstein Probe,
 JPL Scout; #280) are `BrokerProvider`s too and reuse the candidate table and page:
 see docs/feeds-hermes.md, docs/feeds-einstein-probe.md and docs/feeds-jpl-scout.md.
 
@@ -13,8 +14,9 @@ see docs/feeds-hermes.md, docs/feeds-einstein-probe.md and docs/feeds-jpl-scout.
 
 | term | meaning |
 |---|---|
-| provider | a `BrokerProvider` subclass for one broker (`antares`, `fink`, `alerce`), registered by slug in `YSE_App.brokers.registry` |
-| capability | what a provider implements: `query_alerts`, `get_alert`, `cutouts`, `cone_search`, `photometry`, `save_as_transient`, `filter_crud`; `provider.capabilities_list()` drives what the page and the API offer |
+| provider | a `BrokerProvider` subclass for one broker (`antares`, `fink`, `alerce`, `lasair`), registered by slug in `YSE_App.brokers.registry` |
+| capability | what a provider implements: `query_alerts`, `get_alert`, `cutouts`, `cone_search`, `photometry`, `save_as_transient`, `filter_crud`, `stream`; `provider.capabilities_list()` drives what the page and the API offer |
+| `BrokerConnection` | a configured stream (Kafka / ANTARES) a `broker_ingest` worker consumes; off by default (docs/broker-streams.md) |
 | `BrokerAlert` | the normalised alert every provider returns: object id, latest alert id, position, MJDs, latest mag/band, `rb`/`drb`, `ndet`, classification and class probabilities, galactic latitude, cutout links, the raw payload |
 | `BrokerFilter` | a saved rule for one broker, owned by a group (or shared when the group is blank): a broker-side `query` and client-side `criteria`, plus the save policy |
 | `Candidate` | a broker object that passed at least one enabled filter during a poll; status `new` / `saved` / `rejected`, linked to the `Transient` once saved; unique on (broker, object id) |
@@ -27,6 +29,10 @@ see docs/feeds-hermes.md, docs/feeds-einstein-probe.md and docs/feeds-jpl-scout.
 | `antares` | NOIRLab ANTARES via `antares-client` (already pinned; the web venv may lack it, then the provider is *unavailable*) | none for public search | query alerts, fetch, cone search, photometry (ZTF and LSST rows), save |
 | `fink` | Fink public REST API (`/api/v1/latests`, `/objects`, `/conesearch`, `/cutouts`) | none | all of the above plus cutouts |
 | `alerce` | ALeRCE public REST API (`/ztf/v1/objects`, `/lightcurve`, `/probabilities`, avro stamps) | none | all of the above plus cutouts |
+| `lasair` | Lasair REST API (`/streams/<topic>/`, `/objects/`, `/lightcurves/`, `/cone/`; Sherlock class) and the public Kafka filter streams | `EncryptedCredential(service="lasair")` with `{"token": ...}`; without it the provider is *unavailable* and absent from `enabled_providers()` | query alerts (a Lasair filter's stream), fetch, cone search, photometry, save, stream |
+
+Stream capability (`fink`, `lasair`, `antares`): `parse_stream_message(topic, message)`
+turns one Kafka / streaming message into a `BrokerAlert`; see docs/broker-streams.md.
 
 `python manage.py brokers` prints the table for this environment (`--json`,
 `--all` to include providers switched off by `enabled`). A provider whose client
@@ -62,7 +68,8 @@ class LasairProvider(BrokerProvider):
 Put the module in `[brokers] PROVIDER_MODULES` (or in
 `registry.DEFAULT_PROVIDER_MODULES` for a shipped one). Only the methods for the
 declared capabilities need implementing; the base class raises
-`CapabilityNotSupported` for the rest. `get_photometry` returns the point dicts
+`CapabilityNotSupported` for the rest. `brokers/lasair.py` is the shipped
+example of a credential-bearing provider. `get_photometry` returns the point dicts
 `Query_LSST.parse_locus_lightcurve` produces (`make_point` builds one), with
 `limit` set for non-detections; `points_to_upload_blocks` turns them into the
 `/add_transient` photometry document.
@@ -100,7 +107,25 @@ An unknown key or a wrong type is rejected at save time (admin, API and
 
 - save policy: `auto_save` (promote at poll time), `save_status` (default
   `New`), `save_obs_group` (blank: the provider's, `ZTF` or `LSST`),
-  `import_photometry`, `max_alerts` per poll.
+  `import_photometry`, `default_tags` (`TransientTag`s added to every transient
+  saved from the filter's candidates, by a scanner or by auto-save), `max_alerts` per poll;
+- `topics`: stream topics the filter applies to (blank = every topic of the
+  broker's connection; polls ignore it);
+- `notify_group`: when an alert first passes the filter, the group's members get
+  a notification of kind `candidate` (preference group *Alerts*, so email /
+  Slack follow the user's settings; in-app always) linking to the candidates page
+  filtered on that filter;
+- `version`: bumped whenever `query` / `criteria` / `topics` change (admin or
+  API); every state is kept as a `BrokerFilterVersion` row
+  (`GET /api/brokerfilters/<id>/versions/`, admin inline), the older ones
+  inactive history.
+
+`GET|POST /api/brokerfilters/<id>/preview/?n=50` runs the rule against the
+broker's last `n` alerts without writing a candidate and returns
+`fetched` / `passed` / `failed` plus, per alert, the criteria keys it failed; a
+POST body may carry `criteria` / `query` to try a change before saving it
+(unknown keys -> 400). `manage.py broker_poll --broker <slug> --dry-run` is the
+command-line equivalent for every filter of a broker.
 
 Example (Fink, young bright SN candidates away from the plane):
 
@@ -151,6 +176,33 @@ template / difference) when the provider has that capability, and:
   the chosen status.
 - **Reject** (with an optional note) hides it from the *new* queue; a later
   poll updates the row but never re-opens it. **Re-open** undoes a rejection.
+  Rejections are remembered per group: a scanner who belongs to the group
+  owning the filter hides the candidate for that group only
+  (`Candidate.rejected_by_groups`); other groups whose filters also passed it
+  still see it in their queue, and the row only turns `rejected` once every
+  owning group has rejected it. Staff, a shared (group-less) filter, or
+  `scope=all` on the API reject globally.
+
+## Brokers tab and cone search (#275)
+
+The transient detail page has a lazily-loaded **Brokers** tab: for every
+enabled provider with a cone search it lists the alerts within
+`DETAIL_RADIUS_ARCSEC` (5") of the transient, nearest first, with separation,
+latest detection, magnitude, real/bogus, class (and class probabilities),
+cutout thumbnails when the provider has them, and whether the object is
+already a YSE-PZ transient. A broker that is unavailable or fails answers with
+an inline warning in its own section; the other brokers still render.
+**Import photometry** queues a `brokers.import_photometry` job that pulls the
+broker light curve onto the transient and records the broker name as an alias.
+
+`/brokers/search/` (sidebar *Broker Search*) takes RA / Dec (degrees or
+sexagesimal) and a radius, or an object name (a YSE-PZ transient or alias, or a
+broker object id resolved through the providers' `get_alert`), and shows the
+same per-provider tables for any position, plus the YSE-PZ transients already
+within the radius. **Save as transient** (choose the status, default `New`)
+creates the transient through the provider (`obs_group` from the provider,
+broker name as alias, light curve imported) and records a `Candidate` row in
+status `saved` for provenance, so it appears on the dashboard *New* table.
 
 ## API
 
@@ -159,11 +211,15 @@ template / difference) when the provider has that capability, and:
   provider is unavailable, 502 on a broker error);
 - `/api/brokerfilters/` CRUD, group-scoped: a user manages filters of groups
   they belong to, only staff create shared (group-less) filters; validation
-  errors are 400;
+  errors are 400; `GET .../<id>/versions/`, `GET|POST .../<id>/preview/`;
+- `GET /api/brokerconnections/` and `GET /api/brokerconnections/heartbeats/`
+  (stream configuration and worker liveness, read-only);
 - `GET /api/candidates/?broker=&status=&alert_id=` and
   `POST /api/candidates/<id>/save/` (`status`, `obs_group`, `import_photometry`),
-  `.../reject/` (`note`), `.../reopen/`; `GET /brokers/status.json` is the
-  same provider listing for the page.
+  `.../reject/` (`note`, optional `scope=all`), `.../reopen/`; non-staff
+  listings leave out candidates their groups rejected unless
+  `?include_rejected=1`; `GET /brokers/status.json` is the same provider
+  listing for the page.
 
 ## Settings (`settings.ini`, `[brokers]`, all optional)
 
@@ -177,7 +233,9 @@ template / difference) when the provider has that capability, and:
 | `MATCH_RADIUS_ARCSEC` | `2.0` | link instead of create within this radius |
 | `AUTO_SAVE_USERNAME` | `admin` | user stamped on auto-saved transients |
 | `CANDIDATES_PAGE_SIZE` | `50` | rows per page |
-| `FINK_API_URL`, `ALERCE_API_URL` | public endpoints | overrides |
+| `FINK_API_URL`, `ALERCE_API_URL`, `LASAIR_API_URL` | public endpoints | overrides |
+| `DETAIL_RADIUS_ARCSEC` | `5.0` | Brokers tab / search default radius |
+| `STREAM_BATCH_SIZE`, `STREAM_STALE_MINUTES` | `100`, `15` | stream consumers (docs/broker-streams.md) |
 
 ## Deploying
 
@@ -192,6 +250,10 @@ template / difference) when the provider has that capability, and:
    must be running, as for notifications.
 
 Tests: `YSE_App/tests/test_brokers.py` (providers with mocked HTTP / client,
-evaluator, ingest, save/reject, page, API, commands; 42 tests) and the
-unchanged `test_lsst_antares_ingest.py`. SkyPortal's `broker_plugins.md` /
+evaluator, ingest, save/reject, page, API, commands), `test_broker_streams.py`
+(Lasair, stream parsers, consumer loop, versions / preview, per-group
+rejection, Brokers tab, cone search) and the unchanged
+`test_lsst_antares_ingest.py`. `Query_ZTF.AntaresZTF` reaches the ANTARES
+client through `YSE_App.brokers.antares` too, so the module imports without
+`antares_client` and the cron reports the missing package instead. SkyPortal's `broker_plugins.md` /
 `broker_ingestion.md` were the design reference; no SkyPortal code is used.

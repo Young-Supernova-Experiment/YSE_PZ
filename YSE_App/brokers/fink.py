@@ -24,6 +24,7 @@ from YSE_App.brokers.base import (
     PHOTOMETRY,
     QUERY_ALERTS,
     SAVE_AS_TRANSIENT,
+    STREAM,
     BrokerAlert,
     BrokerProvider,
     make_point,
@@ -114,8 +115,11 @@ class FinkProvider(BrokerProvider):
     slug = "fink"
     name = "Fink"
     description = "Fink broker (ZTF) through its public REST API; no credential needed."
-    capabilities = (QUERY_ALERTS, GET_ALERT, CUTOUTS, CONE_SEARCH, PHOTOMETRY, SAVE_AS_TRANSIENT)
+    capabilities = (QUERY_ALERTS, GET_ALERT, CUTOUTS, CONE_SEARCH, PHOTOMETRY, SAVE_AS_TRANSIENT, STREAM)
     query_keys = ("classes", "days", "n")
+    stream_format = "avro"
+    stream_bootstrap_servers = "kafka-ztf.fink-broker.org:24499"
+    stream_topics = ("fink_sn_candidates_ztf", "fink_early_sn_candidates_ztf")
 
     @property
     def api(self) -> str:
@@ -196,6 +200,43 @@ class FinkProvider(BrokerProvider):
                                          alert_id=row.get("i:candid"), bad=(tag == "badquality")))
         points.sort(key=lambda p: p["mjd"])
         return points
+
+
+# Fink added values that arrive at the top level of a stream packet (``d:`` columns in the REST rows).
+STREAM_ADDED_VALUES = ("cdsxmatch", "rf_snia_vs_nonia", "snn_snia_vs_nonia", "snn_sn_vs_all", "rf_kn_vs_nonkn",
+                       "roid", "mulens", "nalerthist", "tag", "tracklet", "DR3Name", "Plx", "e_Plx", "gcvs", "vsx")
+
+
+def stream_packet_to_row(packet: Dict) -> Optional[Dict]:
+    """Flatten one Fink Kafka packet (Avro: ``objectId``, ``candidate``, Fink values at the top
+    level) into the ``i:`` / ``d:`` keyed row the REST parser understands."""
+    if not isinstance(packet, dict):
+        return None
+    candidate = packet.get("candidate")
+    if not isinstance(candidate, dict):
+        return None
+    row = {"i:%s" % k: v for k, v in candidate.items() if not isinstance(v, (bytes, bytearray))}
+    row["i:objectId"] = packet.get("objectId") or candidate.get("objectId")
+    for key in STREAM_ADDED_VALUES:
+        if key in packet:
+            row["d:%s" % key] = packet[key]
+    if "v:classification" not in row:
+        label = packet.get("finkclass") or packet.get("classification") or packet.get("cdsxmatch")
+        if label:
+            row["v:classification"] = label
+    if not row.get("i:objectId") or _f(row.get("i:ra")) is None or _f(row.get("i:dec")) is None:
+        return None
+    return row
+
+
+def _fink_parse_stream(self, topic, message, *, key=None):
+    row = stream_packet_to_row(message)
+    if row is None:
+        return None
+    return row_to_alert(row, self.cutout_urls(str(row["i:objectId"]), str(row.get("i:candid") or "")))
+
+
+FinkProvider.parse_stream_message = _fink_parse_stream
 
 
 def datetime_mjd(dt: datetime.datetime) -> float:

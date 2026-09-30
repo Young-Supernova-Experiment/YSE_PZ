@@ -113,6 +113,7 @@
 								<span class="badge {% if c.status == 'saved' %}badge-success{% elif c.status == 'rejected' %}badge-secondary{% else %}badge-warning{% endif %}">{{ c.get_status_display }}</span>
 								{% if c.transient %}<br><a href="{% url 'transient_detail' c.transient.slug %}">{{ c.transient.name }}</a>{% endif %}
 								{% if c.note %}<br><span class="small text-muted">{{ c.note }}</span>{% endif %}
+								{% if row.rejected_groups %}<br><span class="small text-muted yse-rejected-by" title="groups that rejected this candidate">rejected by {{ row.rejected_groups|join:", " }}</span>{% endif %}
 							</td>
 							<td class="text-nowrap">
 								{% if row.can_save %}

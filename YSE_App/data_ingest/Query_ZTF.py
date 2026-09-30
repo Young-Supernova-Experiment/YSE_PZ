@@ -13,7 +13,18 @@ from YSE_App.models.survey_models import *
 import json
 import re
 import datetime
-from antares_client.search import search
+# ANTARES client access goes through the broker provider (#273): the import is
+# guarded there, so this module imports in a venv without antares_client and
+# the cron reports the missing package instead of failing at import time.
+from YSE_App.brokers.antares import HAS_ANTARES as _HAS_ANTARES
+from YSE_App.brokers import antares as _antares_provider
+
+
+def search(query):
+	"""ANTARES ElasticSearch query via ``YSE_App.brokers.antares`` (raises when the client is missing)."""
+	if not _HAS_ANTARES or _antares_provider.search is None:
+		raise RuntimeError("antares_client is not installed in this environment (see docs/brokers.md)")
+	return _antares_provider.search(query)
 from astropy.coordinates import SkyCoord, Angle
 import astropy.units as u
 import time

@@ -670,6 +670,13 @@ BROKER_CANDIDATES_PAGE_SIZE = config.getint('brokers', 'CANDIDATES_PAGE_SIZE', f
 # Override the public REST endpoints (tests, mirrors).
 BROKER_FINK_API_URL = config.get('brokers', 'FINK_API_URL', fallback='') or None
 BROKER_ALERCE_API_URL = config.get('brokers', 'ALERCE_API_URL', fallback='') or None
+BROKER_LASAIR_API_URL = config.get('brokers', 'LASAIR_API_URL', fallback='') or None
+# Stream consumers (broker_ingest, #278): messages per batch / commit, and how old a
+# running worker's heartbeat may be before the dashboard shows the banner.
+BROKER_STREAM_BATCH_SIZE = config.getint('brokers', 'STREAM_BATCH_SIZE', fallback=100)
+BROKER_STREAM_STALE_MINUTES = config.getfloat('brokers', 'STREAM_STALE_MINUTES', fallback=15.0)
+# Transient-detail Brokers tab (#275): cone-search radius around the transient.
+BROKER_DETAIL_RADIUS_ARCSEC = config.getfloat('brokers', 'DETAIL_RADIUS_ARCSEC', fallback=5.0)
 # Sharing services: TNS reporting, submission queue, TNS retrieval (#324;
 # docs/tns-sharing.md). All keys optional, under [sharing] in settings.ini.
 # The bot credentials live in EncryptedCredential rows, not here.

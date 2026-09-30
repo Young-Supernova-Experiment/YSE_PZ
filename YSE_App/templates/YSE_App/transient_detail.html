@@ -46,6 +46,7 @@
                     <li class="nav-item"><a class="nav-link" href="#photometry_tab" data-toggle="tab">Detailed Photometry</a></li>
                     <li class="nav-item"><a class="nav-link" href="#analysis_tab" data-toggle="tab" id="analysis_tab_header">Analysis</a></li>
                     <li class="nav-item"><a class="nav-link" href="#annotations_tab" data-toggle="tab" id="annotations_tab_header">Annotations</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#brokers_tab" data-toggle="tab" id="brokers_tab_header">Brokers</a></li>
                     <li class="nav-item"><a class="nav-link" href="#spectra_tab" data-toggle="tab">Spectra</a></li>
                     <li class="nav-item"><a class="nav-link" href="#hst_tab" data-toggle="tab" id="hst_tab_header">HST Data</a></li>
                     <li class="nav-item"><a class="nav-link" href="#jwst_tab" data-toggle="tab" id="jwst_tab_header">JWST Data</a></li>
@@ -176,6 +177,29 @@
                         <div id="annotations_container">
                             <p class="text-muted"><i class="fa fa-info-circle"></i> Annotations load when you open this tab.</p>
                         </div>
+                    </div>
+                    <div class="tab-pane" id="brokers_tab">
+                        <div id="brokers_tab_content" data-fragment-url="{% url 'transient_detail_brokers_fragment' transient.id %}" data-import-url="{% url 'transient_broker_import' transient.id %}">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Broker matches load when you open this tab.</p>
+                        </div>
+                        <script>
+                        /* Brokers tab (#275): lazy fragment, independent of the detail-page defer switch. */
+                        document.addEventListener('DOMContentLoaded', function() {
+                            var loaded = false;
+                            function load() {
+                                if (loaded || !window.jQuery) { return; }
+                                loaded = true;
+                                var $c = jQuery('#brokers_tab_content');
+                                $c.html('<p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Asking the brokers…</p>');
+                                jQuery.get($c.data('fragment-url')).done(function(html) { $c.html(html); }).fail(function() {
+                                    loaded = false;
+                                    $c.html('<p class="text-danger">Failed to load the broker matches.</p>');
+                                });
+                            }
+                            jQuery('a[href="#brokers_tab"]').on('shown.bs.tab', load);
+                            if (window.location.hash === '#brokers_tab') { load(); }
+                        });
+                        </script>
                     </div>
                     <div class="tab-pane" id="spectra_tab">
                         <div id="spectra_tab_content">

@@ -25,6 +25,7 @@ DEFAULT_PROVIDER_MODULES = (
     "YSE_App.brokers.antares",
     "YSE_App.brokers.fink",
     "YSE_App.brokers.alerce",
+    "YSE_App.brokers.lasair",
     # Feed providers (#280): Hermes, Einstein Probe, JPL Scout live in YSE_App.feeds.
     "YSE_App.feeds.hermes",
     "YSE_App.feeds.einstein_probe",
