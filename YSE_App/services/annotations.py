@@ -8,7 +8,7 @@
   group audience (staff see everything).
 * :func:`legacy_annotation` presents the annotation-like columns that already
   live on ``Transient`` (``point_source_probability``, ``real_bogus_score``,
-  ``antares_classification``, ``mw_ebv``, ``has_hst`` ...) as a read-only
+  ``antares_classification``, ``mw_ebv``, ``has_hst``, ``has_jwst`` ...) as a read-only
   ``origin='legacy'`` document, so the API and the detail panel show one list
   and the search filters accept ``legacy.<column>`` (no data migration).
 * :func:`annotation_services` lists the ``ExternalService`` rows of kind
@@ -210,13 +210,15 @@ LEGACY_FIELDS = (
     ("antares_classification", "antares_classification"),
     ("alt_status", "alt_status"),
     ("has_hst", "has_hst"),
+    ("has_jwst", "has_jwst"),
     ("has_spitzer", "has_spitzer"),
     ("has_chandra", "has_chandra"),
     ("TNS_spec_class", "TNS_spec_class"),
 )
 # Keys whose column is numeric or boolean (usable with the min / max filters).
 LEGACY_NUMERIC_KEYS = ("point_source_probability", "real_bogus_score", "mw_ebv",
-                       "has_hst", "has_spitzer", "has_chandra")
+                       "has_hst", "has_jwst", "has_spitzer", "has_chandra")
+LEGACY_BOOLEAN_KEYS = ("has_hst", "has_jwst", "has_spitzer", "has_chandra")
 LEGACY_COLUMNS = {key: column for key, column in LEGACY_FIELDS}
 
 

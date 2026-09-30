@@ -1,14 +1,15 @@
 # Analysis services
 
 SkyPortal-parity umbrella #312 (#313 registry / payload / runners / callback, #314 Analysis tab,
-first slice of #315 the sncosmo fitter). An **analysis service** takes a transient's data, runs a
+#315 the sncosmo fitter, the Summary-tab Refit and NGSF). An **analysis service** takes a transient's data, runs a
 fit or classifier and hands back a parameter table, plots and files that are kept per run and
 shown on the transient detail page. Two kinds are supported:
 
-* **in-process** runners: Python modules executed by the background job queue (#340). Two ship:
-  `sncosmo_fit` (SALT3 / any sncosmo source; the fit the Summary tab's synchronous `salt2plot`
-  view performs, kept with parameters, errors, covariance and plots) and `bazin_fit` (the joint
-  Bazin fit of #225 / #336 with the extrapolated magnitude).
+* **in-process** runners: Python modules executed by the background job queue (#340). Three ship:
+  `sncosmo_fit` (SALT3 / any sncosmo source, kept with parameters, errors, covariance and plots; the
+  Summary tab's SALT3 overlay and Refit button use it, see below), `bazin_fit` (the joint Bazin fit
+  of #225 / #336 with the extrapolated magnitude) and `ngsf` (Next Generation SuperFit spectral
+  classification through an installed NGSF; `docs/ngsf.md`).
 * **webhook** services: YSE-PZ POSTs the transient's data to the service's URL with a per-run
   callback token; the service reports status, results JSON, plots and opaque files (arviz /
   joblib blobs) on the callback endpoint of #342.
@@ -43,12 +44,41 @@ run they start is built from the data *they* may access (usually none, so it fai
 message). Result files are served by `analysis_runs/<uuid>/files/<id>/<name>` (requester, staff, or
 anyone with data access), never from `MEDIA_URL`.
 
+## The Summary tab: stored SALT3 fit, Refit, NGSF (#315)
+
+The Summary tab no longer fits SALT2 inside the plot request. **Show SALT3 Fit** (`salt2plot/<id>/1`,
+`salt2fluxplot/<id>/1`; the URLs are unchanged) overlays the **last successful `sncosmo_fit` run** on
+the transient: its `model_curves.json` gives one model line per band and its result gives the labels
+(phase today, z, t0, mB, x1, c, and "salt3 fit <date> by <user>"). Without a stored run the plot
+says "No stored SALT3 fit yet: use Refit on the Summary tab" and never blocks. The helpers live in
+`YSE_App/services/fit_status.py` (`stored_salt_fit`, `model_curves` (cached 10 min), `salt_fit_labels`)
+and `view_utils._overlay_stored_salt_fit`; the cached detail plot's key carries the run id.
+
+Under the photometry buttons a **SALT3 fit:** line (fragment `transient_detail/<id>/salt_fit_fragment/`,
+template `transient_detail/salt_fit_status.html`) shows the stored fit's `t0`, `z`, `x1`, `c`, `mB`,
+chi2/dof, date and requester, a **Refit** button and a **details** link to the Analysis tab. Refit POSTs
+`{service: <slug>, params: {}}` to the Analysis tab's run endpoint, so the daily cap, group audience and
+"enabled" state apply; the line then polls `analysis_runs/<uuid>/status.json` and reloads itself, and
+if the SALT3 overlay is showing the light curve is re-fetched with the new curves. States: not
+registered ("not available on this server", staff see the registration command), disabled, refit
+queued / refitting (button disabled), last refit failed (error text, button back), daily limit reached,
+"your groups may not run it". The service used is the first enabled in-process service whose
+`runner_path` is `sncosmo_fit` that the user may run.
+
+Under the spectrum plot the **NGSF classification:** line (`transient_detail/<id>/ngsf_fragment/`,
+`transient_detail/ngsf_status.html`) does the same for the `ngsf` runner, with the extra "NGSF is not
+installed on this server" state from `YSE_App.analysis.ngsf.availability()`; see `docs/ngsf.md`.
+
+`lightcurveplot_summary(salt2=True)` (not URL-reachable with the flag) is the only synchronous sncosmo
+fit left and keeps the #189 guard.
+
 ## Registering a service
 
 ```bash
-# the two shipped in-process runners (idempotent; re-running updates the row)
+# the shipped in-process runners (idempotent; re-running updates the row)
 python manage.py register_analysis_service --builtin sncosmo_fit --cap 20
 python manage.py register_analysis_service --builtin bazin_fit
+python manage.py register_analysis_service --builtin ngsf --cap 10 --timeout 1800   # needs NGSF installed, docs/ngsf.md
 
 # a webhook service, restricted to one group, with a bearer token from an EncryptedCredential
 python manage.py register_analysis_service ngsf "NGSF spectral matching" \
@@ -177,6 +207,7 @@ entries), 400 bad body, 403 wrong token, 404 unknown run, 409 already finished.
 | `ANALYSIS_HTTP_TIMEOUT_SECONDS` | 30 | webhook POST timeout |
 | `ANALYSIS_MAX_ATTACHMENT_BYTES` | 26214400 | per result file |
 | `ANALYSIS_MAX_FILES_PER_RUN` | 20 | files kept per run |
+| `NGSF_COMMAND`, `NGSF_HOME`, `NGSF_SUBPROCESS_TIMEOUT` | `ngsf`, empty, 1500 | the NGSF runner (`docs/ngsf.md`) |
 | `JOB_RUNNER_INLINE` | False | run jobs in the web process (development) |
 
 Result files live under `MEDIA_ROOT/service_runs/<run uuid>/` (`MEDIA_ROOT` is `<repo>/media` unless
@@ -198,11 +229,16 @@ overridden); `manage.py expire_service_runs --days 90` deletes old runs with the
   `signals.py`, so every process knows the runner.
 - The callback URL uses `YSE_PUBLIC_BASE_URL`; set it on stacks that run webhook services.
 
-## Not in this slice (rest of #312 / #315)
+- Migration `0028_transient_has_jwst` also carries the `runner_path` help text naming the `ngsf` built-in.
+- The Summary tab shows a stored SALT3 fit only once `sncosmo_fit` is registered and a run has
+  succeeded; until then the line says so and the plot's overlay button reports "No stored SALT3 fit".
+  Register the service and click **Refit** on a few transients (or `POST /api/analysisruns/`) to seed it.
+- NGSF is optional; `docs/ngsf.md` has the install steps.
 
-The Summary tab still refits SALT2 synchronously on every load (`salt2plot`); moving it onto the
-stored `sncosmo_fit` run with a "Refit" button, NGSF as a second shipped service (external-service
-mode with a container recipe), spectral-cube and summariser services, Bokeh-JSON plots on the tab and a
-periodic expiry of timed-out webhook runs are follow-ups.
+## Not in this slice (rest of #312)
 
-Tests: `YSE_App/tests/test_analysis_services.py`.
+Spectral-cube and summariser services, Bokeh-JSON plots on the tab and a periodic expiry of timed-out
+webhook runs are follow-ups.
+
+Tests: `YSE_App/tests/test_analysis_services.py`, `YSE_App/tests/test_summary_refit.py` (Summary-tab
+overlay, fragments, Refit, NGSF), `YSE_App/tests/test_salt2_fit_guard.py`.

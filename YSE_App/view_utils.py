@@ -188,6 +188,48 @@ def _note_salt2_fit_failure(ax, exc, transient_id):
         logger.debug("could not annotate plot with SALT fit failure", exc_info=True)
 
 
+SALT_FIT_NONE_TEXT = "No stored SALT3 fit yet: use Refit on the Summary tab"
+
+
+def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=None):
+    """Draw the last successful ``sncosmo_fit`` run (#315) instead of refitting in the request.
+
+    ``series`` is ``[(bandkey, color)]`` with ``bandkey`` the ``bandpassdict``
+    key (``"Band: <instrument> - <band>"``). The run's ``model_curves.json``
+    holds magnitudes on zero point 27.5 per sncosmo band; ``flux_space``
+    converts them to the flux plot's units. Returns the run drawn, or ``None``
+    when there is no stored fit (the plot then says so and never blocks).
+    """
+    from YSE_App.services import fit_status
+
+    run = salt_run if salt_run is not None else fit_status.stored_salt_fit(transient_id)
+    if run is None:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#666666',
+            text=SALT_FIT_NONE_TEXT,
+        ))
+        return None
+    curves = fit_status.model_curves(run)
+    grid = np.asarray(curves.get('mjd') or [], dtype=float)
+    drawn = set()
+    for bandkey, color in series:
+        sband = bandpassdict.get(bandkey)
+        model = curves.get('bands', {}).get(sband) if sband else None
+        if not model or sband in drawn or len(model) != len(grid):
+            continue
+        drawn.add(sband)
+        mag = np.array([np.nan if v is None else float(v) for v in model], dtype=float)
+        y = 10 ** (-0.4 * (mag - 27.5)) if flux_space else mag
+        ok = np.isfinite(y)
+        if ok.any():
+            ax.line(grid[ok], y[ok], color=color)
+    for i, text in enumerate(fit_status.salt_fit_labels(run, today)):
+        ax.add_layout(Label(x=10, y=280 - 15 * i, x_units='screen', y_units='screen',
+                            render_mode='css', text_font_size='10pt', text=text))
+    return run
+
+
 MAX_LC_DISPLAY_POINTS = int(os.environ.get('YSE_LC_PLOT_MAX_POINTS', '3000'))
 MAX_SPEC_DISPLAY_PIXELS = int(os.environ.get('YSE_SPEC_PLOT_MAX_PIXELS', '800'))
 PLOT_HTML_CACHE_TIMEOUT = int(os.environ.get('YSE_PLOT_CACHE_SECONDS', '900'))
@@ -1236,11 +1278,18 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
 
     plot_width = _requested_plot_width(request, 400)
     cache_key = None
-    if not salt2 and _plot_html_cache_enabled():
+    salt_run = None
+    if salt2:
+        # The SALT3 overlay is the stored run's curves (#315): cheap and
+        # deterministic per run, so it is cached under the run's id.
+        from YSE_App.services import fit_status
+        salt_run = fit_status.stored_salt_fit(transient_id)
+    if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
             f'lc_detail_v6_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
+            + (f'_salt{salt_run.pk if salt_run is not None else 0}' if salt2 else '')
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -1477,71 +1526,16 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ax.extra_y_ranges = {"Abs. Mag": Range1d(start=ax.y_range.start-mu, end=ax.y_range.end-mu)}
         ax.add_layout(LinearAxis(y_range_name="Abs. Mag", axis_label="Abs. Mag"), 'right')
 
-    if salt2 and len(salt2flux):
-        try:
-            model = sncosmo.Model(source='salt2')
-            if transient.redshift:
-                model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-            elif transient.host and transient.host.redshift:
-                model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-            else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
-
-            zp = np.array([27.5]*len(salt2band))
-            data = Table([salt2mjd,salt2band,salt2flux.astype(float),salt2fluxerr.astype(float),zp,zpsys],
-                         names=['mjd','band','flux','fluxerr','zp','zpsys'],
-                         meta={'t0':salt2mjd[salt2flux == np.max(salt2flux)]})
-
-            snr = salt2flux / salt2fluxerr
-            pkguess = np.atleast_1d(
-                salt2mjd[(snr > 3) & (salt2flux == np.max(salt2flux[snr > 3]))]
-            )
-            if len(pkguess):
-                pkguess = pkguess[0]
-                data = data[(salt2mjd > pkguess-20) & (salt2mjd < pkguess+40)]
-                result, fitted_model = sncosmo.fit_lc(
-                    data, model, fitparams,
-                    bounds={'t0':(pkguess-10, pkguess+10),
-                            'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})
-
-                count = 0
-                plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
-                bandunq,idx = np.unique(band,return_index=True)
-                for bs,bn,b,bc,bsym,inn in zip(
-                        bandunq,band_name[idx],band[idx],disp_color[idx],disp_symbol[idx],instrument_name[idx]):
-                    color = band_display_color(bn, bc, fallback_index=count)
-                    count += 1
-                    bandkey = 'Band: %s - %s'%(inn,bn)
-                    if bandkey in bandpassdict.keys() and bandpassdict[bandkey] in salt2band:
-                        model_flux = fitted_model.bandflux(
-                            bandpassdict[bandkey], plotmjd, zp=27.5,
-                            zpsys=zpsys[bandpassdict[bandkey] == salt2band][0])
-                        ax.line(plotmjd,-2.5*np.log10(model_flux)+27.5,color=color)
-
-                lcphase = today-result['parameters'][1]
-                if lcphase > 0: lcphase = '+%.1f'%(lcphase)
-                else: lcphase = '%.1f'%(lcphase)
-                latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
-                               render_mode='css', text_font_size='10pt',
-                               text="phase = %s days"%(lcphase))
-                latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
-                               render_mode='css', text_font_size='10pt',
-                               text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
-                latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
-                               render_mode='css', text_font_size='10pt',
-                               text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
-                latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
-                               render_mode='css', text_font_size='10pt',
-                               text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
-                latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
-                               render_mode='css', text_font_size='10pt',
-                               text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
-                latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
-                               render_mode='css', text_font_size='10pt',
-                               text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
-                for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
-                    ax.add_layout(latex)
-        except Exception as exc:
-            _note_salt2_fit_failure(ax, exc, transient_id)
+    if salt2:
+        # Stored SALT3 fit (#315): no sncosmo call in the request.
+        series = []
+        count = 0
+        bandunq, idx = np.unique(band, return_index=True)
+        for bn, bc, inn in zip(band_name[idx], disp_color[idx], instrument_name[idx]):
+            color = band_display_color(bn, bc, fallback_index=count)
+            count += 1
+            series.append(('Band: %s - %s' % (inn, bn), color))
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=salt_run)
 
     html = file_html(ax, CDN, "my plot").replace('width: 90%', 'width: 100%')
     if cache_key:
@@ -1794,66 +1788,18 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     ax.xaxis[0].major_label_overrides = overridedict
     
     if salt2:
-        try:
-            model = sncosmo.Model(source='salt2')
-            if transient.redshift:
-                model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-            elif transient.host and transient.host.redshift:
-                model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-            else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
-            
-            zp = np.array([27.5]*len(salt2band))
-            data = Table([salt2mjd,salt2band,salt2flux,salt2fluxerr,zp,zpsys],
-                         names=['mjd','band','flux','fluxerr','zp','zpsys'],
-                         meta={'t0':salt2mjd[salt2flux == np.max(salt2flux)]})
-
-            result, fitted_model = sncosmo.fit_lc(
-                data, model, fitparams,
-                bounds={'t0':(min(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))-10,
-                              max(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))+10),
-                        'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})
-        
-            count = 0
-            plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
-            bandunq,idx = np.unique(bandstr,return_index=True)
-            for bs,b,bc in zip(bandunq,band[idx],bandcolor[idx]):
-                if bc != 'None' and bc:
-                    color = bc
-                else:
-                    coloridx = count % len(np.unique(colorlist))
-                    color = colorlist[coloridx]
-                    count += 1
-                
-                if bs in bandpassdict.keys() and bandpassdict[bs] in salt2band:
-                    salt2flux = fitted_model.bandflux(bandpassdict[bs], plotmjd, zp=27.5,zpsys=zpsys[bandpassdict[bs] == salt2band][0])
-                    ax.line(plotmjd,salt2flux,color=color)
-                
-            lcphase = today-result['parameters'][1]
-            if lcphase > 0: lcphase = '+%.1f'%(lcphase)
-            else: lcphase = '%.1f'%(lcphase)
-            latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
-                           render_mode='css', text_font_size='10pt',
-                           text="phase = %s days"%(
-                               lcphase))
-            latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
-                           render_mode='css', text_font_size='10pt',
-                           text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
-            latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
-                           render_mode='css', text_font_size='10pt',
-                           text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
-            latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
-                           render_mode='css', text_font_size='10pt',
-                           text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
-            latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
-                           render_mode='css', text_font_size='10pt',
-                           text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
-            latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
-                           render_mode='css', text_font_size='10pt',
-                           text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
-            for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
-                ax.add_layout(latex)
-        except Exception as exc:
-            _note_salt2_fit_failure(ax, exc, transient_id)
+        # Stored SALT3 fit (#315) in flux units; no sncosmo call in the request.
+        series = []
+        count = 0
+        bandunq, idx = np.unique(bandstr, return_index=True)
+        for bs, bc in zip(bandunq, bandcolor[idx]):
+            if bc != 'None' and bc:
+                color = bc
+            else:
+                color = colorlist[count % len(np.unique(colorlist))]
+                count += 1
+            series.append((str(bs), color))
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=True)
 
     g = file_html(ax,CDN,"my plot")
     return HttpResponse(g.replace('width: 90%','width: 100%'))
@@ -2329,14 +2275,32 @@ def _archive_status_with_timeout(work, *, timeout_seconds=None):
         pool.shutdown(wait=False)
 
 
-def _archive_status_payload(cache_key, lookup, archive_name):
-    """JSON payload for the HST/Chandra tab labels.
+def _record_archive_flag(transient_id, field, has_data):
+    """Store a fresh archive answer on ``Transient.<field>`` (``has_hst`` / ``has_jwst`` / ``has_chandra``).
+
+    One ``UPDATE`` only when the stored value differs; bypasses ``save()`` so
+    ``modified_date`` and the save signals are left alone (this is a lookup,
+    not an edit). A failed write never breaks the tab label.
+    """
+    if has_data is None or not field:
+        return False
+    try:
+        return bool(Transient.objects.filter(pk=transient_id).exclude(**{field: bool(has_data)})
+                    .update(**{field: bool(has_data)}))
+    except Exception:  # pragma: no cover - a DB hiccup must not break the label
+        logger.warning('could not record %s for transient %s', field, transient_id, exc_info=True)
+        return False
+
+
+def _archive_status_payload(cache_key, lookup, archive_name, transient_id=None, flag_field=None):
+    """JSON payload for the HST/JWST/Chandra tab labels.
 
     ``has_data`` is ``True``/``False`` only when the archive answered; when the
     lookup timed out or raised it is ``None`` and ``error`` says why, so the
     page can say "lookup failed" instead of "No HST" (an upstream outage is
     not the same as no data). Failures are cached for a minute, answers for
-    an hour.
+    an hour. A fresh answer is also written to ``Transient.<flag_field>``
+    (``has_jwst`` for JWST, which nothing else sets) so it can be searched.
     """
     cached = cache.get(cache_key)
     if cached is not None:
@@ -2363,6 +2327,8 @@ def _archive_status_payload(cache_key, lookup, archive_name):
         return payload
     payload = {'has_data': count > 0, 'count': count}
     cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_CACHE_SECONDS)
+    if transient_id is not None and flag_field:
+        _record_archive_flag(transient_id, flag_field, payload['has_data'])
     return payload
 
 
@@ -2382,7 +2348,8 @@ def get_hst_status(request, transient_id):
             count = len(hst.obstable)
         return count
 
-    return JsonResponse(_archive_status_payload(f'hst_status_v3_{transient_id}', _lookup, 'HST'))
+    return JsonResponse(_archive_status_payload(f'hst_status_v3_{transient_id}', _lookup, 'HST',
+                                                transient_id=t.pk, flag_field='has_hst'))
 
 
 def get_chandra_status(request, transient_id):
@@ -2399,7 +2366,8 @@ def get_chandra_status(request, transient_id):
         return int(getattr(chr, 'n_obsid', 0) or 0)
 
     return JsonResponse(
-        _archive_status_payload(f'chandra_status_v3_{transient_id}', _lookup, 'Chandra')
+        _archive_status_payload(f'chandra_status_v3_{transient_id}', _lookup, 'Chandra',
+                                transient_id=t.pk, flag_field='has_chandra')
     )
 
 
@@ -2417,7 +2385,8 @@ def get_jwst_status(request, transient_id):
         jwst.query()
         return int(jwst.count)
 
-    return JsonResponse(_archive_status_payload(f'jwst_status_v1_{transient_id}', _lookup, 'JWST'))
+    return JsonResponse(_archive_status_payload(f'jwst_status_v1_{transient_id}', _lookup, 'JWST',
+                                                transient_id=t.pk, flag_field='has_jwst'))
 
 
 # The tab body (full observation list) gets longer than the label lookup: the

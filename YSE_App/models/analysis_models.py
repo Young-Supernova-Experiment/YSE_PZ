@@ -53,7 +53,7 @@ class AnalysisService(BaseModel):
     runner_kind = models.CharField(max_length=12, choices=RUNNER_CHOICES, default=RUNNER_INPROCESS)
     runner_path = models.CharField(
         max_length=200, blank=True, default="",
-        help_text="In-process: a built-in name (sncosmo_fit, bazin_fit) or the dotted path of a module "
+        help_text="In-process: a built-in name (sncosmo_fit, bazin_fit, ngsf) or the dotted path of a module "
                   "exposing run(payload, params). Blank for webhooks.",
     )
     input_spec = JSONTextField(

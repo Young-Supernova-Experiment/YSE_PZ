@@ -1,0 +1,43 @@
+{% comment %}
+Summary-tab SALT3 fit line (#315): the last successful sncosmo_fit run, a Refit button that starts a
+new run on the job queue, and the pending / failed state. Loaded into #salt_fit_status by the page's
+yseFitStatus driver (transient_detail.html), which polls while a run is active.
+{% endcomment %}
+<div class="yse-fit-status yse-salt-fit-status small" id="yse_salt_fit_body"
+     data-kind="salt" data-service="{{ salt_service.slug }}"
+     data-run-url="{% url 'transient_analysis_run' transient.id %}"
+     data-fragment-url="{% url 'transient_detail_salt_fit_fragment' transient.id %}"
+     data-active="{% if salt_active %}1{% else %}0{% endif %}"
+     {% if salt_active %}data-status-url="{% url 'analysis_run_status' salt_active.uuid %}"{% endif %}
+     data-poll-seconds="{{ analysis_poll_seconds }}">
+    <strong>SALT3 fit:</strong>
+    {% if salt_fit %}
+        {% for key, value in salt_fit.values %}<span class="text-nowrap"><em>{{ key }}</em> = {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}
+        <span class="text-muted">&mdash; {{ salt_fit.result.model|default:"salt3" }}, {{ salt_fit.when|date:"Y-m-d H:i" }} UTC{% if salt_fit.user %} by {{ salt_fit.user }}{% endif %}</span>
+        <a href="#analysis_tab" class="yse-fit-analysis-link" title="Every run, with plots and files, on the Analysis tab">details</a>
+    {% elif not salt_service.registered %}
+        <span class="text-muted">not available on this server{% if user.is_staff %} &mdash; register it with <code>manage.py register_analysis_service --builtin sncosmo_fit</code>{% endif %}.</span>
+    {% elif not salt_service.enabled %}
+        <span class="text-muted">the SALT3 fit service is disabled.</span>
+    {% elif salt_active %}
+        <span class="text-muted">none stored yet.</span>
+    {% elif salt_failed %}
+        <span class="text-muted">none stored yet.</span>
+    {% else %}
+        <span class="text-muted">none stored yet; the plot shows the fit once one has run.</span>
+    {% endif %}
+    {% if salt_active %}
+        <span class="badge badge-info yse-fit-active"><i class="fa fa-spinner fa-spin"></i> {% if salt_active.status == 'running' %}refitting{% else %}refit queued{% endif %}</span>
+    {% elif salt_failed %}
+        <span class="text-danger yse-fit-failed" title="{{ salt_failed.error }}"><i class="fa fa-exclamation-triangle"></i> last refit failed: {{ salt_failed.error|truncatechars:90 }}</span>
+    {% endif %}
+    {% if salt_service.slug %}
+        <button type="button" class="btn btn-xs btn-outline-primary yse-fit-run-btn" data-fit-action="run"
+                {% if not salt_can_run %}disabled{% endif %}
+                title="{% if salt_service.cap and salt_service.cap.remaining == 0 %}Daily limit reached ({{ salt_service.cap.limit }} runs per user per day){% else %}Start a new SALT3 fit on the job queue (the plot updates when it finishes){% endif %}">
+            <i class="fa fa-refresh"></i> Refit</button>
+    {% elif salt_service.enabled %}
+        <span class="text-muted">(your groups may not run it)</span>
+    {% endif %}
+    <span class="text-danger yse-fit-error"></span>
+</div>

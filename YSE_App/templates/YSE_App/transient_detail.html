@@ -2463,6 +2463,85 @@
     </script>
 
     <script>
+        /* Summary-tab fit status lines (#315): the stored SALT3 fit under the light
+           curve (#salt_fit_status) and the NGSF classification under the spectrum
+           (#ngsf_status). Each shell carries data-fragment-url; the fragment carries
+           the service slug and, while a run is active, the status URL to poll. Refit /
+           Run NGSF POST to the Analysis tab's run endpoint, so caps and permissions
+           are the same. When a SALT3 refit finishes and the overlay is on, the light
+           curve is re-fetched so the new curves show. */
+        var yseFitStatusTimers = {};
+        function yseFitStatusLoad(shellId) {
+            var $shell = $('#' + shellId);
+            if (!$shell.length) { return $.Deferred().resolve().promise(); }
+            if (yseFitStatusTimers[shellId]) { clearTimeout(yseFitStatusTimers[shellId]); yseFitStatusTimers[shellId] = null; }
+            return $.get($shell.data('fragment-url')).done(function(html) {
+                $shell.html(html);
+                yseFitStatusArm(shellId);
+            }).fail(function() {
+                $shell.html('<span class="text-muted small">Fit status unavailable.</span>');
+            });
+        }
+        function yseFitStatusArm(shellId) {
+            var $body = $('#' + shellId).children('.yse-fit-status').first();
+            var active = $body.data('active');
+            if (active === 1 || active === '1') {
+                var seconds = parseInt($body.data('poll-seconds'), 10) || 4;
+                yseFitStatusTimers[shellId] = setTimeout(function() { yseFitStatusPoll(shellId); }, seconds * 1000);
+            }
+        }
+        function yseFitStatusPoll(shellId) {
+            var $body = $('#' + shellId).children('.yse-fit-status').first();
+            var url = $body.data('status-url');
+            if (!url) { return; }
+            $.get(url).done(function(json) {
+                if (json && json.is_finished) {
+                    yseFitStatusLoad(shellId).done(function() {
+                        if ($body.data('kind') === 'salt' && json.status === 'succeeded') { yseFitStatusRefreshSaltOverlay(); }
+                    });
+                } else {
+                    yseFitStatusArm(shellId);
+                }
+            }).fail(function() { yseFitStatusArm(shellId); });
+        }
+        function yseFitStatusRefreshSaltOverlay() {
+            /* Only when the user has the SALT3 overlay showing: the button then reads "Hide". */
+            if (($('#salt2plot').html() || '').indexOf('Hide') > -1) {
+                $.get("{% url 'salt2plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot")).done(function(html) {
+                    $('#lcplot').html(html);
+                });
+            }
+        }
+        window.yseFitStatusLoad = yseFitStatusLoad;
+        $(function() {
+            $(document).on('click', '.yse-fit-status [data-fit-action="run"]', function() {
+                var $btn = $(this).prop('disabled', true);
+                var $body = $btn.closest('.yse-fit-status');
+                var shellId = $body.parent().attr('id');
+                $body.find('.yse-fit-error').text('');
+                $.ajax({
+                    url: $body.data('run-url'), method: 'POST', contentType: 'application/json',
+                    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+                    data: JSON.stringify({service: $body.data('service'), params: {}})
+                }).done(function() {
+                    yseFitStatusLoad(shellId);
+                    if (window.yseDetailFragmentsLoaded) { delete window.yseDetailFragmentsLoaded['analysis']; }
+                }).fail(function(xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.error) || ('request failed (' + xhr.status + ')');
+                    $body.find('.yse-fit-error').text(msg);
+                    $btn.prop('disabled', false);
+                });
+            });
+            $(document).on('click', '.yse-fit-status .yse-fit-analysis-link', function(e) {
+                e.preventDefault();
+                $('a[href="#analysis_tab"]').tab('show');
+            });
+            yseFitStatusLoad('salt_fit_status');
+            yseFitStatusLoad('ngsf_status');
+        });
+    </script>
+
+    <script>
         /* AI summary card (#295, #296): loads the card fragment, drives Generate / Edit /
            History / opt-in, and polls while a summariser run is active. */
         var yseSummaryPollTimer = null;

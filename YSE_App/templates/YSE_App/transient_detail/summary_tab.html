@@ -123,6 +123,15 @@
                                                 </p>
                                             </div>
                                         </div>
+                                        <div class="col-4">
+                                            <div class="form-group yse-archive-flags" id="archive_flags"
+                                                 title="Known archive coverage at this position: set at ingest (HST, Chandra, Spitzer) and refreshed when the archive tabs answer (HST, JWST, Chandra). Searchable as has_hst / has_jwst / has_chandra.">
+                                                <strong>Archives</strong>
+                                                <p class="text-muted">
+                                                    {% for label, flag in transient.archive_flags %}<span class="badge yse-archive-flag {% if flag %}badge-success{% elif flag is False %}badge-light{% else %}badge-secondary{% endif %}" data-archive="{{ label }}" data-flag="{% if flag %}1{% elif flag is False %}0{% else %}unknown{% endif %}">{{ label }}{% if flag %}{% elif flag is False %}: no{% else %}: ?{% endif %}</span> {% endfor %}
+                                                </p>
+                                            </div>
+                                        </div>
                                         {% if transient.point_source_probability %}
                                         <div class="col-4">
                                             <div class="form-group">
@@ -315,6 +324,9 @@
                                             </button>
                                             </div>
                                             {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows hint_compact=True %}
+                                            {# Stored SALT3 fit + Refit (#315); loaded by yseFitStatus in transient_detail.html #}
+                                            <div id="salt_fit_status" class="yse-fit-status-shell" style="padding: 0 10px 4px;"
+                                                 data-fragment-url="{% url 'transient_detail_salt_fit_fragment' transient.id %}"></div>
                                             <div class="box-body" id="lcplot"></div>
                                         </div>
                                     </div>
@@ -580,6 +592,9 @@
                                             {% include "YSE_App/transient_detail_summary_spectra_tools.html" %}
                                         </div>
                                         <div class="box-body" id="specplot"></div>
+                                        {# Last NGSF classification + Run NGSF (#315); loaded by yseFitStatus #}
+                                        <div id="ngsf_status" class="yse-fit-status-shell" style="padding: 0 10px 4px;"
+                                             data-fragment-url="{% url 'transient_detail_ngsf_fragment' transient.id %}"></div>
                                         <p></p>
                                         <div class="row">
                                             <div class="col-12">
