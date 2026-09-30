@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('YSE_App', '0026_facility_queue_accounting'),
+        ('YSE_App', '0027_transient_galactic_coords'),
     ]
 
     operations = [

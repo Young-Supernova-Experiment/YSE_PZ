@@ -475,7 +475,8 @@ class SearchTransientTable(TransientTable):
 
     ``separation`` is the ``annotate_separation`` value in degrees; the
     column shows arcseconds and is excluded (``exclude=('separation',)``)
-    when no cone search is active. ``best_spec_class`` is selected with the
+    when no cone search is active. ``gal_b`` is the stored galactic latitude
+    (#286), shown when a ``|b|`` filter or ``gal_b`` ordering is active. ``best_spec_class`` is selected with the
     row (``select_related``) by the search view, so the table renders a page
     without per-row queries.
     """
@@ -492,8 +493,17 @@ class SearchTransientTable(TransientTable):
     def order_separation(self, queryset, is_descending):
         return (stable_order_by(queryset, 'separation', is_descending), True)
 
+    # #286: the stored galactic latitude; excluded unless a |b| filter or gal_b ordering is active.
+    gal_b = tables.Column(accessor='gal_b', verbose_name='Gal. b (deg)', orderable=True, default='-')
+
+    def render_gal_b(self, value):
+        return '%+.2f' % float(value)
+
+    def order_gal_b(self, queryset, is_descending):
+        return (stable_order_by(queryset, 'gal_b', is_descending), True)
+
     class Meta(TransientTable.Meta):
-        fields = ('name_string', 'separation', 'ra_string', 'dec_string', 'disc_date_string', 'recent_mag',
+        fields = ('name_string', 'separation', 'ra_string', 'dec_string', 'gal_b', 'disc_date_string', 'recent_mag',
                   'recent_magdate', 'peak_mag', 'mw_ebv', 'obs_group', 'best_spec_class', 'best_redshift',
                   'annotation_value', 'status_string', 'interest_count', 'favorite')
         sequence = fields

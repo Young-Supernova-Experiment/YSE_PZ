@@ -31,7 +31,7 @@ URL is the whole state of a search, so it can be pasted into Slack.
 | | `has_tns_name` | name looks like a TNS name (`20YYabc`, 1 to 4 letters) |
 | position | `ra`, `dec`, `radius_arcsec` | cone search; centre in decimal degrees or sexagesimal (hours for RA), radius default 5"; results get a `separation` (degrees) annotation and, with no other ordering, are sorted by it. The page shows a `Sep. (arcsec)` column |
 | | `ra_gte`, `ra_lte`, `dec_gte`, `dec_lte` | coordinate box in degrees (legacy API names) |
-| | `gal_b_abs_min`, `gal_b_abs_max` | absolute galactic latitude range (degrees) |
+| | `gal_b_abs_min`, `gal_b_abs_max` | absolute galactic latitude range (degrees), on the stored `gal_b` column |
 | time | `disc_date_after`, `disc_date_before` | discovery date window |
 | | `days_since_disc_max` | discovered within the last N days |
 | | `created_after`, `created_before`, `modified_after`, `modified_before` | row created / modified windows (`created_date_gte`, `modified_date_gte` still work) |
@@ -73,10 +73,9 @@ column itself for `annotation_origin=legacy`. Details in `docs/annotations.md`.
 * Cone: `getRADecBox` gives an RA/Dec bounding box (wrap-safe at RA 0/360, RA unconstrained when a pole
   is inside the cone) on the indexed `ra` / `dec` columns (#248), then the exact spherical-cosine
   separation is an annotation the WHERE clause compares to the radius.
-* Galactic latitude: `DEGREES(ASIN(sin dec sin dec_NGP + cos dec cos dec_NGP cos(ra - ra_NGP)))` in SQL
-  (J2000 pole), checked against astropy in the tests to 1e-3 deg. A stored, indexed `gal_b` column is
-  the follow-up in #286 once a production `EXPLAIN` shows the expression is the bottleneck; it can
-  replace `galactic_latitude_expression()` without touching callers.
+* Galactic latitude: the stored, indexed `Transient.gal_b` column (#286, below). `gal_b_abs_min` /
+  `gal_b_abs_max` compile to plain range predicates (`gal_b >= v OR gal_b <= -v`, `-v <= gal_b <= v`), no
+  `ABS()`, so the `yse_transient_gal_b_idx` index is usable; `ordering=gal_b` sorts the column.
 * Relations (spectra, follow-ups, comments, tags, group visibility, aliases) are `EXISTS` subqueries,
   so no `DISTINCT` and no row multiplication; stat columns are the `photstat` LEFT JOIN.
 * `ModelMultipleChoice` filters (status, classes, tags, groups) filter on primary keys of the chosen
@@ -127,10 +126,44 @@ Summary View and the bulk photometry download already use:
   `params` (JSON object, list values for multi-selects) or `query_string`; returns `query_id`,
   `explorer_url`, `sql`, `user_query_id`, `dashboard_url`; 400 with the reason otherwise.
 
+## Stored galactic coordinates and indexes (#286)
+
+`Transient.gal_l` / `Transient.gal_b` (degrees, J2000, IAU 1958 galactic frame) are real columns:
+
+* `Transient.save()` fills them from `ra` / `dec` with `YSE_App/common/galactic.py::galactic_coords`
+  (a closed-form rotation; the tests check it against astropy to 1e-4 deg), also when
+  `save(update_fields=[...])` names `ra` or `dec`. The fields are `editable=False`, so forms and the
+  admin never show them; `/api/transients/` exposes them read-only.
+* Migration `0027_transient_galactic_coords` adds the columns, the `gal_b` index and the remaining
+  stat-row indexes (`TransientPhotStat.first_detected_date`, `last_detected_date`, `rise_rate`,
+  `decay_rate`, `deepest_limit`; `peak_mag`, `last_detected_mag`, `last_detected_mjd`,
+  `first_detected_mjd`, `num_det_global`, `last_obs_date` were indexed by #268) and fills every existing
+  row in one `UPDATE` evaluated by the database (`galactic_latitude_expression()` /
+  `galactic_longitude_expression()`, the same formula in SQL). On sqlite the trig functions Django
+  registers are used, so tests and the migration run on both backends.
+* Rows written around `save()` (`bulk_create`, raw SQL, `QuerySet.update(ra=..., dec=...)`) keep
+  `NULL` and never match a `|b|` cut until `python manage.py backfill_galactic_coords` (rows with
+  `gal_b IS NULL`; `--all` recomputes every row) runs: one `UPDATE`, seconds for 1e5 rows. Nothing in
+  the ingest paths does that today; the command exists for the case.
+* The search page shows a **Gal. b (deg)** column when a `|b|` filter or `gal_b` ordering is active.
+
+### Acceptance benchmark
+
+`YSE_App/perf/search_filters.py` seeds transients with a stat row each and times the acceptance search
+of #286, `gal_b_abs_min=10&peak_mag_max=19&num_det_min=3&days_since_last_det_max=5`, as the
+FilterSet queryset (`search_acceptance_sql`) and as `GET /search/` (`search_acceptance_page`);
+`test_search_perf_regression` gates both against `perf_baselines.json` (1000 ms / 2500 ms, not scaled
+with the size) at 2000 rows, and `YSE_PERF_SEARCH_TRANSIENTS=100000 YSE_PERF_SEARCH_EXPLAIN=1` runs
+the production-sized tier and prints the plan. Recorded on docker MySQL 8.0.25, 100 000 transients +
+stat rows (2026-09-30): queryset 106 ms, page 723 ms; the plan is an index range scan on
+`yse_photstat_last_det_mjd_idx` (18 728 of 100 000 rows), the `peak_mag` / `num_det` filters on those
+rows, then a primary-key lookup of the transient with the `gal_b` range predicate. With a less
+selective time window MySQL can start from `yse_transient_gal_b_idx` instead; either way no full
+scan. Production `EXPLAIN` after the deploy (`docs/dashboard-performance.md`, "Checks before
+promoting") is still the go/no-go for keeping each new index.
+
 ## Not in this change (rest of #284)
 
-* Stored `gal_b` / `gal_l` columns with an index and backfill (#286): the expression form above is
-  used until production `EXPLAIN` data says otherwise; no migration ships here.
 * Bulk actions on results (status change, tag, photometry download) and CSV export (#287); saving a
   search is covered above.
 * Annotation-origin filters (#319, after #317).

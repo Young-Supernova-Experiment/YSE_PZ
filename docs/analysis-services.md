@@ -229,7 +229,7 @@ overridden); `manage.py expire_service_runs --days 90` deletes old runs with the
   `signals.py`, so every process knows the runner.
 - The callback URL uses `YSE_PUBLIC_BASE_URL`; set it on stacks that run webhook services.
 
-- Migration `0027_transient_has_jwst` also carries the `runner_path` help text naming the `ngsf` built-in.
+- Migration `0028_transient_has_jwst` also carries the `runner_path` help text naming the `ngsf` built-in.
 - The Summary tab shows a stored SALT3 fit only once `sncosmo_fit` is registered and a run has
   succeeded; until then the line says so and the plot's overlay button reports "No stored SALT3 fit".
   Register the service and click **Refit** on a few transients (or `POST /api/analysisruns/`) to seed it.

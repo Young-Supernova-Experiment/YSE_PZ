@@ -2405,6 +2405,8 @@ class SearchResultsView(TemplateView):
             per_page = SEARCH_PER_PAGE_CHOICES[0]
 
         excluded = () if cone else ('separation',)
+        if not filterset.uses_gal_b:
+            excluded = excluded + ('gal_b',)
         annotation_column = filterset.annotation_column_spec
         if annotation_column is None:
             excluded = excluded + ('annotation_value',)

@@ -32,8 +32,8 @@ list was the reference; the SQL here is YSE-PZ's own):
 Every filter is one SQL clause on the transient table: FK columns join, the
 stat row is a LEFT JOIN, relations are ``EXISTS`` subqueries (no ``DISTINCT``),
 the cone is a bounding box on the indexed ``ra`` / ``dec`` columns followed by
-an exact great-circle separation, and the galactic latitude is a closed-form
-expression of ``ra`` and ``dec``. So one query lists the matches whatever the
+an exact great-circle separation, and the galactic latitude is the stored,
+indexed ``gal_b`` column (#286). So one query lists the matches whatever the
 combination of filters, and the same class serves the DRF viewset (where the
 legacy parameter names ``created_date_gte``, ``status_in``, ``tag_in``,
 ``peak_mag_lte`` ... keep working) and the search page.
@@ -47,9 +47,7 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.db.models import CharField, DateTimeField, Exists, F, FloatField, Func, OuterRef, Q, Subquery, Value
 from django.db.models.functions import (
-    Abs,
     ACos,
-    ASin,
     Coalesce,
     Cos,
     Degrees,
@@ -61,6 +59,7 @@ from django.db.models.functions import (
 from django.utils import timezone
 from django_filters import widgets as filter_widgets
 
+from YSE_App.common.galactic import NGP_DEC_DEG, NGP_RA_DEG, galactic_latitude_expression  # noqa: F401 (re-exported)
 from YSE_App.common.utilities import getRADecBox
 from YSE_App.models import (
     AlternateTransientNames,
@@ -97,10 +96,6 @@ __all__ = [
     'quick_search_params',
 ]
 
-# North galactic pole, J2000 (Reid & Brunthaler 2004 values used by astropy).
-NGP_RA_DEG = 192.85948
-NGP_DEC_DEG = 27.12825
-
 DEFAULT_RADIUS_ARCSEC = 5.0
 
 # Names issued by the Transient Name Server: 20YYabc (one to four letters).
@@ -114,22 +109,6 @@ def _float(value, output_field=None):
 def _clamped(expr):
     """``expr`` clamped to [-1, 1] so rounding never takes ACOS/ASIN out of range."""
     return Least(_float(1.0), Greatest(_float(-1.0), expr))
-
-
-def galactic_latitude_expression():
-    """Galactic latitude ``b`` (degrees) of the row's ``ra`` / ``dec``.
-
-    ``sin b = sin(dec) sin(dec_NGP) + cos(dec) cos(dec_NGP) cos(ra - ra_NGP)``,
-    a closed form the database evaluates per row; the stored ``gal_b`` column
-    of #286 can replace this without changing callers.
-    """
-    dec = Radians(F('dec'))
-    ra = Radians(F('ra'))
-    sin_b = (
-        Sin(dec) * _float(math.sin(math.radians(NGP_DEC_DEG)))
-        + Cos(dec) * _float(math.cos(math.radians(NGP_DEC_DEG))) * Cos(ra - _float(math.radians(NGP_RA_DEG)))
-    )
-    return Degrees(ASin(_clamped(sin_b)))
 
 
 def separation_expression(ra_deg, dec_deg):
@@ -150,9 +129,8 @@ def separation_expression(ra_deg, dec_deg):
 
 
 def annotate_gal_b(qs):
-    if 'gal_b' in qs.query.annotations:
-        return qs
-    return qs.annotate(gal_b=galactic_latitude_expression())
+    """``gal_b`` is a stored, indexed column since #286; kept for callers that annotated it."""
+    return qs
 
 
 def annotate_best_redshift(qs):
@@ -627,6 +605,16 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         radius = float(radius) if radius else DEFAULT_RADIUS_ARCSEC
         return form.cone_center[0], form.cone_center[1], radius
 
+    @property
+    def uses_gal_b(self):
+        """True when a ``|b|`` filter or ``gal_b`` ordering is active (the page then shows the column)."""
+        if not self.form.is_valid():
+            return False
+        cleaned = self.form.cleaned_data
+        if cleaned.get('gal_b_abs_min') is not None or cleaned.get('gal_b_abs_max') is not None:
+            return True
+        return any(o.lstrip('-') == 'gal_b' for o in (cleaned.get('ordering') or []) if o)
+
     def filter_queryset(self, queryset):
         cone = self.cone
         cleaned = self.form.cleaned_data
@@ -774,11 +762,14 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         return qs.exclude(name__iregex=TNS_NAME_REGEX)
 
     # --- position ------------------------------------------------------
+    # |b| cuts as plain range predicates so the gal_b index is usable (no ABS()).
     def filter_gal_b_abs_min(self, qs, name, value):
-        return annotate_gal_b(qs).annotate(_abs_gal_b=Abs('gal_b')).filter(_abs_gal_b__gte=value)
+        value = float(value)
+        return qs.filter(Q(gal_b__gte=value) | Q(gal_b__lte=-value))
 
     def filter_gal_b_abs_max(self, qs, name, value):
-        return annotate_gal_b(qs).annotate(_abs_gal_b=Abs('gal_b')).filter(_abs_gal_b__lte=value)
+        value = float(value)
+        return qs.filter(gal_b__gte=-value, gal_b__lte=value)
 
     # --- time ----------------------------------------------------------
     def filter_days_since_disc_max(self, qs, name, value):
