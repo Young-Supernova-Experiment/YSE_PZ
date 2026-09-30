@@ -16,7 +16,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('auth', '0012_alter_user_first_name_max_length'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('YSE_App', '0026_facility_queue_accounting'),
+        ('YSE_App', '0027_transient_galactic_coords'),
     ]
 
     operations = [
