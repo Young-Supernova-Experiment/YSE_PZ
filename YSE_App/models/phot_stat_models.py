@@ -135,6 +135,12 @@ class TransientPhotStat(models.Model):
             models.Index(fields=['last_obs_date'], name='yse_photstat_last_obs_idx'),
             models.Index(fields=['num_det_global'], name='yse_photstat_num_det_idx'),
             models.Index(fields=['first_detected_mjd'], name='yse_photstat_first_det_idx'),
+            # The remaining search filters on the stat row (#286).
+            models.Index(fields=['first_detected_date'], name='yse_photstat_first_det_dt_idx'),
+            models.Index(fields=['last_detected_date'], name='yse_photstat_last_det_dt_idx'),
+            models.Index(fields=['rise_rate'], name='yse_photstat_rise_rate_idx'),
+            models.Index(fields=['decay_rate'], name='yse_photstat_decay_rate_idx'),
+            models.Index(fields=['deepest_limit'], name='yse_photstat_deep_limit_idx'),
         ]
 
     def __str__(self):
