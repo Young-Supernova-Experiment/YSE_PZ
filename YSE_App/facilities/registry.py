@@ -13,7 +13,17 @@ from YSE_App.facilities.base import FacilityAPI
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODULES = ("YSE_App.facilities.generic", "YSE_App.facilities.lco")
+DEFAULT_MODULES = (
+    "YSE_App.facilities.generic",
+    "YSE_App.facilities.lco",
+    "YSE_App.facilities.soar",
+    "YSE_App.facilities.ztf",
+    "YSE_App.facilities.atlas",
+    "YSE_App.facilities.swift",
+    "YSE_App.facilities.gemini",
+    "YSE_App.facilities.mmt",
+    "YSE_App.facilities.lt",
+)
 
 _registry: Dict[str, FacilityAPI] = {}
 _lock = threading.Lock()

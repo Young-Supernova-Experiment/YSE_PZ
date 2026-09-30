@@ -58,6 +58,16 @@ def autorun_annotation_checks(sender, instance, created, **kwargs):
         annotations_svc.autorun_for_new_transient(instance)
 
 
+@receiver(post_save, sender=TransientFollowup, dispatch_uid="yse_followup_usage_accounting")
+def account_followup_usage(sender, instance, created, **kwargs):
+    """A follow-up reaching Successful charges its ToO / queued resource once; leaving it refunds (#304)."""
+    if kwargs.get('raw') or not (instance.too_resource_id or instance.queued_resource_id):
+        return
+    from YSE_App.services.allocations import sync_followup_usage
+
+    sync_followup_usage(instance)
+
+
 @receiver(post_save, sender=Transient, dispatch_uid="yse_feeds_mpc_screen")
 def screen_new_transient_for_minor_planets(sender, instance, created, **kwargs):
     """Queue the sb_ident minor-planet check for a new transient (#283; FEEDS_MPC_SCREEN_ON_CREATE, off by default)."""

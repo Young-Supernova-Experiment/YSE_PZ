@@ -101,3 +101,112 @@ def allocations_for_user(user: User, *, facility_only: bool = True, now=None):
     from django.db.models import Q
 
     return qs.filter(Q(groups__isnull=True) | Q(groups__in=user.groups.all())).distinct()
+
+
+# --- legacy resource accounting (#304) -----------------------------------------
+# A TransientFollowup that reaches the Successful status charges its ToO / queued resource once
+# (``usage_charged_at``); leaving that status refunds it. Facility requests charge their Allocation
+# separately (charge_request above) and never carry a legacy resource, so nothing is counted twice.
+
+SUCCESS_STATUS = "Successful"
+
+
+def followup_usage_hours(followup) -> float:
+    """Hours to charge: the follow-up's ``usage_hours``, else the hours of its facility requests."""
+    if followup.usage_hours:
+        return float(followup.usage_hours)
+    total = 0.0
+    for request in followup.facility_requests.all():
+        total += float(request.hours_charged or 0.0)
+    return round(total, 4)
+
+
+def _resource_of(followup):
+    if followup.too_resource_id:
+        return followup.too_resource, "too"
+    if followup.queued_resource_id:
+        return followup.queued_resource, "queued"
+    return None, ""
+
+
+def _bump(model, pk, **deltas) -> None:
+    from django.db.models.functions import Coalesce
+
+    updates = {field: Coalesce(F(field), 0.0) + float(delta) for field, delta in deltas.items() if delta}
+    if updates:
+        model.objects.filter(pk=pk).update(**updates)
+
+
+def record_followup_usage(followup, *, hours: Optional[float] = None) -> bool:
+    """Charge the follow-up's resource once (1 ToO trigger + hours, or queued hours); False when already charged."""
+    from YSE_App.models.followup_models import TransientFollowup
+
+    resource, kind = _resource_of(followup)
+    if resource is None or followup.usage_charged_at:
+        return False
+    hours = float(hours if hours is not None else followup_usage_hours(followup))
+    now = timezone.now()
+    with transaction.atomic():
+        updated = TransientFollowup.objects.filter(pk=followup.pk, usage_charged_at__isnull=True).update(
+            usage_charged_at=now, usage_hours=hours)
+        if not updated:
+            return False
+        if kind == "too":
+            _bump(type(resource), resource.pk, used_too_triggers=1.0, used_too_hours=hours)
+        else:
+            _bump(type(resource), resource.pk, used_hours=hours)
+    followup.usage_charged_at = now
+    followup.usage_hours = hours
+    resource.refresh_from_db()
+    return True
+
+
+def refund_followup_usage(followup) -> bool:
+    """Undo :func:`record_followup_usage` (a successful follow-up set back to another status)."""
+    from YSE_App.models.followup_models import TransientFollowup
+
+    resource, kind = _resource_of(followup)
+    if resource is None or not followup.usage_charged_at:
+        return False
+    hours = float(followup.usage_hours or 0.0)
+    with transaction.atomic():
+        updated = TransientFollowup.objects.filter(pk=followup.pk, usage_charged_at__isnull=False).update(
+            usage_charged_at=None)
+        if not updated:
+            return False
+        if kind == "too":
+            _bump(type(resource), resource.pk, used_too_triggers=-1.0, used_too_hours=-hours)
+        else:
+            _bump(type(resource), resource.pk, used_hours=-hours)
+    followup.usage_charged_at = None
+    resource.refresh_from_db()
+    return True
+
+
+def sync_followup_usage(followup) -> Optional[bool]:
+    """Charge or refund according to the follow-up's status; called from the post_save signal."""
+    status_name = followup.status.name if followup.status_id else ""
+    if status_name == SUCCESS_STATUS:
+        return record_followup_usage(followup)
+    if followup.usage_charged_at:
+        return not refund_followup_usage(followup)
+    return None
+
+
+def resource_remaining(resource) -> dict:
+    """Awarded minus used for a legacy resource (``None`` where nothing was awarded)."""
+    return {
+        "hours": getattr(resource, "remaining_hours", None),
+        "triggers": getattr(resource, "remaining_triggers", None),
+    }
+
+
+def estimate_resource_usage(resource) -> dict:
+    """Successful follow-ups on ``resource`` that were never charged (the backfill's preview)."""
+    from YSE_App.models.followup_models import TransientFollowup
+
+    field = "too_resource" if resource.__class__.__name__ == "ToOResource" else "queued_resource"
+    pending = TransientFollowup.objects.filter(**{field: resource}, status__name=SUCCESS_STATUS,
+                                               usage_charged_at__isnull=True)
+    hours = sum(followup_usage_hours(f) for f in pending)
+    return {"followups": pending.count(), "hours": round(hours, 4), "queryset": pending}

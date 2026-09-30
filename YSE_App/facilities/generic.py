@@ -15,7 +15,17 @@ Configuration lives on the allocation:
   standard payload (transient, allocation, parameters, requester) is sent.
 
 Status is manual: a person marks the request complete (or cancelled) once the
-facility reports back. A submission that was sent is ``submitted``.
+facility reports back. A submission that was sent is ``submitted``. When
+``default_request_params["status_url"]`` (or the credential's ``status_url``)
+is set, the adapter polls it instead: ``GET <status_url>`` with ``{external_id}``
+/ ``{request_id}`` filled in (or appended as query parameters) must answer JSON
+holding ``state`` / ``status``; the value is mapped through ``status_map`` in
+the parameters (default: pending/accepted/queued -> accepted, running ->
+running, complete(d)/done/success -> complete, failed/error -> failed,
+cancel(l)ed -> cancelled). Modify and cancel re-send the payload with
+``"action": "update"`` / ``"action": "cancel"`` (API mode: to the endpoint, or to
+``cancel_url`` when set; email / Slack: a message whose subject says so), so a
+facility without an API still learns about the change.
 
 Instrument logs (#310): when ``default_request_params["instrument_log_url"]`` (or
 the credential's ``instrument_log_endpoint``) is set, ``fetch_instrument_log``
@@ -39,8 +49,10 @@ from django.core.mail import send_mail
 from YSE_App.facilities.base import (
     FacilityAPI,
     FacilityError,
+    FacilityUnreachable,
     FacilityValidationError,
     Field,
+    StatusResult,
     SubmitResult,
     http_timeout,
 )
@@ -52,6 +64,15 @@ MODE_API = "api"
 MODE_EMAIL = "email"
 MODE_SLACK = "slack"
 MODES = (MODE_API, MODE_EMAIL, MODE_SLACK)
+
+#: lower-cased facility state -> FacilityRequest state (status_url polling)
+DEFAULT_STATUS_MAP = {
+    "pending": "accepted", "accepted": "accepted", "queued": "accepted", "scheduled": "accepted",
+    "submitted": "submitted", "running": "running", "in_progress": "running", "observing": "running",
+    "complete": "complete", "completed": "complete", "done": "complete", "success": "complete",
+    "succeeded": "complete", "failed": "failed", "error": "failed", "rejected": "failed", "expired": "failed",
+    "cancelled": "cancelled", "canceled": "cancelled", "aborted": "cancelled",
+}
 
 
 class _SafeDict(dict):
@@ -86,9 +107,22 @@ class GenericFacility(FacilityAPI):
         "Sends the request as JSON to an HTTP endpoint, as an email to a list of observers, "
         "or as a Slack webhook message. Status is updated by hand."
     )
-    capabilities = frozenset({"submit", "instrument_log"})
-    credential_keys = ["api_token", "endpoint", "slack_webhook_url", "instrument_log_endpoint"]
+    capabilities = frozenset({"submit", "update", "delete", "status", "instrument_log"})
+    credential_keys = ["api_token", "endpoint", "slack_webhook_url", "instrument_log_endpoint", "status_url",
+                       "cancel_url"]
     manual_status = True
+    setup_notes = ("No code needed: set notification_type (api/email/slack) and, per mode, endpoint_url (or the "
+                   "credential's endpoint + api_token), recipients, or slack_webhook_url; optional status_url "
+                   "makes the request pollable.")
+
+    def supports(self, capability, allocation=None):
+        if capability == "status":
+            return allocation is not None and bool(self.status_url(allocation))
+        return self.can(capability)
+
+    def status_url(self, allocation) -> str:
+        params = allocation.default_request_params or {}
+        return str(params.get("status_url") or allocation.secret().get("status_url") or "")
 
     def fields(self, allocation=None):
         return [
@@ -139,21 +173,79 @@ class GenericFacility(FacilityAPI):
 
     # -- transport -----------------------------------------------------------
     def submit(self, request) -> SubmitResult:
+        return self._send(request, "submit")
+
+    def update(self, request) -> SubmitResult:
+        """Re-send the (changed) payload flagged as an update; the external id is kept."""
+        result = self._send(request, "update")
+        result.external_id = result.external_id or request.external_id
+        result.state = request.state if request.is_open else "submitted"
+        result.detail = "update sent: " + result.detail
+        return result
+
+    def delete(self, request) -> StatusResult:
+        """Tell the facility the request is withdrawn (best effort), then report ``cancelled``."""
+        try:
+            result = self._send(request, "cancel")
+        except FacilityError as exc:
+            return StatusResult("cancelled", detail="cancelled locally; the facility was not told (%s)" % exc)
+        return StatusResult("cancelled", detail="cancellation sent: " + result.detail, response=result.response)
+
+    def get_status(self, request) -> StatusResult:
+        allocation = request.allocation
+        template = self.status_url(allocation)
+        if not template:
+            raise FacilityError("no status_url configured for allocation %s" % allocation.name)
+        context = {"external_id": request.external_id, "request_id": request.pk}
+        url = render_template(template, context)
+        query = None if url != template else {"external_id": request.external_id, "request_id": request.pk}
+        secret = allocation.secret(touch=True)
+        headers = {"Accept": "application/json"}
+        if secret.get("api_token"):
+            headers["Authorization"] = "token %s" % secret["api_token"]
+        try:
+            response = requests.get(url, params=query, headers=headers, timeout=http_timeout())
+        except requests.RequestException as exc:
+            raise FacilityUnreachable("could not reach %s: %s" % (url, exc)) from exc
+        body = _json_or_text(response)
+        if response.status_code >= 300:
+            raise FacilityError("status endpoint answered %s: %s" % (response.status_code, _short(body)))
+        raw = ""
+        if isinstance(body, dict):
+            inner = body.get("data") if isinstance(body.get("data"), dict) else body
+            raw = str(inner.get("state") or inner.get("status") or "")
+        elif isinstance(body, str):
+            raw = body.strip()
+        mapping = dict(DEFAULT_STATUS_MAP)
+        custom = (allocation.default_request_params or {}).get("status_map")
+        if isinstance(custom, dict):
+            mapping.update({str(k).lower(): str(v) for k, v in custom.items()})
+        state = mapping.get(raw.lower(), request.state)
+        return StatusResult(state, detail="facility state %s" % (raw or "?"), response=body)
+
+    def _send(self, request, action: str) -> SubmitResult:
         allocation = request.allocation
         mode = self.mode(allocation)
         payload = self.build_payload(request)
+        if isinstance(payload, dict) and action != "submit":
+            payload = dict(payload, action=action, external_id=request.external_id)
         if mode == MODE_API:
-            return self._submit_api(request, payload)
+            return self._submit_api(request, payload, action)
         if mode == MODE_EMAIL:
-            return self._submit_email(request, payload)
+            return self._submit_email(request, payload, action)
         if mode == MODE_SLACK:
-            return self._submit_slack(request, payload)
+            return self._submit_slack(request, payload, action)
         raise FacilityError("unknown notification_type %r" % mode)
 
-    def _submit_api(self, request, payload) -> SubmitResult:
+    def _submit_api(self, request, payload, action="submit") -> SubmitResult:
         allocation = request.allocation
         secret = allocation.secret(touch=True)
         endpoint = allocation.endpoint_url or secret.get("endpoint")
+        if action == "cancel":
+            endpoint = ((allocation.default_request_params or {}).get("cancel_url") or secret.get("cancel_url")
+                        or endpoint)
+            endpoint = render_template(str(endpoint or ""), {"external_id": request.external_id,
+                                                             "request_id": request.pk})
         if not endpoint:
             raise FacilityError("no endpoint configured for this allocation (endpoint_url or credential 'endpoint')")
         headers = {"Content-Type": "application/json"}
@@ -162,7 +254,7 @@ class GenericFacility(FacilityAPI):
         try:
             response = requests.post(endpoint, json=payload, headers=headers, timeout=http_timeout())
         except requests.RequestException as exc:
-            raise FacilityError("could not reach %s: %s" % (endpoint, exc)) from exc
+            raise FacilityUnreachable("could not reach %s: %s" % (endpoint, exc)) from exc
         body = _json_or_text(response)
         if response.status_code >= 300:
             raise FacilityError("endpoint answered %s: %s" % (response.status_code, _short(body)))
@@ -172,13 +264,15 @@ class GenericFacility(FacilityAPI):
         return SubmitResult("submitted", external_id=external_id, detail="POST %s -> %s" % (endpoint, response.status_code),
                             response=body)
 
-    def _submit_email(self, request, payload) -> SubmitResult:
+    def _submit_email(self, request, payload, action="submit") -> SubmitResult:
         allocation = request.allocation
         recipients = recipients_from((allocation.default_request_params or {}).get("recipients"))
         if not recipients:
             raise FacilityError("no email recipients configured for this allocation")
         transient = request.transient
-        subject = "[YSE-PZ] Observation request: %s on %s" % (transient.name, allocation.telescope.name)
+        prefix = {"update": "UPDATED observation request", "cancel": "CANCELLED observation request"}.get(
+            action, "Observation request")
+        subject = "[YSE-PZ] %s: %s on %s" % (prefix, transient.name, allocation.telescope.name)
         body = self.email_body(request, payload)
         send_mail(subject, body, None, recipients, fail_silently=False)
         return SubmitResult("submitted", detail="email sent to %s" % ", ".join(recipients),
@@ -200,20 +294,22 @@ class GenericFacility(FacilityAPI):
         ]
         return "\n".join(lines)
 
-    def _submit_slack(self, request, payload) -> SubmitResult:
+    def _submit_slack(self, request, payload, action="submit") -> SubmitResult:
         allocation = request.allocation
         secret = allocation.secret(touch=True)
         webhook = secret.get("slack_webhook_url") or (allocation.default_request_params or {}).get("slack_webhook_url")
         if not webhook:
             raise FacilityError("no slack_webhook_url in the allocation's credential")
         transient = request.transient
-        text = "*Observation request* for *%s* (RA %.5f, Dec %.5f) on %s by %s\n```%s```" % (
-            transient.name, transient.ra, transient.dec, allocation.telescope.name,
+        title = {"update": "*UPDATED observation request*", "cancel": "*CANCELLED observation request*"}.get(
+            action, "*Observation request*")
+        text = "%s for *%s* (RA %.5f, Dec %.5f) on %s by %s\n```%s```" % (
+            title, transient.name, transient.ra, transient.dec, allocation.telescope.name,
             request.submitted_by.username, json.dumps(payload, indent=1, sort_keys=True, default=str)[:2500])
         try:
             response = requests.post(webhook, json={"text": text}, timeout=http_timeout())
         except requests.RequestException as exc:
-            raise FacilityError("could not reach the Slack webhook: %s" % exc) from exc
+            raise FacilityUnreachable("could not reach the Slack webhook: %s" % exc) from exc
         if response.status_code >= 300:
             raise FacilityError("Slack webhook answered %s: %s" % (response.status_code, response.text[:300]))
         return SubmitResult("submitted", detail="Slack webhook posted", response={"text": text})
@@ -242,7 +338,7 @@ class GenericFacility(FacilityAPI):
         try:
             response = requests.get(url, params=query or None, headers=headers, timeout=http_timeout())
         except requests.RequestException as exc:
-            raise FacilityError("could not reach %s: %s" % (url, exc)) from exc
+            raise FacilityUnreachable("could not reach %s: %s" % (url, exc)) from exc
         body = _json_or_text(response)
         if response.status_code >= 300:
             raise FacilityError("instrument log endpoint answered %s: %s" % (response.status_code, _short(body)))

@@ -53,6 +53,11 @@ class TransientFollowup(Followup):
 	# Required
 	transient = models.ForeignKey(Transient, on_delete=models.CASCADE)
 
+	# Usage accounting on the attached ToO / queued resource (#304): stamped once
+	# when the status reaches Successful, cleared (and refunded) when it leaves it.
+	usage_hours = models.FloatField(default=0.0, help_text="Hours charged to the resource when this follow-up succeeds.")
+	usage_charged_at = models.DateTimeField(null=True, blank=True, editable=False)
+
 	def __str__(self):
 		return "Transient Followup: [%s]; Valid: %s to %s" % (self.transient.name, self.valid_start.strftime('%m/%d/%Y'), self.valid_stop.strftime('%m/%d/%Y'))
 

@@ -13,7 +13,11 @@ Credential payload: ``{"api_token": "..."}`` (preferred) or
 
 Status and cancel follow the LCO portal API (``GET /api/requestgroups/<id>/``,
 ``POST /api/requestgroups/<id>/cancel/``); the mapping of LCO states to our
-states is in :data:`LCO_STATES`. SkyPortal's ``facility_apis/lco.py``
+states is in :data:`LCO_STATES`. The portal has no edit endpoint, so ``update``
+cancels the pending request group and submits the changed one (the request
+then carries the new group id). Per-instrument request builders (Sinistro,
+Spectral, MuSCAT, QHY, FLOYDS) are in :mod:`YSE_App.facilities.lco_requests`;
+the ``strategy`` field is kept for the older imaging / spectroscopy shortcut. SkyPortal's ``facility_apis/lco.py``
 (BSD-3-Clause) was consulted for the endpoints and the state names; no code
 is copied.
 """
@@ -25,9 +29,11 @@ from typing import Any, Dict
 
 import requests
 
+from YSE_App.facilities import lco_requests
 from YSE_App.facilities.base import (
     FacilityAPI,
     FacilityError,
+    FacilityUnreachable,
     FacilityValidationError,
     Field,
     StatusResult,
@@ -41,12 +47,16 @@ REQUESTGROUPS = PORTAL + "requestgroups/"
 TOKEN_AUTH = PORTAL + "api-token-auth/"
 PORTAL_UI = "https://observe.lco.global/requestgroups/"
 
-STRATEGIES = (("default", "Imaging (1m SINISTRO u,g,r,i)"), ("spectroscopy", "Spectroscopy (FLOYDS / SOAR)"))
+STRATEGIES = (("default", "Imaging (1m SINISTRO u,g,r,i)"), ("spectroscopy", "Spectroscopy (FLOYDS / SOAR)"),
+              ("instrument", "Use the instrument chosen below"))
+LCO_INSTRUMENTS = ("1M0-SCICAM-SINISTRO", "2M0-SCICAM-SPECTRAL", "2M0-SCICAM-MUSCAT", "0M4-SCICAM-QHY600",
+                   "2M0-FLOYDS-SCICAM")
 OBSERVATION_TYPES = ("NORMAL", "RAPID_RESPONSE", "TIME_CRITICAL")
 
 #: LCO request-group state -> FacilityRequest state
 LCO_STATES = {
     "PENDING": "accepted",
+    "SCHEDULED": "accepted",
     "COMPLETED": "complete",
     "CANCELED": "cancelled",
     "WINDOW_EXPIRED": "failed",
@@ -63,15 +73,23 @@ class LCOFacility(FacilityAPI):
     slug = "lco"
     name = "Las Cumbres Observatory"
     description = "Submits request groups to the LCO observation portal; polls and cancels them."
-    capabilities = frozenset({"submit", "delete", "status"})
+    capabilities = frozenset({"submit", "update", "delete", "status"})
     credential_keys = ["api_token", "username", "password"]
     manual_status = False
+    setup_notes = ("proposal_id = the LCO proposal code; credential {\"api_token\": \"<portal token>\"} "
+                   "(or username/password). Pick the instrument per request or fix it in default_request_params.")
+    instruments = LCO_INSTRUMENTS
+    default_instrument = lco_requests.DEFAULT_INSTRUMENT
 
     def fields(self, allocation=None):
         now = datetime.datetime.utcnow()
         return [
             Field("strategy", "choice", label="Strategy", default="default", choices=STRATEGIES, required=True),
+            Field("instrument", "choice", label="Instrument", default=self.default_instrument,
+                  choices=lco_requests.instrument_choices(self.instruments),
+                  help="Used with strategy 'instrument'"),
             Field("exposure_time", "number", label="Exposure time (s)", required=True, minimum=1),
+            Field("exposure_count", "integer", label="Exposures per filter", default=1, minimum=1, maximum=50),
             Field("filters", "list", label="Filters (imaging)", default=["up", "gp", "rp", "ip"]),
             Field("start", "datetime", label="Window start (UTC)", default=_iso(now), required=True),
             Field("end", "datetime", label="Window end (UTC)", default=_iso(now + datetime.timedelta(days=3)),
@@ -100,49 +118,61 @@ class LCOFacility(FacilityAPI):
             params["proposal"] = allocation.proposal_id
         return params
 
+    def instrument_for(self, params) -> str:
+        strategy = params.get("strategy") or "default"
+        if strategy == "spectroscopy":
+            return "2M0-FLOYDS-SCICAM"
+        if strategy == "default":
+            return "1M0-SCICAM-SINISTRO"
+        return params.get("instrument") or self.default_instrument
+
     def estimate_hours(self, params, allocation=None):
         # Imaging: one exposure per filter plus ~90 s overhead each; spectroscopy: exposure + calibrations.
-        try:
-            exposure = float(params.get("exposure_time") or 0)
-        except (TypeError, ValueError):
-            return 0.0
-        if params.get("strategy") == "spectroscopy":
-            return round((exposure + 400.0) / 3600.0, 4)
-        n = len(params.get("filters") or []) or 4
-        return round(n * (exposure + 90.0) / 3600.0, 4)
+        return lco_requests.estimate_hours(self.instrument_for(params), params)
 
     # -- payload ------------------------------------------------------------
     def build_payload(self, request) -> Dict[str, Any]:
-        """The LCO request-group document, built with ``YSE_App.util.lcogt``."""
-        from YSE_App.util.lcogt import lcogt
-
+        """The LCO request-group document (``YSE_App.util.lcogt`` for the legacy strategies)."""
         params = dict(request.payload or {})
         allocation = request.allocation
         transient = request.transient
         proposal = params.get("proposal") or allocation.proposal_id
+        strategy = params.get("strategy") or "default"
+        if strategy in ("default", "spectroscopy"):
+            requests_block = self._legacy_requests(strategy, params, allocation, transient, proposal)
+        else:
+            instrument = self.instrument_for(params)
+            requests_block = [lco_requests.build_request(instrument, transient.name, transient.ra, transient.dec,
+                                                         params, allocation.telescope.name, proposal)]
+        return {
+            "name": transient.name,
+            "proposal": proposal,
+            "ipp_value": float(params.get("ipp_value") or 1.0),
+            "operator": "SINGLE",
+            "observation_type": params.get("observation_type") or "NORMAL",
+            "requests": requests_block,
+        }
+
+    def _legacy_requests(self, strategy, params, allocation, transient, proposal):
+        from YSE_App.util.lcogt import lcogt
+
         telescope = allocation.telescope.name.lower()
         builder = lcogt(None, None, proposal, telescope, params["start"], params["end"])
-        strategy = params.get("strategy") or "default"
         strat = dict(builder.params["strategy"][strategy])
         if strategy == "default" and params.get("filters"):
             strat["filters"] = list(params["filters"])
-        builder.params["constraints"] = {
-            "max_airmass": float(params.get("max_airmass") or 2.5),
-            "min_lunar_distance": float(params.get("min_lunar_distance") or 15),
-        }
+        builder.params["constraints"] = lco_requests.constraints(params)
         requests_block = builder.make_requests(transient.name, transient.ra, transient.dec,
                                                float(params["exposure_time"]), strat)
         if not requests_block[0]["configurations"]:
             raise FacilityError("the %s strategy produced no configurations for telescope %r"
                                 % (strategy, allocation.telescope.name))
-        return {
-            "name": transient.name,
-            "proposal": proposal,
-            "ipp_value": float(params.get("ipp_value") or strat.get("ipp") or 1.0),
-            "operator": "SINGLE",
-            "observation_type": params.get("observation_type") or "NORMAL",
-            "requests": requests_block,
-        }
+        count = int(params.get("exposure_count") or 1)
+        if count > 1:
+            for configuration in requests_block[0]["configurations"]:
+                for ic in configuration.get("instrument_configs", []):
+                    ic["exposure_count"] = count
+        return requests_block
 
     # -- auth ---------------------------------------------------------------
     def auth_headers(self, allocation) -> Dict[str, str]:
@@ -156,7 +186,7 @@ class LCOFacility(FacilityAPI):
                 response = requests.post(TOKEN_AUTH, data={"username": username, "password": password},
                                          timeout=http_timeout())
             except requests.RequestException as exc:
-                raise FacilityError("could not reach the LCO token endpoint: %s" % exc) from exc
+                raise FacilityUnreachable("could not reach the LCO token endpoint: %s" % exc) from exc
             token = (response.json() if response.ok else {}).get("token")
             if not token:
                 raise FacilityError("LCO rejected the username/password (status %s)" % response.status_code)
@@ -169,7 +199,7 @@ class LCOFacility(FacilityAPI):
         try:
             response = requests.post(REQUESTGROUPS, json=payload, headers=headers, timeout=http_timeout())
         except requests.RequestException as exc:
-            raise FacilityError("could not reach the LCO portal: %s" % exc) from exc
+            raise FacilityUnreachable("could not reach the LCO portal: %s" % exc) from exc
         body = _json_or_text(response)
         if response.status_code not in (200, 201):
             raise FacilityError("LCO answered %s: %s" % (response.status_code, str(body)[:500]))
@@ -186,7 +216,7 @@ class LCOFacility(FacilityAPI):
         try:
             response = requests.get(REQUESTGROUPS + request.external_id + "/", headers=headers, timeout=http_timeout())
         except requests.RequestException as exc:
-            raise FacilityError("could not reach the LCO portal: %s" % exc) from exc
+            raise FacilityUnreachable("could not reach the LCO portal: %s" % exc) from exc
         body = _json_or_text(response)
         if response.status_code != 200:
             raise FacilityError("LCO answered %s: %s" % (response.status_code, str(body)[:500]))
@@ -201,11 +231,24 @@ class LCOFacility(FacilityAPI):
             response = requests.post(REQUESTGROUPS + request.external_id + "/cancel/", headers=headers,
                                      timeout=http_timeout())
         except requests.RequestException as exc:
-            raise FacilityError("could not reach the LCO portal: %s" % exc) from exc
+            raise FacilityUnreachable("could not reach the LCO portal: %s" % exc) from exc
         body = _json_or_text(response)
         if response.status_code not in (200, 201):
             raise FacilityError("LCO cancel answered %s: %s" % (response.status_code, str(body)[:500]))
         return StatusResult("cancelled", detail="cancelled at LCO", response=body)
+
+    def update(self, request) -> SubmitResult:
+        """Cancel the pending request group and submit the changed one (LCO has no edit endpoint)."""
+        old_id = request.external_id
+        if old_id:
+            try:
+                self.delete(request)
+            except FacilityError as exc:
+                if "404" not in str(exc) and "not found" not in str(exc).lower():
+                    raise
+        result = self.submit(request)
+        result.detail = "replaced request group %s: %s" % (old_id or "?", result.detail)
+        return result
 
 
 def _json_or_text(response):

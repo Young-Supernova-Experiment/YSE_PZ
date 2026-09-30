@@ -34,6 +34,17 @@
 		<div id="facility_requests_slot" class="mt-3" data-url="{% url 'transient_facility_requests_fragment' transient.id %}">
 			{% include "YSE_App/transient_detail_facility_requests.html" %}
 		</div>
+		<div class="mt-2" id="facility_modify_panel" hidden>
+			<h5 class="mb-1">Modify request <span id="facility_modify_id"></span></h5>
+			<div class="row" id="facility_modify_fields"></div>
+			<div class="text-danger small" id="facility_modify_error" hidden></div>
+			<button type="button" class="btn btn-sm btn-primary" id="facility_modify_send">Send modification</button>
+			<button type="button" class="btn btn-sm btn-default" id="facility_modify_close">Close</button>
+		</div>
+		<div class="mt-2" id="facility_log_panel" hidden>
+			<h5 class="mb-1">Request log <span id="facility_log_id"></span> <button type="button" class="btn btn-xs btn-default" id="facility_log_close">Close</button></h5>
+			<ul class="list-unstyled small mb-0" id="facility_log_entries"></ul>
+		</div>
 	</div>
 </div>
 <script>
@@ -43,8 +54,8 @@
 	var csrftoken = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || $box.find('input[name=csrfmiddlewaretoken]').val();
 	var actionUrlTemplate = "{% url 'facility_request_action' 0 %}";
 
-	function fieldHtml(f) {
-		var id = 'fr_' + f.name, value = f.default === null || f.default === undefined ? '' : f.default;
+	function fieldHtml(f, prefix) {
+		var id = (prefix || 'fr_') + f.name, value = f.default === null || f.default === undefined ? '' : f.default;
 		var req = f.required ? ' required' : '';
 		var html = '<div class="col-md-4 col-sm-6 col-12"><div class="form-group"><label for="' + id + '">' + $('<span>').text(f.label).html() + (f.required ? ' *' : '') + '</label>';
 		if (f.type === 'choice') {
@@ -68,9 +79,9 @@
 		try { schema = JSON.parse($opt.attr('data-schema') || '[]'); } catch (e) { schema = []; }
 		$('#facility_fields').html(schema.map(fieldHtml).join(''));
 	}
-	function collectParams() {
+	function collectParams(container) {
 		var params = {};
-		$('#facility_fields .facility-param').each(function() {
+		$(container || '#facility_fields').find('.facility-param').each(function() {
 			var $el = $(this), name = $el.data('name'), type = $el.data('type'), v = $el.val();
 			if (v === '' || v === null) { return; }
 			if (type === 'number' || type === 'integer') { v = Number(v); }
@@ -104,6 +115,39 @@
 			if (data.errors) { msg = Object.keys(data.errors).map(function(k) { return k + ': ' + data.errors[k]; }).join('; '); }
 			showError(msg);
 		}).always(function() { $btn.prop('disabled', false); });
+	});
+	$box.on('click', '[data-fr-log]', function() {
+		// the log travels with the row (data-log); the table is reloaded after every action
+		var id = $(this).data('fr-log'), entries = [];
+		try { entries = JSON.parse($(this).closest('tr').attr('data-log') || '[]'); } catch (e) { entries = []; }
+		$('#facility_log_id').text('#' + id);
+		$('#facility_log_entries').html(entries.length ? entries.map(function(e) {
+			return '<li><code>' + $('<span>').text((e.at || '').slice(0, 19).replace('T', ' ')).html() + '</code> <b>' + $('<span>').text(e.event).html() + '</b> ' + $('<span>').text(e.detail || '').html() + '</li>';
+		}).join('') : '<li class="text-muted">no entries</li>');
+		$('#facility_log_panel').removeAttr('hidden');
+	});
+	$box.on('click', '#facility_log_close', function() { $('#facility_log_panel').attr('hidden', 'hidden'); });
+	$box.on('click', '[data-fr-modify]', function() {
+		var $row = $(this).closest('tr'), id = $(this).data('fr-modify');
+		var schema = [], payload = {};
+		try { schema = JSON.parse($row.attr('data-schema') || '[]'); payload = JSON.parse($row.attr('data-payload') || '{}'); } catch (e) {}
+		schema.forEach(function(f) { if (payload[f.name] !== undefined) { f.default = payload[f.name]; } });
+		$('#facility_modify_id').text('#' + id).data('request-id', id);
+		$('#facility_modify_fields').html(schema.map(function(f) { return fieldHtml(f, 'frm_'); }).join(''));
+		$('#facility_modify_error').text('').attr('hidden', 'hidden');
+		$('#facility_modify_panel').removeAttr('hidden');
+	});
+	$box.on('click', '#facility_modify_close', function() { $('#facility_modify_panel').attr('hidden', 'hidden'); });
+	$box.on('click', '#facility_modify_send', function() {
+		var id = $('#facility_modify_id').data('request-id'), $b = $(this).prop('disabled', true);
+		$.ajax({
+			url: actionUrlTemplate.replace('/0/', '/' + id + '/'), method: 'POST', contentType: 'application/json',
+			headers: { 'X-CSRFToken': csrftoken }, data: JSON.stringify({ action: 'update', parameters: collectParams('#facility_modify_fields') })
+		}).done(function() { $('#facility_modify_panel').attr('hidden', 'hidden'); reloadRequests(); }).fail(function(xhr) {
+			var data = xhr.responseJSON || {}, msg = data.error || ('Modification failed (' + xhr.status + ')');
+			if (data.errors) { msg = Object.keys(data.errors).map(function(k) { return k + ': ' + data.errors[k]; }).join('; '); }
+			$('#facility_modify_error').text(msg).removeAttr('hidden');
+		}).always(function() { $b.prop('disabled', false); });
 	});
 	$box.on('click', '[data-fr-action]', function() {
 		var $b = $(this), id = $b.closest('tr').data('request-id'), action = $b.data('fr-action');

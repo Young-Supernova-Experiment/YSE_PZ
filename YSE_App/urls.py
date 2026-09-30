@@ -284,8 +284,11 @@ urlpatterns = [
     re_path(r'^allocations/$', allocation_views.allocations, name='allocations'),
     re_path(r'^allocations/new/$', allocation_views.allocation_create, name='allocation_create'),
     re_path(r'^allocations/(?P<allocation_id>[0-9]+)/edit/$', allocation_views.allocation_edit, name='allocation_edit'),
+    re_path(r'^facility_requests/$', allocation_views.facility_requests, name='facility_requests'),
     re_path(r'^facility_requests/(?P<request_id>[0-9]+)/action/$',
             allocation_views.facility_request_action, name='facility_request_action'),
+    re_path(r'^facility_requests/(?P<request_id>[0-9]+)/log/$',
+            allocation_views.facility_request_log, name='facility_request_log'),
     # Sharing services (#324): submissions page, detail, retry and the services/rules page.
     re_path(r'^sharing/$', sharing_views.sharing_submissions, name='sharing_submissions'),
     re_path(r'^sharing/submissions/$', sharing_views.sharing_submissions, name='sharing_submissions_list'),
@@ -445,6 +448,7 @@ router.register(r'classicalresources', api_views.ClassicalResourceViewSet, basen
 router.register(r'classicalobservingdates', api_views.ClassicalObservingDateViewSet, basename='classicalobservingdate')
 router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
 router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
+router.register(r'facilities', api_views.FacilityViewSet, basename='facility')
 router.register(r'transientinterests', api_views.TransientInterestViewSet, basename='transientinterest')
 router.register(r'favorites', api_views.FavoriteTransientViewSet, basename='favorite')
 router.register(r'notifications', api_views.NotificationViewSet, basename='notification')

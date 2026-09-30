@@ -83,9 +83,10 @@ admin.site.register(Instrument)
 
 
 class ObservingResourceAdmin(admin.ModelAdmin):
-	list_display = ("__str__", "creator_only", "begin_date_valid", "end_date_valid")
+	list_display = ("__str__", "creator_only", "begin_date_valid", "end_date_valid", "allocation")
 	list_filter = ("creator_only",)
 	filter_horizontal = ("groups",)
+	raw_id_fields = ("allocation",)
 
 
 admin.site.register(ToOResource, ObservingResourceAdmin)
@@ -489,12 +490,13 @@ class AllocationAdmin(admin.ModelAdmin):
 
 @admin.register(FacilityRequest)
 class FacilityRequestAdmin(admin.ModelAdmin):
-	list_display = ("id", "transient", "allocation", "state", "external_id", "submitted_by", "submitted_at",
-	                "hours_charged", "charged_at")
-	list_filter = ("state", "allocation__facility", "allocation")
+	list_display = ("id", "transient", "allocation", "kind", "state", "external_id", "submitted_by", "submitted_at",
+	                "attempts", "hours_charged", "charged_at", "n_results")
+	list_filter = ("state", "kind", "allocation__facility", "allocation")
 	search_fields = ("transient__name", "external_id", "allocation__name")
 	raw_id_fields = ("transient", "followup", "run")
-	readonly_fields = ("charged_at", "created_by", "created_date", "modified_by", "modified_date")
+	readonly_fields = ("charged_at", "attempts", "results_ingested_at", "n_results", "created_by", "created_date",
+	                   "modified_by", "modified_date")
 
 	def save_model(self, request, obj, form, change):
 		if not change or not obj.created_by_id:

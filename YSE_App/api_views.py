@@ -459,11 +459,38 @@ class FacilityRequestViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if not (user.is_staff or user.is_superuser):
             qs = qs.filter(Q(submitted_by=user) | Q(allocation__in=allocations_for_user(user, facility_only=False)))
-        for key in ("transient", "allocation", "state"):
+        for key in ("transient", "allocation", "state", "kind"):
             value = self.request.query_params.get(key)
             if value:
-                qs = qs.filter(**{key if key == "state" else key + "_id": value})
+                qs = qs.filter(**{key if key in ("state", "kind") else key + "_id": value})
         return qs.distinct()
+
+
+class FacilityViewSet(viewsets.ViewSet):
+    """Registered facility adapters (#298): slug, capabilities, credential keys, request form schema."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def _describe(self, slug):
+        from YSE_App.facilities import get_facility
+
+        adapter = get_facility(slug)
+        if adapter is None:
+            return None
+        info = adapter.describe()
+        info["fields"] = adapter.form_schema()
+        return info
+
+    def list(self, request):
+        from YSE_App.facilities import registered_slugs
+
+        return Response([self._describe(slug) for slug in registered_slugs()])
+
+    def retrieve(self, request, pk=None):
+        info = self._describe(pk)
+        if info is None:
+            raise Http404("no facility %r" % pk)
+        return Response(info)
 
 
 class AnalysisServiceViewSet(viewsets.ReadOnlyModelViewSet):

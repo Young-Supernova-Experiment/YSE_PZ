@@ -1343,6 +1343,7 @@ def _load_transient_followups(transient_id, user):
                     ),
                 ),
                 'requests__requestor',
+                'facility_requests__allocation',
             ),
             user,
         )
@@ -2541,6 +2542,26 @@ def save_search(request):
 #    return JsonResponse(context) #HttpResponse('')
 
     
+def _ztf_forced_phot_via_allocation(request, transient):
+    """Submit through the first usable 'ztf' allocation; None when there is none (legacy path)."""
+    from YSE_App.facilities import FacilityValidationError
+    from YSE_App.services import facility_requests as fr
+
+    allocation = fr.allocations_for_user(request.user).filter(facility='ztf').order_by('-end_date').first()
+    if allocation is None:
+        return None
+    existing = fr.open_request_for(allocation, transient)
+    if existing is not None:
+        return 'error: a ZTF forced-photometry request is already %s (submitted %s)' % (
+            existing.get_state_display().lower(), (existing.submitted_at or existing.created_date).strftime('%Y-%m-%d %H:%M UT'))
+    try:
+        req = fr.submit_request(allocation, transient, request.user, {})
+    except (FacilityValidationError, fr.FacilityRequestError) as exc:
+        return 'error: %s' % exc
+    return 'success: ZTF forced photometry request %d is %s; the light curve is ingested when the service finishes' % (
+        req.pk, req.get_state_display().lower())
+
+
 @login_required
 def ztf_forced_phot(request,slug):
 
@@ -2548,6 +2569,12 @@ def ztf_forced_phot(request,slug):
     from YSE_App.data_ingest import ZTF_Forced_Phot
 
     transient = Transient.objects.get(slug=slug)
+
+    # A 'ztf' allocation open to the user (#301) submits through the facility adapter: the request
+    # is recorded, polled and ingested by the queue, and an open request replaces the 12 h throttle.
+    facility_msg = _ztf_forced_phot_via_allocation(request, transient)
+    if facility_msg is not None:
+        return JsonResponse({'msg': facility_msg})
 
     # make sure this request wasn't run w/i the last 12 hours
     old_log = Log.objects.filter(transient=transient).\
