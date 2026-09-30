@@ -38,11 +38,17 @@ HTTP 502 (`error: lookup_failed`) and one that times out answers 504 (`error: ti
 - `_archive_status_with_timeout(work, timeout_seconds)` runs the blocking archive query in a
   worker thread and returns `None` when it does not finish in time; the worker is abandoned
   (`shutdown(wait=False)`) so the response really comes back at the timeout.
-- `_archive_status_payload(cache_key, lookup, archive_name)` builds the label payload for every
-  archive: answers are cached for `ARCHIVE_STATUS_CACHE_SECONDS` (1 h), timeouts and errors for
-  `ARCHIVE_STATUS_FAILURE_CACHE_SECONDS` (60 s) so a reload retries soon. Timeout:
-  `YSE_ARCHIVE_STATUS_TIMEOUT` (default 8 s). Cache keys: `hst_status_v3_<id>`,
+- `_archive_status_payload(cache_key, lookup, archive_name, transient_id, flag_field)` builds the
+  label payload for every archive: answers are cached for `ARCHIVE_STATUS_CACHE_SECONDS` (1 h),
+  timeouts and errors for `ARCHIVE_STATUS_FAILURE_CACHE_SECONDS` (60 s) so a reload retries soon.
+  Timeout: `YSE_ARCHIVE_STATUS_TIMEOUT` (default 8 s). Cache keys: `hst_status_v3_<id>`,
   `jwst_status_v1_<id>`, `chandra_status_v3_<id>`.
+- A fresh answer (`has_data` true / false, never a failure) is also written to the transient's
+  archive flag (`_record_archive_flag`): `has_jwst` (#383; nothing else sets it), `has_hst` and
+  `has_chandra` (otherwise set at TNS ingest). The write is a single `UPDATE` only when the value
+  changes, bypasses `save()` (no `modified_date` change, no signals) and never breaks the label. The
+  flags show as the **Archives** badges on the Summary tab (yes / no / `?` = never looked up) and are
+  searchable (`has_jwst=true`, `legacy.has_jwst`; `docs/transient-search.md`).
 - `_archive_table_response(transient_id, archive_name, lookup, empty_payload, cache_key)` does
   the same for the tab bodies (HST and JWST) with the longer `YSE_ARCHIVE_TABLE_TIMEOUT`
   (default 45 s) and caches successful JWST answers for an hour (`jwst_observations_v1_<id>`).
@@ -61,6 +67,8 @@ HTTP 502 (`error: lookup_failed`) and one that times out answers 504 (`error: ti
   to widen a one-off query). Masked cells are `None`. The class does not catch exceptions; the
   views' timeout/error handling does.
 
-Tests: `YSE_App/tests/test_archive_status_views.py` (HST/Chandra) and
+Tests: `YSE_App/tests/test_archive_status_views.py` (HST/Chandra),
 `YSE_App/tests/test_jwst_tab.py` (helper with a recorded table, status and body endpoints, cache
-TTLs, timeout/error answers, both page modes). MAST is never contacted in the test suite.
+TTLs, timeout/error answers, both page modes) and `YSE_App/tests/test_summary_refit.py`
+(`HasJwstFlagTests`: the flags recorded by the status views, search filters, API, badges). MAST is
+never contacted in the test suite.

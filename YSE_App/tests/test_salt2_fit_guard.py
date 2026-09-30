@@ -1,11 +1,13 @@
-"""SALT2/SALT3 fit guard for the light-curve plot endpoints (#189).
+"""SALT fit guard for the light-curve plot endpoints (#189, #315).
 
 ``salt2plot/<id>/1/`` and ``salt2fluxplot/<id>/1/`` used to call
-``sncosmo.fit_lc`` with no error handling, so a failed model download, a band
-missing from ``bandpassdict`` or too few points returned HTTP 500 and the plot
-never rendered. The fit is now wrapped: the endpoint logs the error, annotates
-the plot with a short "SALT fit unavailable" note and returns the light curve
-without the fit.
+``sncosmo.fit_lc`` inside the request. Since #315 they overlay the **stored**
+``sncosmo_fit`` run instead (``YSE_App/services/fit_status.py``) and never
+touch sncosmo: without a stored run the plot carries a short "No stored
+SALT3 fit" note and still renders. ``lightcurveplot_summary(salt2=True)`` is
+the one remaining synchronous fit (not URL-reachable with the flag); its
+guard from #189 stays: the error is logged, the plot annotated with "SALT fit
+unavailable" and returned without the fit.
 
 ``sncosmo`` is mocked so the tests never download a SALT model.
 """
@@ -78,33 +80,47 @@ class Salt2FitGuardTests(TestCase):
         self.assertIn(view_utils.SALT_FIT_UNAVAILABLE_TEXT, body)
         return body
 
-    def test_salt2plot_returns_plot_when_fit_raises(self):
+    def _assert_plot_without_stored_fit(self, response):
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8", errors="replace")
+        self.assertGreater(len(body), 100)
+        self.assertIn("plot", body.lower())
+        self.assertIn(view_utils.SALT_FIT_NONE_TEXT, body)
+        self.assertNotIn(view_utils.SALT_FIT_UNAVAILABLE_TEXT, body)
+        return body
+
+    def test_salt2plot_uses_the_stored_run_never_sncosmo(self):
+        """No stored sncosmo_fit run: the plot says so; sncosmo is not called (#315)."""
         fit_lc = mock.MagicMock(side_effect=RuntimeError("synthetic fit failure"))
-        with self._patched_sncosmo(fit_lc=fit_lc), \
-                self.assertLogs("YSE_App.view_utils", level="WARNING") as logs:
+        model = mock.MagicMock()
+        with self._patched_sncosmo(model=model, fit_lc=fit_lc):
             response = self.client.get(self.detail_fit_url)
-        self._assert_plot_without_fit(response)
-        self.assertTrue(fit_lc.called, "the fit branch should have been exercised")
-        self.assertTrue(any("SALT fit failed" in line for line in logs.output), logs.output)
-
-    def test_salt2fluxplot_returns_plot_when_fit_raises(self):
-        fit_lc = mock.MagicMock(side_effect=ValueError("too few points"))
-        with self._patched_sncosmo(fit_lc=fit_lc), \
-                self.assertLogs("YSE_App.view_utils", level="WARNING"):
-            response = self.client.get(self.flux_fit_url)
-        self._assert_plot_without_fit(response)
-        self.assertTrue(fit_lc.called, "the fit branch should have been exercised")
-
-    def test_salt2plot_returns_plot_when_model_download_fails(self):
-        """sncosmo.Model(source=...) fetching the SALT model is guarded too."""
-        model = mock.MagicMock(side_effect=OSError("could not download salt2 model"))
-        fit_lc = mock.MagicMock()
-        with self._patched_sncosmo(model=model, fit_lc=fit_lc), \
-                self.assertLogs("YSE_App.view_utils", level="WARNING"):
-            response = self.client.get(self.detail_fit_url)
-        self._assert_plot_without_fit(response)
-        self.assertTrue(model.called)
+        self._assert_plot_without_stored_fit(response)
         self.assertFalse(fit_lc.called)
+        self.assertFalse(model.called)
+
+    def test_salt2fluxplot_uses_the_stored_run_never_sncosmo(self):
+        fit_lc = mock.MagicMock(side_effect=ValueError("too few points"))
+        model = mock.MagicMock()
+        with self._patched_sncosmo(model=model, fit_lc=fit_lc):
+            response = self.client.get(self.flux_fit_url)
+        self._assert_plot_without_stored_fit(response)
+        self.assertFalse(fit_lc.called)
+        self.assertFalse(model.called)
+
+    def test_salt2plot_survives_an_unreadable_stored_run(self):
+        """A stored run whose model_curves.json cannot be read still renders (labels only)."""
+        from YSE_App.services import fit_status
+
+        fake_run = mock.MagicMock(pk=12345, result={"t0": 60000.0, "z": 0.03, "model": "salt3"}, finished_at=None, created_by_id=None)
+        fake_run.files.filter.return_value.first.return_value = None
+        with mock.patch.object(fit_status, "stored_salt_fit", return_value=fake_run), \
+                self._patched_sncosmo():
+            response = self.client.get(self.detail_fit_url)
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode("utf-8", errors="replace")
+        self.assertNotIn(view_utils.SALT_FIT_NONE_TEXT, body)
+        self.assertIn("salt3 fit", body)
 
     def test_lightcurveplot_summary_with_salt2_is_guarded(self):
         """Not URL-reachable with salt2=True, but the same unguarded fit lived here."""

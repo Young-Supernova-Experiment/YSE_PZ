@@ -47,7 +47,7 @@ annotation grouped by origin: the service name, the verdict badge, the one-line 
 key/value pairs, an expandable JSON view, who wrote it and when, plus **Rerun** (when the user may
 run that service) and delete (staff, or the owner of a `user:` origin). The `legacy` row shows the
 non-null `Transient` columns (`point_source_probability`, `real_bogus_score`, `mw_ebv`,
-`antares_classification`, `alt_status`, `has_hst` / `has_spitzer` / `has_chandra`, `TNS_spec_class`).
+`antares_classification`, `alt_status`, `has_hst` / `has_jwst` / `has_spitzer` / `has_chandra`, `TNS_spec_class`).
 
 The right-hand card lists the registered checks with the time of their last run (or a **failed**
 badge with the error) and a **Check** / **Rerun** button. Buttons are shown to staff and superusers,

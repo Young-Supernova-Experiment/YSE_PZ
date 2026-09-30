@@ -5,6 +5,8 @@
 * ``GET  analysis_runs/<uuid>/status.json``          polled until the run is final
 * ``GET  analysis_runs/<uuid>/files/<file id>/<name>``  a plot or result file (access-checked)
 * ``POST analysis_runs/<uuid>/delete/`` / ``cancel/``  own runs (staff: any)
+* ``GET  transient_detail/<id>/salt_fit_fragment/``   Summary-tab SALT3 fit status + Refit (#315)
+* ``GET  transient_detail/<id>/ngsf_fragment/``       Summary-tab NGSF classification + Run NGSF (#315)
 
 A user may see a run when they may see its transient (photometry / spectra
 group access, ``services.visibility``); files are served through this module,
@@ -25,6 +27,7 @@ from django.views.decorators.http import require_GET, require_POST
 from YSE_App.models import AnalysisResultFile, AnalysisService, ExternalService, ExternalServiceRun, Transient
 from YSE_App.services import analysis_services as svc
 from YSE_App.services import external_services as runs
+from YSE_App.services import fit_status
 from YSE_App.services.visibility import filter_transients_by_user_access
 
 POLL_SECONDS = 4
@@ -229,3 +232,27 @@ def analysis_run_cancel(request, run_uuid):
         return JsonResponse({"ok": False, "error": "only the requester or staff may cancel a run"}, status=403)
     svc.cancel_run(run)
     return JsonResponse({"ok": True, "run": run_json(run, request)})
+
+
+# --- Summary tab (#315): stored SALT3 fit and NGSF classification -----------------------------
+
+@login_required
+@require_GET
+def transient_salt_fit_fragment(request, transient_id):
+    """The SALT3 line under the light curve: last successful fit, Refit button, run state."""
+    transient = get_object_or_404(Transient, pk=transient_id)
+    svc.fail_timed_out_runs()
+    ctx = fit_status.salt_fit_context(transient, request.user)
+    ctx["analysis_poll_seconds"] = POLL_SECONDS
+    return render(request, "YSE_App/transient_detail/salt_fit_status.html", ctx)
+
+
+@login_required
+@require_GET
+def transient_ngsf_fragment(request, transient_id):
+    """The NGSF line under the spectrum: last classification, Run NGSF button, installed state."""
+    transient = get_object_or_404(Transient, pk=transient_id)
+    svc.fail_timed_out_runs()
+    ctx = fit_status.ngsf_context(transient, request.user)
+    ctx["analysis_poll_seconds"] = POLL_SECONDS
+    return render(request, "YSE_App/transient_detail/ngsf_status.html", ctx)

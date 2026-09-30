@@ -54,6 +54,7 @@ URL is the whole state of a search, so it can be pasted into Slack.
 | | `has_followup`, `followup_status` | any follow-up / a follow-up in one of the given statuses |
 | | `has_comment` | a transient-level comment (`Log` row without a follow-up) |
 | | `has_host`, `host_redshift_min`, `host_redshift_max` | host presence and redshift |
+| | `has_hst`, `has_jwst`, `has_chandra` | archive coverage flags on the transient (`true` = known to have data, `false` = known not to; never looked up matches neither). `has_jwst` is set by the detail page's JWST lookup (#383, `docs/archive-tabs.md`) |
 | | `visible_to_group` | photometry or spectra shared with that collaboration group; non-staff may only ask about groups they belong to (anything else matches nothing) |
 | ordering | `ordering` | `name`, `ra`, `dec`, `disc_date`, `created_date`, `modified_date`, `redshift`, `best_redshift`, `mw_ebv`, `peak_mag`, `peak_mjd`, `last_det_mag`, `last_det_mjd`, `first_det_mjd`, `num_det`, `rise_rate`, `decay_rate`, `deepest_limit`, `separation` (cone only), `gal_b`; prefix `-` for descending; a primary-key tie-breaker is always appended |
 

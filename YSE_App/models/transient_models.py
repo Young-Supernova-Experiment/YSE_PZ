@@ -80,6 +80,8 @@ class Transient(BaseModel):
 	has_hst = models.BooleanField(null=True, blank=True)
 	has_spitzer = models.BooleanField(null=True, blank=True)
 	has_chandra = models.BooleanField(null=True, blank=True)
+	# JWST coverage from the detail page's MAST lookup (#328 follow-up); None = never looked up.
+	has_jwst = models.BooleanField(null=True, blank=True)
 
 	# AI summary (#295): the current text; every version is a TransientSummaryHistory row.
 	summary = models.TextField(null=True, blank=True)
@@ -97,6 +99,13 @@ class Transient(BaseModel):
 			models.Index(fields=['ra'], name='yse_transient_ra_idx'),
 			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
 		]
+
+	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
+	ARCHIVE_FLAG_FIELDS = (('HST', 'has_hst'), ('JWST', 'has_jwst'), ('Chandra', 'has_chandra'), ('Spitzer', 'has_spitzer'))
+
+	@property
+	def archive_flags(self):
+		return [(label, getattr(self, field)) for label, field in self.ARCHIVE_FLAG_FIELDS]
 
 	def CoordString(self):
 		return GetSexigesimalString(self.ra, self.dec)

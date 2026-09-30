@@ -474,7 +474,7 @@ FIELD_GROUPS = (
     ('Relations', ('status', 'obs_group', 'internal_survey', 'tags', 'tags_all',
                    'has_spectrum', 'has_followup', 'followup_status', 'has_comment',
                    'has_host', 'host_redshift_min', 'host_redshift_max', 'visible_to_group',
-                   'favorites', 'has_interest')),
+                   'favorites', 'has_interest', 'has_hst', 'has_jwst', 'has_chandra')),
     ('Annotations', ('annotation_origin', 'annotation_key', 'annotation_value_eq', 'annotation_value_min',
                      'annotation_value_max', 'annotation_column')),
 )
@@ -587,6 +587,13 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     # --- favorites (#323) and paper interests (#290) -----------------------
     favorites = _bool('filter_favorites', 'My favorites only')
     has_interest = _bool('filter_has_interest', 'Has open paper interest')
+
+    # --- archive coverage flags (Transient.has_hst / has_jwst / has_chandra) --------
+    # "Yes" = the archive is known to have data at the position; "No" = known not to
+    # (a transient never looked up matches neither).
+    has_hst = _bool('filter_has_hst', 'Has HST data')
+    has_jwst = _bool('filter_has_jwst', 'Has JWST data')
+    has_chandra = _bool('filter_has_chandra', 'Has Chandra data')
 
     # --- annotations (#319) ------------------------------------------------
     annotation_origin = django_filters.CharFilter(method='noop', label='Annotation origin',
@@ -728,7 +735,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         return qs.filter(Exists(rows))
 
     def _filter_legacy(self, qs, key, eq, vmin, vmax):
-        from YSE_App.services.annotations import LEGACY_COLUMNS, LEGACY_NUMERIC_KEYS
+        from YSE_App.services.annotations import LEGACY_BOOLEAN_KEYS, LEGACY_COLUMNS, LEGACY_NUMERIC_KEYS
 
         if not key:
             return qs
@@ -739,7 +746,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
             column = 'antares_classification__name'
         q = Q(**{column + '__isnull': False})
         if eq:
-            if key in ('has_hst', 'has_spitzer', 'has_chandra'):
+            if key in LEGACY_BOOLEAN_KEYS:
                 q &= Q(**{column: eq.lower() in ('1', 'true', 'yes')})
             elif key in LEGACY_NUMERIC_KEYS:
                 try:
@@ -859,6 +866,20 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         if value is None:
             return qs
         return qs.filter(host__isnull=not value)
+
+    def _filter_archive_flag(self, qs, field, value):
+        if value is None:
+            return qs
+        return qs.filter(**{field: bool(value)})
+
+    def filter_has_hst(self, qs, name, value):
+        return self._filter_archive_flag(qs, 'has_hst', value)
+
+    def filter_has_jwst(self, qs, name, value):
+        return self._filter_archive_flag(qs, 'has_jwst', value)
+
+    def filter_has_chandra(self, qs, name, value):
+        return self._filter_archive_flag(qs, 'has_chandra', value)
 
     def filter_visible_to_group(self, qs, name, value):
         """Transients with photometry or spectra shared with collaboration group ``value``.
