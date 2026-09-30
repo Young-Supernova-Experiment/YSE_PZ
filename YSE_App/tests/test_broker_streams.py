@@ -656,6 +656,7 @@ class GroupRejectionTests(ConsumeBase):
 
 # --- Brokers tab and cone search page (#275) ------------------------------------------------
 
+@override_settings(BROKERS_ENABLED=["sfake", "lasair"])  # no live broker: the page must never reach the network in CI
 class BrokersTabAndSearchTests(ConsumeBase):
     def setUp(self):
         super().setUp()
@@ -674,6 +675,7 @@ class BrokersTabAndSearchTests(ConsumeBase):
         self.assertContains(r, "yse-broker-import")
         self.assertContains(r, "ZTF26tab0001-sci.png")
         self.assertContains(r, 'data-broker="sfake" data-error="0"')
+        self.assertContains(r, "unavailable: no active EncryptedCredential")  # lasair, inline, no 500
         StreamFakeProvider.fail_cone = True
         r = self.client.get(reverse("transient_detail_brokers_fragment", args=[self.transient.pk]))
         self.assertEqual(r.status_code, 200)
