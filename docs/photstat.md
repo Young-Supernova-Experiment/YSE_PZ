@@ -120,3 +120,11 @@ filters on `num_limits_gte` / `deepest_limit_gte` see the new values before anyo
 `rebuild_photstats --stale-only` command applies.
 
 No new settings.
+
+## Indexes
+
+`peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, `num_det_global` and
+`first_detected_mjd` are indexed since #268; #286 (migration `0027_transient_galactic_coords`) adds
+`first_detected_date`, `last_detected_date`, `rise_rate`, `decay_rate` and `deepest_limit`, so every
+search filter on the stat row (`docs/transient-search.md`) has an index. The table has one row per
+transient, so the write cost is one index update per stat rebuild.
