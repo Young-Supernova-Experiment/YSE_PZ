@@ -23,6 +23,30 @@ services:
         depends_on:
           yse_db:
             condition: service_healthy
+    # Broker stream consumer (#278, docs/broker-streams.md). Opt-in: only starts with
+    # `docker compose --profile brokers up`; BROKER_CONNECTION names the enabled
+    # BrokerConnection slug (admin > Broker connections).
+    yse_broker_ingest:
+        container_name: ysepz_broker_ingest_container
+        image: "ghcr.io/young-supernova-experiment/yse_pz:latest"
+        platform: linux/amd64
+        working_dir: /app
+        profiles: ["brokers"]
+        volumes:
+            - ${VOL}:/app
+        command: python manage.py broker_ingest --connection ${BROKER_CONNECTION:-fink} --workers ${BROKER_WORKERS:-2}
+        environment:
+          CONDA_DEFAULT_ENV: base
+          PROJ_LIB: /opt/conda/share/proj
+          CONDA_PREFIX: /opt/conda
+          DB_CONFIG: /opt/project/db_configuration
+        env_file:
+          - ".env"
+          - ".env.secrets"
+        restart: unless-stopped
+        depends_on:
+          yse_db:
+            condition: service_healthy
     yse_redis:
       container_name: ysepz_redis_container
       image: redis:7-alpine

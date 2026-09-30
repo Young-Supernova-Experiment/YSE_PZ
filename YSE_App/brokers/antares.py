@@ -28,6 +28,7 @@ from YSE_App.brokers.base import (
     PHOTOMETRY,
     QUERY_ALERTS,
     SAVE_AS_TRANSIENT,
+    STREAM,
     BrokerAlert,
     BrokerError,
     BrokerProvider,
@@ -181,8 +182,10 @@ class AntaresProvider(BrokerProvider):
     slug = "antares"
     name = "ANTARES"
     description = "NOIRLab ANTARES broker (ZTF and Rubin/LSST alerts) through antares-client."
-    capabilities = (QUERY_ALERTS, GET_ALERT, CONE_SEARCH, PHOTOMETRY, SAVE_AS_TRANSIENT)
+    capabilities = (QUERY_ALERTS, GET_ALERT, CONE_SEARCH, PHOTOMETRY, SAVE_AS_TRANSIENT, STREAM)
     requires_package = "antares_client"
+    stream_format = "antares"
+    stream_topics = ("extragalactic",)
     default_obs_group = "ZTF"
     default_instrument = "ZTF-Cam"
     query_keys = ("tags", "days", "rb_min", "survey", "ra_min", "ra_max", "dec_min", "dec_max")
@@ -269,6 +272,29 @@ class AntaresProvider(BrokerProvider):
     def get_photometry(self, object_id) -> List[Dict]:
         locus = self._locus(object_id)
         return locus_points(locus) if locus is not None else []
+
+    def parse_stream_message(self, topic, message, *, key=None) -> Optional[BrokerAlert]:
+        """``antares_client.StreamingClient`` yields ``Locus`` objects; a JSON mirror of a
+        locus (``locus_id``, ``ra``, ``dec``, ``properties``, ``tags``) is accepted too."""
+        if message is None:
+            return None
+        if isinstance(message, dict):
+            if message.get("locus_id") is None or message.get("ra") is None:
+                return None
+            message = _DictLocus(message)
+        return locus_to_alert(message)
+
+
+class _DictLocus:
+    """Attribute view of a locus serialised as JSON (no lightcurve)."""
+
+    def __init__(self, data: Dict):
+        self.locus_id = data.get("locus_id")
+        self.ra = data.get("ra")
+        self.dec = data.get("dec")
+        self.properties = dict(data.get("properties") or {})
+        self.tags = list(data.get("tags") or [])
+        self.lightcurve = None
 
 
 def loci_to_alerts(loci: Iterable) -> List[BrokerAlert]:

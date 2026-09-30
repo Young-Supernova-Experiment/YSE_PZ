@@ -433,18 +433,34 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
 
 
 # --- Broker filters and candidates (#276): criteria / query JSON edited as text.
+class BrokerFilterVersionInline(admin.TabularInline):
+	model = BrokerFilterVersion
+	extra = 0
+	can_delete = False
+	readonly_fields = ("version", "query", "criteria", "topics", "saved_by", "saved_at", "note")
+	ordering = ("-version",)
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
 @admin.register(BrokerFilter)
 class BrokerFilterAdmin(admin.ModelAdmin):
-	list_display = ("name", "broker", "group", "enabled", "auto_save", "save_status", "last_run_at", "last_run_summary")
-	list_filter = ("broker", "enabled", "auto_save", "group")
+	list_display = ("name", "broker", "group", "enabled", "auto_save", "notify_group", "version", "save_status",
+					"last_run_at", "last_run_summary")
+	list_filter = ("broker", "enabled", "auto_save", "notify_group", "group")
 	search_fields = ("name", "description")
-	readonly_fields = ("last_run_at", "last_run_summary", "created_at", "updated_at")
+	readonly_fields = ("version", "last_run_at", "last_run_summary", "created_at", "updated_at")
+	filter_horizontal = ("default_tags",)
+	inlines = (BrokerFilterVersionInline,)
 	fieldsets = (
 		(None, {"fields": ("name", "broker", "group", "description", "enabled")}),
-		("Poll", {"fields": ("query", "criteria", "max_alerts"),
+		("Rule", {"fields": ("query", "criteria", "topics", "max_alerts", "version"),
 				  "description": "query: broker-side keys (see the provider's query_keys); criteria: "
-								 "YSE_App.brokers.filters.CRITERIA keys, all must pass."}),
-		("Saving", {"fields": ("auto_save", "save_status", "save_obs_group", "import_photometry")}),
+								 "YSE_App.brokers.filters.CRITERIA keys, all must pass; topics: stream topics this "
+								 "filter applies to (blank = all). Editing query / criteria records a new version."}),
+		("Saving", {"fields": ("auto_save", "save_status", "save_obs_group", "import_photometry", "default_tags")}),
+		("Notifications", {"fields": ("notify_group",)}),
 		("Bookkeeping", {"fields": ("created_by", "last_run_at", "last_run_summary", "created_at", "updated_at")}),
 	)
 
@@ -452,6 +468,57 @@ class BrokerFilterAdmin(admin.ModelAdmin):
 		if not change and not obj.created_by_id:
 			obj.created_by = request.user
 		super().save_model(request, obj, form, change)
+		obj.record_version(request.user, "edited in admin" if change else "created")
+
+
+@admin.register(BrokerConnection)
+class BrokerConnectionAdmin(admin.ModelAdmin):
+	list_display = ("slug", "name", "broker", "kind", "enabled", "bootstrap_servers", "group_id", "message_format",
+					"last_message_at", "short_error")
+	list_filter = ("broker", "kind", "enabled")
+	search_fields = ("name", "slug", "bootstrap_servers", "description")
+	raw_id_fields = ("credential",)
+	prepopulated_fields = {"slug": ("name",)}
+	readonly_fields = ("last_message_at", "last_error", "created_at", "updated_at")
+	fieldsets = (
+		(None, {"fields": ("name", "slug", "broker", "kind", "enabled", "description")}),
+		("Stream", {"fields": ("bootstrap_servers", "topics", "group_id", "message_format", "credential", "config"),
+					"description": "Off by default. Start a worker with manage.py broker_ingest --connection <slug> "
+								   "(docs/broker-streams.md). Credential: username/password (Kafka SASL) or "
+								   "api_key/api_secret (ANTARES)."}),
+		("Bookkeeping", {"fields": ("created_by", "last_message_at", "last_error", "created_at", "updated_at")}),
+	)
+
+	def short_error(self, obj):
+		return (obj.last_error or "")[:80]
+	short_error.short_description = "last error"
+
+	def save_model(self, request, obj, form, change):
+		if not change and not obj.created_by_id:
+			obj.created_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(IngestHeartbeat)
+class IngestHeartbeatAdmin(admin.ModelAdmin):
+	list_display = ("connection", "topic", "worker", "status", "stale", "last_seen", "lag", "messages", "candidates",
+					"saved", "errors", "hostname", "pid", "short_error")
+	list_filter = ("status", "connection")
+	readonly_fields = [f.name for f in IngestHeartbeat._meta.fields]
+	ordering = ("connection", "topic", "worker")
+
+	def stale(self, obj):
+		from YSE_App.brokers.streams import stale_minutes
+
+		return obj.is_stale(stale_minutes())
+	stale.boolean = True
+
+	def short_error(self, obj):
+		return (obj.last_error or "")[:80]
+	short_error.short_description = "last error"
+
+	def has_add_permission(self, request):
+		return False
 
 
 @admin.register(Candidate)
@@ -460,8 +527,8 @@ class CandidateAdmin(admin.ModelAdmin):
 	list_filter = ("broker", "status")
 	search_fields = ("alert_id", "classification", "transient__name")
 	raw_id_fields = ("transient", "status_changed_by")
-	readonly_fields = ("first_seen", "last_seen", "n_alerts", "created_at", "updated_at")
-	filter_horizontal = ("filters",)
+	readonly_fields = ("first_seen", "last_seen", "n_alerts", "topic", "created_at", "updated_at")
+	filter_horizontal = ("filters", "rejected_by_groups")
 
 
 # --- Allocations and facility requests (#303, #298) -----------------------------

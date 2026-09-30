@@ -1109,17 +1109,91 @@ class BrokerFilterViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         self._check_group(serializer.validated_data.get("group"))
-        serializer.save(created_by=self.request.user)
+        instance = serializer.save(created_by=self.request.user)
+        instance.record_version(self.request.user, "created")
 
     def perform_update(self, serializer):
         self._check_group(serializer.instance.group)
         if "group" in serializer.validated_data:
             self._check_group(serializer.validated_data.get("group"))
-        serializer.save()
+        instance = serializer.save()
+        # #277: a rule change keeps the previous version as inactive history.
+        instance.record_version(self.request.user, "edited via API")
 
     def perform_destroy(self, instance):
         self._check_group(instance.group)
         instance.delete()
+
+    @action(detail=True, methods=["get"])
+    def versions(self, request, pk=None):
+        """Recorded rule versions, newest first (the current one is ``is_current``)."""
+        bf = self.get_object()
+        if not bf.versions.exists():
+            bf.record_version(None, "recorded on first read")
+        return Response(BrokerFilterVersionSerializer(bf.versions.select_related("saved_by").order_by("-version"), many=True).data)
+
+    @action(detail=True, methods=["get", "post"])
+    def preview(self, request, pk=None):
+        """Run the filter's rule against the broker's last ``n`` alerts without writing
+        candidates; ``criteria`` / ``query`` in a POST body override the saved ones."""
+        from YSE_App.brokers import registry
+        from YSE_App.brokers.base import BrokerError, BrokerUnavailable
+        from YSE_App.brokers.filters import CriteriaError, evaluate, validate_criteria
+        from YSE_App.brokers.base import mjd_now
+        bf = self.get_object()
+        data = request.data if request.method == "POST" else request.query_params
+        try:
+            n = min(int(data.get("n") or 50), 500)
+        except (TypeError, ValueError):
+            return Response({"detail": "n must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+        criteria = bf.criteria or {}
+        query = bf.query or {}
+        if request.method == "POST":
+            body = request.data or {}
+            if "criteria" in body:
+                try:
+                    criteria = validate_criteria(body.get("criteria"))
+                except CriteriaError as exc:
+                    return Response({"criteria": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if "query" in body:
+                query = body.get("query") or {}
+        try:
+            provider = registry.get_provider(bf.broker, require_available=True)
+        except BrokerUnavailable as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if provider is None:
+            return Response({"detail": "broker %r is unknown or disabled" % bf.broker}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            query = provider.validate_query(query)
+            alerts = provider.query_alerts(query, limit=n)
+        except ValueError as exc:
+            return Response({"query": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except BrokerError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        now_mjd = mjd_now()
+        rows = []
+        passed = 0
+        for alert in alerts:
+            ok, failed = evaluate(criteria, alert, now_mjd=now_mjd)
+            passed += 1 if ok else 0
+            rows.append({"object_id": alert.object_id, "mag": alert.mag, "band": alert.band, "rb": alert.rb,
+                         "classification": alert.classification, "passed": ok, "failed": failed, "url": alert.url})
+        return Response({"filter": bf.pk, "version": bf.version, "fetched": len(alerts), "passed": passed,
+                         "failed": len(alerts) - passed, "criteria": criteria, "query": query, "alerts": rows})
+
+
+class BrokerConnectionViewSet(viewsets.ReadOnlyModelViewSet):
+    """``/api/brokerconnections/`` (read): configured streams; ``/heartbeats/`` lists worker liveness."""
+    serializer_class = BrokerConnectionSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+    queryset = BrokerConnection.objects.select_related("credential").order_by("broker", "name")
+
+    @action(detail=False, methods=["get"])
+    def heartbeats(self, request):
+        from YSE_App.brokers.streams import stale_minutes
+        qs = IngestHeartbeat.objects.select_related("connection").order_by("connection__slug", "topic", "worker")
+        data = IngestHeartbeatSerializer(qs, many=True).data
+        return Response({"stale_minutes": stale_minutes(), "stale": sum(1 for h in data if h["stale"]), "heartbeats": data})
 
 
 class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1131,11 +1205,13 @@ class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         from YSE_App.candidate_views import visible_filters
-        allowed = visible_filters(self.request.user)
-        return (
-            Candidate.objects.filter(Q(filters__in=allowed) | Q(filters__isnull=True)).distinct()
-            .select_related("transient").prefetch_related("filters").order_by("-last_seen", "-id")
-        )
+        user = self.request.user
+        allowed = visible_filters(user)
+        qs = Candidate.objects.filter(Q(filters__in=allowed) | Q(filters__isnull=True))
+        if (self.action == "list" and not (user.is_staff or user.is_superuser)
+                and self.request.query_params.get("include_rejected") != "1"):
+            qs = qs.exclude(rejected_by_groups__in=user.groups.all())
+        return qs.distinct().select_related("transient").prefetch_related("filters", "rejected_by_groups").order_by("-last_seen", "-id")
 
     def _act(self, request, pk, fn):
         from YSE_App.brokers.base import BrokerError
@@ -1159,7 +1235,9 @@ class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         from YSE_App.brokers import ingest
-        return self._act(request, pk, lambda c: ingest.reject_candidate(c, request.user, note=str((request.data or {}).get("note") or "")[:255]))
+        data = request.data or {}
+        return self._act(request, pk, lambda c: ingest.reject_candidate(
+            c, request.user, note=str(data.get("note") or "")[:255], scope="all" if data.get("scope") == "all" else "auto"))
 
     @action(detail=True, methods=["post"])
     def reopen(self, request, pk=None):

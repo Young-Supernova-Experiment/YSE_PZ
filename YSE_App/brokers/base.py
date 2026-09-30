@@ -30,9 +30,10 @@ CONE_SEARCH = "cone_search"            # objects near a position
 PHOTOMETRY = "photometry"              # light curve as YSE point dicts
 SAVE_AS_TRANSIENT = "save_as_transient"  # create a YSE-PZ Transient from an object
 FILTER_CRUD = "filter_crud"            # broker-side saved filters (streams / topics)
+STREAM = "stream"                      # decodes messages of a Kafka / streaming topic (#278)
 
 ALL_CAPABILITIES = (
-    QUERY_ALERTS, GET_ALERT, CUTOUTS, CONE_SEARCH, PHOTOMETRY, SAVE_AS_TRANSIENT, FILTER_CRUD,
+    QUERY_ALERTS, GET_ALERT, CUTOUTS, CONE_SEARCH, PHOTOMETRY, SAVE_AS_TRANSIENT, FILTER_CRUD, STREAM,
 )
 
 CAPABILITY_LABELS = {
@@ -43,6 +44,7 @@ CAPABILITY_LABELS = {
     PHOTOMETRY: "Photometry",
     SAVE_AS_TRANSIENT: "Save as transient",
     FILTER_CRUD: "Filter CRUD",
+    STREAM: "Stream",
 }
 
 
@@ -191,6 +193,11 @@ class BrokerProvider:
     default_instrument: str = "ZTF-Cam"
     #: Keys allowed in ``BrokerFilter.query`` for this provider (documentation + validation).
     query_keys: Iterable[str] = ()
+    #: Stream defaults (STREAM capability): wire format of the topic messages and the public
+    #: bootstrap servers / topics an operator would start from (documentation only).
+    stream_format: str = "json"
+    stream_bootstrap_servers: str = ""
+    stream_topics: Iterable[str] = ()
 
     def __init__(self, credential: Optional[Dict] = None, options: Optional[Dict] = None):
         self.credential = credential or {}
@@ -235,6 +242,8 @@ class BrokerProvider:
             "available": self.available(),
             "unavailable_reason": self.unavailable_reason(),
             "query_keys": list(self.query_keys),
+            "stream": {"format": self.stream_format, "bootstrap_servers": self.stream_bootstrap_servers,
+                       "topics": list(self.stream_topics)} if self.has(STREAM) else None,
         }
 
     def _unsupported(self, capability):
@@ -286,6 +295,11 @@ class BrokerProvider:
 
     def delete_filter(self, filter_id: str) -> None:
         self._unsupported(FILTER_CRUD)
+
+    def parse_stream_message(self, topic: str, message: Dict, *, key=None) -> Optional[BrokerAlert]:
+        """Normalise one decoded stream message (``dict`` from JSON or Avro) or return
+        None to skip it (heartbeat, unsupported record). STREAM capability."""
+        self._unsupported(STREAM)
 
     def validate_query(self, query: Optional[Dict]) -> Dict:
         """Reject unknown keys in a ``BrokerFilter.query`` for this provider."""

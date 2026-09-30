@@ -200,9 +200,20 @@ def dashboard(request):
         'all_transient_statuses': TransientStatus.objects.order_by('name'),
         'anchor': anchor,
         'main_dashboard_defer': defer,
+        'broker_stale_heartbeats': _broker_stale_heartbeats(),
     }
 
     return render(request, 'YSE_App/dashboard.html', context)
+
+
+def _broker_stale_heartbeats():
+    """Stream workers (#278) whose heartbeat is older than BROKER_STREAM_STALE_MINUTES; [] on any error."""
+    try:
+        from YSE_App.brokers.streams import stale_heartbeats
+
+        return stale_heartbeats()
+    except Exception:  # noqa: BLE001 - the dashboard must render even if the table is missing
+        return []
 
 
 @login_required

@@ -128,6 +128,11 @@ urlpatterns = [
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/submit/$',
             sharing_views.report_submit, name='sharing_report_submit'),
     # Analysis tab (#314): fragment and run action for one transient; before the slug catch-all.
+    # Transient-detail Brokers tab (#275)
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/brokers_fragment/$',
+            candidate_views.transient_brokers_fragment, name='transient_detail_brokers_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/broker_import/$',
+            candidate_views.transient_broker_import, name='transient_broker_import'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_fragment/$',
             analysis_views.transient_analysis_fragment, name='transient_detail_analysis_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_run/$',
@@ -374,6 +379,9 @@ urlpatterns = [
     re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reject/$', candidate_views.candidate_reject, name='candidate_reject'),
     re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reopen/$', candidate_views.candidate_reopen, name='candidate_reopen'),
     re_path(r'^brokers/status\.json$', candidate_views.brokers_status_json, name='brokers_status_json'),
+    # Broker cone search (#275)
+    re_path(r'^brokers/search/$', candidate_views.broker_search, name='broker_search'),
+    re_path(r'^brokers/search/save/$', candidate_views.broker_search_save, name='broker_search_save'),
     # Other feeds (#280): Hermes / Einstein Probe / Scout sources and their poll status
     re_path(r'^feeds/$', feed_views.feed_sources, name='feed_sources'),
     re_path(r'^feeds/status\.json$', feed_views.feed_sources_json, name='feed_sources_json'),
@@ -431,6 +439,7 @@ router.register(r'transientphotstats', api_views.TransientPhotStatViewSet, basen
 router.register(r'brokerfilters', api_views.BrokerFilterViewSet, basename='brokerfilter')
 router.register(r'candidates', api_views.CandidateViewSet, basename='candidate')
 router.register(r'brokers', api_views.BrokerViewSet, basename='broker')
+router.register(r'brokerconnections', api_views.BrokerConnectionViewSet, basename='brokerconnection')
 router.register(r'sharingservices', api_views.SharingServiceViewSet, basename='sharingservice')
 router.register(r'sharingsubmissions', api_views.SharingSubmissionViewSet, basename='sharingsubmission')
 router.register(r'hostphotdata', api_views.HostPhotDataViewSet, basename='hostphotdata')
