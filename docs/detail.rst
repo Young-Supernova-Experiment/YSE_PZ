@@ -52,9 +52,17 @@ nights (see ``docs/observability.md``).
 
 Interactive plots of photometry and spectra using Bokeh allow the
 user to view any data that exist.  For unclassified SNe or SNe Ia,
-the "Show SALT2 Fit" button uses sncosmo on the backend with very
-approximate filter curves to estimate the SALT2 parameters including
-shape, color, and time of maximum light.  Buttons allow downloading
+the "Show SALT3 Fit" button overlays the last stored SALT3 fit (an
+``sncosmo_fit`` analysis run, see ``docs/analysis-services.md``) with
+its shape, color, time of maximum light and phase; the "SALT3 fit:"
+line under the buttons shows the same numbers with a **Refit** button
+that queues a new fit, so the page never waits on sncosmo.  Under the
+spectrum plot the "NGSF classification:" line shows the last NGSF
+template match with a **Run NGSF** button when NGSF is installed on
+the server (``docs/ngsf.md``).  The "Archives" badges in the header
+say whether HST, JWST, Chandra and Spitzer are known to have data at
+the position (``has_hst`` / ``has_jwst`` / ``has_chandra`` /
+``has_spitzer``, searchable).  Buttons allow downloading
 photometry and a gzipped spectra file, with the "Download All Data"
 button providing a JSON dictionary with every associated piece of
 data in the database for a given transient.  Spectra can also be

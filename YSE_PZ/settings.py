@@ -533,6 +533,14 @@ WEATHER_WIDGET_REFRESH_SECONDS = config.getint('observatory', 'WEATHER_WIDGET_RE
 ANALYSIS_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'ANALYSIS_HTTP_TIMEOUT_SECONDS', fallback=30)
 ANALYSIS_MAX_ATTACHMENT_BYTES = config.getint('site_settings', 'ANALYSIS_MAX_ATTACHMENT_BYTES', fallback=25 * 1024 * 1024)
 ANALYSIS_MAX_FILES_PER_RUN = config.getint('site_settings', 'ANALYSIS_MAX_FILES_PER_RUN', fallback=20)
+# NGSF spectral classification (#315; docs/ngsf.md): the command that runs Next Generation
+# SuperFit (a program name on PATH or a full command such as "python /opt/NGSF/run.py"; an
+# optional "{params}" marks where the parameters.json path goes, else it is appended), the
+# directory holding NGSF's template bank and its base parameters.json, and how long one
+# subprocess may run. Empty NGSF_COMMAND = not installed: the Summary tab says so.
+NGSF_COMMAND = config.get('site_settings', 'NGSF_COMMAND', fallback='ngsf')
+NGSF_HOME = config.get('site_settings', 'NGSF_HOME', fallback='')
+NGSF_SUBPROCESS_TIMEOUT = config.getint('site_settings', 'NGSF_SUBPROCESS_TIMEOUT', fallback=1500)
 
 # Annotations (#316; docs/annotations.md): catalogue-check HTTP timeout, cone radius,
 # how long a queued check may stay pending, which checks run for every new

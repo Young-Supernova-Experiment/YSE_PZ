@@ -81,6 +81,8 @@ class Transient(BaseModel):
 	has_hst = models.BooleanField(null=True, blank=True)
 	has_spitzer = models.BooleanField(null=True, blank=True)
 	has_chandra = models.BooleanField(null=True, blank=True)
+	# JWST coverage from the detail page's MAST lookup (#328 follow-up); None = never looked up.
+	has_jwst = models.BooleanField(null=True, blank=True)
 
 	# AI summary (#295): the current text; every version is a TransientSummaryHistory row.
 	summary = models.TextField(null=True, blank=True)
@@ -107,6 +109,13 @@ class Transient(BaseModel):
 			# Search |b| cuts and ORDER BY gal_b (#286).
 			models.Index(fields=['gal_b'], name='yse_transient_gal_b_idx'),
 		]
+
+	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
+	ARCHIVE_FLAG_FIELDS = (('HST', 'has_hst'), ('JWST', 'has_jwst'), ('Chandra', 'has_chandra'), ('Spitzer', 'has_spitzer'))
+
+	@property
+	def archive_flags(self):
+		return [(label, getattr(self, field)) for label, field in self.ARCHIVE_FLAG_FIELDS]
 
 	def save(self, *args, **kwargs):
 		"""Keep gal_l / gal_b in step with ra / dec (also when update_fields names one of them)."""

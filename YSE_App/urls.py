@@ -132,6 +132,10 @@ urlpatterns = [
             analysis_views.transient_analysis_fragment, name='transient_detail_analysis_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_run/$',
             analysis_views.transient_analysis_run, name='transient_analysis_run'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/salt_fit_fragment/$',
+            analysis_views.transient_salt_fit_fragment, name='transient_detail_salt_fit_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/ngsf_fragment/$',
+            analysis_views.transient_ngsf_fragment, name='transient_detail_ngsf_fragment'),
     # Annotations tab (#317, #318): fragment, summary JSON and actions for one transient; before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_fragment/$',
             annotation_views.transient_annotations_fragment, name='transient_detail_annotations_fragment'),
