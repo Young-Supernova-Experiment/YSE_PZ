@@ -1,4 +1,5 @@
 import json
+import re
 import sys, numpy as np
 from urllib.parse import quote
 from astroquery.mast import Observations
@@ -164,7 +165,8 @@ class MastObservations():
     default: the archive tabs show images, not spectra, #356), returned as
     plain dicts the views can serialise without knowing about astropy tables.
     Rows whose ``dataproduct_type`` is not in ``product_types`` are dropped
-    even when MAST returns them.
+    even when MAST returns them, and subclasses narrow the selection further
+    through ``accepts`` (``JwstImages`` keeps imaging modes only, #387).
 
     Nothing here catches exceptions: callers wrap the lookup in the
     archive-status timeout/error handling in ``view_utils``.
@@ -175,6 +177,9 @@ class MastObservations():
                't_min', 't_max', 't_exptime', 'proposal_id', 'proposal_pi',
                'target_name', 'dataproduct_type', 'calib_level', 'jpegURL',
                'dataURL', 'dataRights')
+
+    #: MAST ``instrument_name`` values the query is restricted to (None: any).
+    instrument_names = None
 
     def __init__(self, ra, dec, collections, radius=None, product_types=('image',),
                  intent_type='science'):
@@ -203,17 +208,26 @@ class MastObservations():
             criteria['dataproduct_type'] = self.product_types
         if self.intent_type:
             criteria['intentType'] = self.intent_type
+        if self.instrument_names:
+            criteria['instrument_name'] = sorted(self.instrument_names)
         return self.set_table(Observations.query_criteria(**criteria))
 
     def set_table(self, table):
-        """Take a MAST answer: keep the rows of the wanted product types."""
+        """Take a MAST answer: keep the rows of the wanted product types that
+        ``accepts`` lets through (the MAST criteria are not trusted on their
+        own: the same rules are applied to whatever comes back)."""
         self.obstable = table
         rows = self.rows_from_table(table)
         if self.product_types:
             wanted = {p.lower() for p in self.product_types}
             rows = [r for r in rows if (r.get('dataproduct_type') or '').lower() in wanted]
-        self.rows = rows
+        self.rows = [r for r in rows if self.accepts(r)]
         return self.rows
+
+    @classmethod
+    def accepts(cls, row):
+        """Extra per-row selection; the base class keeps every row."""
+        return True
 
     @classmethod
     def rows_from_table(cls, table):
@@ -234,9 +248,88 @@ class MastObservations():
         return rows
 
 
+# JWST imaging modes as MAST names them in ``instrument_name`` (#387). This is
+# an allowlist: anything not listed is out, which covers every NIRSpec mode
+# (MSA, SLIT, IFU and its IMAGE/target-acquisition frames), MIRI MRS (IFU) and
+# LRS (SLIT, SLITLESS), NIRCam WFSS (GRISM), NIRISS WFSS and SOSS, the TARGACQ
+# frames of every instrument, and any mode MAST adds later. MIRI and NIRCam
+# have both imaging and spectroscopic modes, so the instrument alone is not
+# enough: the mode after the slash is what counts.
+JWST_IMAGING_MODES = frozenset({
+    'NIRCAM/IMAGE', 'NIRCAM/CORON',
+    'MIRI/IMAGE', 'MIRI/CORON',
+    'NIRISS/IMAGE', 'NIRISS/AMI',
+})
+
+# Filter / grating names that mark a dispersive element. MAST's
+# ``dataproduct_type`` is not reliable for JWST (spectra can be labelled
+# ``image``), so a row whose ``filters`` names one of these is dropped even
+# when its instrument mode is allowed: the MIRI LRS prism (P750L) and MRS
+# grating settings (SHORT / MEDIUM / LONG), NIRCam grisms (GRISMR / GRISMC),
+# NIRISS grisms (GR150R / GR150C, GR700XD), and the NIRSpec gratings and prism
+# (G140M ... G395H, PRISM).
+JWST_SPECTRAL_FILTER_TOKENS = frozenset({'P750L', 'SHORT', 'MEDIUM', 'LONG', 'PRISM'})
+JWST_SPECTRAL_FILTER_PREFIXES = ('GRISM', 'GR150', 'GR700')
+_JWST_NIRSPEC_GRATING = re.compile(r'^G\d{3}[MH]$')
+
+
+def jwst_filter_tokens(filters):
+    """The individual filter / grating / mask names in a MAST ``filters`` cell
+    (``'CLEAR;F150W'`` -> ``['CLEAR', 'F150W']``), upper-cased."""
+    if filters is None:
+        return []
+    return [tok for tok in re.split(r'[;,/\s|+&]+', str(filters).upper()) if tok]
+
+
+def jwst_filters_are_spectroscopic(filters):
+    """True when the ``filters`` cell names a dispersive element (see above)."""
+    for tok in jwst_filter_tokens(filters):
+        if tok in JWST_SPECTRAL_FILTER_TOKENS or tok.startswith(JWST_SPECTRAL_FILTER_PREFIXES):
+            return True
+        if _JWST_NIRSPEC_GRATING.match(tok):
+            return True
+    return False
+
+
+def is_jwst_image(row):
+    """Images-only rule for the JWST tab, its label and ``has_jwst`` (#356, #387).
+
+    ``row`` is a ``MastObservations`` row dict (or any mapping with
+    ``instrument_name``, ``filters`` and ``dataproduct_type``). A row is an
+    image only when all three hold: ``dataproduct_type`` is ``image``,
+    ``instrument_name`` is one of ``JWST_IMAGING_MODES`` (so every NIRSpec mode
+    and every MIRI / NIRCam / NIRISS spectroscopic mode is out, whatever MAST
+    calls the product) and ``filters`` names no dispersive element.
+    """
+    if (row.get('dataproduct_type') or '').strip().lower() != 'image':
+        return False
+    inst = (row.get('instrument_name') or '').strip().upper()
+    if inst not in JWST_IMAGING_MODES:
+        return False
+    return not jwst_filters_are_spectroscopic(row.get('filters'))
+
+
+class JwstImages(MastObservations):
+    """JWST science images at a position: ``MastObservations`` restricted to
+    the JWST collection and, both in the MAST query and on the rows that come
+    back, to the imaging modes in ``JWST_IMAGING_MODES`` (``is_jwst_image``).
+    Every consumer of JWST data (tab body, tab label, ``has_jwst``) goes
+    through this class, so they cannot disagree about what counts as an image.
+    """
+
+    instrument_names = JWST_IMAGING_MODES
+
+    def __init__(self, ra, dec, radius=None):
+        super().__init__(ra, dec, collections=['JWST'], radius=radius, product_types=('image',))
+
+    @classmethod
+    def accepts(cls, row):
+        return is_jwst_image(row)
+
+
 def jwstObservations(ra, dec, radius=None):
-    """JWST science images covering the position (no spectra, #356)."""
-    return MastObservations(ra, dec, collections=['JWST'], radius=radius, product_types=('image',))
+    """JWST science images covering the position (no spectra: #356, #387)."""
+    return JwstImages(ra, dec, radius=radius)
 
 
 ## TEST TEST TEST

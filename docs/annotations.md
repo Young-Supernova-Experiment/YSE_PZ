@@ -57,8 +57,9 @@ tab polls the fragment every few seconds until it finishes. A second click while
 answers 409.
 
 `transient_detail/<id>/annotations_summary.json` returns `{count, badges, active}`; the page uses it
-to label the tab "Annotations (n)" and to draw the `stellar` / `AGN-like` badges next to the status
-on the Summary tab (click one to open the tab). It costs no extra query on the detail page render.
+to draw the `stellar` / `AGN-like` badges next to the status on the Summary tab (click one to open
+the tab). The tab label stays "Annotations" (no counts on tab labels, #387). It costs no extra
+query on the detail page render.
 
 ## The built-in checks (#318)
 

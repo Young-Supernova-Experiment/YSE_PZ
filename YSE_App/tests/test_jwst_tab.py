@@ -43,18 +43,57 @@ RECORDED_ROWS = [
 ]
 
 
-class _FakeJwst(mast_query.MastObservations):
-    """Stand-in for common.mast_query.jwstObservations: the real helper fed a
-    recorded MAST answer holding one NIRCam image and one NIRSpec spectrum.
-    Only the image may come out (#356)."""
+def _row(obs_id, instrument_name, filters, dataproduct_type='image', t_min=60200.0):
+    """A MAST-shaped observation row for the mode-selection tests (#387)."""
+    return {
+        'obs_id': obs_id, 'instrument_name': instrument_name, 'filters': filters,
+        't_min': t_min, 't_exptime': 1000.0, 'proposal_id': '4321', 'proposal_pi': 'Example, PI',
+        'target_name': 'SN-HOST', 'dataproduct_type': dataproduct_type, 'calib_level': 3,
+        'jpegURL': None, 'dataURL': f'mast:JWST/product/{obs_id}.fits', 'obsid': hash(obs_id) % 10000,
+        'obs_collection': 'JWST',
+    }
+
+
+# What MAST really hands back for a well-observed field: NIRSpec and the MIRI
+# spectroscopic modes come labelled ``dataproduct_type='image'`` too, so the
+# product type alone does not separate images from spectra (#387).
+MIXED_ROWS = [
+    _row('jw04321-o001_nircam_f200w', 'NIRCAM/IMAGE', 'CLEAR;F200W', t_min=60201.0),
+    _row('jw04321-o002_nirspec_msa', 'NIRSPEC/MSA', 'G140M;F100LP', t_min=60202.0),
+    _row('jw04321-o003_nirspec_ifu', 'NIRSPEC/IFU', 'G235H;F170LP', t_min=60203.0),
+    _row('jw04321-o004_nirspec_image', 'NIRSPEC/IMAGE', 'CLEAR;F110W', t_min=60204.0),
+    _row('jw04321-o005_miri_f770w', 'MIRI/IMAGE', 'F770W', t_min=60205.0),
+    _row('jw04321-o006_miri_mrs', 'MIRI/IFU', 'SHORT;MEDIUM;LONG', t_min=60206.0),
+    _row('jw04321-o007_miri_lrs', 'MIRI/SLIT', 'P750L', t_min=60207.0),
+    _row('jw04321-o008_miri_lrs_slitless', 'MIRI/SLITLESS', 'P750L', t_min=60208.0),
+    _row('jw04321-o009_miri_image_p750l', 'MIRI/IMAGE', 'P750L', t_min=60209.0),
+    _row('jw04321-o010_nircam_grism', 'NIRCAM/GRISM', 'GRISMR;F322W2', t_min=60210.0),
+    _row('jw04321-o011_nircam_image_grism', 'NIRCAM/IMAGE', 'GRISMC;F444W', t_min=60211.0),
+    _row('jw04321-o012_niriss_wfss', 'NIRISS/WFSS', 'GR150R;F200W', t_min=60212.0),
+    _row('jw04321-o013_niriss_soss', 'NIRISS/SOSS', 'GR700XD;CLEAR', t_min=60213.0),
+    _row('jw04321-o014_miri_targacq', 'MIRI/TARGACQ', 'F560W', t_min=60214.0),
+    _row('jw04321-o015_nircam_spectrum', 'NIRCAM/IMAGE', 'CLEAR;F150W', 'spectrum', t_min=60215.0),
+    _row('jw04321-o016_miri_coron', 'MIRI/CORON', 'F1140C', t_min=60216.0),
+    _row('jw04321-o017_niriss_ami', 'NIRISS/AMI', 'NRM;F480M', t_min=60217.0),
+    _row('jw04321-o018_new_mode', 'NIRCAM/NEWMODE', 'CLEAR;F200W', t_min=60218.0),
+]
+MIXED_IMAGE_OBS_IDS = ['jw04321-o001_nircam_f200w', 'jw04321-o005_miri_f770w',
+                       'jw04321-o016_miri_coron', 'jw04321-o017_niriss_ami']
+
+
+class _FakeJwst(mast_query.JwstImages):
+    """Stand-in for common.mast_query.jwstObservations: the real images-only
+    helper fed a recorded MAST answer holding one NIRCam image and one NIRSpec
+    spectrum. Only the image may come out (#356, #387)."""
 
     answer = RECORDED_ROWS
 
-    def __init__(self, ra, dec, radius=None):
-        super().__init__(ra, dec, collections=['JWST'], radius=radius, product_types=('image',))
-
     def query(self):
         return self.set_table(_table(self.answer))
+
+
+class _MixedJwst(_FakeJwst):
+    answer = MIXED_ROWS
 
 
 class _EmptyJwst(_FakeJwst):
@@ -91,6 +130,8 @@ class MastObservationsHelperTests(SimpleTestCase):
         self.assertEqual(kwargs['obs_collection'], ['JWST'])
         self.assertEqual(kwargs['radius'], mast_query.instrument_defaults['radius'])
         self.assertEqual(kwargs['dataproduct_type'], ['image'], 'images only, no spectra (#356)')
+        self.assertEqual(kwargs['instrument_name'], sorted(mast_query.JWST_IMAGING_MODES),
+                         'MAST is asked for the imaging modes only (#387)')
         self.assertEqual(kwargs['intentType'], 'science')
         self.assertAlmostEqual(kwargs['coordinates'].ra.degree, 199.8674542)
         self.assertEqual([r['obs_id'] for r in rows], [RECORDED_ROWS[0]['obs_id']])
@@ -143,6 +184,74 @@ class MastObservationsHelperTests(SimpleTestCase):
         self.assertEqual(mast_query.MastObservations.rows_from_table(_table([])), [])
         self.assertEqual(mast_query.MastObservations.rows_from_table(None), [])
 
+
+class JwstImagingSelectionTests(SimpleTestCase):
+    """is_jwst_image / JwstImages: images only, whatever MAST calls the product (#387)."""
+
+    def test_allowlist_is_the_imaging_modes(self):
+        self.assertEqual(mast_query.JWST_IMAGING_MODES, {
+            'NIRCAM/IMAGE', 'NIRCAM/CORON', 'MIRI/IMAGE', 'MIRI/CORON', 'NIRISS/IMAGE', 'NIRISS/AMI'})
+        self.assertFalse(any(m.startswith('NIRSPEC/') for m in mast_query.JWST_IMAGING_MODES))
+
+    def test_nirspec_is_excluded_whatever_the_product_type(self):
+        for mode in ('NIRSPEC/MSA', 'NIRSPEC/SLIT', 'NIRSPEC/IFU', 'NIRSPEC/IMAGE', 'NIRSPEC/TARGACQ'):
+            for product in ('image', 'spectrum', 'cube', None):
+                row = _row('x', mode, 'CLEAR;F110W', product)
+                self.assertFalse(mast_query.is_jwst_image(row), (mode, product))
+
+    def test_miri_keeps_imaging_and_coronagraphy_only(self):
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'MIRI/IMAGE', 'F770W')))
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'MIRI/CORON', 'F1550C')))
+        for mode, filters in (('MIRI/IFU', 'SHORT'), ('MIRI/IFU', 'MEDIUM;LONG'), ('MIRI/SLIT', 'P750L'),
+                              ('MIRI/SLITLESS', 'P750L'), ('MIRI/TARGACQ', 'F560W')):
+            self.assertFalse(mast_query.is_jwst_image(_row('x', mode, filters)), mode)
+
+    def test_spectroscopic_filters_exclude_a_row_even_in_an_imaging_mode(self):
+        for filters in ('P750L', 'SHORT', 'MEDIUM', 'LONG', 'SHORT;MEDIUM;LONG', 'GRISMR;F322W2',
+                        'GRISMC;F444W', 'GR150R;F200W', 'GR700XD;CLEAR', 'G140M;F100LP', 'G395H;F290LP',
+                        'PRISM;CLEAR', 'clear;grismr'):
+            self.assertTrue(mast_query.jwst_filters_are_spectroscopic(filters), filters)
+            self.assertFalse(mast_query.is_jwst_image(_row('x', 'NIRCAM/IMAGE', filters)), filters)
+            self.assertFalse(mast_query.is_jwst_image(_row('x', 'MIRI/IMAGE', filters)), filters)
+        for filters in ('CLEAR;F150W', 'F770W', 'F1140C', 'MASK335R;F335M', 'NRM;F480M', 'F150W2;F162M',
+                        'F200W', 'F2550W', None, ''):
+            self.assertFalse(mast_query.jwst_filters_are_spectroscopic(filters), filters)
+        # "LONG" is the MRS grating setting, not a substring rule: F444W or F200LP style names stay.
+        self.assertFalse(mast_query.jwst_filters_are_spectroscopic('F200LP'))
+        self.assertFalse(mast_query.jwst_filters_are_spectroscopic('F1000W;LONGNAME'), 'whole tokens only')
+
+    def test_nircam_and_niriss_modes(self):
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'NIRCAM/IMAGE', 'CLEAR;F200W')))
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'NIRCAM/CORON', 'MASK335R;F335M')))
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'NIRISS/IMAGE', 'CLEAR;F200W')))
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'NIRISS/AMI', 'NRM;F480M')))
+        for mode in ('NIRCAM/GRISM', 'NIRCAM/TARGACQ', 'NIRISS/WFSS', 'NIRISS/SOSS'):
+            self.assertFalse(mast_query.is_jwst_image(_row('x', mode, 'CLEAR;F200W')), mode)
+
+    def test_unknown_modes_and_non_image_products_are_out(self):
+        self.assertFalse(mast_query.is_jwst_image(_row('x', 'NIRCAM/NEWMODE', 'CLEAR;F200W')))
+        self.assertFalse(mast_query.is_jwst_image(_row('x', 'FGS/IMAGE', 'CLEAR')))
+        self.assertFalse(mast_query.is_jwst_image(_row('x', None, 'CLEAR;F200W')))
+        self.assertFalse(mast_query.is_jwst_image(_row('x', 'NIRCAM/IMAGE', 'CLEAR;F150W', 'spectrum')))
+        self.assertFalse(mast_query.is_jwst_image(_row('x', 'NIRCAM/IMAGE', 'CLEAR;F150W', None)))
+        # MAST casing is upper, but a differently cased answer is judged the same way.
+        self.assertTrue(mast_query.is_jwst_image(_row('x', 'nircam/image', 'clear;f150w', 'Image')))
+
+    def test_jwst_images_keeps_only_the_image_rows_of_a_mixed_answer(self):
+        jwst = mast_query.JwstImages(199.8674542, -13.7236833)
+        rows = jwst.set_table(_table(MIXED_ROWS))
+        self.assertEqual([r['obs_id'] for r in rows], MIXED_IMAGE_OBS_IDS)
+        self.assertEqual(jwst.count, 4)
+        self.assertEqual({r['instrument_name'] for r in rows},
+                         {'NIRCAM/IMAGE', 'MIRI/IMAGE', 'MIRI/CORON', 'NIRISS/AMI'})
+        self.assertEqual(len(jwst.obstable), len(MIXED_ROWS), 'the raw MAST table is kept for inspection')
+        self.assertIsInstance(mast_query.jwstObservations(1.0, 2.0), mast_query.JwstImages)
+
+    def test_plain_mast_observations_still_keeps_every_image_typed_row(self):
+        """The allowlist is a JWST rule; the generic helper only checks the product type."""
+        generic = mast_query.MastObservations(1.0, 2.0, collections=['JWST'])
+        self.assertEqual(len(generic.set_table(_table(MIXED_ROWS))), len(MIXED_ROWS) - 1)
+
     def test_http_urls_pass_through_mast_file_url(self):
         self.assertEqual(mast_query.mast_file_url('https://x/y.jpg'), 'https://x/y.jpg')
         self.assertIsNone(mast_query.mast_file_url('--'))
@@ -168,7 +277,7 @@ class JwstStatusViewTests(TestCase):
             payload = self.client.get(self.url).json()
         self.assertEqual(payload, {"has_data": True, "count": 1}, "the NIRSpec spectrum is not counted")
         cache_set.assert_called_once()
-        self.assertEqual(cache_set.call_args.args[0], f"jwst_status_v1_{self.transient.id}")
+        self.assertEqual(cache_set.call_args.args[0], f"jwst_status_v2_{self.transient.id}")
         self.assertEqual(cache_set.call_args.kwargs["timeout"], view_utils.ARCHIVE_STATUS_CACHE_SECONDS)
 
     def test_cached_answer_skips_mast(self):
@@ -254,7 +363,7 @@ class JwstObservationsViewTests(TestCase):
     def test_successful_answer_is_cached_and_reused(self):
         with mock.patch("YSE_App.common.mast_query.jwstObservations", _FakeJwst):
             first = self.client.get(self.url).json()
-        self.assertEqual(cache.get(f"jwst_observations_v1_{self.transient.id}"), first)
+        self.assertEqual(cache.get(f"jwst_observations_v2_{self.transient.id}"), first)
         with mock.patch("YSE_App.common.mast_query.jwstObservations", side_effect=_BrokenJwst) as broken:
             second = self.client.get(self.url)
         self.assertEqual(second.status_code, 200)
@@ -266,6 +375,36 @@ class JwstObservationsViewTests(TestCase):
             payload = self.client.get(self.url).json()
         self.assertEqual(payload, {"count": 0, "rows": []})
 
+    def test_body_label_and_has_jwst_agree_on_a_mixed_mast_answer(self):
+        """NIRSpec / MIRI spectroscopy never reaches the tab, its label or the flag (#387)."""
+        status_url = reverse("get_jwst_status", args=[self.transient.id])
+        with mock.patch("YSE_App.common.mast_query.jwstObservations", _MixedJwst):
+            body = self.client.get(self.url).json()
+            status = self.client.get(status_url).json()
+        self.assertEqual([r["obs_id"] for r in body["rows"]], MIXED_IMAGE_OBS_IDS)
+        self.assertEqual([r["inst"] for r in body["rows"]],
+                         ["NIRCAM/IMAGE", "MIRI/IMAGE", "MIRI/CORON", "NIRISS/AMI"])
+        self.assertEqual(body["count"], 4)
+        self.assertEqual(status, {"has_data": True, "count": 4})
+        self.transient.refresh_from_db()
+        self.assertIs(self.transient.has_jwst, True)
+        listed = " ".join(r["inst"] + " " + (r["filters"] or "") for r in body["rows"])
+        for word in ("NIRSPEC", "IFU", "SLIT", "GRISM", "WFSS", "SOSS", "P750L", "TARGACQ"):
+            self.assertNotIn(word, listed)
+
+    def test_spectroscopy_only_field_is_no_jwst(self):
+        """A position with NIRSpec and MIRI MRS/LRS coverage but no image: No JWST, has_jwst False."""
+        spectra_only = type("_SpectraOnly", (_FakeJwst,), {
+            "answer": [r for r in MIXED_ROWS if r["obs_id"] not in MIXED_IMAGE_OBS_IDS]})
+        status_url = reverse("get_jwst_status", args=[self.transient.id])
+        with mock.patch("YSE_App.common.mast_query.jwstObservations", spectra_only):
+            body = self.client.get(self.url).json()
+            status = self.client.get(status_url).json()
+        self.assertEqual(body, {"count": 0, "rows": []})
+        self.assertEqual(status, {"has_data": False, "count": 0})
+        self.transient.refresh_from_db()
+        self.assertIs(self.transient.has_jwst, False)
+
     def test_mast_failure_is_a_502_with_a_message_and_is_not_cached(self):
         with mock.patch("YSE_App.common.mast_query.jwstObservations", _BrokenJwst):
             response = self.client.get(self.url)
@@ -274,7 +413,7 @@ class JwstObservationsViewTests(TestCase):
         self.assertEqual(payload["error"], "lookup_failed")
         self.assertIn("MAST", payload["message"])
         self.assertEqual(payload["rows"], [])
-        self.assertIsNone(cache.get(f"jwst_observations_v1_{self.transient.id}"))
+        self.assertIsNone(cache.get(f"jwst_observations_v2_{self.transient.id}"))
 
     def test_timeout_is_a_504_with_a_message(self):
         with mock.patch.object(view_utils, "_archive_status_with_timeout", return_value=None):
@@ -336,6 +475,12 @@ class DetailPageJwstTabTests(TestCase):
         self.assertNotIn("Filter / grating", html)
         self.assertIn("yse-jwst-retry", html)
         self.assertIn(reverse("get_jwst_observations", args=[self.transient.id]), html)
+        # No counts on tab labels (#387): "JWST Data", "Annotations", never "(N)".
+        self.assertNotIn("JWST Data (", html)
+        self.assertNotIn("countLabel", html)
+        self.assertNotIn("' (' + json.count", html)
+        self.assertNotIn("Annotations (", html)
+        self.assertNotIn("_tab_header').text('Annotations' +", html)
         # The JWST tab sits right after the HST one.
         self.assertLess(html.index('id="hst_tab_header"'), html.index('id="jwst_tab_header"'))
         self.assertLess(html.index('id="jwst_tab_header"'), html.index('id="chandra_tab_header"'))
