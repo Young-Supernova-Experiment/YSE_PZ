@@ -13,6 +13,7 @@ See docs/brokers.md.
 from YSE_App.brokers.base import (  # noqa: F401
     ALL_CAPABILITIES,
     CAPABILITY_LABELS,
+    STREAM,
     BrokerAlert,
     BrokerError,
     BrokerProvider,
@@ -30,7 +31,7 @@ from YSE_App.brokers.registry import (  # noqa: F401
 )
 
 __all__ = [
-    "ALL_CAPABILITIES", "CAPABILITY_LABELS", "BrokerAlert", "BrokerError", "BrokerProvider",
+    "ALL_CAPABILITIES", "CAPABILITY_LABELS", "STREAM", "BrokerAlert", "BrokerError", "BrokerProvider",
     "BrokerUnavailable", "CapabilityNotSupported", "all_providers", "describe_all", "enabled_providers",
     "enabled_slugs", "get_provider", "register", "registered_slugs",
 ]

@@ -32,8 +32,9 @@ KIND_GROUPS = (
      "New follow-up requests on telescopes you follow and status changes on your requests.",
      ("followup_request", "followup_status")),
     ("alert", "Alerts",
-     "New-transient alerts and failures of data uploads you submitted.",
-     ("alert", "upload_error")),
+     "New-transient alerts, broker candidates passing your group's filters, and failures of data uploads "
+     "you submitted.",
+     ("alert", "upload_error", "candidate")),
     ("collaboration", "Interests and data access",
      "Paper interests registered on transients you work on; data access requests you can decide and "
      "decisions on your own requests.",
@@ -144,6 +145,7 @@ class Notification(models.Model):
         ("followup_status", "Follow-up status"),
         ("alert", "Transient alert"),
         ("upload_error", "Upload failure"),
+        ("candidate", "Broker candidate"),
         ("favorite_activity", "Favorite activity"),
         ("data_access", "Data access"),
         ("interest", "Interest"),
