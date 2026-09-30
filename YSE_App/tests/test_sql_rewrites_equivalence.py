@@ -9,6 +9,13 @@ name patterns, statuses, hosts, bands, excluded instrument).
 The saved queries use MySQL-only functions (TO_DAYS, CURDATE, ISNULL,
 INTERVAL, RADIANS ...) and run only on MySQL/MariaDB (CI); the RawSQL
 fragments run on sqlite too where the functions they need exist.
+
+The saved queries count *calendar* days (``TO_DAYS(CURDATE()) - TO_DAYS(obs_date)``),
+so a point ``timezone.now() - 7.5 days`` is 7 or 8 calendar days back depending on
+the time of day the fixture is built (issue #381: the test failed for every run
+between 00:00 and 12:00 UTC). Points meant to sit on a calendar-day boundary are
+therefore pinned to noon of the database's own current date minus N days, which
+gives the same TO_DAYS difference at any hour.
 """
 
 import datetime
@@ -55,6 +62,18 @@ def _norm(v):
     return v
 
 
+def _db_today():
+    """The database's current date, i.e. what its CURDATE() / CURRENT_DATE sees."""
+    with connections["default"].cursor() as cursor:
+        cursor.execute("SELECT CURRENT_DATE")
+        value = cursor.fetchone()[0]
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    return datetime.date.fromisoformat(str(value))
+
+
 class _Fixture:
     """A small population that hits every branch of the rewritten predicates."""
 
@@ -77,6 +96,13 @@ class _Fixture:
         yse_tag, _ = TransientTag.objects.get_or_create(name="YSE", defaults=audit)
         bad_flag, _ = DataQuality.objects.get_or_create(name="Bad", defaults=audit)
         now = timezone.now()
+        today = _db_today()
+
+        def calendar_days_ago(n):
+            """Noon UTC, ``n`` calendar days before the database's current date: the
+            saved queries see exactly ``n`` in TO_DAYS(CURDATE()) - TO_DAYS(obs_date)
+            whatever the time of day, unlike ``now - n.5 days`` (issue #381)."""
+            return datetime.datetime.combine(today - datetime.timedelta(days=n), datetime.time(12), tzinfo=datetime.timezone.utc)
 
         def transient(name, *, tagged=True, status=status1, host_z=None, t_z=None, ebv=0.1, spec=None,
                       host_offset_deg=0.001):
@@ -89,11 +115,13 @@ class _Fixture:
             return t
 
         def phot(t, points, instrument=gpc1):
-            """points: (days_ago, band, mag, flux, flux_err, mag_err, flagged)"""
+            """points: (when, band, mag, flux, flux_err, mag_err, flagged); ``when`` is a
+            number of days before ``now`` or an explicit datetime (see calendar_days_ago)."""
             p = TransientPhotometry.objects.create(transient=t, instrument=instrument, obs_group=obs_group, **audit)
-            for days_ago, band, mag, flux, ferr, merr, flagged in points:
+            for when, band, mag, flux, ferr, merr, flagged in points:
+                obs_date = when if isinstance(when, datetime.datetime) else now - datetime.timedelta(days=when)
                 pd = TransientPhotData.objects.create(
-                    photometry=p, band=band, obs_date=now - datetime.timedelta(days=days_ago),
+                    photometry=p, band=band, obs_date=obs_date,
                     mag=mag, flux=flux, flux_err=ferr, mag_err=merr, **audit)
                 if flagged:
                     pd.data_quality.add(bad_flag)
@@ -123,14 +151,18 @@ class _Fixture:
         # 7. recent but only two detections (number_of_detection > 2 fails)
         t = transient("2025aae")
         phot(t, [(0.5, R, 18.0, 100, 5, 0.05, False), (1.5, R, 18.2, 100, 5, 0.05, False)])
-        # 8. recent detections spanning exactly the boundaries: first detection 7.5 d ago (< 8 ok), 14.5 d ago (< 15 ok)
+        # 8. first detection exactly on the calendar-day boundaries: 7 days ago (< 8: in Fast & Young),
+        #    8 days ago (< 8 fails: out of Fast & Young, in New Two Days), 14 days ago (< 15 ok)
         t = transient("2025aaf")
-        phot(t, [(0.9, R, 18.5, 100, 5, 0.05, False), (3.5, R, 18.6, 100, 5, 0.05, False), (7.5, R, 18.7, 100, 5, 0.05, False)])
+        phot(t, [(0.9, R, 18.5, 100, 5, 0.05, False), (3.5, R, 18.6, 100, 5, 0.05, False), (calendar_days_ago(7), R, 18.7, 100, 5, 0.05, False)])
+        t = transient("2025aap")
+        phot(t, [(0.5, R, 18.5, 100, 5, 0.05, False), (2.0, R, 18.6, 100, 5, 0.05, False), (calendar_days_ago(8), R, 18.7, 100, 5, 0.05, False)])
         t = transient("2025aag", spec="SN Ia")
-        phot(t, [(1.2, R, 18.5, 100, 5, 0.05, False), (5.0, R, 18.6, 100, 5, 0.05, False), (14.5, R, 18.7, 100, 5, 0.05, False)])
-        # 9. NULL mag / NULL mag_err rows and a point 2.5 days old only (Last Two Days window edge)
+        phot(t, [(1.2, R, 18.5, 100, 5, 0.05, False), (5.0, R, 18.6, 100, 5, 0.05, False), (calendar_days_ago(14), R, 18.7, 100, 5, 0.05, False)])
+        # 9. NULL mag / NULL mag_err rows; latest usable point exactly 2 calendar days old
+        #    (Fast & Young latest < 3: in; New Two Days latest < 2: out)
         t = transient("2025aah")
-        phot(t, [(2.5, R, 18.0, 100, 5, None, False), (2.6, R, None, 10, 5, None, False), (3.5, R, 18.4, 100, 5, 0.5, False), (4.5, R, 18.6, 100, 5, 0.05, False)])
+        phot(t, [(calendar_days_ago(2), R, 18.0, 100, 5, None, False), (2.6, R, None, 10, 5, None, False), (3.5, R, 18.4, 100, 5, 0.5, False), (4.5, R, 18.6, 100, 5, 0.05, False)])
         # 10. Interesting-New branches: faint but nearby host (z<=0.01, within 40 kpc); status other than 1
         t = transient("2025aai", host_z=0.005, host_offset_deg=0.0001)
         phot(t, [(1.0, R, 19.5, 50, 5, 0.1, False), (2.0, R, 19.7, 50, 5, 0.1, False)])
@@ -185,7 +217,9 @@ class SavedQueryRewriteEquivalenceTests(TestCase):
         self._assert_same(dsq.FAST_YOUNG_ORIGINAL, dsq.FAST_YOUNG_REWRITE, ordered=True, min_rows=2)
         names = [r[0] for r in _rows(dsq.FAST_YOUNG_REWRITE)]
         self.assertIn("2025aaa", names)
-        self.assertIn("2025aaf", names)
+        self.assertIn("2025aaf", names)  # first detection 7 calendar days ago (< 8)
+        self.assertIn("2025aah", names)  # latest detection 2 calendar days ago (< 3)
+        self.assertNotIn("2025aap", names)  # first detection 8 calendar days ago
         self.assertNotIn("2019xyz", names)
         self.assertNotIn("2025aae", names)
 
@@ -193,6 +227,8 @@ class SavedQueryRewriteEquivalenceTests(TestCase):
         self._assert_same(dsq.NEW_TWO_DAYS_ORIGINAL, dsq.NEW_TWO_DAYS_REWRITE, ordered=True, min_rows=2)
         names = [r[0] for r in _rows(dsq.NEW_TWO_DAYS_REWRITE)]
         self.assertIn("2025aaa", names)
+        self.assertIn("2025aap", names)  # first detection 8 days ago is fine here (< 15)
+        self.assertNotIn("2025aah", names)  # latest detection 2 calendar days ago (< 2 fails)
         self.assertNotIn("2025aag", names)  # SN Ia
         self.assertNotIn("2019xyz", names)
 
