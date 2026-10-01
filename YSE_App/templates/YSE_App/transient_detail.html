@@ -7,6 +7,22 @@
     <link rel="stylesheet" href="{% static 'YSE_App/vendor/aladin-lite/v2-latest/aladin.min.css' %}" />
     <link rel="stylesheet" href="{% static 'YSE_App/bower_components/select2/dist/css/select2.min.css' %}">
 
+    <style>
+        /* Keep the tab bar above the tab content at every width.
+           A wider-screen rule was placing them side by side in Chrome. */
+        .nav-tabs-custom.yse-page-transient-summary {
+            display: flex !important;
+            flex-direction: column !important;
+            grid-template-columns: none !important;
+        }
+        .nav-tabs-custom.yse-page-transient-summary > .nav-tabs,
+        .nav-tabs-custom.yse-page-transient-summary > .tab-content {
+            width: 100%;
+            max-width: 100%;
+            flex: 0 0 auto;
+        }
+    </style>
+    
 {% endblock %}
 
 <!-- Content Header (Page header) -->
@@ -179,7 +195,7 @@
                     </div>
                     <div class="tab-pane" id="chandra_tab">
                         <h4>Chandra Images for {{transient.name}}</h4>
-                        <h4 id="totalchandraexp">total exposure time<h4>
+                        <h4 id="totalchandraexp">total exposure time</h4>
                         <table class="table table-bordered table-striped">
                             <thead>
                                 <tr>
