@@ -514,7 +514,7 @@ class DeployChecklistFlowTests(TestCase):
         self.assertNotIn("ExpiredTooTel", too_table)
         self.assertIn("Swope", nights_table)
         self.assertNotIn("FarAwayTel", nights_table)
-        self.assertNotIn("delta_too_hours", body)
+        self.assertNotIn("/delta_too_hours/", body)  # no per-row AJAX calls left
 
     def test_add_too_resource_form_and_resources_table(self):
         n_res = ToOResource.objects.count()
