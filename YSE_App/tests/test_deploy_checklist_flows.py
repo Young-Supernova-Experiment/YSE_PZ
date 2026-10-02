@@ -282,10 +282,43 @@ class DeployChecklistFlowTests(TestCase):
             first = self.client.get(url)
             second = self.client.get(url)
         self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.json()["msg"], "success")
+        self.assertTrue(first.json()["msg"].startswith("success"))
         self.assertTrue(fake.return_value.run_ztf_fp.called)
-        self.assertEqual(Log.objects.filter(transient=transient, comment__startswith="ZTF Forced Phot").count(), 1)
+        logs = Log.objects.filter(transient=transient, comment__startswith="ZTF Forced Phot")
+        self.assertEqual(logs.count(), 1)
+        self.assertIn(self.user.username, logs.get().comment)
         self.assertTrue(second.json()["msg"].startswith("error"))
+        self.assertIn("hours ago", second.json()["msg"])
+
+    def test_forced_photometry_not_blocked_by_unrelated_comment(self):
+        """#399: only an earlier forced-phot request starts the 12 h throttle, not any comment."""
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-comment")
+        Log.objects.create(transient=transient, comment="looks like a SN Ia", **audit_fields(self.user))
+        fake = mock.MagicMock()
+        fake.return_value.run_ztf_fp.return_value = "ztf_fp_ci.log"
+        url = reverse("ztf_forced_phot", kwargs={"slug": transient.slug})
+        with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake):
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["msg"].startswith("success"), response.json())
+        self.assertEqual(Log.objects.filter(transient=transient, comment__startswith="ZTF Forced Phot").count(), 1)
+
+    def test_forced_photometry_failure_is_reported_and_leaves_no_comment(self):
+        """#399: a failing submission answers with an error message instead of a bare 500."""
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-fail")
+        url = reverse("ztf_forced_phot", kwargs={"slug": transient.slug})
+        raising = mock.MagicMock()
+        raising.return_value.run_ztf_fp.side_effect = OSError("network down")
+        no_log = mock.MagicMock()
+        no_log.return_value.run_ztf_fp.return_value = None  # the script's "insufficient parameters" path
+        for fake in (raising, no_log):
+            with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake), \
+                    mock.patch.object(views_module.logger, "exception"):
+                response = self.client.get(url)
+            self.assertEqual(response.status_code, 502)
+            self.assertTrue(response.json()["msg"].startswith("error"), response.json())
+            self.assertIn("nothing was submitted", response.json()["msg"])
+        self.assertFalse(Log.objects.filter(transient=transient).exists())
 
     def test_flux_plot_with_photometry_returns_html(self):
         response = self.client.get(f"/lightcurveplot_flux/{self.transient.id}/")
