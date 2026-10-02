@@ -11,21 +11,21 @@
 				{% for hidden_field in form.hidden_fields %}
 					{{ hidden_field }}
 				{% endfor %}
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>SQL</label>
 						<!--<label>Query</label>-->
 						{% render_field form.query class+="form-control select2" style+="width: 100%;" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Python Function</label>
 						<!--<label>Query</label>-->
 						{% render_field form.python_query class+="form-control select2" style+="width: 100%;" %}
 					</div>
 				</div>
-                <div class="col-xs-6">
+                <div class="col-6">
                     <div class="form-group">
                         <!--<br>-->
                             <button type="submit" class="btn btn-block btn-primary">Submit</button>

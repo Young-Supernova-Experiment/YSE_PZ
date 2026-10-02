@@ -19,18 +19,35 @@ from .data import PhotometryService, SpectraService, ObservingResourceService
 from .serializers import *
 from rest_framework.request import Request
 from django.contrib.auth.decorators import login_required, permission_required
-import json
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.parsers import JSONParser
 from django.db.models import ForeignKey
-from .common.alert import sendemail
-from .common.utilities import getRADecBox
+
+
+def _notify_upload_failure(user, subject, message):
+    """Upload-failure alert to the uploading user: ``upload_error`` notification (in-app, email per preference)."""
+    if user is None:
+        return []
+    try:
+        from YSE_App.services.notify import notify
+
+        return notify([user], message, "/dashboard/", "upload_error", subject=subject)
+    except Exception as exc:
+        print(f'Upload-failure notification failed: {exc}')
+        return []
+from .common.collaboration_groups import (
+    apply_collaboration_groups_to_photometry,
+    collaboration_groups_from_photometry_upload,
+    normalize_collaboration_group_names,
+)
 from django.db.models import Q
 from .queries.yse_python_queries import *
 from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
+from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
+from YSE_App.services import photstat
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -47,9 +64,6 @@ def add_yse_survey_fields(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "Survey Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload today's survey fields "
 
@@ -74,9 +88,7 @@ def add_yse_survey_fields(request):
                     print("Sending email to: %s" % user.username)
                     html_msg = "Alert : YSE_PZ Failed to upload survey obs "
                     html_msg += "\nError : %s value doesn\'t exist in SurveyField.%s FK relationship"
-                    sendemail(from_addr, user.email, subject,
-                              html_msg%(survey[surveykey],surveykey),
-                              djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                    _notify_upload_failure(user, subject, html_msg%(survey[surveykey],surveykey))
                     continue
 
                 surveydict[surveykey] = fk[0]
@@ -122,9 +134,6 @@ def add_yse_survey_obs(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "Survey Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload today's survey fields "
 
@@ -184,9 +193,7 @@ def add_yse_survey_obs(request):
                     print("Sending email to: %s" % user.username)
                     html_msg = "Alert : YSE_PZ Failed to upload survey obs "
                     html_msg += "\nError : %s value doesn\'t exist in SurveyObservation.%s FK relationship"
-                    sendemail(from_addr, user.email, subject,
-                              html_msg%(survey[surveykey],surveykey),
-                              djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                    _notify_upload_failure(user, subject, html_msg%(survey[surveykey],surveykey))
                     continue
 
                 surveydict[surveykey] = fk[0]
@@ -233,9 +240,17 @@ def add_transient(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
+    return add_transient_payload(transient_data, user)
+
+
+def add_transient_payload(transient_data, user):
+    """Body of ``/add_transient`` for an already-authenticated ``user``.
+
+    Shared with the broker save path (``YSE_App.brokers.ingest``), which
+    builds the same upload document from a broker alert so aliases, the
+    position-based duplicate check and the photometry passthrough behave
+    exactly like a TNS or ZTF upload.
+    """
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 
@@ -279,9 +294,7 @@ def add_transient(request):
                         print("Sending email to: %s" % user.username)
                         html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                         html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
-                        sendemail(from_addr, user.email, subject,
-                                  html_msg%(transient['name'],transient[transientkey],transientkey),
-                                  djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                        _notify_upload_failure(user, subject, html_msg%(transient['name'],transient[transientkey],transientkey))
 
                     transientdict[transientkey] = fk[0]
 
@@ -406,11 +419,11 @@ def add_transient(request):
             print("Sending email to: %s" % user.username)
             html_msg = """Alert : YSE_PZ Failed to upload transient %s with error %s at line number %s"""
 
-            sendemail(from_addr, user.email, subject, html_msg%(transient['name'],e,exc_tb.tb_lineno),
-                      djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
-            # sending SMS is too scary for now
-            #sendsms(from_addr, phone_email, subject, txt_msg%transient['name'],
-            #        djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+            _notify_upload_failure(user, subject, html_msg%(transient['name'],e,exc_tb.tb_lineno))
+            return JsonResponse(
+                {"message": f"Error uploading {transient['name']}: {e}"},
+                status=500,
+            )
 
     Transient.objects.bulk_create(transient_entries)
     for t in transient_entries:
@@ -439,6 +452,19 @@ def add_transient(request):
                     transient=dbt)
 
     # add photometry, spectra, hosts
+    with photstat.deferred_updates():
+        _add_transient_data_stage(transient_data, user)
+
+    return_dict = {"message":"success"}
+    return JsonResponse(return_dict)
+
+
+def _add_transient_data_stage(transient_data, user):
+    """Photometry / spectra / host stage of ``add_transient``.
+
+    Runs inside ``photstat.deferred_updates()`` so each transient's stat row
+    is recomputed once after the bulk inserts (which fire no signals).
+    """
     phot_entries = []
     for transientlistkey in transient_data.keys():
         if transientlistkey == 'noupdatestatus': continue
@@ -486,12 +512,10 @@ def add_transient(request):
             response,transientphot = add_transient_phot_util(
                 transient['transientphotometry'],dbtransient,user,do_photdata=True)
             for t in transientphot:
-                phot_entries.append(t)
+                photdata_entries.append(t)
+            photstat.schedule_recompute(dbtransient.id)
     
     TransientPhotometry.objects.bulk_create(photdata_entries)
-    
-    return_dict = {"message":"success"}
-    return JsonResponse(return_dict)
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -503,9 +527,6 @@ def add_gw_candidate(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
-    # ready to send error emails
-    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 
@@ -546,9 +567,7 @@ def add_gw_candidate(request):
                         print("Sending email to: %s" % user.username)
                         html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                         html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
-                        sendemail(from_addr, user.email, subject,
-                                  html_msg%(transient['name'],transient[transientkey],transientkey),
-                                  djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                        _notify_upload_failure(user, subject, html_msg%(transient['name'],transient[transientkey],transientkey))
 
                     transientdict[transientkey] = fk[0]
 
@@ -598,11 +617,7 @@ def add_gw_candidate(request):
             print('Transient %s failed!'%transient['name'])
             print("Sending email to: %s" % user.username)
             html_msg = "Alert : YSE_PZ Failed to upload transient %s with error %s"
-            sendemail(from_addr, user.email, subject, html_msg%(transient['name'],e),
-                      djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
-            # sending SMS is too scary for now
-            #sendsms(from_addr, phone_email, subject, txt_msg%transient['name'],
-            #        djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+            _notify_upload_failure(user, subject, html_msg%(transient['name'],e))
 
     return_dict = {"message":"success"}
 
@@ -623,17 +638,12 @@ def add_gw_candidate_util(gwdict,transient,user):
             fkmodel = GWCandidate._meta.get_field(gwkey).remote_field.model
             fk = fkmodel.objects.filter(name=gwdict[gwkey])
             if not len(fk):
-                # ready to send error emails
-                smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-                from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
                 subject = "TNS Transient Upload Failure"
                 html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 html_msg += "\nError : %s value doesn\'t exist in GWCandidate.%s FK relationship"
                 print("Sending email to: %s" % user.username)
-                sendemail(from_addr, user.email, subject,
-                          html_msg%(gwdict['name'],gwdict[gwkey],gwkey),
-                          djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                _notify_upload_failure(user, subject, html_msg%(gwdict['name'],gwdict[gwkey],gwkey))
 
             gwdict[gwkey] = fk[0]
 
@@ -660,17 +670,12 @@ def add_gw_candidate_util(gwdict,transient,user):
                     fk = fkmodel.objects.filter(name=gwdict['gwcandidateimage'][gwtopkey][gwkey])
 
                 if not len(fk):
-                    # ready to send error emails
-                    smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-                    from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
                     subject = "TNS Transient Upload Failure"
                     html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
                     html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
                     print("Sending email to: %s" % user.username)
-                    sendemail(from_addr, user.email, subject,
-                              html_msg%(gwdict['name'],gwdict['gwcandidateimage'][gwtopkey],gwdict['gwcandidateimage'][gwtopkey][gwkey]),
-                              djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                    _notify_upload_failure(user, subject, html_msg%(gwdict['name'],gwdict['gwcandidateimage'][gwtopkey],gwdict['gwcandidateimage'][gwtopkey][gwkey]))
 
                 dbgwimagedict[gwkey] = fk[0]
 
@@ -699,17 +704,12 @@ def add_transient_host_util(hostdict,transient,user):
             fkmodel = Host._meta.get_field(hostkey).remote_field.model
             fk = fkmodel.objects.filter(name=hostdict[hostkey])
             if not len(fk):
-                # ready to send error emails
-                smtpserver = "%s:%s" % (djangoSettings.SMTP_HOST, djangoSettings.SMTP_PORT)
-                from_addr = "%s@gmail.com" % djangoSettings.SMTP_LOGIN
                 subject = "TNS Transient Upload Failure"
                 html_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
                 html_msg += "\nError : %s value doesn\'t exist in transient.%s FK relationship"
                 print("Sending email to: %s" % user.username)
-                sendemail(from_addr, user.email, subject,
-                          html_msg%(transient['name'],transient[transientkey],transientkey),
-                          djangoSettings.SMTP_LOGIN, djangoSettings.SMTP_PASSWORD, smtpserver)
+                _notify_upload_failure(user, subject, html_msg%(transient['name'],transient[transientkey],transientkey))
 
             hostdict[hostkey] = fk[0]
 
@@ -733,15 +733,22 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
         if k == 'clobber' or k == 'mjdmatchmin': continue
         photometry = photdict[k]
 
-        instrument = Instrument.objects.filter(name=photometry['instrument'])
-        if not len(instrument):
-            instrument = Instrument.objects.filter(name='Unknown')
-        instrument = instrument[0]
+        from YSE_App.common.tns_photometry_map import (
+            lookup_instrument_band,
+            resolve_tns_photometry,
+        )
 
-        obs_group = ObservationGroup.objects.filter(name=photometry['obs_group'])
-        if not len(obs_group):
-            obs_group = ObservationGroup.objects.filter(name='Unknown')
-        obs_group = obs_group[0]
+        obs_group_name = photometry.get('obs_group') or None
+        if obs_group_name in (None, '', 'None'):
+            obs_group_name = None
+        _resolved_inst = resolve_tns_photometry(photometry['instrument'], 'r')
+        _obs_group, instrument, _ = lookup_instrument_band(
+            user,
+            photometry['instrument'],
+            _resolved_inst.band,
+            obs_group_name=obs_group_name or _resolved_inst.obs_group_hint,
+        )
+        obs_group = _obs_group
 
         transientphot = TransientPhotometry.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group)
         if not len(transientphot):
@@ -756,9 +763,16 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
                 p = photometry['photdata'][k]
                 pmjd = Time(p['obs_date'],format='isot').mjd
 
-                band = PhotometricBand.objects.filter(name=p['band']).filter(instrument__name=photometry['instrument'])
-                if len(band): band = band[0]
-                else: band = PhotometricBand.objects.filter(name='Unknown')[0]
+                _og, _inst, band = lookup_instrument_band(
+                    user,
+                    photometry['instrument'],
+                    p['band'],
+                    obs_group_name=obs_group_name,
+                )
+                if _inst.id != instrument.id:
+                    instrument = _inst
+                if _og.id != obs_group.id:
+                    obs_group = _og
                 obsExists = False
 
                 for idx,e in enumerate(existingphot):
@@ -839,6 +853,10 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
                         p['diffimg']['phot_data_id'] = e.id
                         TransientDiffImage.objects.create(**p['diffimg'])
 
+        group_names = collaboration_groups_from_photometry_upload(photometry)
+        if transientphot.pk:
+            apply_collaboration_groups_to_photometry(transientphot, group_names)
+
     return_dict = {"message":"successfully added phot data"}
     return JsonResponse(return_dict),transientphot_entries
 
@@ -860,7 +878,7 @@ def add_transient_spec_util(specdict,transient,user):
 
         allgroups = []
         if 'groups' in spectrum.keys() and spectrum['groups']:
-            for specgroup in spectrum['groups'].split(','):
+            for specgroup in normalize_collaboration_group_names(spectrum['groups']):
                 group = Group.objects.filter(name=specgroup)
                 if not len(group):
                     return_dict = {"message":"group %s is not in DB"%hd['groups']}
@@ -887,6 +905,7 @@ def add_transient_spec_util(specdict,transient,user):
         spectrum['transient'] = transient
         spectrum_copy = spectrum.copy()
         del spectrum_copy['specdata']
+        spectrum_copy.pop('groups', None)
 
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(**spectrum_copy)
@@ -1010,7 +1029,16 @@ def add_transient_phot(request):
 
     existingphot = TransientPhotData.objects.filter(photometry=transientphot)
 
-    # loop through new, comp against existing
+    # loop through new, comp against existing; one photstat recompute at the end
+    with photstat.deferred_updates():
+        _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user)
+
+    return_dict = {"message": "success"}
+
+    return JsonResponse(return_dict)
+
+
+def _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user):
     for k in phot_data.keys():
         if k == 'header' or k == 'transient' or k == 'photheader': continue
         p = phot_data[k]
@@ -1077,10 +1105,6 @@ def add_transient_phot(request):
                 # Set operator needs a list...
                 tpd.data_quality.set([dq])
                 tpd.save()
-
-    return_dict = {"message": "success"}
-
-    return JsonResponse(return_dict)
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -1324,9 +1348,7 @@ def query_api(request,query_name):
     query = Query.objects.filter(title=unquote(query_name))
     if len(query):
         query = query[0]
-        if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
-        if 'name' not in query.sql.lower(): return Http404('Invalid Query')
-        if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
+        if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
         cursor = connections['explorer'].cursor()
         cursor.execute(query.sql.replace('%','%%'), ())
         #transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
@@ -1397,7 +1419,7 @@ def getRADecBox(ra,dec,size=None,dec_size=None):
         RAboxsize = DECboxsize = size
     else:
         RAboxsize = size
-        DECboxsize = size
+        DECboxsize = dec_size
 
     # get the maximum 1.0/cos(DEC) term: used for RA cut
     minDec = dec-0.5*DECboxsize

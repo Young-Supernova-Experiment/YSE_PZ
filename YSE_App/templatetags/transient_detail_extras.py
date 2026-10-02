@@ -6,7 +6,11 @@ from astroplan import Observer
 from astropy.time import Time
 import astropy.units as u
 from django import template
+import logging
 from ..models import *
+from YSE_App.common.magnitude_format import format_magnitude
+
+logger = logging.getLogger(__name__)
 from astropy.cosmology import FlatLambdaCDM
 cosmo = FlatLambdaCDM(70,0.3)
 
@@ -41,6 +45,16 @@ def galcoordsb(coordstring):
 
 	sc = SkyCoord('%s %s'%(coordstring[0],coordstring[1]),frame="fk5",unit=(u.hourangle,u.deg))
 	return '%.7f'%sc.galactic.b.value
+
+
+@register.filter(name='format_mag')
+def format_mag(value):
+    return format_magnitude(value)
+
+
+@register.filter(name='format_mag_err')
+def format_mag_err(value):
+    return format_magnitude(value)
 
 
 @register.filter(name='replace_space')
@@ -158,7 +172,9 @@ def get_ps1_image(transient):
 	ps1url = ("http://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
 	try:
 		response = requests.get(url=ps1url,timeout=5)
-	except: return("")
+	except requests.RequestException as exc:
+		logger.warning("PS1 cutout request failed for transient %s: %s", transient_id, exc)
+		return("")
 	response_text = response.content.decode('utf-8')
 	if "<td><img src=" in response.content.decode('utf-8'):
 		jpegurl = response.content.decode('utf-8').split('<td><img src="')[1].split('" width="240" height="240" /></td>')[0]

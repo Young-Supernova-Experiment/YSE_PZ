@@ -7,7 +7,14 @@
 #had to pick central wavelength of r,g in /Users/patrickaleo/miniconda3/envs/yse_pz/lib/python3.7/site-packages/astrorapid/ANTARES_object
 
 
-from astrorapid.classify import Classify
+# astrorapid is not installed in the web or ingest environments (it is in neither
+# requirements file) and this cron is no longer in settings.CRON_CLASSES; the
+# import is guarded so the module still imports, and do() fails with a clear
+# message if it is ever run without the package.
+try:
+	from astrorapid.classify import Classify
+except ImportError:  # pragma: no cover - astrorapid is optional
+	Classify = None
 from django_cron import CronJobBase, Schedule
 
 import sys
@@ -17,7 +24,6 @@ from django.db.models import Q
 from YSE_App.view_utils import get_all_phot_for_transient
 from YSE_App.common.utilities import date_to_mjd
 import numpy as np
-import sys
 import operator
 
 classdict = {'SNIa':'SN Ia','SN Ia':'SN Ia','SNIa-norm':'SN Ia', 'SNIbc':'SN Ib/c', 'SNII':'SN II',
@@ -26,6 +32,8 @@ classdict = {'SNIa':'SN Ia','SN Ia':'SN Ia','SNIa-norm':'SN Ia', 'SNIbc':'SN Ib/
 			 'ILOT':'ILOT', 'CART':'CART', 'TDE':'TDE', 'AGN':'AGN'}
 
 def do(debug=False):
+	if Classify is None:
+		raise ImportError("astrorapid is not installed; RAPID classification is disabled (it is not in either requirements file)")
 	# run this under Admin
 	user = User.objects.get(username='Admin')
 
@@ -171,7 +179,6 @@ def do(debug=False):
 				photo_class = TransientClass.objects.filter(name = classdict[transient_class])
 
 			except Exception as e:
-				import pdb; pdb.set_trace()
 				print(f'Runtime Error: {e}')
 				raise RuntimeError(e)
 

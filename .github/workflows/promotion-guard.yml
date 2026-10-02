@@ -1,0 +1,48 @@
+name: Promotion guard
+
+# Only `experimental` may merge into `develop`, and only `develop` into `master`.
+# This job fails for any other pull request into those two branches. Make it a
+# required status check ("promotion guard") on the develop and master branch
+# protection rules so the Merge button greys out; see docs/branching.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [develop, master]
+
+jobs:
+  guard:
+    name: promotion guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check that the head branch is allowed to merge into the base branch
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          echo "PR: ${HEAD_REPO}:${HEAD} -> ${BASE_REPO}:${BASE}"
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::Pull requests into '$BASE' must come from a branch in $BASE_REPO, not a fork ($HEAD_REPO)."
+            exit 1
+          fi
+          case "$BASE" in
+            develop)
+              if [ "$HEAD" != "experimental" ]; then
+                echo "::error::Only 'experimental' may be merged into 'develop' (this PR is from '$HEAD'). Merge your branch into 'experimental' first, then open experimental -> develop."
+                exit 1
+              fi
+              ;;
+            master)
+              if [ "$HEAD" != "develop" ]; then
+                echo "::error::Only 'develop' may be merged into 'master' (this PR is from '$HEAD'). Promote through experimental -> develop -> master."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Base branch '$BASE' is not guarded."
+              ;;
+          esac
+          echo "OK: '$HEAD' -> '$BASE' is an allowed promotion."

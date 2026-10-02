@@ -1,91 +1,377 @@
 # utils for generating webpage views
+
 import multiprocessing as mp
 try: mp.set_start_method('fork')
-except: pass
+except (RuntimeError, ValueError): pass  # already set, or platform without fork
+from multiprocessing import Process, Queue
+
 import django
-from django.http import HttpResponse,JsonResponse
-from django.shortcuts import render, get_object_or_404, render
-import copy
-from .models import *
-#from .common.riseset import rise_func,set_func
-from django.db import models
-from astropy.coordinates import EarthLocation
-from astropy.coordinates import get_moon, SkyCoord, Angle
-from astropy.time import Time
-import astropy.units as u
-import datetime
-import numpy as np
 from django.conf import settings as djangoSettings
-from django.http import HttpResponseRedirect
+from django.core.cache import cache
+from django.contrib.auth.decorators import login_required, permission_required
+from django.db import models, connection, reset_queries
+from django.db.models import Prefetch
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.generic import TemplateView
-import random
-import bokeh
-from bokeh.plotting import figure,ColumnDataSource
-from bokeh.resources import CDN
-from bokeh.embed import file_html
-from bokeh.models import Range1d,Span,LinearAxis,Label,Title,HoverTool
-from bokeh.core.properties import FontSizeSpec
+
+import calendar
+import datetime
+import logging
+import time
+
+from .models import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
 from .serializers import *
-from rest_framework.request import Request
-from django.contrib.auth.decorators import login_required, permission_required
-import matplotlib.image as mpimg
-import calendar
-from astropy.table import Table
-import sncosmo
 from .common.bandpassdict import bandpassdict
+from .common.filter_display import (
+    band_display_color,
+    display_filter_label,
+    plot_legend_label,
+    telescope_display_name,
+    telescope_display_symbol,
+)
+from .common.band_order import (
+    group_consecutive,
+    legend_column_key,
+    legend_sort_key,
+)
+from .common.legend_layout import (
+    GLYPH_HEIGHT as LEGEND_GLYPH_HEIGHT,
+    GLYPH_WIDTH as LEGEND_GLYPH_WIDTH,
+    LABEL_STANDOFF as LEGEND_LABEL_STANDOFF,
+    legend_block_height_px,
+    legend_column_blocks,
+    legend_column_margin,
+    legend_label_width_px,
+    requested_plot_width,
+)
 from .common.utilities import date_to_mjd
-import time
-import random
-import django
-import datetime
-from astroplan.plots import plot_airmass
-from astropy.utils import iers
-iers.conf.auto_download = True
-from astropy.cosmology import FlatLambdaCDM
-from bokeh.models import Legend
-cosmo = FlatLambdaCDM(70,0.3)
+from .services.visibility import group_access_plot_cache_token
+from .services import bazin as bazin_fits
+from .services import phot_points
 
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-from matplotlib.figure import Figure
-from matplotlib.dates import DateFormatter
-from matplotlib import rcParams
-import healpy as hp
-import itertools
-from bokeh.palettes import Dark2_5 as palette
-
-from django.db import connection, reset_queries
-import time
+import copy
 import functools
+import itertools
+import numpy as np
+import random
 import signal
-from multiprocessing import Process, Queue
+import os
+
+from rest_framework.request import Request
+from django.templatetags.static import static
+from .util import mkFinderChart
+from YSE_App.models import Transient
+
+logger = logging.getLogger(__name__)
+
+_HEAVY_PLOT_LOADED = False
+_ASTROPY_COORDS_LOADED = False
+
+# Names populated by _load_heavy_plot_stack() / _load_astropy_coords()
+bokeh = file_html = CDN = palette = figure = ColumnDataSource = None
+Range1d = Span = LinearAxis = Label = Title = HoverTool = Legend = FontSizeSpec = None
+cosmo = hp = plt = cm = mpimg = FigureCanvas = Figure = DateFormatter = rcParams = None
+matplotlib = sncosmo = plot_airmass = None
+Time = SkyCoord = get_moon = u = EarthLocation = Angle = Table = Observer = None
+
+
+def _load_astropy_coords():
+    global _ASTROPY_COORDS_LOADED, Time, SkyCoord, get_moon, u, EarthLocation, Angle, Table, Observer
+    if _ASTROPY_COORDS_LOADED:
+        return
+    from astropy.coordinates import EarthLocation, get_moon, SkyCoord, Angle
+    from astropy.table import Table
+    from astropy.time import Time
+    from astropy.utils import iers
+    import astropy.units as u
+    from astroplan import Observer
+    iers.conf.auto_download = True
+    _ASTROPY_COORDS_LOADED = True
+
+
+def _load_heavy_plot_stack():
+    global _HEAVY_PLOT_LOADED
+    global bokeh, file_html, CDN, palette, figure, ColumnDataSource
+    global Range1d, Span, LinearAxis, Label, Title, HoverTool, Legend, FontSizeSpec
+    global cosmo, hp, plt, cm, mpimg, FigureCanvas, Figure, DateFormatter, rcParams
+    global matplotlib, sncosmo, plot_airmass
+    if _HEAVY_PLOT_LOADED:
+        return
+    _load_astropy_coords()
+    import bokeh as _bokeh
+    from bokeh.core.properties import FontSizeSpec as _FontSizeSpec
+    from bokeh.embed import file_html as _file_html
+    from bokeh.palettes import Dark2_5 as _palette
+    from bokeh.plotting import figure as _figure, ColumnDataSource as _ColumnDataSource
+    from bokeh.models import (
+        Range1d as _Range1d,
+        Span as _Span,
+        LinearAxis as _LinearAxis,
+        Label as _Label,
+        Title as _Title,
+        HoverTool as _HoverTool,
+        Legend as _Legend,
+    )
+    from bokeh.resources import CDN as _CDN
+    from astropy.cosmology import FlatLambdaCDM
+    from astroplan.plots import plot_airmass as _plot_airmass
+    import healpy as _hp
+    import matplotlib as _matplotlib
+    import matplotlib.pyplot as _plt
+    import matplotlib.cm as _cm
+    import matplotlib.image as _mpimg
+    from matplotlib import rcParams as _rcParams
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _FigureCanvas
+    from matplotlib.dates import DateFormatter as _DateFormatter
+    from matplotlib.figure import Figure as _Figure
+    import sncosmo as _sncosmo
+
+    bokeh = _bokeh
+    FontSizeSpec = _FontSizeSpec
+    file_html = _file_html
+    palette = _palette
+    figure = _figure
+    ColumnDataSource = _ColumnDataSource
+    Range1d, Span, LinearAxis, Label, Title, HoverTool, Legend = (
+        _Range1d, _Span, _LinearAxis, _Label, _Title, _HoverTool, _Legend,
+    )
+    CDN = _CDN
+    cosmo = FlatLambdaCDM(70, 0.3)
+    plot_airmass = _plot_airmass
+    hp = _hp
+    matplotlib = _matplotlib
+    plt = _plt
+    cm = _cm
+    mpimg = _mpimg
+    rcParams = _rcParams
+    FigureCanvas = _FigureCanvas
+    DateFormatter = _DateFormatter
+    Figure = _Figure
+    sncosmo = _sncosmo
+    _HEAVY_PLOT_LOADED = True
+
+
+def _bokeh_ajax_response(ax, title="plot"):
+    """Embed Bokeh using components(); page already loads bokeh-2.4.2.min.js."""
+    _load_heavy_plot_stack()
+    from bokeh.embed import components
+
+    script, div = components(ax)
+    html = f"{div}{script}"
+    return HttpResponse(html.replace("width: 90%", "width: 100%"))
+
+
+SALT_FIT_UNAVAILABLE_TEXT = "SALT fit unavailable"
+
+
+def _note_salt2_fit_failure(ax, exc, transient_id):
+    """Log a failed SALT2/SALT3 fit and annotate the plot instead of raising.
+
+    A missing model download, a band that is not in ``bandpassdict``, or too
+    few points for the fitter all end up here; the light curve itself still
+    renders and the caller returns it without the fit (#189).
+    """
+    logger.warning(
+        "SALT fit failed for transient %s (%s: %s); returning plot without fit",
+        transient_id, type(exc).__name__, exc, exc_info=True,
+    )
+    try:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#b00020',
+            text=f"{SALT_FIT_UNAVAILABLE_TEXT} ({type(exc).__name__})",
+        ))
+    except Exception:
+        logger.debug("could not annotate plot with SALT fit failure", exc_info=True)
+
+
+SALT_FIT_NONE_TEXT = "No stored SALT3 fit yet: use Refit on the Summary tab"
+
+
+def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=None):
+    """Draw the last successful ``sncosmo_fit`` run (#315) instead of refitting in the request.
+
+    ``series`` is ``[(bandkey, color)]`` with ``bandkey`` the ``bandpassdict``
+    key (``"Band: <instrument> - <band>"``). The run's ``model_curves.json``
+    holds magnitudes on zero point 27.5 per sncosmo band; ``flux_space``
+    converts them to the flux plot's units. Returns the run drawn, or ``None``
+    when there is no stored fit (the plot then says so and never blocks).
+    """
+    from YSE_App.services import fit_status
+
+    run = salt_run if salt_run is not None else fit_status.stored_salt_fit(transient_id)
+    if run is None:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#666666',
+            text=SALT_FIT_NONE_TEXT,
+        ))
+        return None
+    curves = fit_status.model_curves(run)
+    grid = np.asarray(curves.get('mjd') or [], dtype=float)
+    drawn = set()
+    for bandkey, color in series:
+        sband = bandpassdict.get(bandkey)
+        model = curves.get('bands', {}).get(sband) if sband else None
+        if not model or sband in drawn or len(model) != len(grid):
+            continue
+        drawn.add(sband)
+        mag = np.array([np.nan if v is None else float(v) for v in model], dtype=float)
+        y = 10 ** (-0.4 * (mag - 27.5)) if flux_space else mag
+        ok = np.isfinite(y)
+        if ok.any():
+            ax.line(grid[ok], y[ok], color=color)
+    for i, text in enumerate(fit_status.salt_fit_labels(run, today)):
+        ax.add_layout(Label(x=10, y=280 - 15 * i, x_units='screen', y_units='screen',
+                            render_mode='css', text_font_size='10pt', text=text))
+    return run
+
+
+MAX_LC_DISPLAY_POINTS = int(os.environ.get('YSE_LC_PLOT_MAX_POINTS', '3000'))
+MAX_SPEC_DISPLAY_PIXELS = int(os.environ.get('YSE_SPEC_PLOT_MAX_PIXELS', '800'))
+PLOT_HTML_CACHE_TIMEOUT = int(os.environ.get('YSE_PLOT_CACHE_SECONDS', '900'))
+
+
+BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections)" % bazin_fits.MIN_DETECTIONS
+BAZIN_LEGEND_LABEL = "Bazin fit"
+# Legend column of the today line and fit overlays: after every instrument column.
+MARKER_LEGEND_COLUMN = "markers"
+
+
+def _draw_bazin_fits(ax, series, today):
+    """Overlay per-band Bazin curves on the detail light-curve plot (#225).
+
+    ``series`` holds one dict per plotted band: ``label``, ``band_name``,
+    ``color``, ``leader`` (the detection renderer, so hiding the band in the
+    legend hides its fit), ``mjd`` / ``mag`` / ``magerr`` (flagged points
+    already removed).  All bands are fitted together (wavelength-correlated
+    shape, see ``services/bazin.py``).  The fitted span is drawn solid, the extrapolation past the
+    last detection dashed, in the band's colour, and labels list each band's
+    extrapolated magnitude today.  Returns ``(renderers, x_end)``: the fit
+    renderers for one shared legend entry and the last MJD of the
+    extrapolation grid (so the caller can widen the x-range); when no band
+    has a usable fit a note is drawn instead and ``([], None)`` returned.
+    """
+    renderers, notes = [], []
+    x_end = None
+    fits = bazin_fits.fit_bands(
+        {k: list(zip(e['mjd'], e['mag'], e['magerr'])) for k, e in enumerate(series)},
+        {k: bazin_fits.band_effective_wavelength(e.get('band_name')) for k, e in enumerate(series)},
+    )
+    for k, entry in enumerate(series):
+        fit = fits.get(k)
+        if fit is None:
+            continue
+        fitted, extrapolated = bazin_fits.bazin_plot_grid(fit, today)
+        fitted_mag = bazin_fits.flux_to_mag(fit.flux_at(fitted))
+        extrapolated_mag = bazin_fits.flux_to_mag(fit.flux_at(extrapolated))
+        # non-positive model flux has no magnitude; drop those grid points
+        ok_f, ok_e = np.isfinite(fitted_mag), np.isfinite(extrapolated_mag)
+        solid = ax.line(
+            fitted[ok_f].tolist(), fitted_mag[ok_f].tolist(),
+            color=entry['color'], line_width=2, muted_alpha=0.2,
+        )
+        dashed = ax.line(
+            extrapolated[ok_e].tolist(), extrapolated_mag[ok_e].tolist(),
+            color=entry['color'], line_width=2, line_dash='dashed', muted_alpha=0.2,
+        )
+        _link_series_visibility(entry['leader'], [solid, dashed])
+        renderers.extend([solid, dashed])
+        x_end = float(extrapolated[-1]) if x_end is None else max(x_end, float(extrapolated[-1]))
+        mag_today = fit.mag_at(today)
+        notes.append(
+            "%s: %s today" % (entry['label'], "%.2f" % mag_today if mag_today is not None else "no flux")
+        )
+    if not renderers:
+        ax.add_layout(Label(
+            x=10, y=280, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text_color='#b00020',
+            text=BAZIN_FIT_UNAVAILABLE_TEXT,
+        ))
+        return renderers, None
+    y = 280
+    header = "Bazin fit (dashed = extrapolated)"
+    if any(fit.method == 'shared' for fit in fits.values()):
+        header = "Bazin fit, shared shape (dashed = extrapolated)"
+    for text in [header] + notes[:8]:
+        ax.add_layout(Label(
+            x=10, y=y, x_units='screen', y_units='screen',
+            render_mode='css', text_font_size='10pt', text=text,
+        ))
+        y -= 15
+    return renderers, x_end
+
+
+def _plot_html_cache_enabled():
+    return os.environ.get('YSE_PLOT_HTML_CACHE', '1') != '0'
+
+
+def _phot_data_quality_label(phot_row):
+    dq_names = [dq.name for dq in phot_row.data_quality.all()]
+    return 'Good' if not dq_names else ','.join(dq_names)
+
+
+def _downsample_phot_rows_for_display(phot_rows, max_points=MAX_LC_DISPLAY_POINTS):
+    if len(phot_rows) <= max_points:
+        return phot_rows
+    sorted_rows = sorted(phot_rows, key=lambda row: row.obs_date)
+    discovery_ids = {id(row) for row in sorted_rows if row.discovery_point}
+    stride = max(1, len(sorted_rows) // max_points)
+    kept = [
+        row for idx, row in enumerate(sorted_rows)
+        if id(row) in discovery_ids or idx % stride == 0
+    ]
+    if len(kept) > max_points:
+        kept = sorted(kept, key=lambda row: row.obs_date)[-max_points:]
+    return kept
+
+
+def _transient_phot_cache_token(transient_id):
+    from django.db.models import Count, Max
+
+    agg = TransientPhotData.objects.filter(
+        photometry__transient_id=transient_id,
+    ).aggregate(latest=Max('modified_date'), n=Count('id'))
+    latest = agg['latest']
+    latest_key = latest.isoformat() if latest else 'none'
+    return f"{agg['n']}:{latest_key}"
+
+
+def _transient_spectrum_cache_token(transient_id):
+    from django.db.models import Count, Max
+
+    spec_agg = TransientSpectrum.objects.filter(
+        transient_id=transient_id,
+    ).aggregate(latest=Max('modified_date'), n=Count('id'))
+    data_agg = TransientSpecData.objects.filter(
+        spectrum__transient_id=transient_id,
+    ).aggregate(latest=Max('modified_date'), n=Count('id'))
+    spec_latest = spec_agg['latest'].isoformat() if spec_agg['latest'] else 'none'
+    data_latest = data_agg['latest'].isoformat() if data_agg['latest'] else 'none'
+    return f"s{spec_agg['n']}:{spec_latest}:d{data_agg['n']}:{data_latest}"
+
+
+def _cached_plot_http_response(cache_key, html):
+    if _plot_html_cache_enabled() and html:
+        cache.set(cache_key, html, timeout=PLOT_HTML_CACHE_TIMEOUT)
+    return django.http.HttpResponse(html)
+
+
+        
+        
+
 Q = Queue()
 
-def query_debugger(func):
 
-    @functools.wraps(func)
-    def inner_func(*args, **kwargs):
 
-        reset_queries()
-        
-        start_queries = len(connection.queries)
-
-        start = time.perf_counter()
-        result = func(*args, **kwargs)
-        end = time.perf_counter()
-
-        end_queries = len(connection.queries)
-
-        print("Function : {}".format(func.__name__))
-        print("Number of Queries : {}".format(end_queries - start_queries))
-        print("Finished in : {:.2f}s".format(end - start))
-        return result
-
-    return inner_func
+def _phot_data_quality_label(phot_row):
+    dq_names = list(phot_row.data_quality.values_list("name", flat=True))
+    if not dq_names:
+        return "Good"
+    return ",".join(dq_names)
 
 py2bokeh_symboldict = {"^":"triangle",
                        "+":"cross",
@@ -96,17 +382,30 @@ py2bokeh_symboldict = {"^":"triangle",
                        "o":"circle",
                        "h":"hex"}
 
+def query_debugger(func):
+
+    @functools.wraps(func)
+    def inner_func(*args, **kwargs):
+        reset_queries()
+        
+        start_queries = len(connection.queries)
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        end = time.perf_counter()
+        end_queries = len(connection.queries)
+
+        print("Function : {}".format(func.__name__))
+        print("Number of Queries : {}".format(end_queries - start_queries))
+        print("Finished in : {:.2f}s".format(end - start))
+        return result
+
+    return inner_func
+
 def get_recent_phot_for_host(user, host_id=None):
     allowed_phot = PhotometryService.GetAuthorizedHostPhotometry_ByUser_ByHost(user, host_id)
 
-    photdata = False
-    for p in allowed_phot:
-        photdata = HostPhotData.objects.filter(photometry=p.id).order_by('-obs_date')
-    
-    if photdata:
-        return(photdata[0])
-    else:
-        return(None)
+    photdata = HostPhotData.objects.filter(photometry__in=allowed_phot).order_by('-obs_date').first()
+    return photdata
 
 def get_all_phot_for_transient(user, transient_id=None):
     photdata = PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(
@@ -121,23 +420,25 @@ def get_recent_phot_for_transient(user, transient_id=None):
     else:
         return(None)
 
-def get_disc_mag_for_transient(user, transient_id=None):
-    photdata = PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(user, transient_id,
-                                                                                   includeBadData=False)
-
-    if photdata:
-        photdata = photdata.order_by('-obs_date')
-
+def get_disc_mag_from_photdata(photdata_qs):
+    """Discovery / first mag from an existing photdata queryset (avoids duplicate DB fetch)."""
     firstphot = None
-    for ph in photdata:
+    for ph in photdata_qs.order_by('obs_date'):
         if ph.discovery_point:
-            return(ph)
-        elif ph.mag:
+            return ph
+        if ph.mag:
             firstphot = ph
+    return firstphot
 
-    return(firstphot)
+
+def get_disc_mag_for_transient(user, transient_id=None):
+    photdata = PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(
+        user, transient_id, includeBadData=False
+    )
+    return get_disc_mag_from_photdata(photdata)
 
 def getMoonAngle(observingdate,telescope,ra,dec):
+    _load_astropy_coords()
     if observingdate:
         obstime = Time(observingdate,scale='utc')
     else:
@@ -160,6 +461,7 @@ def get_too_resources(user):
     return allowed_too_resource
 
 def getTimeUntilRiseSet(ra,dec,date,lat,lon,elev,utc_off):
+    _load_astropy_coords()
     if date:
         time = Time(date)
     else:
@@ -223,66 +525,55 @@ def getTimeUntilRiseSet(ra,dec,date,lat,lon,elev,utc_off):
 #
 #   return(can_obs)
 
-class finder(TemplateView):
+
+def finder_chart_static_relpath(transient_name):
+    return f"YSE_App/images/findercharts/{transient_name}/{transient_name}.finder.png"
+
+
+def static_asset_available(relative_path):
+    """True if a static file exists in finders or under STATIC_ROOT (post-collectstatic)."""
+    from django.contrib.staticfiles import finders
+
+    if finders.find(relative_path):
+        return True
+    return os.path.isfile(os.path.join(djangoSettings.STATIC_ROOT, relative_path))
+
+
+class Finder(TemplateView):
     template_name = 'YSE_App/finder.html'
-    
-    def __init__(self):
-        pass
+
     def finderchart(self, request, transient_id, clobber=False):
-        import os
-        from .util import mkFinderChart
-
-        from django.templatetags.static import static
-        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-        from matplotlib.figure import Figure
-    
+        _load_heavy_plot_stack()
         transient = Transient.objects.get(pk=transient_id)
-        basedir = "%sYSE_App/images/findercharts"%(djangoSettings.STATIC_ROOT)
-        if not os.path.exists(basedir):
-            os.makedirs(basedir)
+        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
+        os.makedirs(basedir, exist_ok=True)
 
-        outputOffsetFileName = '%s/%s/%s.offsetstars.txt'%(
-            basedir,transient.name,transient.name)
-        outputFinderFileName = '%s/%s/%s.finder.png'%(
-            basedir,transient.name,transient.name)
-        if not os.path.exists(os.path.dirname(outputFinderFileName)):
-            os.makedirs(os.path.dirname(outputFinderFileName))
-        #if os.path.exists(outputOffsetFileName) and\
-        #   os.path.exists(outputFinderFileName):
-        #   return HttpResponseRedirect(reverse('transient_detail',
-        #                                       args=(transient.id,)))
+        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
+        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
-        options,  args = parser.parse_args()
+        options, args = parser.parse_args()
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
-        options.outputOffsetFileName = outputOffsetFileName
-        options.outputFinderFileName = outputFinderFileName
+        options.outputOffsetFileName = output_offset_file
+        options.outputFinderFileName = output_finder_file
         find.options = options
-        import pylab as plt
+        
+        fig, ax = plt.subplots()
+        canvas = FigureCanvas(fig)
 
-        fig=Figure()
-        if not os.path.exists(options.outputFinderFileName) or \
-           not os.path.exists(options.outputOffsetFileName) or \
-           clobber:
-            ax = fig.add_axes([0.2,0.3,0.6,0.6])
-            canvas=FigureCanvas(fig)
-            ax,offdictlist = find.mkChart(options.ra,options.dec,
-                                          options.outputFinderFileName,
-                                          ax=ax,saveImg=False,
-                                          clobber=clobber)
-            fig.savefig(options.outputFinderFileName,dpi=1000)
+        if not (os.path.exists(options.outputFinderFileName) and os.path.exists(options.outputOffsetFileName)) or clobber:
+            ax, offdictlist = find.mkChart(options.ra, options.dec, options.outputFinderFileName, ax=ax, saveImg=False, clobber=clobber)
+            fig.savefig(options.outputFinderFileName, dpi=1000)
         else:
             image = mpimg.imread(options.outputFinderFileName)
-            ax = fig.add_axes([0,0,1,1])
-            ax.set_xticks([]); ax.set_yticks([])
-            canvas=FigureCanvas(fig)
             ax.imshow(image)
+            ax.set_xticks([])
+            ax.set_yticks([])
 
-            offid,ra_str,dec_str,ra_off,dec_off,mag = \
-                np.loadtxt(outputOffsetFileName,dtype='str',unpack=True)
+            offid, ra_str, dec_str, ra_off, dec_off, mag = np.loadtxt(output_offset_file, dtype='str', unpack=True)
             offdictlist = []
             for i in range(len(offid))[1:]:
                 offdict = {'id':offid[i],
@@ -292,37 +583,22 @@ class finder(TemplateView):
                            'dec_off':'%.3f'%float(dec_off[i]),
                            'mag':'%.3f'%float(mag[i])}
                 offdictlist += [offdict]
-            
-        context = {'t':transient,
-                   'offsets':offdictlist}
-        
-        #return response
-        return render(request,'YSE_App/finder.html',
-                      context)
 
+        context = {
+            't': transient,
+            'offsets': offdictlist
+        }
+
+        return render(request, 'YSE_App/finder.html', context)    
+    
     def finderim(self, request, transient_id, clobber=False):
-        import os
-        from .util import mkFinderChart
-        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-        from matplotlib.figure import Figure
-        import pylab as plt
         transient = Transient.objects.get(pk=transient_id)
-        basedir = "%sYSE_App/images/findercharts"%(djangoSettings.STATIC_ROOT)
-        if not os.path.exists(basedir):
-            os.makedirs(basedir)
-        print(basedir)
-        outputOffsetFileName = '%s/%s/%s.offsetstars.txt'%(
-            basedir,transient.name,transient.name)
-        outputFinderFileName = '%s/%s/%s.finder.png'%(
-            basedir,transient.name,transient.name)
-        if not os.path.exists(os.path.dirname(outputFinderFileName)):
-            os.makedirs(os.path.dirname(outputFinderFileName))
-        #if os.path.exists(outputOffsetFileName) and\
-        #   os.path.exists(outputFinderFileName):
-        #   return HttpResponseRedirect(reverse('transient_detail',
-        #                                       args=(transient.id,)))
+        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
+        os.makedirs(basedir, exist_ok=True)
 
-        
+        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
+        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
         options,  args = parser.parse_args()
@@ -360,7 +636,6 @@ class finder(TemplateView):
         import os
         from .util import mkFinderChart
 
-        from django.templatetags.static import static
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
         from matplotlib.figure import Figure
     
@@ -423,6 +698,9 @@ class finder(TemplateView):
 
         return offdict, outputFinderFileName
 
+def finder():
+    return Finder()
+
 
 ## We should refactor this so that it takes:
 # - transient
@@ -432,7 +710,9 @@ class finder(TemplateView):
 # i.e. a tuple of (datetime, airmass) that ChartJS can plot on the 
 # client 
     
+@login_required
 def airmassplot(request, transient_id, obs_id, telescope_id):
+    _load_heavy_plot_stack()
     #font = {'family' : 'normal',
     #       'weight' : 'normal',
     #       'size'   : 2}
@@ -488,6 +768,7 @@ def airmassplot(request, transient_id, obs_id, telescope_id):
     return response
 
 def view_yse_fields(request):
+    _load_heavy_plot_stack()
 
     cmap = cm.gray
     cmap.set_bad('grey')
@@ -517,8 +798,11 @@ def view_yse_fields(request):
     field_pk = survey_obs.values('survey_field').distinct()
     survey_fields_two_nights_ago = SurveyField.objects.filter(pk__in = field_pk).filter(~Q(obs_group__name='ZTF')).select_related()
     
-    mapdata = hp.fitsfunc.read_map(
-        '%s/YSE_metric_map.fits'%djangoSettings.STATIC_ROOT, h=False, verbose=True)
+    metric_map_path = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_metric_map.fits')
+    if os.path.exists(metric_map_path):
+        mapdata = hp.fitsfunc.read_map(metric_map_path, h=False, verbose=True)
+    else:
+        mapdata = np.zeros(hp.nside2npix(128), dtype=np.float64)
 
     npix = hp.nside2npix(128)
     newmap = np.zeros(npix, dtype=np.float32)
@@ -572,344 +856,529 @@ def view_yse_fields(request):
     return response
 
 
+@login_required
 def salt2plot(request, transient_id, salt2fit):
 
     response = lightcurveplot_detail(request,transient_id,salt2=int(salt2fit))
     return response
 
+@login_required
 def salt2fluxplot(request, transient_id, salt2fit):
 
     response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
     return response
 
+@login_required
+def bazinplot(request, transient_id, bazinfit):
+    """Detail light-curve plot with (1) or without (0) the per-band Bazin overlay (#225)."""
+    return lightcurveplot_detail(request, transient_id, bazin=int(bazinfit))
+
+def _band_instrument_names(band_obj):
+    """(instrument name, telescope name) of a PhotometricBand, ``None`` where unset."""
+    inst = band_obj.instrument if getattr(band_obj, 'instrument_id', None) else None
+    tel_name = (
+        inst.telescope.name
+        if inst is not None and getattr(inst, 'telescope_id', None)
+        else None
+    )
+    return (inst.name if inst is not None else None, tel_name)
+
+
+def _band_legend_key(band_obj):
+    """Stable legend sort key for a PhotometricBand (instrument group, then wavelength; #91).
+
+    The order is the one in ``YSE_App/common/band_order.py``: PS1/2, DECam,
+    Swope, LSST, ZTF, ATLAS, Swift, other instruments alphabetically, and
+    bands bluest to reddest within each.
+    """
+    inst_name, tel_name = _band_instrument_names(band_obj)
+    return legend_sort_key(
+        getattr(band_obj, 'name', None),
+        instrument_name=inst_name,
+        telescope_name=tel_name,
+    )
+
+
+def _band_column_key(band_obj):
+    """Legend column (one per instrument label) a PhotometricBand's series belongs to."""
+    return legend_column_key(*_band_instrument_names(band_obj))
+
+
+def _legend_series_order(band_objs):
+    """Indices that put band objects in stable legend order (#91).
+
+    ``np.unique`` orders series by primary key (or by ``str(band)``), which
+    changes from transient to transient; sorting by telescope family and
+    filter wavelength keeps ``PS1 g`` before ``PS1 r`` and every ZTF entry
+    after every PS1 entry no matter which bands have data.
+    """
+    band_objs = list(band_objs)
+    return np.array(
+        sorted(range(len(band_objs)), key=lambda k: _band_legend_key(band_objs[k])),
+        dtype=int,
+    )
+
+
+def _link_series_visibility(leader, followers):
+    """Hide/show ``followers`` (error bars, upper limits) with the legend-controlled ``leader`` (#249)."""
+    from bokeh.models import CustomJS
+
+    followers = [renderer for renderer in followers if renderer is not None]
+    if not followers:
+        return
+    leader.js_on_change(
+        'visible',
+        CustomJS(
+            args=dict(followers=followers),
+            code="for (const r of followers) { r.visible = cb_obj.visible; }",
+        ),
+    )
+
+
+def _requested_plot_width(request, default):
+    """Nominal figure width: the container width the page sends as ``?w=``, else ``default``."""
+    return requested_plot_width(request.GET.get('w'), default)
+
+
+def _add_legend_grid(ax, legend_items, plot_width):
+    """Lay ``legend_items`` out below ``ax``, one column per instrument (#226, #372).
+
+    ``legend_items`` are ``(label, renderers, column)`` in legend order;
+    consecutive items with the same ``column`` key form one column that
+    reads down (``PS1 g`` over ``PS1 r`` over ``PS1 i`` ...).  Every column
+    is its own vertical ``Legend`` added ``below`` the plot, as wide as its
+    own longest label, at the x offset :func:`legend_column_blocks` packs it
+    to; a new block of columns starts under the previous one only when the
+    next column would not fit ``plot_width``.  A column legend's margin
+    collapses its side panel so all columns of a block share one top edge,
+    and an empty legend after each block reserves the block's height (see
+    ``YSE_App/common/legend_layout.py``).  Returns the height in pixels the
+    legend adds below the plot so the caller can size the figure.
+    """
+    from bokeh.models import LegendItem
+
+    columns = [
+        [(label, renderers) for label, renderers, _column in items]
+        for _column, items in group_consecutive(legend_items, key=lambda item: item[2])
+    ]
+    blocks = legend_column_blocks([[label for label, _r in column] for column in columns], plot_width)
+    common = dict(
+        click_policy='hide',
+        label_height=LEGEND_GLYPH_HEIGHT,
+        glyph_width=LEGEND_GLYPH_WIDTH,
+        glyph_height=LEGEND_GLYPH_HEIGHT,
+        label_standoff=LEGEND_LABEL_STANDOFF,
+        spacing=0,
+        padding=0,
+        border_line_color=None,
+    )
+    height = 0
+    for block in blocks:
+        for index, x in block:
+            column = columns[index]
+            margin = legend_column_margin(len(column))
+            ax.add_layout(Legend(
+                items=[LegendItem(label=label, renderers=renderers) for label, renderers in column],
+                orientation='vertical',
+                location=(x, 2 * margin),
+                label_width=legend_label_width_px(label for label, _r in column),
+                margin=margin,
+                **common,
+            ), 'below')
+        block_height = legend_block_height_px(max(len(columns[index]) for index, _x in block))
+        # no items: draws nothing, its panel is 2 * margin tall
+        ax.add_layout(Legend(items=[], margin=block_height // 2, **common), 'below')
+        height += block_height
+    return height
+
+
+@login_required
 def lightcurveplot_summary(request, transient_id, salt2=False):
-    import time
-    tstart = time.time()
+    _load_heavy_plot_stack()
 
-    transient = Transient.objects.get(pk=transient_id)
-    photdata = get_all_phot_for_transient(request.user, transient_id).all().select_related(
-        'created_by', 'modified_by', 'band', 'unit',
-        'photometry','band__instrument','band__instrument__telescope')
+    transient = get_object_or_404(Transient, pk=transient_id)
 
-    if not photdata:
-        return django.http.HttpResponse('')
+    # Fetch photometry data with necessary related fields
+    photdata = (
+        get_all_phot_for_transient(request.user, transient_id)
+        .select_related(
+            "band__instrument__telescope",
+            "created_by",
+            "modified_by",
+        )
+        .prefetch_related("data_quality")
+        .order_by("-modified_date")
+    )
 
-    ax=figure(plot_width=240,plot_height=240,sizing_mode='stretch_both')
+    if not photdata.exists():
+        return HttpResponse("")
 
-    mjd,salt2mjd,date,mag,magerr,flux,fluxerr,zpsys,salt2band,band,bandstr,bandcolor,bandsym,data_quality,magsys = \
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),\
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),\
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
-    upperlimmjd,upperlimdate,upperlimmag,upperlimband,upperlimbandstr,upperlimbandcolor,upperlimdataquality,upperlimmagsys = \
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
-    limmjd = None
-    
-    for p in photdata:
-        dbmjd = date_to_mjd(p.obs_date)
-        if p.flux and np.abs(p.flux) > 1e10: continue
-        
-        if (p.flux and p.mag and p.flux_err and p.flux/p.flux_err > 3) or (not p.flux and p.mag):
-            if p.discovery_point:
-                limmjd = dbmjd-30
+    # Pre-fetch related band data to avoid repeated lookups
+    band_ids = photdata.values_list("band", flat=True).distinct()
+    band_data = PhotometricBand.objects.filter(pk__in=band_ids).select_related(
+        "instrument", "instrument__telescope"
+    )
+    band_lookup = {b.pk: b for b in band_data}
 
-            mjd = np.append(mjd,[dbmjd])
-            date = np.append(date,[p.obs_date.strftime('%m/%d/%Y')])
-            mag = np.append(mag,[p.mag])
-            if p.mag_sys is None: magsys = np.append(mag,['None'])
-            else: magsys = np.append(mag,[p.mag_sys])
-            dqs = p.data_quality.all()
-            if not len(dqs):
-                data_quality = np.append(data_quality,['Good'])
-            else:
-                data_quality = np.append(data_quality,[','.join(np.array([pdq.name for pdq in p.data_quality.all()]))])
+    phot_rows = list(photdata)
+    phot_values = [
+        {
+            "id": p.id,
+            "flux": p.flux,
+            "flux_err": p.flux_err,
+            "flux_zero_point": p.flux_zero_point,
+            "mag": p.mag,
+            "mag_err": p.mag_err,
+            "discovery_point": p.discovery_point,
+            "obs_date": p.obs_date,
+            "band": p.band_id,
+            "mag_sys__name": p.mag_sys.name if p.mag_sys_id else None,
+            "dq_label": _phot_data_quality_label(p),
+        }
+        for p in phot_rows
+    ]
 
-            if p.mag_err: magerr = np.append(magerr,p.mag_err)
-            else: magerr = np.append(magerr,0)
-            bandstr = np.append(bandstr,str(p.band))
-            bandcolor = np.append(bandcolor,str(p.band.disp_color))
-            if p.band.disp_symbol in py2bokeh_symboldict.keys():
-                bandsym = np.append(bandsym,str(py2bokeh_symboldict[p.band.disp_symbol]))
-            else:
-                bandsym = np.append(bandsym,str(p.band.disp_symbol))
-            band = np.append(band,p.band)
-            if salt2:
-                if str(p.band) in bandpassdict.keys():
-                    if p.mag_err: mag_err = p.mag_err
-                    else: mag_err = 0.02
-                    salt2mjd = np.append(salt2mjd,[dbmjd])
-                    flux_single = 10**(-0.4*(p.mag-27.5))
-                    flux = np.append(flux,flux_single)
-                    fluxerr = np.append(fluxerr,flux_single*mag_err*0.4*np.log(10))
-                    salt2band = np.append(salt2band,bandpassdict[str(p.band)])
-                    if 'bessell' in bandpassdict[str(p.band)]: zpsys = np.append(zpsys,'Vega')
-                    else: zpsys = np.append(zpsys,'AB')
-                
-        elif p.flux and p.flux_zero_point and p.flux + 3*p.flux_err > 0:
-            upperlimmjd = np.append(upperlimmjd,[dbmjd])
-            upperlimdate = np.append(upperlimdate,[p.obs_date.strftime('%m/%d/%Y')])
-            upperlimmag = np.append(upperlimmag,[-2.5*np.log10(p.flux + 3*p.flux_err) + p.flux_zero_point])
-            upperlimbandstr = np.append(upperlimbandstr,str(p.band))
-            upperlimband = np.append(upperlimband,p.band)
-            upperlimbandcolor = np.append(upperlimbandcolor,p.band.disp_color)
-            if p.data_quality is None: upperlimdataquality = np.append(upperlimdataquality,['Good'])
-            else: upperlimdataquality = np.append(upperlimdataquality,[p.data_quality.name])
-            if p.mag_sys is None: upperlimdataquality = np.append(upperlimmagsys,['None'])
-            else: upperlimmagsys = np.append(upperlimmagsys,[p.mag_sys])
+    # Convert data to NumPy arrays
+    flux = np.array([p["flux"] for p in phot_values], dtype=float)
+    flux_err = np.array([p["flux_err"] for p in phot_values], dtype=float)
+    flux_zero_point = np.array([p["flux_zero_point"] or 27.5 for p in phot_values], dtype=float)
+    mag = np.array([p["mag"] for p in phot_values], dtype=float)
+    mag_err = np.array([p["mag_err"] or 0.01 for p in phot_values], dtype=float)
+    discovery_point = np.array([p["discovery_point"] for p in phot_values], dtype=bool)
+    obs_date = np.array([p["obs_date"] for p in phot_values], dtype="datetime64")
+    mag_sys = np.array([p["mag_sys__name"] or "None" for p in phot_values])
+    dq_labels = np.array([p["dq_label"] for p in phot_values])
+    band_ids = np.array([p["band"] for p in phot_values], dtype=int)
 
-            if salt2:
-                if str(p.band) in bandpassdict.keys():
-                    salt2mjd = np.append(salt2mjd,[dbmjd])
-                    flux = np.append(flux,p.flux)
-                    fluxerr = np.append(fluxerr,p.flux_err)
-                    salt2band = np.append(salt2band,bandpassdict[str(p.band)])
-                    if 'bessell' in bandpassdict[str(p.band)]: zpsys = np.append(zpsys,'Vega')
-                    else: zpsys = np.append(zpsys,'AB')
+    # Convert observation dates to MJD
+    mjd = date_to_mjd(obs_date)
+    obs_date_str = [p["obs_date"].strftime("%m/%d/%Y") for p in phot_values]
 
-    if transient.non_detect_limit and transient.non_detect_band:
-        upperlimmjd = np.append(upperlimmjd,[date_to_mjd(transient.non_detect_date)])
-        upperlimdate = np.append(upperlimdate,[transient.non_detect_date.strftime('%m/%d/%Y')])
-        upperlimmag = np.append(upperlimmag,transient.non_detect_limit)
-        upperlimbandstr = np.append(upperlimbandstr,str(transient.non_detect_band))
-        upperlimband = np.append(upperlimband,transient.non_detect_band)
-        upperlimbandcolor = np.append(upperlimbandcolor,transient.non_detect_band.disp_color)
-        upperlimdataquality = np.append(upperlimdataquality,'Good')
-        upperlimdatamagsys = np.append(upperlimmagsys,'None')
-        
-    #ax.title.text = "%s"%transient.name
-    #colorlist = ['#1f77b4','#ff7f0e','#2ca02c','#d62728',
-    #            '#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
-    colorlist = ['#8dd3c7','#bebada','#fb8072','#80b1d3','#fdb462','#b3de69','#fccde5','#d9d9d9']
-    count = 0
-    allband = np.append(band,upperlimband)
-    allbandstr = np.append(bandstr,upperlimbandstr)
-    allbandcolor = np.append(bandcolor,upperlimbandcolor)
-    allbandsym = np.append(bandsym,[None]*len(upperlimbandcolor))
-    bandunq,idx = np.unique(allbandstr,return_index=True)
+    # Initialize plot
+    colorlist = ['#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9']
+    TOOLTIPS = [
+        ("mag", "$y"),
+        ("telescope", "@telescope"),
+        ("filter", "@filter"),
+        ("date", "@date"),
+        ("dq", "@data_quality"),
+        ("magsys", "@magsys"),
+    ]
 
-    legend_it = []
-    for bs,b,bc,bsym in zip(bandunq,allband[idx],allbandcolor[idx],allbandsym[idx]):
-        if bc != 'None' and bc: color = bc
-        else:
-            coloridx = count % len(np.unique(colorlist))
-            color = colorlist[coloridx]
-            count += 1
+    plot_width = _requested_plot_width(request, 500)
+    ax = figure(plot_width=plot_width, plot_height=400, sizing_mode="scale_width")
 
-        if bsym and bsym != 'inverted_triangle':
+    # Group by unique bands, in stable legend order (#91)
+    unique_bands = np.unique(band_ids)
+    unique_bands = unique_bands[_legend_series_order([band_lookup[b] for b in unique_bands])]
+
+    legend_items = []
+    salt2mjd, flux, fluxerr, salt2band, zpsys = [], [], [], [], []
+
+    # Upper limits (for the y-range): once, not once per band (#254)
+    upperlimmjd, upperlimmag = [], []
+    for idx, p in enumerate(phot_values):
+        if p["flux"] and p["flux_zero_point"] and p["flux"] + 3 * p["flux_err"] > 0:
+            upperlimmjd.append(mjd[idx])
+            upperlimmag.append(-2.5 * np.log10(p["flux"] + 3 * p["flux_err"]) + p["flux_zero_point"])
+
+    # Rows without a magnitude (forced-photometry non-detections) would put
+    # NaN into the ColumnDataSource, which Bokeh cannot serialise (#254).
+    has_mag = np.isfinite(mag)
+
+    for count, band_id in enumerate(unique_bands):
+        band_obj = band_lookup[band_id]
+        inst_name = band_obj.instrument.name if band_obj.instrument_id else None
+        tel_name = (
+            band_obj.instrument.telescope.name
+            if band_obj.instrument_id and band_obj.instrument.telescope_id
+            else None
+        )
+        legend_label = plot_legend_label(
+            band_obj.name,
+            instrument_name=inst_name,
+            telescope_name=tel_name,
+        )
+        short_filter = display_filter_label(band_obj.name)
+        tel_label = telescope_display_name(inst_name, tel_name)
+        color = band_display_color(band_obj.name, band_obj.disp_color, fallback_index=count)
+        symbol = telescope_display_symbol(inst_name, band_obj.disp_symbol)
+        if symbol and symbol != 'inverted_triangle':
             try:
-                plotmethod = getattr(ax, bsym)
-            except:
-                plotmethod = getattr(ax, 'triangle')
+                plotmethod = getattr(ax, symbol)
+            except AttributeError:
+                plotmethod = getattr(ax, 'triangle')  # Default to triangle
         else:
-            plotmethod = getattr(ax, 'triangle')
-        try:    
-            p = plotmethod(mjd[bandstr == bs].tolist(),mag[bandstr == bs].tolist(),
-                           color=color,size=7, muted_alpha=0.2)#,legend='%s - %s'%(
-        except: raise RuntimeError(bs,b,bsym)
-                       #b.instrument.telescope.name,b.name))
-        #legend_it.append(('%s - %s'%(b.instrument.telescope.name,b.name), [p]))
-        if len(upperlimbandstr) and len(upperlimmjd[upperlimbandstr == bs]):
-            p = ax.inverted_triangle(upperlimmjd[upperlimbandstr == bs].tolist(),upperlimmag[upperlimbandstr == bs].tolist(),
-                                     color=color,size=7,muted_alpha=0.2)
-            #,legend='%s - %s'%(b.instrument.telescope.name,b.name)
-            
-        err_xs,err_ys = [],[]
-        for x,y,yerr in zip(mjd[bandstr == bs].tolist(),mag[bandstr == bs].tolist(),magerr[bandstr == bs].tolist()):
-            err_xs.append((x, x))
-            err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)#, legend='%s - %s'%(
-        legend_it.append(('%s - %s'%(b.instrument.telescope.name,b.name), [p]))
-        #b.instrument.telescope.name,b.name))
-        #legend_it.append(('%s - %s'%(b.instrument.telescope.name,b.name), [p]))
-        
-    today = Time(datetime.datetime.today()).mjd
-    p = ax.line(today,20,line_width=3,line_color='black')#,legend='today (%i)'%today)
-    legend_it.append(('today (%i)'%today, [p]))
-    vline = Span(location=today, dimension='height', line_color='black',
-                 line_width=3)
-    ax.add_layout(vline)
+            plotmethod = getattr(ax, 'triangle')  # Default to triangle if bsym is not valid
+        size = 20 if symbol == "asterisk" else 7
 
-    legend = Legend(items=legend_it, location="center")
-    legend.click_policy="mute"
-    legend.label_height = 1
-    legend.glyph_height = 20
+        # Filter data for this band
+        band_filter = (band_ids == band_id) & has_mag
+        band_mjd = mjd[band_filter]
+        band_mag = mag[band_filter]
+        band_mag_err = mag_err[band_filter]
+        band_obs_date_str = np.array(obs_date_str)[band_filter]
 
-    ax.add_layout(legend, 'right')
-    
-    #ax.legend.location = (0,-60) #'bottom_left'
-    
-    #ax.legend.label_text_font_size = "4pt"#FontSizeSpec("10")
-    #ax.legend.click_policy="hide"
+        # Plot data
+        source = ColumnDataSource(
+            data=dict(
+                x=band_mjd.tolist(),
+                y=band_mag.tolist(),
+                date=band_obs_date_str.tolist(),
+                data_quality=dq_labels[band_filter].tolist(),
+                magsys=mag_sys[band_filter].tolist(),
+                telescope=[tel_label] * len(band_mjd),
+                filter=[short_filter] * len(band_mjd),
+            )
+        )
+        plot_func = getattr(ax, symbol, ax.triangle)
+        plot = plot_func("x", "y", source=source, color=color, size=size, muted_alpha=0.2)
+        hover = HoverTool(renderers=[plot], tooltips=TOOLTIPS, toggleable=False)
+        ax.add_tools(hover)
 
-    
-    ax.xaxis.axis_label = 'MJD'
-    ax.yaxis.axis_label = 'Mag'
+        # Error bars
+        err_xs = [(x, x) for x in band_mjd]
+        err_ys = [(y - yerr, y + yerr) for y, yerr in zip(band_mag, band_mag_err)]
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(plot, [p_err])
 
-    if limmjd:
-        ax.x_range = Range1d(limmjd,np.max(mjd)+10)
-        ax.y_range = Range1d(np.max(np.append(mag[mjd > limmjd],upperlimmag[upperlimmjd > limmjd]))+0.25,
-                             np.min(mag[mjd > limmjd])-0.5)
-        ax.extra_x_ranges = {"dateax": Range1d(limmjd,np.max(mjd)+10)}
-        ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
-        
+        legend_items.append((legend_label, [plot], _band_column_key(band_obj)))
+
+        # SALT2 processing
+        if salt2 and str(band_obj.name) in bandpassdict.keys():
+            salt2mjd.append(mjd[band_filter])
+            flux_single = 10 ** (-0.4 * (band_mag - 27.5))
+            flux.append(flux_single)
+            fluxerr.append(flux_single * band_mag_err * 0.4 * np.log(10))
+            salt2band.append(bandpassdict[str(band_obj.name)])
+            zpsys.append("Vega" if "bessell" in bandpassdict[str(band_obj.name)] else "AB")
+
+    # Add "today" marker
+    today_mjd = Time(datetime.datetime.today()).mjd
+    today_line = Span(location=today_mjd, dimension="height", line_color="black", line_width=3)
+    ax.add_layout(today_line)
+
+    # Configure legend: columns sized to the longest label (#226)
+    _add_legend_grid(ax, legend_items, plot_width)
+
+    # Adaptive x/y ranges
+    if discovery_point.any():
+        limmjd = mjd[discovery_point].min() - 30
+        mjd_range = (limmjd, mjd.max() + 10)
     else:
-        ax.x_range=Range1d(np.min(mjd)-10,np.max(mjd)+10)
-        ax.y_range=Range1d(np.max(np.append(mag,upperlimmag))+0.25,np.min(mag)-0.5)
-        ax.extra_x_ranges = {"dateax": Range1d(np.min(mjd)-10,np.max(mjd)+10)}
-        ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
-        #ax.legend()
-    ax.plot_height = 400
-    ax.plot_width = 500
+        limmjd = None
+        mjd_range = (mjd.min() - 10, mjd.max() + 10)
+    ax.x_range = Range1d(*mjd_range)
+    finite_mag = mag[has_mag]
+    if len(upperlimmag):
+        y_hi = float(np.max(upperlimmag)) + 0.25
+    elif len(finite_mag):
+        y_hi = float(np.max(finite_mag)) + 0.5
+    else:
+        y_hi = 20.0
+    y_lo = float(np.min(finite_mag)) - 0.5 if len(finite_mag) else y_hi - 2.0
+    ax.y_range = Range1d(y_hi, y_lo)
 
-    majorticks = []; overridedict = {}
-    mjdrange = range(int(np.min(mjd)-100),int(np.max(mjd)+100))
-    times = Time(mjdrange,format='mjd')
-    if (not limmjd and np.max(mjd)+10 - (np.min(mjd)-10) > 300) or \
-       (limmjd and np.max(mjd)+10 - limmjd > 300):
+    majorticks = []
+    overridedict = {}
+    mjdrange = range(int(np.min(mjd) - 100), int(np.max(mjd) + 100))
+    times = Time(mjdrange, format='mjd')
+
+    if (not limmjd and np.max(mjd) + 10 - (np.min(mjd) - 10) > 300) or \
+       (limmjd and np.max(mjd) + 10 - limmjd > 300):
         count = 0
-        for m,t in zip(mjdrange,times):
+        for m, t in zip(mjdrange, times):
             tm_list = t.iso.split()[0].split('-')
             if tm_list[2] == '01': count += 1
             if count % 3: continue
             if tm_list[2] == '01':
-                majorticks += [m]
-                overridedict[m] = '%s %i, %i'%(calendar.month_name[int(tm_list[1])][:3],int(tm_list[2]),int(tm_list[0]))
+                majorticks.append(m)
+                overridedict[m] = f"{calendar.month_name[int(tm_list[1])][:3]} {int(tm_list[2])}, {int(tm_list[0])}"
     else:
-        for m,t in zip(mjdrange,times):
+        for m, t in zip(mjdrange, times):
             tm_list = t.iso.split()[0].split('-')
             if tm_list[2] == '01':
-                majorticks += [m]
-                overridedict[m] = '%s %i, %i'%(calendar.month_name[int(tm_list[1])][:3],int(tm_list[2]),int(tm_list[0]))
+                majorticks.append(m)
+                overridedict[m] = f"{calendar.month_name[int(tm_list[1])][:3]} {int(tm_list[2])}, {int(tm_list[0])}"
 
+    # Apply ticks and overrides
     ax.xaxis[0].ticker = majorticks
     ax.xaxis[0].major_label_overrides = overridedict
-    
+
     if salt2:
-        model = sncosmo.Model(source='salt3')
-        if transient.redshift:
-            model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        elif transient.host and transient.host.redshift:
-            model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
-            
-        zp = np.array([27.5]*len(salt2band))
-        data = Table([salt2mjd,salt2band,flux,fluxerr,zp,zpsys],names=['mjd','band','flux','fluxerr','zp','zpsys'],meta={'t0':salt2mjd[flux == np.max(flux)]})
-
-        result, fitted_model = sncosmo.fit_lc(
-            data, model, fitparams,
-            bounds={'t0':(salt2mjd[flux == np.max(flux)]-10, salt2mjd[flux == np.max(flux)]+10),
-                    'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})  # bounds on parameters (if any)
+        try:
+            model = sncosmo.Model(source='salt3')
         
-        count = 0
-        plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
-        bandunq,idx = np.unique(bandstr,return_index=True)
-        for bs,b,bc in zip(bandunq,band[idx],bandcolor[idx]):
-            if bc != 'None' and bc:
-                color = bc
+            if transient.redshift:
+                model.set(z=transient.redshift)
+                fitparams = ['t0', 'x0', 'x1', 'c']
+            elif transient.host and transient.host.redshift:
+                model.set(z=transient.host.redshift)
+                fitparams = ['t0', 'x0', 'x1', 'c']
             else:
-                coloridx = count % len(np.unique(colorlist))
-                color = colorlist[coloridx]
+                fitparams = ['z', 't0', 'x0', 'x1', 'c']
+        
+            zp = np.array([27.5] * len(salt2band))
+            data = Table([salt2mjd, salt2band, flux, fluxerr, zp, zpsys],
+                         names=['mjd', 'band', 'flux', 'fluxerr', 'zp', 'zpsys'],
+                         meta={'t0': salt2mjd[flux == np.max(flux)]})
+        
+            result, fitted_model = sncosmo.fit_lc(
+                data, model, fitparams,
+                bounds={
+                    't0': (salt2mjd[flux == np.max(flux)] - 10, salt2mjd[flux == np.max(flux)] + 10),
+                    'z': (0.0, 0.7), 'x1': (-3, 3), 'c': (-0.3, 0.3)
+                }
+            )
+        
+            count = 0
+            plotmjd = np.arange(result['parameters'][1] - 20, result['parameters'][1] + 50, 0.5)
+            for band_id in unique_bands:
+                band_obj = band_lookup[band_id]
+                color = band_display_color(band_obj.name, band_obj.disp_color, fallback_index=count)
                 count += 1
-                
-            if bs in bandpassdict.keys() and bandpassdict[bs] in salt2band:
-                salt2flux = fitted_model.bandflux(bandpassdict[bs], plotmjd, zp=27.5,zpsys=zpsys[bandpassdict[bs] == salt2band][0])
-                ax.line(plotmjd,-2.5*np.log10(salt2flux)+27.5,color=color)
+                bandkey = f'Band: {band_obj.instrument.name} - {band_obj.name}'
+                if bandkey in bandpassdict.keys() and bandpassdict[bandkey] in salt2band:
+                    salt2flux = fitted_model.bandflux(
+                        bandpassdict[bandkey], plotmjd,
+                        zp=27.5, zpsys=zpsys[bandpassdict[bandkey] == salt2band][0]
+                    )
+                    ax.line(plotmjd, -2.5 * np.log10(salt2flux) + 27.5, color=color)
+        
+            # Calculate phase and add annotations
+            lcphase = today - result['parameters'][1]
+            lcphase_str = f"+{lcphase:.1f}" if lcphase > 0 else f"{lcphase:.1f}"
+        
+            annotations = [
+                ("phase = %s days" % lcphase_str, 280),
+                ("\uD835\uDE3B  = %.3f" % result.parameters[0], 265),
+                ("\uD835\uDC61\u2080  = %i" % result['parameters'][1], 250),
+                ("\uD835\uDC5A\u2088 = %.2f" % (10.635 - 2.5 * np.log10(result['parameters'][2])), 235),
+                ("\uD835\uDC65\u2081 = %.2f" % result['parameters'][3], 220),
+                ("\uD835\uDC50  = %.2f" % result['parameters'][4], 205)
+            ]
+        
+            for text, y in annotations:
+                label = Label(x=10, y=y, x_units='screen', y_units='screen',
+                              render_mode='css', text_font_size='10pt', text=text)
+                ax.add_layout(label)
+        except Exception as exc:
+            _note_salt2_fit_failure(ax, exc, transient_id)
 
-        lcphase = today-result['parameters'][1]
-        if lcphase > 0: lcphase = '+%.1f'%(lcphase)
-        else: lcphase = '%.1f'%(lcphase)
-        latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="phase = %s days"%(
-                           lcphase))
-        latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
-        latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
-        latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
-        latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
-        latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
-        for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
-            ax.add_layout(latex)
-
-    g = file_html(ax,CDN,"my plot")
-    return HttpResponse(g.replace('width: 90%','width: 100%'))
+    return _bokeh_ajax_response(ax, "my plot")
 
 
-def lightcurveplot_detail(request, transient_id, salt2=False):
-    import time
-    tstart = time.time()
+def _limit_or_nan(limit):
+    return np.nan if limit is None else limit
 
-    transient = Transient.objects.get(pk=transient_id)
-    photdata = get_all_phot_for_transient(request.user, transient_id).all().select_related(
-        'created_by', 'modified_by', 'band', 'unit', 'photometry',
-        'band__instrument','band__instrument__telescope').order_by('-modified_date')
-    if not photdata:
+
+@login_required
+def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
+    _load_heavy_plot_stack()
+
+    plot_width = _requested_plot_width(request, 400)
+    cache_key = None
+    salt_run = None
+    if salt2:
+        # The SALT3 overlay is the stored run's curves (#315): cheap and
+        # deterministic per run, so it is cached under the run's id.
+        from YSE_App.services import fit_status
+        salt_run = fit_status.stored_salt_fit(transient_id)
+    if _plot_html_cache_enabled():
+        user_key = group_access_plot_cache_token(request.user)
+        cache_key = (
+            f'lc_detail_v6_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
+            + (f'_salt{salt_run.pk if salt_run is not None else 0}' if salt2 else '')
+        )
+        cached_html = cache.get(cache_key)
+        if cached_html is not None:
+            return django.http.HttpResponse(cached_html)
+
+    transient = get_object_or_404(Transient, pk=transient_id)
+    photdata = (
+        get_all_phot_for_transient(request.user, transient_id)
+        .select_related('band__instrument', 'mag_sys')
+        .prefetch_related('data_quality')
+        .order_by('-modified_date')
+    )
+    phot_rows = _downsample_phot_rows_for_display(list(photdata))
+    if not phot_rows:
         return django.http.HttpResponse('')
-    
-    mjd,salt2mjd,salt2flux,salt2fluxerr,date,mag,magerr,flux,fluxerr,zpsys,salt2band,band,bandstr,bandcolor,bandsym,data_quality,magsys = \
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),\
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),\
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),\
-        np.array([]),np.array([])
-    upperlimmjd,upperlimdate,upperlimmag,upperlimband,upperlimbandstr,upperlimbandcolor,upperlimdataquality,upperlimmagsys = \
-        np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
+
     limmjd = None
+    salt2mjd = np.array([])
+    salt2flux = np.array([])
+    salt2fluxerr = np.array([])
+    zpsys = np.array([])
+    salt2band = np.array([])
+    bazin_series = []
 
-    salt2bandpasses = np.array(bandpassdict.keys())
+    band_lookup = {
+        b.pk: b
+        for b in PhotometricBand.objects.filter(
+            pk__in={p.band_id for p in phot_rows}
+        ).select_related('instrument', 'instrument__telescope')
+    }
 
-    tstart = time.time()
-    fluxes = np.array(photdata.values_list('flux',flat=True))
-    flux_errs = np.array(photdata.values_list('flux_err',flat=True))
-    flux_zpts = np.array(photdata.values_list('flux_zero_point',flat=True))
-    flux_zpts[flux_zpts == None] = 27.5
-    mags = np.array(photdata.values_list('mag',flat=True))
-    mag_errs = np.array(photdata.values_list('mag_err',flat=True))
-    disc_points = np.array(photdata.values_list('discovery_point',flat=True))
-    obs_dates = np.array(photdata.values_list('obs_date',flat=True))
-    obs_dates_str = np.array([p.strftime('%m/%d/%Y') for p in photdata.values_list('obs_date',flat=True)])
-    mjds = date_to_mjd(obs_dates)
-    data_quality = np.array(['Good' if p is None else ','.join(p.data_quality.values_list('name',flat=True)) for p in photdata])
-    mag_sys = np.array(['None' if p is None else p for p in photdata.values_list('mag_sys__name',flat=True)])
-    band = np.array(photdata.values_list('band',flat=True))
-    band_name = np.array([PhotometricBand.objects.get(pk=b).name for b in band])
-    instrument_name = np.array([PhotometricBand.objects.get(pk=b).instrument.name for b in band])
-    disp_symbol = np.array([PhotometricBand.objects.get(pk=b).disp_symbol for b in band])
-    disp_color = np.array([PhotometricBand.objects.get(pk=b).disp_color for b in band])
-    mag_errs_tmp = mag_errs
-    mag_errs_tmp[mag_errs == None] = 0.01
+    mags = np.array([p.mag for p in phot_rows], dtype=object)
+    mag_errs = np.array([p.mag_err for p in phot_rows], dtype=object)
+    disc_points = np.array([p.discovery_point for p in phot_rows], dtype=bool)
+    obs_dates_str = np.array([p.obs_date.strftime('%m/%d/%Y') for p in phot_rows])
+    mjds = date_to_mjd(np.array([p.obs_date for p in phot_rows]))
+    data_quality = np.array([_phot_data_quality_label(p) for p in phot_rows])
+    mag_sys = np.array([p.mag_sys.name if p.mag_sys else 'None' for p in phot_rows])
+    band = np.array([p.band_id for p in phot_rows], dtype=int)
+    band_name = np.array([band_lookup[b].name for b in band])
+    instrument_name = np.array([band_lookup[b].instrument.name for b in band])
+    disp_symbol = np.array([band_lookup[b].disp_symbol for b in band])
+    disp_color = np.array([band_lookup[b].disp_color for b in band])
+    # Detection / upper-limit classification shared with the stored
+    # statistics (services.phot_points, #368): the triangles this plot draws
+    # are the limits the Photometry statistics block counts.
+    is_det = np.array(
+        [phot_points.is_detection(p.mag, p.mag_err, p.flux, p.flux_err) for p in phot_rows],
+        dtype=bool,
+    )
+    ulim_mags = np.array(
+        [_limit_or_nan(phot_points.limiting_mag(p.flux, p.flux_err, p.flux_zero_point)) for p in phot_rows],
+        dtype=float,
+    )
+    is_ulim = np.isfinite(ulim_mags)
 
     colorlist = ['#8dd3c7','#bebada','#fb8072','#80b1d3','#fdb462','#b3de69','#fccde5','#d9d9d9']
     TOOLTIPS = [
         ('mag','$y'),
-        ('band','@band'),
+        ('telescope','@telescope'),
+        ('filter','@filter'),
         ('date','@date'),
         ('dq','@data_quality'),
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
     bandunq,idx = np.unique(band,return_index=True)
+    series_order = _legend_series_order([band_lookup[b] for b in bandunq])
+    bandunq, idx = bandunq[series_order], idx[series_order]
     count = 0
     legend_it = []
     upperlimmag,upperlimmjd = np.array([]),np.array([])
     for bs,bn,b,bc,bsym,inn in zip(
             bandunq,band_name[idx],band[idx],disp_color[idx],disp_symbol[idx],instrument_name[idx]):
-        if bc != 'None' and bc: color = bc
-        else:
-            coloridx = count % len(np.unique(colorlist))
-            color = colorlist[coloridx]
-            count += 1
-
-        if bsym and bsym != 'inverted_triangle':
+        band_obj = band_lookup[b]
+        tel_name = (
+            band_obj.instrument.telescope.name
+            if band_obj.instrument.telescope_id
+            else None
+        )
+        legend_label = plot_legend_label(bn, instrument_name=inn, telescope_name=tel_name)
+        short_filter = display_filter_label(bn)
+        tel_label = telescope_display_name(inn, tel_name)
+        color = band_display_color(bn, bc, fallback_index=count)
+        count += 1
+        symbol = telescope_display_symbol(inn, bsym)
+        if symbol and symbol != 'inverted_triangle':
             try:
-                plotmethod = getattr(ax, bsym)
-            except:
+                plotmethod = getattr(ax, symbol)
+            except AttributeError:
                 plotmethod = getattr(ax, 'triangle')
         else:
             plotmethod = getattr(ax, 'triangle')
@@ -930,69 +1399,83 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
                 if 'bessell' in bandpassdict[bandkey]: zpsys = np.append(zpsys,['Vega']*len(mag_errs[iBand]))
                 else: zpsys = np.append(zpsys,['AB']*len(mag_errs[iBand]))
 
-        iPlot = (band_name == bn) & (instrument_name == inn) & (mags != None) & \
-                (mag_errs != None) & ((mag_errs_tmp <= 0.36) | (fluxes == None) | (flux_errs == None))
-        iPlotUlimFlux = (band_name == bn) & (instrument_name == inn) & (fluxes != None) & (flux_errs != None) & (flux_errs != 0)
-        iPlotUlimFlux2 = fluxes[iPlotUlimFlux]/flux_errs[iPlotUlimFlux] < 3
-        mags_ulim = -2.5*np.log10((fluxes[iPlotUlimFlux][iPlotUlimFlux2] + \
-            3*flux_errs[iPlotUlimFlux][iPlotUlimFlux2]).astype(float)) + flux_zpts[iPlotUlimFlux][iPlotUlimFlux2]
-        iPlotUlimFlux3 = mags_ulim == mags_ulim
-        upperlimmag = np.append(upperlimmag,mags_ulim[iPlotUlimFlux3])
-        upperlimmjd = np.append(upperlimmjd,mjds[iPlotUlimFlux][iPlotUlimFlux2][iPlotUlimFlux3].tolist())
-        
-        
+        iPlot = (band_name == bn) & (instrument_name == inn) & is_det
+        iUlim = (band_name == bn) & (instrument_name == inn) & is_ulim
+        mags_ulim = ulim_mags[iUlim]
+        upperlimmag = np.append(upperlimmag,mags_ulim)
+        upperlimmjd = np.append(upperlimmjd,mjds[iUlim].tolist())
+
         source = ColumnDataSource(data=dict(x=mjds[iPlot].tolist(),
                                             y=mags[iPlot].tolist(),
                                             date=obs_dates_str[iPlot].tolist(),
                                             data_quality=data_quality[iPlot].tolist(),
                                             magsys=mag_sys[iPlot].tolist(),
-                                            band=['%s - %s'%(inn,bn)]*len(mjds[iPlot].tolist())))
+                                            telescope=[tel_label]*len(mjds[iPlot].tolist()),
+                                            filter=[short_filter]*len(mjds[iPlot].tolist())))
             
-        p = plotmethod('x','y',source=source,
+        p_det = plotmethod('x','y',source=source,
                    color=color,size=size, muted_alpha=0.2)
-        g1_hover = HoverTool(renderers=[p],
+        g1_hover = HoverTool(renderers=[p_det],
                              tooltips=TOOLTIPS,toggleable=False)
         ax.add_tools(g1_hover)
 
-        source = ColumnDataSource(data=dict(x=mjds[iPlotUlimFlux][iPlotUlimFlux2].tolist(),
-                                            y=mags_ulim.tolist(), #[iPlotUlim].tolist(),
-                                            date=obs_dates_str[iPlotUlimFlux][iPlotUlimFlux2].tolist(),
-                                            data_quality=data_quality[iPlotUlimFlux][iPlotUlimFlux2].tolist(),
-                                            magsys=mag_sys[iPlotUlimFlux][iPlotUlimFlux2].tolist(),
-                                            band=['%s - %s'%(inn,bn)]*len(mjds[iPlotUlimFlux][iPlotUlimFlux2].tolist())))
+        ulim_x = mjds[iUlim]
+        ulim_y = mags_ulim
+        p_ulim = None
+        if len(ulim_x):
+            source = ColumnDataSource(data=dict(x=ulim_x.tolist(),
+                                                y=ulim_y.tolist(),
+                                                date=obs_dates_str[iUlim].tolist(),
+                                                data_quality=data_quality[iUlim].tolist(),
+                                                magsys=mag_sys[iUlim].tolist(),
+                                                telescope=[tel_label]*len(ulim_x),
+                                                filter=[short_filter]*len(ulim_x)))
 
-        p = ax.inverted_triangle('x','y',source=source,
-                                 color=color,size=5,muted_alpha=0.2)
-        g1_hover = HoverTool(renderers=[p],
-                             tooltips=TOOLTIPS,toggleable=False)
-        ax.add_tools(g1_hover)
+            # same size as the detections (asterisk series use 20 px for the
+            # thin marker; a 20 px triangle would swamp the plot)
+            p_ulim = ax.inverted_triangle('x','y',source=source,
+                                     color=color,size=7,muted_alpha=0.2)
+            g1_hover = HoverTool(renderers=[p_ulim],
+                                 tooltips=TOOLTIPS,toggleable=False)
+            ax.add_tools(g1_hover)
         err_xs,err_ys = [],[]
         for x,y,yerr in zip(mjds[iPlot].tolist(),mags[iPlot].tolist(),mag_errs[iPlot].tolist()):
             err_xs.append((x, x))
             err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)#, legend='%s - %s'%(
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(p_det, [p_err, p_ulim])
 
-        legend_it.append(('%s - %s'%(inn,bn), [p]))
+        legend_it.append((legend_label, [p_det], _band_column_key(band_obj)))
+        if bazin:
+            # detections only, flagged (data_quality) points left out
+            iFit = iPlot & (data_quality == 'Good')
+            bazin_series.append(dict(
+                label=legend_label, band_name=bn, color=color, leader=p_det,
+                mjd=mjds[iFit].astype(float), mag=mags[iFit].astype(float),
+                magerr=mag_errs[iFit].astype(float),
+            ))
 
     today = Time(datetime.datetime.today()).mjd
-    p = ax.line(today,20,line_width=3,line_color='black')
-    legend_it.append(('today (%i)'%today, [p]))
+    x_end = np.max(mjds) + 10
+    if bazin:
+        bazin_renderers, bazin_x_end = _draw_bazin_fits(ax, bazin_series, today)
+        if bazin_renderers:
+            legend_it.append((BAZIN_LEGEND_LABEL, bazin_renderers, MARKER_LEGEND_COLUMN))
+        if bazin_x_end is not None:
+            x_end = max(x_end, bazin_x_end)
+    p_today = ax.line(today,20,line_width=3,line_color='black')
+    legend_it.append(('today (%i)'%today, [p_today], MARKER_LEGEND_COLUMN))
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
-    legend = Legend(items=legend_it)
-    legend.click_policy="hide"
-    legend.label_height = 1
-    legend.glyph_height = 20
-
-    ax.add_layout(legend, 'below')
+    legend_height = _add_legend_grid(ax, legend_it, plot_width)
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
     if len(mjds[disc_points == 1]):
         limmjd = np.min(mjds[disc_points == 1])-30
-        ax.x_range=Range1d(limmjd,np.max(mjds)+10)
-        ax.extra_x_ranges = {"dateax": Range1d(limmjd,np.max(mjds)+10)}
+        ax.x_range=Range1d(limmjd,x_end)
+        ax.extra_x_ranges = {"dateax": Range1d(limmjd,x_end)}
         ax.y_range = Range1d(np.max(np.append(mags[mags != None][mjds[mags != None] > limmjd],upperlimmag[upperlimmjd > limmjd]))+0.25,
                              np.min(mags[mags != None][mjds[mags != None] > limmjd])-0.5)
     else:
@@ -1000,15 +1483,15 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
             minmjd = np.max([np.min(mjds)-10,date_to_mjd(transient.disc_date)-30])
         else:
             minmjd = np.min(mjds)-10
-        ax.x_range=Range1d(minmjd,np.max(mjds)+10)
-        ax.extra_x_ranges = {"dateax": Range1d(minmjd,np.max(mjds)+10)}
+        ax.x_range=Range1d(minmjd,x_end)
+        ax.extra_x_ranges = {"dateax": Range1d(minmjd,x_end)}
         ax.y_range=Range1d(np.max(np.append(mags[mags != None],upperlimmag))+0.25,np.min(mags[mags != None])-0.5)
         
     #ax.y_range=Range1d(np.max(mags[mags != None])+0.25,np.min(mags[mags != None])-0.5)
     ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 400+20*len(bandunq)
-    ax.plot_width = 400
+    ax.plot_height = 400 + legend_height
+    ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
     mjdrange = range(int(np.min(mjds)-100),int(np.max(mjds)+100))
@@ -1044,82 +1527,40 @@ def lightcurveplot_detail(request, transient_id, salt2=False):
         ax.add_layout(LinearAxis(y_range_name="Abs. Mag", axis_label="Abs. Mag"), 'right')
 
     if salt2:
-        model = sncosmo.Model(source='salt2')
-        if transient.redshift:
-            model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        elif transient.host and transient.host.redshift:
-            model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
+        # Stored SALT3 fit (#315): no sncosmo call in the request.
+        series = []
+        count = 0
+        bandunq, idx = np.unique(band, return_index=True)
+        for bn, bc, inn in zip(band_name[idx], disp_color[idx], instrument_name[idx]):
+            color = band_display_color(bn, bc, fallback_index=count)
+            count += 1
+            series.append(('Band: %s - %s' % (inn, bn), color))
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=salt_run)
 
-        zp = np.array([27.5]*len(salt2band))
-        data = Table([salt2mjd,salt2band,salt2flux.astype(float),salt2fluxerr.astype(float),zp,zpsys],
-                     names=['mjd','band','flux','fluxerr','zp','zpsys'],
-                     meta={'t0':salt2mjd[salt2flux == np.max(salt2flux)]})
-
-        pkguess = np.atleast_1d(salt2mjd[salt2flux/salt2fluxerr > 3][salt2flux[salt2flux/salt2fluxerr > 3] == np.max(salt2flux[salt2flux/salt2fluxerr > 3])])
-        if len(pkguess):
-            pkguess = pkguess[0]
-            data = data[(salt2mjd > pkguess-20) & (salt2mjd < pkguess+40)]
-            result, fitted_model = sncosmo.fit_lc(
-                data, model, fitparams,
-                bounds={'t0':(pkguess-10, pkguess+10),
-                        'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})  # bounds on parameters (if any)
-
-            count = 0
-            plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
-            bandunq,idx = np.unique(band,return_index=True)
-            for bs,bn,b,bc,bsym,inn in zip(
-                    bandunq,band_name[idx],band[idx],disp_color[idx],disp_symbol[idx],instrument_name[idx]):
-                if bc != 'None' and bc:
-                    color = bc
-                else:
-                    coloridx = count % len(np.unique(colorlist))
-                    color = colorlist[coloridx]
-                    count += 1
-                bandkey = 'Band: %s - %s'%(inn,bn)
-                if bandkey in bandpassdict.keys() and bandpassdict[bandkey] in salt2band:
-                    salt2flux = fitted_model.bandflux(bandpassdict[bandkey], plotmjd, zp=27.5,zpsys=zpsys[bandpassdict[bandkey] == salt2band][0])
-                    ax.line(plotmjd,-2.5*np.log10(salt2flux)+27.5,color=color)
-
-        lcphase = today-result['parameters'][1]
-        if lcphase > 0: lcphase = '+%.1f'%(lcphase)
-        else: lcphase = '%.1f'%(lcphase)
-        latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="phase = %s days"%(
-                           lcphase))
-        latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
-        latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
-        latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
-        latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
-        latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
-        for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
-            ax.add_layout(latex)
-
-    g = file_html(ax,CDN,"my plot")
-    print("plotting took %s"%(time.time()-tstart))
-    return HttpResponse(g.replace('width: 90%','width: 100%'))
+    html = file_html(ax, CDN, "my plot").replace('width: 90%', 'width: 100%')
+    if cache_key:
+        return _cached_plot_http_response(cache_key, html)
+    return django.http.HttpResponse(html)
 
 
+@login_required
 def lightcurveplot_flux(request, transient_id, salt2=False):
+    _load_heavy_plot_stack()
     import time
     tstart = time.time()
 
-    transient = Transient.objects.get(pk=transient_id)
-    photdata = get_all_phot_for_transient(request.user, transient_id).all().select_related(
-        'created_by', 'modified_by', 'band', 'unit', 'photometry',
-        'band__instrument','band__instrument__telescope')
-    if not photdata:
+    plot_width = _requested_plot_width(request, 400)
+    transient = get_object_or_404(Transient, pk=transient_id)
+    photdata = (
+        get_all_phot_for_transient(request.user, transient_id)
+        .select_related(
+            'created_by', 'modified_by', 'band', 'unit', 'photometry',
+            'band__instrument', 'band__instrument__telescope', 'mag_sys',
+        )
+        .prefetch_related('data_quality')
+    )
+    phot_rows = _downsample_phot_rows_for_display(list(photdata))
+    if not phot_rows:
         return django.http.HttpResponse('')
 
     #ax=figure()
@@ -1133,7 +1574,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
     limmjd = None
 
-    for p in photdata:
+    for p in phot_rows:
         dbmjd = date_to_mjd(p.obs_date)
         if p.flux and np.abs(p.flux) > 1e10: continue
 
@@ -1147,11 +1588,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
             if p.mag_sys is None: magsys = np.append(magsys,['None'])
             else: magsys = np.append(magsys,[p.mag_sys])
 
-            dqs = p.data_quality.all()
-            if not len(dqs):
-                data_quality = np.append(data_quality,['Good'])
-            else:
-                data_quality = np.append(data_quality,[','.join(np.array([pdq.name for pdq in p.data_quality.all()]))])
+            data_quality = np.append(data_quality, [_phot_data_quality_label(p)])
 
             if not p.flux or not p.flux_err:
                 flux_single = 10**(-0.4*(p.mag-27.5))
@@ -1165,11 +1602,16 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
             if p.mag_err: magerr = np.append(magerr,p.mag_err)
             else: magerr = np.append(magerr,0)
             bandstr = np.append(bandstr,str(p.band))
-            bandcolor = np.append(bandcolor,str(p.band.disp_color))
-            if p.band.disp_symbol in py2bokeh_symboldict.keys():
-                bandsym = np.append(bandsym,str(py2bokeh_symboldict[p.band.disp_symbol]))
+            inst_name = p.band.instrument.name if p.band.instrument_id else None
+            bandcolor = np.append(
+                bandcolor,
+                band_display_color(p.band.name, p.band.disp_color),
+            )
+            sym = telescope_display_symbol(inst_name, p.band.disp_symbol)
+            if sym in py2bokeh_symboldict.keys():
+                bandsym = np.append(bandsym, str(py2bokeh_symboldict[sym]))
             else:
-                bandsym = np.append(bandsym,str(p.band.disp_symbol))
+                bandsym = np.append(bandsym, str(sym))
             band = np.append(band,p.band)
             if salt2:
                 if str(p.band) in bandpassdict.keys():
@@ -1191,7 +1633,10 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
             upperlimband = np.append(upperlimband,p.band)
             if p.mag_sys is None: upperlimmagsys = np.append(upperlimmagsys,'None')
             else: upperlimmagsys = np.append(upperlimmagsys,p.mag_sys)
-            upperlimbandcolor = np.append(upperlimbandcolor,p.band.disp_color)
+            upperlimbandcolor = np.append(
+                upperlimbandcolor,
+                band_display_color(p.band.name, p.band.disp_color),
+            )
             if salt2:
                 if str(p.band) in bandpassdict.keys():
                     salt2mjd = np.append(salt2mjd,[dbmjd])
@@ -1208,7 +1653,13 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         upperlimmagsys = np.append(upperlimmagsys,'None')
         upperlimbandstr = np.append(upperlimbandstr,str(transient.non_detect_band))
         upperlimband = np.append(upperlimband,transient.non_detect_band)
-        upperlimbandcolor = np.append(upperlimbandcolor,transient.non_detect_band.disp_color)
+        upperlimbandcolor = np.append(
+            upperlimbandcolor,
+            band_display_color(
+                transient.non_detect_band.name,
+                transient.non_detect_band.disp_color,
+            ),
+        )
         
     colorlist = ['#8dd3c7','#bebada','#fb8072','#80b1d3','#fdb462','#b3de69','#fccde5','#d9d9d9']
     count = 0
@@ -1217,10 +1668,13 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     allbandcolor = np.append(bandcolor,upperlimbandcolor)
     allbandsym = np.append(bandsym,[None]*len(upperlimbandcolor))
     bandunq,idx = np.unique(allbandstr,return_index=True)
+    series_order = _legend_series_order(allband[idx])
+    bandunq, idx = bandunq[series_order], idx[series_order]
 
     TOOLTIPS = [
         ('mag','$y'),
-        ('band','@band'),
+        ('telescope','@telescope'),
+        ('filter','@filter'),
         ('date','@date'),
         ('dq','@data_quality'),
         ('magsys','@magsys')]
@@ -1229,16 +1683,23 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     
     legend_it = []
     for bs,b,bc,bsym in zip(bandunq,allband[idx],allbandcolor[idx],allbandsym[idx]):
-        if bc != 'None' and bc: color = bc
-        else:
-            coloridx = count % len(np.unique(colorlist))
-            color = colorlist[coloridx]
-            count += 1
-
-        if bsym and bsym != 'inverted_triangle':
+        raw_band_name = b.name if hasattr(b, 'name') else str(bs)
+        short_filter = display_filter_label(raw_band_name)
+        tel_label = telescope_display_name(
+            b.instrument.name if hasattr(b, 'instrument_id') and b.instrument_id else None,
+            b.instrument.telescope.name
+            if hasattr(b, 'instrument') and getattr(b.instrument, 'telescope_id', None)
+            else None,
+        )
+        legend_label = f'{tel_label} {short_filter}'
+        color = band_display_color(raw_band_name, bc, fallback_index=count)
+        count += 1
+        inst_name = b.instrument.name if hasattr(b, 'instrument_id') and b.instrument_id else None
+        symbol = telescope_display_symbol(inst_name, bsym if bsym != 'None' else None)
+        if symbol and symbol != 'inverted_triangle':
             try:
-                plotmethod = getattr(ax, bsym)
-            except:
+                plotmethod = getattr(ax, symbol)
+            except AttributeError:
                 plotmethod = getattr(ax, 'triangle')
         else:
             plotmethod = getattr(ax, 'triangle')
@@ -1250,7 +1711,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                                             date=date[bandstr == bs].tolist(),
                                             data_quality=data_quality[bandstr == bs].tolist(),
                                             magsys=magsys[bandstr == bs].tolist(),
-                                            band=[bs.replace('Band: ','')]*len(mjd[bandstr == bs].tolist())))
+                                            telescope=[tel_label]*len(mjd[bandstr == bs].tolist()),
+                                            filter=[short_filter]*len(mjd[bandstr == bs].tolist())))
 
         p = plotmethod('x','y',source=source,
                    color=color,size=size, muted_alpha=0.2)#,legend='%s - %s'%(
@@ -1264,25 +1726,21 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         for x,y,yerr in zip(mjd[bandstr == bs].tolist(),flux[bandstr == bs].tolist(),fluxerr[bandstr == bs].tolist()):
             err_xs.append((x, x))
             err_ys.append((y - yerr, y + yerr))
-        ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        _link_series_visibility(p, [p_err])
 
-        legend_it.append(('%s - %s'%(b.instrument.telescope.name,b.name), [p]))
+        legend_it.append((legend_label, [p], _band_column_key(b)))
         
     today = Time(datetime.datetime.today()).mjd
     p = ax.line(today,20,line_width=3,line_color='black')
-    legend_it.append(('today (%i)'%today, [p]))
+    legend_it.append(('today (%i)'%today, [p], MARKER_LEGEND_COLUMN))
     vline = Span(location=today, dimension='height', line_color='black',
                  line_width=3)
     ax.add_layout(vline)
     hline = Span(location=0, dimension='width', line_color='black',
                  line_width=3)
     ax.add_layout(hline)
-    legend = Legend(items=legend_it)
-    legend.click_policy="hide"
-    legend.label_height = 1
-    legend.glyph_height = 20
-    
-    ax.add_layout(legend, 'below')
+    legend_height = _add_legend_grid(ax, legend_it, plot_width)
     
 
     
@@ -1303,8 +1761,8 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ax.extra_x_ranges = {"dateax": Range1d(np.min(mjd)-10,np.max(mjd)+10)}
         ax.add_layout(LinearAxis(x_range_name="dateax"), 'above')
 
-    ax.plot_height = 200+20*len(bandunq)
-    ax.plot_width = 400
+    ax.plot_height = 200 + legend_height
+    ax.plot_width = plot_width
 
     majorticks = []; overridedict = {}
     mjdrange = range(int(np.min(mjd)-100),int(np.max(mjd)+100))
@@ -1330,221 +1788,192 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     ax.xaxis[0].major_label_overrides = overridedict
     
     if salt2:
-        model = sncosmo.Model(source='salt2')
-        if transient.redshift:
-            model.set(z=transient.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        elif transient.host and transient.host.redshift:
-            model.set(z=transient.host.redshift); fitparams = ['t0', 'x0', 'x1', 'c']
-        else: fitparams = ['z', 't0', 'x0', 'x1', 'c']
-            
-        zp = np.array([27.5]*len(salt2band))
-        data = Table([salt2mjd,salt2band,salt2flux,salt2fluxerr,zp,zpsys],
-                     names=['mjd','band','flux','fluxerr','zp','zpsys'],
-                     meta={'t0':salt2mjd[salt2flux == np.max(salt2flux)]})
-
-        result, fitted_model = sncosmo.fit_lc(
-            data, model, fitparams,
-            bounds={'t0':(min(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))-10,
-                          max(np.atleast_1d(salt2mjd[salt2flux == np.max(salt2flux)]))+10),
-                    'z':(0.0,0.7),'x1':(-3,3),'c':(-0.3,0.3)})
-        
+        # Stored SALT3 fit (#315) in flux units; no sncosmo call in the request.
+        series = []
         count = 0
-        plotmjd = np.arange(result['parameters'][1]-20,result['parameters'][1]+50,0.5)
-        bandunq,idx = np.unique(bandstr,return_index=True)
-        for bs,b,bc in zip(bandunq,band[idx],bandcolor[idx]):
+        bandunq, idx = np.unique(bandstr, return_index=True)
+        for bs, bc in zip(bandunq, bandcolor[idx]):
             if bc != 'None' and bc:
                 color = bc
             else:
-                coloridx = count % len(np.unique(colorlist))
-                color = colorlist[coloridx]
+                color = colorlist[count % len(np.unique(colorlist))]
                 count += 1
-                
-            if bs in bandpassdict.keys() and bandpassdict[bs] in salt2band:
-                salt2flux = fitted_model.bandflux(bandpassdict[bs], plotmjd, zp=27.5,zpsys=zpsys[bandpassdict[bs] == salt2band][0])
-                ax.line(plotmjd,salt2flux,color=color)
-                
-        lcphase = today-result['parameters'][1]
-        if lcphase > 0: lcphase = '+%.1f'%(lcphase)
-        else: lcphase = '%.1f'%(lcphase)
-        latex1 = Label(x=10,y=280,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="phase = %s days"%(
-                           lcphase))
-        latex2 = Label(x=10,y=265,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDE3B  = %.3f"%(result.parameters[0]))
-        latex3 = Label(x=10,y=250,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC61\u2080  = %i"%(result['parameters'][1]))
-        latex4 = Label(x=10,y=235,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC5A\u2088 = %.2f"%(10.635-2.5*np.log10(result['parameters'][2])))
-        latex5 = Label(x=10,y=220,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC65\u2081 = %.2f"%(result['parameters'][3]))
-        latex6 = Label(x=10,y=205,x_units='screen',y_units='screen',
-                       render_mode='css', text_font_size='10pt',
-                       text="\uD835\uDC50  = %.2f"%(result['parameters'][4]))
-        for latex in [latex1,latex2,latex3,latex4,latex5,latex6]:
-            ax.add_layout(latex)
+            series.append((str(bs), color))
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=True)
 
     g = file_html(ax,CDN,"my plot")
     return HttpResponse(g.replace('width: 90%','width: 100%'))
 
+def _spectrum_plot_empty_message(n_spectra_without_points):
+    """Empty-state HTML for ``spectrumplot``.
+
+    The Summary-tab toolbar counts TransientSpectrum rows while the plot needs
+    TransientSpecData points, so say which of the two is missing (#208).
+    """
+    if n_spectra_without_points == 0:
+        text = 'No spectrum data on file for this transient.'
+    elif n_spectra_without_points == 1:
+        text = '1 spectrum on file, but it has no wavelength/flux points to plot.'
+    else:
+        text = (
+            f'{n_spectra_without_points} spectra on file, but none has '
+            'wavelength/flux points to plot.'
+        )
+    return f'<p class="text-muted yse-plot-empty">{text}</p>'
+
+
+def _spectra_for_plot(dbspectra):
+    """Turn TransientSpectrum rows into plottable dicts, skipping empty ones.
+
+    Returns ``(spectra, n_without_points)``: spectra whose ``transientspecdata_set``
+    is empty are counted instead of plotted, so a transient whose spectra were
+    registered without wavelength/flux rows gets the empty-state message rather
+    than a traceback (#343). Each spectrum is resampled to at most
+    ``MAX_SPEC_DISPLAY_PIXELS`` points.
+    """
+    spectra = []
+    n_without_points = 0
+    for spectrum in dbspectra:
+        spec_data = list(spectrum.transientspecdata_set.all())
+        wave = np.array([s.wavelength for s in spec_data])
+        flux = np.array([s.flux for s in spec_data])
+        if wave.size == 0 or flux.size == 0:
+            n_without_points += 1
+            continue
+
+        sort_idx = np.argsort(wave)
+        wave = wave[sort_idx]
+        flux = flux[sort_idx]
+
+        n_display = min(MAX_SPEC_DISPLAY_PIXELS, max(2, wave.size))
+        wave_interp = np.linspace(np.min(wave), np.max(wave), n_display)
+        flux_interp = np.interp(wave_interp, wave, flux)
+
+        spectra.append({
+            'wave': wave_interp,
+            'flux': flux_interp,
+            'mjd': date_to_mjd(spectrum.obs_date.isoformat().split('+')[0]),
+            'label': f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}',
+        })
+    return spectra, n_without_points
+
+
+def _normalized_plot_flux(flux, offset):
+    """Scale ``flux`` onto the 5th-95th percentile range and stack it at ``offset``."""
+    n_pix = len(flux)
+    sort_flux = np.sort(flux)
+    minval = sort_flux[round(n_pix * 0.05)] * 0.5
+    maxval = sort_flux[round(n_pix * 0.95)] * 1.1
+    scale = maxval - minval
+    if scale == 0:
+        scale = 1.0
+    return (flux - minval) / scale + offset
+
+
+@login_required
 def spectrumplot(request, transient_id):
-    tstart = time.time()
-    transient = Transient.objects.get(pk=transient_id)
-    dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True).select_related()
-    spectra = {}
+    cache_key = None
+    if _plot_html_cache_enabled():
+        user_key = group_access_plot_cache_token(request.user)
+        cache_key = (
+            f'specplot_v2_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+        )
+        cached_html = cache.get(cache_key)
+        if cached_html is not None:
+            return django.http.HttpResponse(cached_html)
 
-    if not len(dbspectra):
-        return django.http.HttpResponse('')
-
+    transient = get_object_or_404(Transient, pk=transient_id)
+    dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
+        request.user, transient_id, includeBadData=True
+    ).select_related('instrument').prefetch_related(
+        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
+    )
     
-    dates = []
-    for i,spectrum in enumerate(dbspectra):
-        spec = TransientSpecData.objects.filter(spectrum=spectrum)
+    spectra, n_without_points = _spectra_for_plot(dbspectra)
+    if not spectra:
+        return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
 
-        wave = list(spec.values_list('wavelength',flat=True))
-        flux = list(spec.values_list('flux',flat=True))
+    # bokeh/matplotlib/sncosmo are imported only now: a transient with nothing
+    # to plot answers in milliseconds instead of paying the cold import.
+    _load_heavy_plot_stack()
 
-        
-        flux = np.array(flux)[np.argsort(wave)]
-        wave = np.sort(wave)
-
-        wave2 = np.arange(np.min(wave),np.max(wave)+5,5)
-        flux = np.interp(wave2,wave,flux)
-        wave = wave2
-        
-        spec = Table([wave,flux],names=['wave','flux'])         
-        spectra[i] = spec
-        spectra[i].mjd = date_to_mjd(spectrum.obs_date.isoformat().split('+')[0])
-        n_pix = len(wave)
-        sort_flux = np.sort(flux)
-        
-        if len(flux):
-            minval = sort_flux[round(n_pix*0.05)]
-            maxval = sort_flux[round(n_pix*0.95)]
-            minval = minval*0.5
-            maxval = maxval*1.1
-            scale = maxval - minval
-            spectra[i].minval = minval
-            spectra[i].maxval = maxval
-            spectra[i].scale  = scale
-
-        dates.append(spectra[i].mjd)
-
-    dates = np.array(dates)
-    temp = np.argsort(-dates)
-    temp2 = np.argsort(dates)
-    offset = np.empty_like(temp)
-    offset[temp] = np.arange(len(dates))
-    ax=figure(plot_width=240,plot_height=240,sizing_mode='stretch_width',y_range=(-0.15, len(dbspectra)+0.15))
-
-
+    # Process spectra and compute offsets
+    dates = np.array([spec['mjd'] for spec in spectra])
+    sorted_idx = np.argsort(-dates)
+    offsets = np.argsort(sorted_idx)
+    
+    # Prepare plot
+    ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width', y_range=(-0.15, len(spectra) + 0.15))
     colors = itertools.cycle(palette)
-    legend_it = [None]*len(dbspectra)
-    for i,color in zip(range(len(dbspectra)),colors):
-        spectra[i].offset = offset[i]
-
-        if len(spectra[i]['flux']):
-            p = ax.line(spectra[i]['wave'], (spectra[i]['flux']-spectra[i].minval)/spectra[i].scale + spectra[i].offset,
-                        color=color,muted_alpha=0.2)
-
-        legend_it[np.where(temp2 == i)[0][0]] = ('%s - %s'%(dbspectra[i].instrument.name,dbspectra[i].obs_date.strftime('%Y-%m-%d')), [p])
+    legend_items = []
     
-    legend = Legend(items=legend_it, location="bottom_right")
-    legend.click_policy="mute"
-    legend.label_height = 1
-    legend.glyph_height = 20
-    ax.add_layout(legend) #, 'right')
-
-    ax.plot_height = 400+50*len(dbspectra)
+    for spec, color, offset in zip(spectra, colors, offsets):
+        norm_flux = _normalized_plot_flux(spec['flux'], offset)
+        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2)
+        legend_items.append((spec['label'], [p]))
+    
+    # Add legend
+    legend = Legend(items=legend_items, location="bottom_right")
+    legend.click_policy = "mute"
+    ax.add_layout(legend)
+    
+    # Configure plot dimensions
+    ax.plot_height = 400 + 50 * len(spectra)
     ax.plot_width = 400
-    ax.x_range=Range1d(3000,10000)
-    
+    ax.x_range = Range1d(3000, 10000)
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
-    g = file_html(ax,CDN,"spectrum plot")
-    time.sleep(5)
-    return HttpResponse(g.replace('width: 90%','width: 100%'))
+    
+    html = file_html(ax, CDN, "spectrum plot").replace('width: 90%', 'width: 100%')
+    if cache_key:
+        return _cached_plot_http_response(cache_key, html)
+    return django.http.HttpResponse(html)
 
+@login_required
 def spectrumplot_summary(request, transient_id):
-    tstart = time.time()
-    transient = Transient.objects.get(pk=transient_id)
-    dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True).select_related()
-    spectra = {}
+    transient = get_object_or_404(Transient, pk=transient_id)
+    dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
+        request.user, transient_id, includeBadData=True
+    ).select_related('instrument').prefetch_related(
+        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
+    )
 
-    if not len(dbspectra):
-        return django.http.HttpResponse('')
+    spectra, n_without_points = _spectra_for_plot(dbspectra)
+    if not spectra:
+        if n_without_points == 0:
+            # The summary card stays blank for a transient without spectra.
+            return django.http.HttpResponse('')
+        # Same empty state as spectrumplot instead of an UnboundLocalError (#343).
+        return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
 
-    
-    dates = []
-    for i,spectrum in enumerate(dbspectra):
-        spec = TransientSpecData.objects.filter(spectrum=spectrum)
+    _load_heavy_plot_stack()
 
-        wave = list(spec.values_list('wavelength',flat=True))
-        flux = list(spec.values_list('flux',flat=True))
-
-        #figure is a function in the bokeh module
-        #HELLO
-        #wave,flux = [],[]
-        #for s in spec:
-        #   wave += [s.wavelength]
-        #   flux += [s.flux]
-        flux = np.array(flux)[np.argsort(wave)]
-        wave = np.sort(wave)
-            
-        spec = Table([wave,flux],names=['wave','flux'])         
-        spectra[i] = spec
-        spectra[i].mjd = date_to_mjd(spectrum.obs_date.isoformat().split('+')[0])
-        n_pix = len(wave)
-        sort_flux = np.sort(flux)
-
-        if len(flux):
-            minval = sort_flux[round(n_pix*0.05)]
-            maxval = sort_flux[round(n_pix*0.95)]
-            minval = minval*0.5
-            maxval = maxval*1.1
-            scale = maxval - minval
-            spectra[i].minval = minval
-            spectra[i].maxval = maxval
-            spectra[i].scale  = scale
-
-        dates.append(spectra[i].mjd)
-
-    dates = np.array(dates)
-    temp = np.argsort(-dates)
-    temp2 = np.argsort(dates)
-    offset = np.empty_like(temp)
-    offset[temp] = np.arange(len(dates))
-    ax=figure(plot_width=240,plot_height=240,sizing_mode='stretch_width',y_range=(-0.15, len(dbspectra)+0.15))
-
+    # Newest spectrum at the top of the stack, legend in date order.
+    dates = np.array([spec['mjd'] for spec in spectra])
+    offsets = np.argsort(np.argsort(-dates))
+    ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width',
+                y_range=(-0.15, len(spectra) + 0.15))
 
     colors = itertools.cycle(palette)
-    legend_it = [None]*len(dbspectra)
-    for i,color in zip(range(len(dbspectra)),colors):
-        spectra[i].offset = offset[i]
+    legend_it = [None] * len(spectra)
+    for spec, color, offset in zip(spectra, colors, offsets):
+        norm_flux = _normalized_plot_flux(spec['flux'], offset)
+        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2)
+        legend_it[len(spectra) - 1 - offset] = (spec['label'], [p])
 
-        if len(spectra[i]['flux']):
-            p = ax.line(spectra[i]['wave'], (spectra[i]['flux']-spectra[i].minval)/spectra[i].scale + spectra[i].offset,
-                        color=color,muted_alpha=0.2)
-        legend_it[np.where(temp2 == i)[0][0]] = ('%s - %s'%(dbspectra[i].instrument.name,dbspectra[i].obs_date.strftime('%Y-%m-%d')), [p])
-    
     legend = Legend(items=legend_it, location="bottom_right")
-    legend.click_policy="mute"
+    legend.click_policy = "mute"
     legend.label_height = 1
     legend.glyph_height = 20
-    ax.add_layout(legend) #, 'right')
+    ax.add_layout(legend)
 
-    ax.plot_height = 200 #150+30*len(dbspectra)
+    ax.plot_height = 200
     ax.plot_width = 400
-    
+
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
-    g = file_html(ax,CDN,"spectrum plot")
-    time.sleep(5)
-    return HttpResponse(g.replace('width: 90%','width: 100%'))
+    g = file_html(ax, CDN, "spectrum plot")
+    return HttpResponse(g.replace('width: 90%', 'width: 100%'))
 
 
 #def spectrumplot(request, transient_id):
@@ -1582,25 +2011,26 @@ def spectrumplot_summary(request, transient_id):
 #   time.sleep(5)
 #   return HttpResponse(g.replace('width: 90%','width: 100%'))
 
+@login_required
 def spectrumplotsingle(request, transient_id, spec_id):
+    _load_heavy_plot_stack()
     
-    #transient_id = request.GET.get('transient_id')
-    #spec_id = request.GET.get('spec_id')
-    
-    tstart = time.time()
-    print(transient_id,spec_id)
-    transient = Transient.objects.get(pk=transient_id)
+    transient = get_object_or_404(Transient, pk=transient_id)
     spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(request.user, transient_id, includeBadData=True)
     spectrum = spectra.filter(id=spec_id)
     
     if not len(spectrum):
-        return django.http.HttpResponse('')
+        return django.http.HttpResponse(
+            '<p class="text-muted yse-plot-empty">'
+            'That spectrum is not on file for this transient (or you are not '
+            'authorized to see it).</p>'
+        )
     else:
         spectrum = spectrum[0]
     spec = TransientSpecData.objects.filter(spectrum=spectrum)
     
     if not len(spec):
-        return django.http.HttpResponse('')
+        return django.http.HttpResponse(_spectrum_plot_empty_message(1))
 
     wave,flux = [],[]
     for s in spec:
@@ -1622,6 +2052,7 @@ def spectrumplotsingle(request, transient_id, spec_id):
     return HttpResponse(g.replace('width: 90%','width: 100%'))
 
 def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
+    _load_astropy_coords()
     tstart = time.time()
 
     #transient = Transient.objects.filter(id=transient_id)[0]
@@ -1641,7 +2072,7 @@ def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
 
     if target_set_time:
         try: settime = target_set_time.isot.split('T')[-1]
-        except: settime = None
+        except (AttributeError, ValueError): settime = None
     else: 
         settime = None
 
@@ -1650,6 +2081,7 @@ def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
     #setdict['set_time'] = settime
     
 def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
+    _load_astropy_coords()
     tstart = time.time()
     #transient = Transient.objects.filter(id=transient_id)[0]
     #coords = transient.CoordString()
@@ -1669,7 +2101,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
 
     if target_rise_time:
         try: risetime = target_rise_time.isot.split('T')[-1]
-        except: risetime = None
+        except (AttributeError, ValueError): risetime = None
     else: 
         risetime = None
 
@@ -1716,6 +2148,7 @@ def set_time(request,transient_id,obs_id):
 
         
 def moon_angle(request,transient_id,obs_id):
+    _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
     coords = transient.CoordString()
 
@@ -1729,6 +2162,7 @@ def moon_angle(request,transient_id,obs_id):
     return JsonResponse(moondict)
 
 def tonight_rise_time(request,transient_id,too_id):
+    _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
     coords = transient.CoordString()
 
@@ -1746,13 +2180,14 @@ def tonight_rise_time(request,transient_id,too_id):
 
     if target_rise_time:
         try: returnstarttime = target_rise_time.isot.split('T')[-1]
-        except: returnstarttime = None
+        except (AttributeError, ValueError): returnstarttime = None
     else: returnstarttime = None
 
     risedict = {'rise_time':returnstarttime}
     return JsonResponse(risedict)
 
 def tonight_set_time(request,transient_id,too_id):
+    _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
     coords = transient.CoordString()
 
@@ -1770,13 +2205,14 @@ def tonight_set_time(request,transient_id,too_id):
 
     if target_set_time:
         try: returnstarttime = target_set_time.isot.split('T')[-1]
-        except: returnstarttime = None
+        except (AttributeError, ValueError): returnstarttime = None
     else: returnstarttime = None
 
     setdict = {'set_time':returnstarttime}
     return JsonResponse(setdict)
     
 def tonight_moon_angle(request,transient_id,too_id):
+    _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
     coords = transient.CoordString()
 
@@ -1796,7 +2232,8 @@ def get_ps1_image(request,transient_id):
     ps1url = ("http://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
     try:
         response = requests.get(url=ps1url,timeout=5)
-    except:
+    except requests.RequestException as exc:
+        logger.warning("PS1 cutout request failed for transient %s: %s", transient_id, exc)
         return(JsonResponse({"jpegurl":"","msg":"timeout"}))
     response_text = response.content.decode('utf-8')
     if "<td><img src=" in response.content.decode('utf-8'):
@@ -1808,39 +2245,269 @@ def get_ps1_image(request,transient_id):
     jpegurldict = {"jpegurl":jpegurl,"msg":"success"}
     return(JsonResponse(jpegurldict))
 
+ARCHIVE_STATUS_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_STATUS_TIMEOUT', '8'))
+ARCHIVE_STATUS_CACHE_SECONDS = 3600
+# A failed or timed-out archive lookup is remembered only briefly, so a
+# reload retries it instead of showing a stale negative for an hour.
+ARCHIVE_STATUS_FAILURE_CACHE_SECONDS = 60
+
+
+def _archive_status_with_timeout(work, *, timeout_seconds=None):
+    """Run a blocking archive lookup with a wall-clock timeout.
+
+    Returns ``None`` when the lookup does not finish in time. The worker
+    thread is left to finish on its own: ``ThreadPoolExecutor`` used as a
+    context manager would ``shutdown(wait=True)`` and block the response
+    until MAST answered, which made the timeout cosmetic.
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    if timeout_seconds is None:
+        timeout_seconds = ARCHIVE_STATUS_TIMEOUT_SECONDS
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(work)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeout:
+            return None
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _record_archive_flag(transient_id, field, has_data):
+    """Store a fresh archive answer on ``Transient.<field>`` (``has_hst`` / ``has_jwst`` / ``has_chandra``).
+
+    One ``UPDATE`` only when the stored value differs; bypasses ``save()`` so
+    ``modified_date`` and the save signals are left alone (this is a lookup,
+    not an edit). A failed write never breaks the tab label.
+    """
+    if has_data is None or not field:
+        return False
+    try:
+        return bool(Transient.objects.filter(pk=transient_id).exclude(**{field: bool(has_data)})
+                    .update(**{field: bool(has_data)}))
+    except Exception:  # pragma: no cover - a DB hiccup must not break the label
+        logger.warning('could not record %s for transient %s', field, transient_id, exc_info=True)
+        return False
+
+
+def _archive_status_payload(cache_key, lookup, archive_name, transient_id=None, flag_field=None):
+    """JSON payload for the HST/JWST/Chandra tab labels.
+
+    ``has_data`` is ``True``/``False`` only when the archive answered; when the
+    lookup timed out or raised it is ``None`` and ``error`` says why, so the
+    page can say "lookup failed" instead of "No HST" (an upstream outage is
+    not the same as no data). Failures are cached for a minute, answers for
+    an hour. A fresh answer is also written to ``Transient.<flag_field>``
+    (``has_jwst`` for JWST, which nothing else sets) so it can be searched.
+    """
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        count = _archive_status_with_timeout(lookup)
+    except Exception as exc:
+        logger.warning('%s archive status lookup failed: %s', archive_name, exc)
+        payload = {
+            'has_data': None, 'count': 0, 'error': 'lookup_failed',
+            'message': f'{archive_name} archive lookup failed; open the tab to retry.',
+        }
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_FAILURE_CACHE_SECONDS)
+        return payload
+    if count is None:
+        payload = {
+            'has_data': None, 'count': 0, 'error': 'timeout', 'timed_out': True,
+            'message': (
+                f'{archive_name} archive did not answer within '
+                f'{ARCHIVE_STATUS_TIMEOUT_SECONDS} s; open the tab to retry.'
+            ),
+        }
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_FAILURE_CACHE_SECONDS)
+        return payload
+    payload = {'has_data': count > 0, 'count': count}
+    cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_CACHE_SECONDS)
+    if transient_id is not None and flag_field:
+        _record_archive_flag(transient_id, flag_field, payload['has_data'])
+    return payload
+
+
+def get_hst_status(request, transient_id):
+    """Lightweight HST availability for tab label (no JPG fetch)."""
+    try:
+        t = Transient.objects.get(pk=transient_id)
+    except Transient.DoesNotExist:
+        raise Http404("Transient id does not exist")
+
+    def _lookup():
+        from . import common
+        hst = common.mast_query.hstImages(t.ra, t.dec, 'Object')
+        hst.getObstable()
+        count = int(getattr(hst, 'Nimages', 0) or 0)
+        if not count and getattr(hst, 'obstable', None) is not None:
+            count = len(hst.obstable)
+        return count
+
+    return JsonResponse(_archive_status_payload(f'hst_status_v3_{transient_id}', _lookup, 'HST',
+                                                transient_id=t.pk, flag_field='has_hst'))
+
+
+def get_chandra_status(request, transient_id):
+    """Lightweight Chandra availability for tab label (no image fetch)."""
+    try:
+        t = Transient.objects.get(pk=transient_id)
+    except Transient.DoesNotExist:
+        raise Http404("Transient id does not exist")
+
+    def _lookup():
+        from . import common
+        chr = common.chandra_query.chandraImages(t.ra, t.dec, 'Object')
+        chr.search_chandra_database()
+        return int(getattr(chr, 'n_obsid', 0) or 0)
+
+    return JsonResponse(
+        _archive_status_payload(f'chandra_status_v3_{transient_id}', _lookup, 'Chandra',
+                                transient_id=t.pk, flag_field='has_chandra')
+    )
+
+
+@login_required
+def get_jwst_status(request, transient_id):
+    """Lightweight JWST availability for the tab label.
+
+    The same images-only selection as the tab body (``jwstObservations``,
+    #387); the answer also sets ``Transient.has_jwst``. Cache key ``v2``: the
+    ``v1`` answers were counted before NIRSpec / MIRI spectroscopy was excluded.
+    """
+    try:
+        t = Transient.objects.get(pk=transient_id)
+    except Transient.DoesNotExist:
+        raise Http404("Transient id does not exist")
+
+    def _lookup():
+        from . import common
+        jwst = common.mast_query.jwstObservations(t.ra, t.dec)
+        jwst.query()
+        return int(jwst.count)
+
+    return JsonResponse(_archive_status_payload(f'jwst_status_v2_{transient_id}', _lookup, 'JWST',
+                                                transient_id=t.pk, flag_field='has_jwst'))
+
+
+# The tab body (full observation list) gets longer than the label lookup: the
+# user asked for it by opening the tab, and the page offers Retry on failure.
+ARCHIVE_TABLE_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_TABLE_TIMEOUT', '45'))
+
+
+def _archive_table_response(transient_id, archive_name, lookup, empty_payload, cache_key=None):
+    """JSON for an archive tab body (HST images, JWST observations).
+
+    ``lookup`` runs in a worker with a wall-clock timeout and returns the
+    payload dict. On a MAST failure the answer is HTTP 502 (timeout: 504)
+    carrying ``error`` and ``message`` plus the empty payload shape, so the
+    page can say "lookup failed" with a Retry link instead of swallowing a
+    500. Successful answers are cached for an hour under ``cache_key``.
+    """
+    if cache_key:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return JsonResponse(cached)
+    started = datetime.datetime.now()
+    try:
+        payload = _archive_status_with_timeout(lookup, timeout_seconds=ARCHIVE_TABLE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        logger.warning('%s lookup failed for transient %s: %s', archive_name, transient_id, exc)
+        body = dict(empty_payload)
+        body.update({
+            'error': 'lookup_failed',
+            'message': f'{archive_name} archive (MAST) lookup failed; retry in a moment.',
+        })
+        return JsonResponse(body, status=502)
+    if payload is None:
+        logger.warning('%s lookup timed out for transient %s after %s s',
+                       archive_name, transient_id, ARCHIVE_TABLE_TIMEOUT_SECONDS)
+        body = dict(empty_payload)
+        body.update({
+            'error': 'timeout', 'timed_out': True,
+            'message': (f'{archive_name} archive (MAST) did not answer within '
+                        f'{ARCHIVE_TABLE_TIMEOUT_SECONDS} s; retry in a moment.'),
+        })
+        return JsonResponse(body, status=504)
+    logger.debug('%s lookup for transient %s took %.1f s', archive_name, transient_id,
+                 (datetime.datetime.now() - started).total_seconds())
+    if cache_key:
+        cache.set(cache_key, payload, timeout=ARCHIVE_STATUS_CACHE_SECONDS)
+    return JsonResponse(payload)
+
+
+HST_IMAGE_EMPTY = {"jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []}
+
+
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
-    except t.DoesNotExist:
+    except Transient.DoesNotExist:
         raise Http404("Transient id does not exist")
 
-    startTime = datetime.datetime.now()
-    from . import common
-    hst=common.mast_query.hstImages(t.ra,t.dec,'Object')
-    hst.getObstable()
-    hst.getJPGurl()
-    print("I found",hst.Nimages,"HST images of",hst.object,"located at coordinates",hst.ra,hst.dec)
-    print("The cut out images have the following URLs:")
-    fitsurllist = []
-    for jpg,i in zip(hst.jpglist,range(len(hst.jpglist))):
-        print(jpg)
-        fitsurllist += ["https://hla.stsci.edu/cgi-bin/getdata.cgi?config=ops&amp;dataset=%s"%str(hst.obstable["obs_id"][i]).lower()]
-    print("Run time was: ",(datetime.datetime.now() - startTime).total_seconds(),"seconds")
+    def _lookup():
+        from . import common
+        hst = common.mast_query.hstImages(t.ra, t.dec, 'Object')
+        hst.getObstable()
+        hst.getJPGurl()
+        if not len(hst.jpglist):
+            return dict(HST_IMAGE_EMPTY)
+        fitsurllist = [
+            "https://hla.stsci.edu/cgi-bin/getdata.cgi?config=ops&amp;dataset=%s" % str(obs_id).lower()
+            for obs_id in hst.obstable["obs_id"][:len(hst.jpglist)]
+        ]
+        return {"jpegurl": list(hst.jpglist),
+                "fitsurl": fitsurllist,
+                "obsdate": list(Time(hst.obstable["t_min"], format='mjd').iso),
+                "filters": list(hst.obstable["filters"]),
+                "inst": list(hst.obstable["instrument_name"])}
 
-    if len(hst.jpglist):
-        jpegurldict = {"jpegurl":hst.jpglist,
-                       "fitsurl":fitsurllist,#list(hst.obstable["dataURL"]),
-                       "obsdate":list(Time(hst.obstable["t_min"],format='mjd').iso), #,out_subfmt='date'
-                       "filters":list(hst.obstable["filters"]),
-                       "inst":list(hst.obstable["instrument_name"])}
-    else:
-        jpegurldict = {"jpegurl":[],
-                       "fitsurl":[],
-                       "obsdate":[],
-                       "filters":[],
-                       "inst":[]}
+    return _archive_table_response(transient_id, 'HST', _lookup, HST_IMAGE_EMPTY)
 
-    return(JsonResponse(jpegurldict))
+
+JWST_OBSERVATION_FIELDS = ('obs_id', 'inst', 'filters', 'obsdate', 'mjd', 'exptime', 'program',
+                           'pi', 'target', 'product', 'calib_level', 'previewurl', 'dataurl',
+                           'portalurl')
+
+
+@login_required
+def get_jwst_observations(request, transient_id):
+    """JWST observations at the transient position for the JWST tab body.
+
+    Payload: ``{"count": N, "rows": [{obs_id, inst, filters, obsdate, mjd,
+    exptime, program, pi, target, product, calib_level, previewurl, dataurl,
+    portalurl}]}``.
+    """
+    try:
+        t = Transient.objects.get(pk=transient_id)
+    except Transient.DoesNotExist:
+        raise Http404("Transient id does not exist")
+
+    def _lookup():
+        from . import common
+        jwst = common.mast_query.jwstObservations(t.ra, t.dec)
+        rows = [
+            {
+                'obs_id': r.get('obs_id'), 'inst': r.get('instrument_name'),
+                'filters': r.get('filters'), 'obsdate': r.get('obsdate'), 'mjd': r.get('t_min'),
+                'exptime': r.get('t_exptime'), 'program': r.get('proposal_id'),
+                'pi': r.get('proposal_pi'), 'target': r.get('target_name'),
+                'product': r.get('dataproduct_type'), 'calib_level': r.get('calib_level'),
+                'previewurl': r.get('previewurl'), 'dataurl': r.get('dataurl'),
+                'portalurl': r.get('portalurl'),
+            }
+            for r in jwst.query()
+        ]
+        return {'count': len(rows), 'rows': rows}
+
+    return _archive_table_response(
+        transient_id, 'JWST', _lookup, {'count': 0, 'rows': []},
+        cache_key=f'jwst_observations_v2_{transient_id}',
+    )
 
 def get_chandra_image(request,transient_id):
     

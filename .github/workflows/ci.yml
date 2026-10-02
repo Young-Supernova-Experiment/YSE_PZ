@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop, experimental]
+  pull_request:
+    branches: [master, develop, experimental]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Undefined names, redefinitions, literal comparisons, duplicate dict keys
+        run: |
+          ruff check --select F821,F811,F632,F601 \
+            --exclude YSE_App/static,YSE_App/migrations,docker/web_image_history,YSE_App/util,YSE_App/common/getGWevents.py \
+            .
+
+  docker-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure application settings
+        run: cp YSE_PZ/public_settings.ini YSE_PZ/settings.ini
+
+      - name: Python syntax check (app code)
+        run: |
+          find YSE_App YSE_PZ -name '*.py' \
+            ! -path '*/static/*' ! -path '*/bower_components/*' \
+            -exec python3 -m py_compile {} +
+
+      - name: Write docker compose environment
+        working-directory: docker
+        run: |
+          printf '%s\n' \
+            "VOL=${{ github.workspace }}" \
+            "VOL_DB=${{ github.workspace }}/database" \
+            "VOL_GHOST=${{ github.workspace }}/ghost_logs" \
+            "STATIC_VOL=${{ github.workspace }}/YSE_PZ/static" \
+            "DB_PWD=password" \
+            "LOCAL_DB_PORT=53306" \
+            "LOCAL_HTTP_PORT=8080" \
+            "DJANGO_SUPERUSER_USERNAME=ci_admin" \
+            "DJANGO_SUPERUSER_PASSWORD=ci_password" \
+            "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
+            > .env
+          grep -q '^VOL=' .env
+          ! grep -q '^[[:space:]]' .env
+          # compose env_file lists .env.secrets (gitignored locally); CI needs an empty stub
+          cp .env.secrets.example .env.secrets
+          grep -q '^TNS_API_KEY=' .env.secrets
+
+      - name: Start database and web services
+        working-directory: docker
+        run: |
+          docker compose up -d yse_db web || {
+            docker logs ysepz_db_container 2>&1 || true
+            exit 1
+          }
+
+      # The pulled GHCR image bakes in Django 4.0, but production runs the 3.2 LTS
+      # line (requirements.txt: Django>=3.2,<4.0; docker/requirements.web.dev pins
+      # 3.2.25). Install the same pin into the running container and restart it so
+      # every check below runs on the Django that Ziggy runs. Drop this step once
+      # the image is rebuilt on docker/requirements.web.dev or #133 lands.
+      - name: Pin Django 3.2 in the web container
+        working-directory: docker
+        run: |
+          docker exec ysepz_web_container pip3 install --quiet "Django==3.2.25"
+          docker compose restart web
+          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
+
+      - name: Wait for MySQL
+        working-directory: docker
+        run: |
+          for i in $(seq 1 60); do
+            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -ppassword --silent; then
+              echo "MySQL ready after attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i/60: MySQL not ready yet"
+            sleep 5
+          done
+          echo "MySQL did not become ready in time"
+          docker compose ps || true
+          docker compose logs --tail=200 yse_db || true
+          exit 1
+
+      - name: Wait for Gunicorn
+        working-directory: docker
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --connect-timeout 5 --max-time 10 http://localhost:8000/login/ >/dev/null; then
+              echo "Gunicorn ready after attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i/60: login not ready yet"
+            timeout 20 docker logs ysepz_web_container 2>&1 | tail -40 || true
+            sleep 5
+          done
+          echo "Web service did not become ready in time"
+          docker compose ps || true
+          docker compose logs --tail=200 web || true
+          docker compose logs --tail=100 yse_db || true
+          exit 1
+
+      - name: Django system check
+        run: docker exec ysepz_web_container python3 manage.py check
+
+      - name: Run tests
+        run: docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
+
+      - name: Page load regression and benchmark plots
+        run: |
+          docker exec ysepz_web_container python3 manage.py test YSE_App.tests.test_page_load_regression -v2
+          # Non-gating trend record. The command caps its own saved-query benchmark
+          # (--mag-limited-max-seconds, default 600 s) and records what it has; the
+          # outer timeout is a last resort so this step can never hang the job.
+          timeout -k 30s 20m docker exec ysepz_web_container python3 manage.py record_perf_benchmark --label "ci-${{ github.sha }}" \
+            || echo "::warning::record_perf_benchmark exited $? (timed out or failed); perf history not updated for this run"
+
+      - name: Upload perf metrics artifacts
+        if: always()
+        # Advisory: the perf artifact is a convenience for trend inspection. A
+        # transient GitHub ArtifactService timeout must not turn a passing
+        # docker-test red after all tests and benchmarks have succeeded.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: yse-perf-metrics
+          path: |
+            YSE_App/static/YSE_App/perf/metrics_history.json
+            YSE_App/static/YSE_App/perf/*.png
+          if-no-files-found: ignore
+
+      - name: Tear down and prune Docker artifacts
+        if: always()
+        working-directory: docker
+        run: |
+          docker compose down -v
+          bash -n scripts/prune-yse-docker.sh
+          bash scripts/prune-yse-docker.sh aggressive

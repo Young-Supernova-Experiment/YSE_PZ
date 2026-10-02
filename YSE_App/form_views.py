@@ -5,7 +5,8 @@ from django.views import generic
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.conf import settings
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
+from django.utils.decorators import method_decorator
 import requests
 import sys
 from datetime import datetime
@@ -20,7 +21,6 @@ import json
 
 from django.views.generic import FormView, DeleteView
 from .forms import *
-from django.http import JsonResponse
 from django.forms.models import model_to_dict
 from .common import alert
 from .common.utilities import date_to_mjd, coordstr_to_decimal
@@ -29,6 +29,15 @@ from django.views.decorators.csrf import csrf_exempt
 from .basicauth import *
 
 from YSE_App.util import lcogt
+from YSE_App.facilities import FacilityValidationError
+from YSE_App.services.facility_requests import FacilityRequestError, submit_request as submit_facility_request
+from YSE_App.services.dashboard_queries import duplicates_of, matching_user_queries
+from YSE_App.services.followup_requests import (
+	DEFAULT_PRIORITY,
+	create_or_attach_request,
+	format_comments,
+	format_requestors,
+)
 # for getting YSE filter selection
 from django.conf import settings as djangoSettings
 
@@ -38,80 +47,146 @@ _reddest_yse_filter = djangoSettings.REDYSEFILTER
 def is_ajax(request):
 	return request.META.get('HTTP_X_REQUESTED_WITH') == 'XMLHttpRequest'
 
+@method_decorator(login_required, name='dispatch')
 class AddTransientFollowupFormView(FormView):
 	form_class = TransientFollowupForm
 	template_name = 'YSE_App/form_snippets/transient_followup_form.html'
-	success_url = '/form-success/'
-	
+
+	def get_form_kwargs(self):
+		kwargs = super().get_form_kwargs()
+		kwargs["user"] = self.request.user
+		transient_id = self.request.POST.get("transient") or self.request.GET.get("transient")
+		if transient_id:
+			kwargs["transient_id"] = int(transient_id)
+		return kwargs
+
+	def _transient_detail_success_url(self, transient):
+		return reverse("transient_detail", kwargs={"slug": transient.slug}) + "#followup_tab"
+
+	def _followup_response_data(self, instance, created_parent):
+		data_dict = {
+			"id": instance.id,
+			"status_id": instance.status.id,
+			"status_name": instance.status.name,
+			"valid_start": instance.valid_start,
+			"valid_stop": instance.valid_stop,
+			"attached": not created_parent,
+			"priority": instance.priority,
+			"offset_star_ra": instance.offset_star_ra,
+			"offset_star_dec": instance.offset_star_dec,
+			"offset_north": instance.offset_north,
+			"offset_east": instance.offset_east,
+			"comment": format_comments(instance),
+			"requestors": format_requestors(instance),
+			"modified_by": instance.modified_by.username,
+		}
+		if instance.too_resource:
+			data_dict["too_resource"] = str(instance.too_resource)
+		if instance.classical_resource:
+			data_dict["classical_resource"] = str(instance.classical_resource)
+		if instance.queued_resource:
+			data_dict["queued_resource"] = str(instance.queued_resource)
+		return data_dict
+
+	def _save_followup_request(self, form):
+		from YSE_App.services.audience import resolve_followup_audience
+
+		classical_resource = form.cleaned_data.get("classical_resource")
+		valid_start = form.cleaned_data["valid_start"]
+		valid_stop = form.cleaned_data["valid_stop"]
+		if classical_resource:
+			valid_start = classical_resource.begin_date_valid
+			valid_stop = classical_resource.end_date_valid
+
+		priority = form.cleaned_data.get("priority")
+		if priority is None:
+			priority = DEFAULT_PRIORITY
+
+		instance, _child, created_parent = create_or_attach_request(
+			self.request.user,
+			form.cleaned_data["transient"],
+			status=form.cleaned_data["status"],
+			valid_start=valid_start,
+			valid_stop=valid_stop,
+			priority=priority,
+			comment=form.cleaned_data.get("comment") or "",
+			classical_resource=classical_resource,
+			too_resource=form.cleaned_data.get("too_resource"),
+			queued_resource=form.cleaned_data.get("queued_resource"),
+			offset_star_ra=form.cleaned_data.get("offset_star_ra"),
+			offset_star_dec=form.cleaned_data.get("offset_star_dec"),
+			offset_north=form.cleaned_data.get("offset_north"),
+			offset_east=form.cleaned_data.get("offset_east"),
+		)
+
+		if created_parent:
+			is_public, audience_groups = resolve_followup_audience(
+				self.request.user,
+				instance.transient_id,
+				audience_groups=list(form.cleaned_data.get("audience_groups") or []),
+				linked_resource=(
+					classical_resource
+					or form.cleaned_data.get("too_resource")
+					or form.cleaned_data.get("queued_resource")
+				),
+				explicit_audience=True,
+			)
+			instance.is_public = is_public
+			instance.save(update_fields=["is_public"])
+			if audience_groups:
+				instance.groups.set(audience_groups)
+
+		if instance.transient.status.name in ["New", "Watch", "Ignore", "Interesting"]:
+			instance.transient.status = TransientStatus.objects.filter(
+				name="FollowupRequested"
+			)[0]
+			instance.transient.save()
+
+		if form.cleaned_data.get("comment"):
+			log = Log(
+				transient_followup=instance,
+				comment=form.cleaned_data["comment"],
+				created_by=self.request.user,
+				modified_by=self.request.user,
+			)
+			log.save()
+
+		return instance, created_parent
+
 	def form_invalid(self, form):
-		response = super(AddTransientFollowupFormView, self).form_invalid(form)
 		if is_ajax(self.request):
 			return JsonResponse(form.errors, status=400)
-		else:
-			return response
+		transient_id = self.request.POST.get("transient")
+		if transient_id:
+			transient = Transient.objects.filter(pk=transient_id).only("slug").first()
+			if transient:
+				from django.contrib import messages
+
+				messages.error(
+					self.request,
+					"Could not save follow-up: "
+					+ "; ".join(
+						f"{field}: {', '.join(errors)}"
+						for field, errors in form.errors.items()
+					),
+				)
+				return HttpResponseRedirect(self._transient_detail_success_url(transient))
+		referer = self.request.META.get("HTTP_REFERER")
+		if referer:
+			return HttpResponseRedirect(referer)
+		return HttpResponseRedirect(reverse_lazy("dashboard"))
 
 	def form_valid(self, form):
-		response = super(AddTransientFollowupFormView, self).form_valid(form)
+		instance, created_parent = self._save_followup_request(form)
 		if is_ajax(self.request):
-
-			instance = form.save(commit=False)
-			instance.created_by = self.request.user
-			instance.modified_by = self.request.user
-			if instance.classical_resource:
-				instance.valid_start = instance.classical_resource.begin_date_valid
-				instance.valid_stop = instance.classical_resource.end_date_valid
-			
-			instance.save() #update_fields=['created_by','modified_by']
-
-			if instance.transient.status.name in ['New','Watch','Ignore','Interesting']:
-				instance.transient.status = TransientStatus.objects.filter(name='FollowupRequested')[0]
-				instance.transient.save()
-			
-			if form.cleaned_data['comment']:
-				log = Log(transient_followup=TransientFollowup.objects.get(id=instance.id),
-						  comment=form.cleaned_data['comment'])
-				log.created_by = self.request.user
-				log.modified_by = self.request.user
-				log.save()
-			
-			print(form.cleaned_data)
-
-			# for key,value in form.cleaned_data.items():
-			data_dict = {}
-			data_dict['id'] = instance.id
-			data_dict['status_id'] = instance.status.id
-			data_dict['status_name'] = instance.status.name
-			if instance.too_resource:
-				data_dict['too_resource'] = str(instance.too_resource)
-			if instance.classical_resource:
-				data_dict['classical_resource'] = str(instance.classical_resource)
-			if instance.queued_resource:
-				data_dict['queued_resource'] = str(instance.queued_resource)
-
-			if instance.classical_resource:
-				data_dict['valid_start'] = instance.classical_resource.begin_date_valid
-				data_dict['valid_stop'] = instance.classical_resource.end_date_valid
-			else:
-				data_dict['valid_start'] = form.cleaned_data['valid_start']
-				data_dict['valid_stop'] = form.cleaned_data['valid_stop']
-
-			data_dict['spec_priority'] = form.cleaned_data['spec_priority']
-			data_dict['phot_priority'] = form.cleaned_data['phot_priority']
-			data_dict['offset_star_ra'] = form.cleaned_data['offset_star_ra']
-			data_dict['offset_star_dec'] = form.cleaned_data['offset_star_dec']
-			data_dict['offset_north'] = form.cleaned_data['offset_north']
-			data_dict['offset_east'] = form.cleaned_data['offset_east']
-			data_dict['comment'] = form.cleaned_data['comment']
-			
-			data_dict['modified_by'] = instance.modified_by.username
-
 			data = {
-				'data':data_dict,
-				'message': "Successfully submitted form data.",
+				"data": self._followup_response_data(instance, created_parent),
+				"message": "Successfully submitted form data.",
 			}
 			return JsonResponse(data)
-		else:
-			return response
+		return HttpResponseRedirect(
+			self._transient_detail_success_url(instance.transient)
+		)
 
 class AddClassicalResourceFormView(FormView):
 	form_class = ClassicalResourceForm
@@ -144,11 +219,14 @@ class AddClassicalResourceFormView(FormView):
 						   'resource':instance,'night_type':ClassicalNightType.objects.filter(name='Full')[0],
 						   'obs_date':form.cleaned_data['observing_date']}
 			ClassicalObservingDate.objects.create(**obsdatedict)
-			
-			print(form.cleaned_data)
 
+			obs_date = form.cleaned_data['observing_date']
 			data = {
 				'message': "Successfully submitted form data.",
+				# reverse() keeps the stack prefix (/yse_test/, /yse_experimental/) (#397)
+				'observing_calendar_url': reverse('observing_calendar'),
+				'obs_date': obs_date.strftime('%Y-%m-%d'),
+				'telescope': str(instance.telescope.name),
 			}
 			return JsonResponse(data)
 		else:
@@ -173,13 +251,16 @@ class AddToOResourceFormView(FormView):
 			instance = form.save(commit=False)
 			instance.created_by = self.request.user
 			instance.modified_by = self.request.user
-			
-			instance.save() #update_fields=['created_by','modified_by']
 
-			print(form.cleaned_data)
+			instance.save() #update_fields=['created_by','modified_by']
 
 			data = {
 				'message': "Successfully submitted form data.",
+				# shown in the dashboard's confirmation alert (#396)
+				'summary': '%s, %s to %s UT' % (
+					instance.telescope.name,
+					instance.begin_date_valid.strftime('%Y-%m-%d'),
+					instance.end_date_valid.strftime('%Y-%m-%d')),
 			}
 			return JsonResponse(data)
 		else:
@@ -538,84 +619,54 @@ class AddOncallUserFormView(FormView):
 class AddTransientCommentFormView(FormView):
 	form_class = TransientCommentForm
 	template_name = 'simple.html'#YSE_App/form_snippets/transient_followup_form.html'
-	success_url = '/form-success/'
+
+	def get_form_kwargs(self):
+		kwargs = super().get_form_kwargs()
+		kwargs["user"] = self.request.user
+		transient_id = self.request.POST.get("transient") or self.request.GET.get("transient")
+		if transient_id:
+			kwargs["transient_id"] = int(transient_id)
+		return kwargs
+
+	def _transient_detail_success_url(self, transient):
+		return reverse("transient_detail", kwargs={"slug": transient.slug})
+
+	def _create_comment_from_form(self, form):
+		from YSE_App.services.audience import resolve_comment_audience
+		from YSE_App.services.comments import create_transient_comment, log_to_comment_dict
+
+		transient = form.cleaned_data["transient"]
+		is_public, audience_groups = resolve_comment_audience(
+			self.request.user,
+			transient.id,
+			is_public=form.cleaned_data.get("is_public", False),
+			audience_groups=form.cleaned_data.get("audience_groups"),
+		)
+		log = create_transient_comment(
+			transient=transient,
+			comment=form.cleaned_data["comment"],
+			user=self.request.user,
+			is_public=is_public,
+			audience_groups=audience_groups,
+		)
+		return log, log_to_comment_dict(log)
 
 	def form_invalid(self, form):
-		response = super(AddTransientCommentFormView, self).form_invalid(form)
 		if is_ajax(self.request):
 			return JsonResponse(form.errors, status=400)
-		else:
-			return response
+		return super(AddTransientCommentFormView, self).form_invalid(form)
 
 	def form_valid(self, form):
-		response = super(AddTransientCommentFormView, self).form_valid(form)
+		log, comment_dict = self._create_comment_from_form(form)
 		if is_ajax(self.request):
-
-			instance = form.save(commit=False)
-			instance.created_by = self.request.user
-			instance.modified_by = self.request.user
-			
-			instance.save() #update_fields=['created_by','modified_by']
-			print(form.cleaned_data)
-
-			# send emails to everyone else on the comments thread
-			logs = Log.objects.filter(transient=instance.transient.id)
-				
-			emaillist = []
-			if '@channel' in instance.comment:
-				for user in User.objects.all():
-					emaillist += [user.email]
-			else:
-				#for log in logs:
-				#	emaillist += [log.created_by.email]
-				for user in re.compile(r"\@(\w+)").findall(instance.comment):
-					usermatch = User.objects.filter(username=user)
-					if len(usermatch):
-						emaillist += [usermatch[0].email]
-			emaillist = np.unique(emaillist)
-
-			transient_name = instance.transient.name
-			base_url = "https://ziggy.ucolick.org/yse/" 
-			if settings.DEBUG:
-				base_url =	"https://ziggy.ucolick.org/yse_test/"
-			subject = "YSE_PZ: new comment added to event %s"%transient_name
-			body = """\
-			<html>
-			<head></head>
-			<body>
-			<h1>Comment added!</h1>
-			<p>
-			<a href='%stransient_detail/%s/'>%s</a><br>
-			%s says:<br>
-			%s <br>
-			</p>
-			<br />
-			<p>Go to <a href='%s/dashboard/'>YSE Dashboard</a></p> 
-			</body>
-			</html>
-			""" % (base_url, transient_name, transient_name,
-				   str(instance.created_by),instance.comment, base_url)
-			for email in emaillist:
-				alert.send_email_simple(email, subject, body)
-
-				
-			# for key,value in form.cleaned_data.items():
-			data_dict = {}
-			data_dict['id'] = instance.id
-			data_dict['created_by'] = str(instance.created_by)
-			data_dict['modified_date'] = instance.modified_date.strftime('%b. %-d, %Y, %H:%M ') + \
-								   instance.modified_date.strftime('%p').lower()[0]+'.'+\
-								   instance.modified_date.strftime('%p').lower()[1]+'.'
-			data_dict['comment'] = instance.comment
-			
 			data = {
-				'message': "Successfully submitted form data.",
-				'data': data_dict
+				"message": "Successfully submitted form data.",
+				"data": comment_dict,
 			}
 			return JsonResponse(data)
-		else:
-			return response
+		return HttpResponseRedirect(self._transient_detail_success_url(log.transient))
 		
+@method_decorator(login_required, name='dispatch')
 class AddDashboardQueryFormView(FormView):
 	form_class = AddDashboardQueryForm
 	template_name = 'YSE_App/form_snippets/dashboard_query_form.html'
@@ -631,28 +682,78 @@ class AddDashboardQueryFormView(FormView):
 	def form_valid(self, form):
 		response = super(AddDashboardQueryFormView, self).form_valid(form)
 		if is_ajax(self.request):
+			query = form.cleaned_data.get('query')
+			python_query = form.cleaned_data.get('python_query') or None
+			if query is None and not python_query:
+				return JsonResponse(
+					{'message': 'Choose an SQL query or a Python function.'}, status=400
+				)
+
+			# Idempotent: the same query attached twice is still one dashboard
+			# box (issue #203). Re-use the existing row instead of adding another.
+			existing = matching_user_queries(
+				self.request.user, query=query, python_query=python_query
+			).order_by('id').first()
+			if existing is not None:
+				return JsonResponse({
+					'message': "Query is already on your dashboard.",
+					'user_query_id': existing.id,
+					'created': False,
+				})
 
 			instance = form.save(commit=False)
 			instance.created_by = self.request.user
 			instance.modified_by = self.request.user
 			instance.user = self.request.user
+			instance.python_query = python_query
 
 			instance.save() #update_fields=['created_by','modified_by']
 
-			print(form.cleaned_data)
-
 			data = {
 				'message': "Successfully submitted form data.",
+				'user_query_id': instance.id,
+				'created': True,
 			}
 			return JsonResponse(data)
 		else:
 			return response
 
+@method_decorator(login_required, name='dispatch')
 class RemoveDashboardQueryFormView(DeleteView):
+	"""Detach a saved query from the requesting user's dashboard.
+
+	Deletes every ``UserQuery`` row attaching that query to the user (not just
+	``pk``), so duplicates created before issue #203 disappear in one click.  An
+	AJAX request gets a JSON answer instead of the redirect to
+	``personaldashboard``: jQuery follows redirects inside the XHR, which made
+	the delete wait on a full dashboard render.  Only the row's owner can delete
+	it.
+	"""
 	model = UserQuery
 	form_class = RemoveDashboardQueryForm
 	template_name = 'YSE_App/personaldashboard.html'
 	success_url = reverse_lazy('personaldashboard')
+
+	def get_queryset(self):
+		return UserQuery.objects.filter(user=self.request.user)
+
+	def post(self, request, *args, **kwargs):
+		target = self.get_queryset().filter(pk=kwargs.get('pk')).first()
+		if target is None:
+			if is_ajax(request):
+				# Already gone (e.g. removed by an earlier click): nothing to do.
+				return JsonResponse({'message': 'Query is not on your dashboard.', 'removed': 0})
+			raise Http404("No UserQuery matches the given query.")
+
+		# get_success_url() formats success_url with self.object.__dict__.
+		self.object = target
+		removed, _ = duplicates_of(target).delete()
+		if is_ajax(request):
+			return JsonResponse({'message': 'Removed query from dashboard.', 'removed': removed})
+		return HttpResponseRedirect(self.get_success_url())
+
+	# Django >= 4 routes DELETE through form_valid; keep it on the same path.
+	delete = post
 	
 	def form_invalid(self, form):
 		response = super(RemoveDashboardQueryFormView, self).form_invalid(form)
@@ -682,7 +783,7 @@ class AddFollowupNoticeFormView(FormView):
 			instance.created_by = self.request.user
 			instance.modified_by = self.request.user
 			try: instance.profile = Profile.objects.filter(user=self.request.user)[0]
-			except:
+			except (Profile.DoesNotExist, IndexError):
 				data = {
 					'message': """User %s has no profile object in the YSE_PZ database.	 
 Contact D. Jones or D. Coulter."""%self.request.user,
@@ -714,6 +815,16 @@ class RemoveFollowupNoticeFormView(DeleteView):
 			return JsonResponse(form.errors, status=400)
 		else:
 			return response
+
+def facility_allocation_for(resource, user, slugs=('lco', 'soar')):
+	"""The allocation a legacy resource is bound to (#304), else an open one on its telescope with an LCO-family facility."""
+	from YSE_App.services.allocations import allocations_for_user
+
+	allocation = getattr(resource, 'allocation', None)
+	if allocation is not None and allocation.facility in slugs and allocation.usable_by(user):
+		return allocation
+	return allocations_for_user(user).filter(telescope=resource.telescope, facility__in=slugs).order_by('-end_date').first()
+
 
 class AddAutomatedSpectrumRequestFormView(FormView):
 	form_class = AutomatedSpectrumRequest
@@ -772,17 +883,39 @@ class AddAutomatedSpectrumRequestFormView(FormView):
 				resource = resource[0]
 			
 			status = FollowupStatus.objects.get(name='Requested')
+			is_goodman = 'goodman' in form.cleaned_data['instrument'].name.lower()
+			tf, _child, _created = create_or_attach_request(
+				self.request.user,
+				form.cleaned_data['transient'],
+				status=status,
+				valid_start=form.cleaned_data['spectrum_valid_start'],
+				valid_stop=form.cleaned_data['spectrum_valid_stop'],
+				priority=DEFAULT_PRIORITY,
+				classical_resource=resource if is_goodman else None,
+				too_resource=None if is_goodman else resource,
+			)
 
-			if 'goodman' in form.cleaned_data['instrument'].name.lower():
-				tf = TransientFollowup(status=status,valid_start=form.cleaned_data['spectrum_valid_start'],
-									   valid_stop=form.cleaned_data['spectrum_valid_stop'],classical_resource=resource,
-									   transient=form.cleaned_data['transient'],created_by=self.request.user,modified_by=self.request.user)
-			else:
-				tf = TransientFollowup(status=status,valid_start=form.cleaned_data['spectrum_valid_start'],
-									   valid_stop=form.cleaned_data['spectrum_valid_stop'],too_resource=resource,
-									   transient=form.cleaned_data['transient'],created_by=self.request.user,modified_by=self.request.user)
-
-			tf.save()
+			# A facility allocation bound to the resource (or open on the telescope) sends the request
+			# through the lco / soar adapter (#301): recorded, polled and cancellable. Otherwise the
+			# legacy settings-credential path.
+			allocation = facility_allocation_for(resource, self.request.user)
+			if allocation is not None:
+				try:
+					facility_request = submit_facility_request(
+						allocation, tf.transient, self.request.user,
+						{'strategy': 'instrument' if allocation.facility == 'soar' else 'spectroscopy',
+						 'exposure_time': form.cleaned_data['exp_time'],
+						 'start': form.cleaned_data['spectrum_valid_start'].replace(tzinfo=None).isoformat(),
+						 'end': form.cleaned_data['spectrum_valid_stop'].replace(tzinfo=None).isoformat()},
+						followup=tf, attach_followup=False)
+				except (FacilityValidationError, FacilityRequestError) as exc:
+					data = {'data': {'errors': 'facility request refused: %s' % exc, 'errorflag': 1},
+							'message': "Successfully submitted form data."}
+					return JsonResponse(data)
+				data = {'data': {'errors': '', 'errorflag': 0, 'facility_request_id': facility_request.pk,
+								 'state': facility_request.state},
+						'message': "Successfully submitted form data."}
+				return JsonResponse(data)
 
 			# now charlie's code
 			lcogt.main(
