@@ -2298,26 +2298,48 @@ def upload_spectrum(request):
 @csrf_exempt
 @login_or_basic_auth_required
 def change_status_for_query(request, query_id, status_id):
+    """Set every transient a saved dashboard query selects to one status (#398).
 
-    transients = []
-    q = UserQuery.objects.get(pk=query_id)
+    One UPDATE instead of save() per transient: on a large query (Auto Ignore)
+    the per-row saves -- galactic coordinates, audit log, auto-publish rules --
+    ran for minutes until the request timed out. The auto-publisher's periodic
+    sweep still evaluates the changed transients. Answers JSON with the count;
+    the old redirect was re-sent by the browser as a PATCH to the dashboard.
+    """
+    q = get_object_or_404(UserQuery, pk=query_id)
+    if request.user.is_authenticated:
+        if q.user_id != request.user.id and not request.user.is_staff:
+            return JsonResponse({'msg': 'error: that saved query belongs to another user'}, status=403)
+        acting_user = request.user
+    else:
+        # HTTP basic auth (scripts): the decorator checked the credentials but does
+        # not log the caller in, so keep the old behaviour and credit the query owner.
+        acting_user = q.user
+    new_status = get_object_or_404(TransientStatus, pk=status_id)
+
     if q.query:
         try:
-            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query)).order_by('-disc_date')
-        except:
-            # Query bombed
-            pass
-
-
+            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query))
+        except Exception as exc:  # noqa: BLE001 - saved SQL can fail or time out
+            logger.exception('change_status_for_query: query %s failed', query_id)
+            return JsonResponse({'msg': 'error: the saved query failed (%s); no status changed' % type(exc).__name__},
+                                status=502)
     elif q.python_query:
-        transients = getattr(yse_python_queries,q.python_query)()
+        transients = getattr(yse_python_queries, q.python_query)()
+    else:
+        transients = Transient.objects.none()
 
-    new_status = TransientStatus.objects.get(pk=status_id)
-    for t in transients:
-        t.status = new_status
-        t.save()
+    from django.utils import timezone
 
-    return redirect('personaldashboard')
+    pks = list(transients.values_list('pk', flat=True))
+    n_changed = Transient.objects.filter(pk__in=pks).exclude(status=new_status).update(
+        status=new_status, modified_by=acting_user, modified_date=timezone.now())
+
+    return JsonResponse({
+        'msg': 'success: %d of %d transients changed to %s' % (n_changed, len(pks), new_status.name),
+        'n_changed': n_changed,
+        'n_selected': len(pks),
+    })
 
 def _followup_tab_redirect(slug):
     return HttpResponseRedirect(

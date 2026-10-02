@@ -91,7 +91,7 @@
         </button>
         <ul class="dropdown-menu">
           {% for status in all_transient_statuses %}
-          <li><a data-status_id="{{ status.id }}" data-status_name="{{status.name}}" data-n_transients="{{transient_cat.5}}" data-query_id="{{ transient_cat.4 }}" class="transientQueryStatusChange" href="#">{{ status.name }}</a></li>
+          <li><a data-status_id="{{ status.id }}" data-status_name="{{status.name}}" data-query_title="{{ transient_cat.1 }}" data-query_id="{{ transient_cat.4 }}" class="transientQueryStatusChange" href="#">{{ status.name }}</a></li>
           {% endfor %}
         </ul>
       </div>
@@ -265,49 +265,38 @@ $(document).ready(function(){
         event.preventDefault();
       });
 
+      // Bulk status change for one saved query (#398). The count is not known on the
+      // page (sections load lazily), so the dialogs name the query and the server
+      // reports how many transients it changed.
       $('.transientQueryStatusChange').on('click', function(event){
-        var status_name = $(this).attr('data-status_name')
-        var n_transients = $(this).attr('data-n_transients')
-        var r1 = confirm("Really change "+n_transients+" transient statuses to "+status_name+" ?");
-        if (r1 == true) {
-          var r2 = confirm("REALLY change "+n_transients+" transient statuses to "+status_name+" ???");
-          if (r2 == true) {
-            var status_id = $(this).attr('data-status_id')
-            var query_id = $(this).attr('data-query_id')
-            var url_target = "{% url 'change_status_for_query' -1 -2 %}".replace('-1', query_id).replace('-2', status_id);
-          
-            var base_url = window.location.protocol + "//" + window.location.hostname
-            var port = window.location.port
-            var api_url = base_url + url_target
+        event.preventDefault();
+        var $link = $(this);
+        var status_name = $link.attr('data-status_name');
+        var query_title = $link.attr('data-query_title');
+        if (!confirm('Change every transient in "' + query_title + '" to ' + status_name + '?')) return;
+        if (!confirm('REALLY change every transient in "' + query_title + '" to ' + status_name + '? This cannot be undone.')) return;
 
-            if (port != "") {
-              api_url = base_url + ":" + port + url_target
-            }
+        var url = "{% url 'change_status_for_query' -1 -2 %}"
+          .replace('-1', $link.attr('data-query_id')).replace('-2', $link.attr('data-status_id'));
+        var $btn = $link.closest('.btn-group').find('.dropdown-toggle');
+        var label = $btn.html();
+        $btn.prop('disabled', true).text('Changing statuses...');
 
-            var putData = {}
-
-            $.ajax({
-             type: "PATCH",
-              url: api_url,
-              csrfmiddlewaretoken: "{{ csrf_token }}",
-              data: putData,
-              success: function(data, textStatus, jqXHR) {
-                if (jqXHR.status == 200 && textStatus == "success") {
-
-                  location.reload();
-
-                } else {
-                  transientStatusChangeErr()
-                }
-              },
-              error: function(XMLHttpRequest, textStatus, errorThrown) {
-                transientStatusChangeErr()
-                {#alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));#}
-              }
-          });
-          event.preventDefault();
+        $.ajax({
+          type: "PATCH",
+          url: url,
+          success: function(json) {
+            alert(json.msg);
+            location.reload();
+          },
+          error: function(xhr) {
+            alert((xhr.responseJSON && xhr.responseJSON.msg) ||
+                  ('error: status change failed (HTTP ' + xhr.status + '); statuses may be unchanged'));
+          },
+          complete: function() {
+            $btn.prop('disabled', false).html(label);
           }
-        }
+        });
       });
 
       // This function gets cookie with a given name
