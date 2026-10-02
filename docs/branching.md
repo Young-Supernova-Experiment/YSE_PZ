@@ -11,6 +11,10 @@ Three long-lived branches, each deployed to its own stack on Ziggy by
 
 Hotfixes are not merged straight into `develop` or `master`: land them on
 `experimental` and promote.
+If a hotfix does land on `develop` (for example while `develop` is being
+reviewed before a release), backport it to `experimental` straight away with an
+issue and a PR, so the next promotion does not revert it and the branches stay
+in step. The full contributor workflow is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## The promotion guard
 

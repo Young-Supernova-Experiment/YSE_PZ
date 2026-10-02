@@ -31,43 +31,30 @@ see the errors and assumptions that seasoned contributors have glossed over.
 General workflow
 ----------------
 
-The normal develop workflow of YSE_PZ is to branch off develop, commit and push
-changes, and then merge to the develop branch with a pull request. Finally, after
-the pull request has been approved and your changes have been merged you can delete
-your branch.
+YSE_PZ has three long-lived branches: ``experimental`` (feature work, deployed to
+the ``/yse_experimental/`` test stack), ``develop`` (deployed to ``/yse_test/``) and
+``master`` (production). New work never targets ``develop`` or ``master`` directly.
+The full step-by-step workflow, including issue linking and who merges what, is in
+`CONTRIBUTING.md <https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/CONTRIBUTING.md>`_;
+in short:
 
-Starting from scratch, the typical development workflow would be the following.
-Clone the YSE_PZ git repository
+1. Open a GitHub issue for each individual change.
+2. Branch from ``experimental`` (one branch per group of related issues).
+3. Open a pull request into ``experimental`` that links each issue with ``Fixes #N``.
+4. Once CI passes it is merged and deployed to ``/yse_experimental/`` for testing.
+5. Tested work is promoted ``experimental`` -> ``develop`` -> ``master`` by the maintainers.
+
+Clone the repository and create your branch from ``experimental``:
 
 .. code:: none
 
     git clone https://github.com/Young-Supernova-Experiment/YSE_PZ.git
+    cd YSE_PZ
+    git checkout experimental
+    git checkout -b fix/<short-description>
+    git push --set-upstream origin fix/<short-description>
 
-Once in the YSE_PZ directory, checkout the develop branch.
-
-.. code:: none
-
-    git checkout develop
-
-Create your own branch with the following naming convention.
-
-.. code:: none
-
-    git checkout -b develop-<your first name>-<one or two word description of what you are doing>
-
-For example, if you were called Joe and wanted to contribute to documentation on
-YSE_PZ your branch might be called develop-joe-docs. Then set the remote of your
-new branch to github.
-
-.. code:: none
-
-    git push --set-upstream origin <your branch name>
-
-This means you can push changes to github where they can be saved before you
-are ready for a pull request. Now you can make your changes and additions to the
-code and push changes to github.
-
-Next go to to the YSE_PZ github repository page and go to the pull requests tab.
+Next go to the YSE_PZ github repository page and go to the pull requests tab.
 
 .. image:: _static/contributing_pull_request_tab.png
 
@@ -75,7 +62,7 @@ Then open a new draft pull request.
 
 .. image:: _static/contributing_new_pull_request.png
 
-Create a pull request with your branch and develop.
+Create a pull request from your branch into ``experimental`` (set it as the base branch).
 
 .. image:: _static/contributing_create_pull_request.png
 
@@ -86,23 +73,19 @@ open a draft pull request.
 
 As you commit and push changes to your branch on github they will show up
 in the draft pull request. When you are a happy for you changes to be reviewed
-and then eventually merged into develop, click ready for review.
+and then eventually merged into experimental, click ready for review.
 
 .. image:: _static/contributing_ready_for_review.png
 
-Your code will now be reviewed and when it is accepted it will be merged into
-develop. After your branch has been merged, delete the branch from your local
+Once CI passes it will be merged into
+experimental. After your branch has been merged, delete the branch from your local
 repository.
 
 .. code:: none
 
     git branch -d <your branch name>
 
-Then delete the branch from Github.
-
-.. code:: none
-
-    git push -d origin <your branch name>
+GitHub deletes the merged branch automatically.
 
 
 Documentation
