@@ -504,9 +504,16 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(nights, [soon_night, swope_night])
         self.assertEqual(list(response.context["too_resources"]), [current])
         body = response.content.decode()
-        self.assertIn("7.5 of 10.0", body)
-        self.assertNotIn("ExpiredTooTel", body)
-        self.assertNotIn("FarAwayTel", body)
+
+        def table(table_id):  # the add forms' telescope drop-downs list every telescope
+            start = body.index(f'id="{table_id}"')
+            return body[start:body.index("</table>", start)]
+
+        too_table, nights_table = table("too_resources"), table("classical_resources")
+        self.assertIn("7.5 of 10.0", too_table)
+        self.assertNotIn("ExpiredTooTel", too_table)
+        self.assertIn("Swope", nights_table)
+        self.assertNotIn("FarAwayTel", nights_table)
         self.assertNotIn("delta_too_hours", body)
 
     def test_add_too_resource_form_and_resources_table(self):
