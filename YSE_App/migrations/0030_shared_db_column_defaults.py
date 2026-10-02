@@ -50,6 +50,10 @@ def drop_defaults(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # MySQL cannot roll back DDL; Django refuses ALTER TABLE inside the
+    # migration's transaction, so run each statement on its own.
+    atomic = False
+
     dependencies = [
         ("YSE_App", "0029_broker_streams"),
     ]
