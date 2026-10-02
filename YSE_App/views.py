@@ -28,6 +28,8 @@ from astropy.utils import iers
 
 logger = logging.getLogger(__name__)
 QUERY_CACHE_VERSION = os.environ.get('YSE_QUERY_CACHE_VERSION', '2')
+# yse_home "Next Telescope Nights": classical runs starting within this many days (#397).
+YSE_HOME_CLASSICAL_DAYS_AHEAD = 30
 iers.conf.auto_download = True
 from astropy.utils.iers import conf
 conf.auto_max_age = None
@@ -945,12 +947,19 @@ def yse_home(request):
             context[key] = _yse_home_section_tuple(request, section)
 
     #obsnights = view_utils.get_obs_nights_happening_soon(request.user)
+    # Upcoming classical nights, all telescopes (Swope included), far enough ahead
+    # that a run added from the form below shows up here (#397).
+    now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
     obsnights = ObservingResourceService.GetAuthorizedClassicalResource_ByUser(request.user).\
-        filter(begin_date_valid__lte=datetime.datetime.utcnow()+datetime.timedelta(5)).\
-        filter(begin_date_valid__gte=datetime.datetime.utcnow()-datetime.timedelta(1)).\
-        select_related().order_by('begin_date_valid')
+        filter(begin_date_valid__lte=now_utc+datetime.timedelta(YSE_HOME_CLASSICAL_DAYS_AHEAD)).\
+        filter(end_date_valid__gte=now_utc).\
+        select_related('telescope', 'principal_investigator').order_by('begin_date_valid')
 
-    too_resources = view_utils.get_too_resources(request.user)
+    # Only allocations still valid, soonest first; expired ones made the list a
+    # long alphabetical history in which a new resource was hard to find (#396).
+    too_resources = view_utils.get_too_resources(request.user).\
+        filter(end_date_valid__gte=now_utc).\
+        select_related('telescope', 'principal_investigator').order_by('begin_date_valid')
     all_transient_statuses = TransientStatus.objects.all()
 
     # get current fields: tonight's and last night's GPC observations, bounded

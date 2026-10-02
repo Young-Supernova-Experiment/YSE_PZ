@@ -467,6 +467,54 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(
             list(resource.groups.values_list("name", flat=True)), ["YSE"]
         )
+        self.assertEqual(body["observing_calendar_url"], reverse("observing_calendar"))
+
+    def test_yse_home_lists_current_resources_soonest_first(self):
+        """#396/#397: the dashboard boxes show what was just added, not a history."""
+        self._survey_stack()  # yse_home needs Pan-STARRS1 and the YSE group
+        audit = audit_fields(self.user)
+        swope = create_telescope(self.user, "Swope")
+        expired_tel = create_telescope(self.user, "ExpiredTooTel")
+        far_tel = create_telescope(self.user, "FarAwayTel")
+
+        def classical(telescope, days):
+            res = ClassicalResource.objects.create(
+                telescope=telescope, principal_investigator=self.pi,
+                begin_date_valid=utc_days_from_now(days, hour=0),
+                end_date_valid=utc_days_from_now(days + 1, hour=0), **audit)
+            res.groups.add(self.yse_group)
+            return res
+
+        swope_night = classical(swope, 12)        # hidden before: Swope, and > 5 days out
+        soon_night = classical(self.telescope, 2)
+        classical(far_tel, 45)                    # beyond the 30-day window
+        current = ToOResource.objects.create(
+            telescope=self.telescope, principal_investigator=self.pi,
+            begin_date_valid=utc_days_from_now(-1, hour=0), end_date_valid=utc_days_from_now(120, hour=0),
+            awarded_too_hours=10, used_too_hours=2.5, **audit)
+        ToOResource.objects.create(
+            telescope=expired_tel, principal_investigator=self.pi,
+            begin_date_valid=utc_days_from_now(-200, hour=0), end_date_valid=utc_days_from_now(-20, hour=0),
+            awarded_too_hours=5, **audit)
+
+        with iers_offline():
+            response = self.client.get(reverse("yse_home"))
+        self.assertEqual(response.status_code, 200)
+        nights = list(response.context["upcoming_observing_nights"])
+        self.assertEqual(nights, [soon_night, swope_night])
+        self.assertEqual(list(response.context["too_resources"]), [current])
+        body = response.content.decode()
+
+        def table(table_id):  # the add forms' telescope drop-downs list every telescope
+            start = body.index(f'id="{table_id}"')
+            return body[start:body.index("</table>", start)]
+
+        too_table, nights_table = table("too_resources"), table("classical_resources")
+        self.assertIn("7.5 of 10.0", too_table)
+        self.assertNotIn("ExpiredTooTel", too_table)
+        self.assertIn("Swope", nights_table)
+        self.assertNotIn("FarAwayTel", nights_table)
+        self.assertNotIn("/delta_too_hours/", body)  # no per-row AJAX calls left
 
     def test_add_too_resource_form_and_resources_table(self):
         n_res = ToOResource.objects.count()
