@@ -636,6 +636,47 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(len(bands), 2)
         self.assertTrue(bands <= {"g", "r", "i", "z"})
 
+    def test_select_yse_fields_renders_with_active_and_inactive_fields(self):
+        """/select_yse_fields/ with observed fields (#394: ndarray .exists() 500)."""
+        yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
+        audit = audit_fields(self.user)
+        for name, active, mjds in (("995", True, (60000.1, 60001.1, 60100.1)),
+                                   ("994", False, (60002.1,))):
+            field = SurveyField.objects.create(
+                obs_group=yse_obs_group,
+                field_id=f"{name}.A",
+                cadence=3,
+                instrument=gpc1,
+                ztf_field_id=name,
+                active=active,
+                ra_cen=70.0,
+                dec_cen=-1.0,
+                width_deg=3.3,
+                height_deg=3.3,
+                **audit,
+            )
+            msb = SurveyFieldMSB.objects.create(obs_group=yse_obs_group, name=name, active=active, **audit)
+            msb.survey_fields.add(field)
+            for mjd in mjds:
+                SurveyObservation.objects.create(
+                    mjd_requested=mjd,
+                    obs_mjd=mjd,
+                    survey_field=field,
+                    status=self.task_statuses["Successful"],
+                    exposure_time=27,
+                    photometric_band=bands["g"],
+                    **audit,
+                )
+
+        with iers_offline():
+            response = self.client.get(reverse("select_yse_fields"))
+        self.assertEqual(response.status_code, 200)
+        active = response.context["active_yse_gpc1_field_data"]
+        self.assertEqual([row[0].name for row in active], ["995"])
+        # first observation after the last >60-day gap
+        self.assertAlmostEqual(active[0][1], 60100.1)
+        self.assertEqual([row[0].name for row in response.context["yse_gpc1_field_data"]], ["994"])
+
     def test_survey_obs_schedule_and_ingest_observation_record(self):
         yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
         audit = audit_fields(self.user)

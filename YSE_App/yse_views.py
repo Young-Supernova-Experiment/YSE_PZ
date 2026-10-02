@@ -78,7 +78,7 @@ def select_yse_fields(request):
     for a in active_yse_gpc1_fields:
         obs = SurveyObservation.objects.filter(survey_field=a.survey_fields.all()[0]).filter(obs_mjd__isnull=False).order_by('-obs_mjd')
         obs_mjd = np.sort(np.array([om for om in obs.values_list('obs_mjd',flat=True)]))
-        if obs_mjd.exists():
+        if obs_mjd.size:
 
             if len(obs_mjd[:-1][obs_mjd[1:]-obs_mjd[:-1] > 60]):
                 first_obs = obs_mjd[1:][obs_mjd[1:]-obs_mjd[:-1] > 60][0]
@@ -110,7 +110,7 @@ def select_yse_fields(request):
     for a in active_yse_gpc2_fields:
         obs = SurveyObservation.objects.filter(survey_field=a.survey_fields.all()[0]).filter(obs_mjd__isnull=False).order_by('-obs_mjd')
         obs_mjd = np.sort(np.array([om for om in obs.values_list('obs_mjd',flat=True)]))
-        if obs_mjd.exists():
+        if obs_mjd.size:
 
             if len(obs_mjd[:-1][obs_mjd[1:]-obs_mjd[:-1] > 60]):
                 first_obs = obs_mjd[1:][obs_mjd[1:]-obs_mjd[:-1] > 60][0]
