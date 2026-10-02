@@ -1668,10 +1668,24 @@
             $('.ztfrequest').on('click', function(event){
 
                 var url = "{% url 'ztf_forced_phot' transient.slug %}";
+                // The legacy submission runs inside the request and can take a while:
+                // show that it is in flight and always report the outcome (#399).
+                var $btn = $(this);
+                var label = $btn.text();
+                $btn.prop('disabled', true).text('Requesting ZTF forced phot...');
 
                 $.get(url).done(function(json){
                     var message = json.msg;
                     alert(message);
+                    if (String(message).indexOf('success') === 0) {
+                        location.reload();  // show the new comment
+                    }
+                }).fail(function(xhr){
+                    var message = (xhr.responseJSON && xhr.responseJSON.msg) ||
+                        ('error: ZTF forced photometry request failed (HTTP ' + xhr.status + '); nothing was submitted');
+                    alert(message);
+                }).always(function(){
+                    $btn.prop('disabled', false).text(label);
                 });
             });
 
