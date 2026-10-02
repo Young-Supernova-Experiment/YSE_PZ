@@ -7,6 +7,7 @@ from YSE_App.models.host_models import *
 from YSE_App.models.tag_models import *
 from YSE_App.common.utilities import GetSexigesimalString
 from YSE_App.common.utilities import date_to_mjd
+from YSE_App.common.galactic import galactic_coords
 from YSE_App import models as yse_models
 from django.dispatch import receiver
 from pytz import timezone
@@ -80,6 +81,19 @@ class Transient(BaseModel):
 	has_hst = models.BooleanField(null=True, blank=True)
 	has_spitzer = models.BooleanField(null=True, blank=True)
 	has_chandra = models.BooleanField(null=True, blank=True)
+	# JWST coverage from the detail page's MAST lookup (#328 follow-up); None = never looked up.
+	has_jwst = models.BooleanField(null=True, blank=True)
+
+	# AI summary (#295): the current text; every version is a TransientSummaryHistory row.
+	summary = models.TextField(null=True, blank=True)
+	summary_modified = models.DateTimeField(null=True, blank=True, editable=False)
+
+	# Galactic coordinates (#286), degrees, J2000; filled from ra / dec by save()
+	# (common/galactic.py), backfilled by migration 0027 and
+	# ``manage.py backfill_galactic_coords``. gal_b is indexed for the search
+	# filters; NULL only for rows written around save() and not yet backfilled.
+	gal_l = models.FloatField(null=True, blank=True, editable=False)
+	gal_b = models.FloatField(null=True, blank=True, editable=False)
 
 	class Meta:
 		# Dashboard/search hot paths (#248): name lookups from saved queries,
@@ -92,7 +106,25 @@ class Transient(BaseModel):
 			models.Index(fields=['modified_date'], name='yse_transient_mod_date_idx'),
 			models.Index(fields=['ra'], name='yse_transient_ra_idx'),
 			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
+			# Search |b| cuts and ORDER BY gal_b (#286).
+			models.Index(fields=['gal_b'], name='yse_transient_gal_b_idx'),
 		]
+
+	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
+	ARCHIVE_FLAG_FIELDS = (('HST', 'has_hst'), ('JWST', 'has_jwst'), ('Chandra', 'has_chandra'), ('Spitzer', 'has_spitzer'))
+
+	@property
+	def archive_flags(self):
+		return [(label, getattr(self, field)) for label, field in self.ARCHIVE_FLAG_FIELDS]
+
+	def save(self, *args, **kwargs):
+		"""Keep gal_l / gal_b in step with ra / dec (also when update_fields names one of them)."""
+		update_fields = kwargs.get('update_fields')
+		if update_fields is None or 'ra' in update_fields or 'dec' in update_fields:
+			self.gal_l, self.gal_b = galactic_coords(self.ra, self.dec)
+			if update_fields is not None:
+				kwargs['update_fields'] = list(dict.fromkeys(list(update_fields) + ['gal_l', 'gal_b']))
+		super().save(*args, **kwargs)
 
 	def CoordString(self):
 		return GetSexigesimalString(self.ra, self.dec)
@@ -208,6 +240,12 @@ class Transient(BaseModel):
 		date_format = '%m/%d/%Y %H:%M:%S %Z'
 		mod_date = self.modified_date.astimezone(timezone('US/Pacific'))
 		return mod_date.strftime(date_format)
+
+	@property
+	def summary_first_line(self):
+		"""First line of the AI/human summary (table tooltips, #295)."""
+		from YSE_App.models.summary_models import first_line
+		return first_line(self.summary)
 
 	def disc_date_string(self):
 		date_format = '%m/%d/%Y'

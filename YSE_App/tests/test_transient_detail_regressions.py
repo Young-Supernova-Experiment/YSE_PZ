@@ -10,6 +10,7 @@ and the deferred shell rendering the Summary spectrum toolbar with no spectra.
 import os
 from unittest import mock
 
+from django.conf import settings
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -295,6 +296,71 @@ class SpectrumPlotEmptyStateTests(TestCase):
         self.assertIn("<script", html)
 
 
+class SpectrumPlotSummaryEmptyStateTests(TestCase):
+    """spectrumplot_summary raised UnboundLocalError (500) when a spectrum had no
+    TransientSpecData rows (#343); it must take spectrumplot's empty-state path.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("specplot_summary_empty_user")
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _summary_html(self, transient):
+        response = self.client.get(reverse("spectrumplot_summary", args=[transient.id]))
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode("utf-8", errors="replace")
+
+    def _add_points(self, spectrum, n=20):
+        for i in range(n):
+            TransientSpecData.objects.create(
+                spectrum=spectrum,
+                wavelength=4000 + 10 * i,
+                flux=1.0 + 0.1 * i,
+                created_by=self.user,
+                modified_by=self.user,
+            )
+
+    def test_no_spectra_renders_blank_card(self):
+        transient = create_minimal_transient(self.user, name="2026specsumnone")
+        self.assertEqual(self._summary_html(transient), "")
+
+    def test_spectrum_without_points_renders_message_not_500(self):
+        transient = create_minimal_transient(self.user, name="2026specsumnopoints")
+        attach_synthetic_spectrum(self.user, transient)
+        html = self._summary_html(transient)
+        self.assertIn(
+            "1 spectrum on file, but it has no wavelength/flux points to plot.", html
+        )
+
+    def test_several_spectra_without_points_are_counted(self):
+        transient = create_minimal_transient(self.user, name="2026specsumtwonopoints")
+        for _ in range(2):
+            attach_synthetic_spectrum(self.user, transient)
+        html = self._summary_html(transient)
+        self.assertIn(
+            "2 spectra on file, but none has wavelength/flux points to plot.", html
+        )
+
+    def test_empty_spectrum_before_a_plottable_one_still_plots(self):
+        transient = create_minimal_transient(self.user, name="2026specsummixed")
+        attach_synthetic_spectrum(self.user, transient)  # no points, first in id order
+        self._add_points(attach_synthetic_spectrum(self.user, transient))
+        html = self._summary_html(transient)
+        self.assertNotIn("yse-plot-empty", html)
+        self.assertIn("<script", html)
+
+    def test_spectrum_with_points_is_plotted(self):
+        transient = create_minimal_transient(self.user, name="2026specsumpoints")
+        self._add_points(attach_synthetic_spectrum(self.user, transient))
+        html = self._summary_html(transient)
+        self.assertNotIn("yse-plot-empty", html)
+        self.assertIn("<script", html)
+
+
 class SpectrumPlotSingleEmptyStateTests(TestCase):
     """spectrumplotsingle returned '' for a spectrum without points, so picking
     one from the dropdown blanked the pane with no explanation (#211)."""
@@ -372,3 +438,77 @@ class SpectraTabPointCountTests(TestCase):
         self.assertNotIn(f'spec_plot-id="{self.empty_spectrum.id}"', html)
         self.assertIn("No data points to plot", html)
         self.assertIn('spec_plot-id="all"', html)
+
+
+class PlotEndpointAuthTests(TestCase):
+    """The AJAX plot endpoints require a login like the pages that embed them (#210).
+
+    ``transient_detail`` / ``transient_summary`` fetch these with ``$.get`` from a
+    page that is itself ``@login_required``, so the session cookie is present and
+    a logged-in user still gets 200; an anonymous request is redirected to
+    ``LOGIN_URL`` instead of being served ungrouped data (or a debug traceback
+    for an unknown id).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("plot_auth_user")
+        cls.transient = create_minimal_transient(cls.user, name="2026plotauth")
+        cls.spectrum = attach_synthetic_spectrum(cls.user, cls.transient)
+        for i in range(20):
+            TransientSpecData.objects.create(
+                spectrum=cls.spectrum,
+                wavelength=4000 + 10 * i,
+                flux=1.0 + 0.1 * i,
+                created_by=cls.user,
+                modified_by=cls.user,
+            )
+
+    def _plot_urls(self):
+        t = self.transient.id
+        return {
+            "spectrumplot": reverse("spectrumplot", args=[t]),
+            "spectrumplot_summary": reverse("spectrumplot_summary", args=[t]),
+            "spectrumplotsingle": reverse("spectrumplotsingle", args=[t, self.spectrum.id]),
+            "lightcurveplot_detail": reverse("lightcurveplot_detail", args=[t]),
+            "lightcurveplot_flux": reverse("lightcurveplot_flux", args=[t]),
+            "lightcurveplot_summary": reverse("lightcurveplot_summary", args=[t]),
+            "salt2plot": reverse("salt2plot", args=[t, 0]),
+            "salt2fluxplot": reverse("salt2fluxplot", args=[t, 0]),
+            "bazinplot": reverse("bazinplot", args=[t, 0]),
+        }
+
+    def test_anonymous_requests_are_redirected_to_login(self):
+        client = Client()
+        for name, url in self._plot_urls().items():
+            with self.subTest(view=name):
+                response = client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(
+                    response["Location"].startswith(settings.LOGIN_URL),
+                    (name, response["Location"]),
+                )
+
+    def test_logged_in_requests_still_succeed(self):
+        client = Client()
+        client.force_login(self.user)
+        for name, url in self._plot_urls().items():
+            with self.subTest(view=name):
+                self.assertEqual(client.get(url).status_code, 200, name)
+
+    def test_unknown_transient_is_404_not_500_for_plots(self):
+        client = Client()
+        client.force_login(self.user)
+        for name, url in {
+            "spectrumplot": reverse("spectrumplot", args=[999999]),
+            "spectrumplot_summary": reverse("spectrumplot_summary", args=[999999]),
+            "spectrumplotsingle": reverse("spectrumplotsingle", args=[999999, 1]),
+            "lightcurveplot_flux": reverse("lightcurveplot_flux", args=[999999]),
+        }.items():
+            with self.subTest(view=name):
+                self.assertEqual(client.get(url).status_code, 404, name)
+
+    def test_anonymous_unknown_transient_is_still_a_redirect(self):
+        """Auth runs before the lookup, so no traceback leaks for a bad id."""
+        response = Client().get(reverse("spectrumplot", args=[999999]))
+        self.assertEqual(response.status_code, 302)

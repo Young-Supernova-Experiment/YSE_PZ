@@ -136,6 +136,10 @@ jobs:
 
       - name: Upload perf metrics artifacts
         if: always()
+        # Advisory: the perf artifact is a convenience for trend inspection. A
+        # transient GitHub ArtifactService timeout must not turn a passing
+        # docker-test red after all tests and benchmarks have succeeded.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: yse-perf-metrics

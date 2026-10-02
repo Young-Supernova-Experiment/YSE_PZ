@@ -435,13 +435,17 @@ class DashboardIndexTests(TestCase):
         "yse_photdata_obs_date_idx": ("transientphotdata", ["obs_date"]),
         "yse_photdata_phot_obs_idx": ("transientphotdata", ["photometry", "obs_date"]),
     }
+    # Added later for the search filters (#286, migration 0027), not part of the #248 list.
+    LATER = {
+        "yse_transient_gal_b_idx": ("transient", ["gal_b"]),
+    }
 
     def test_models_declare_exactly_the_recommended_indexes(self):
         declared = {}
         for model in (Transient, TransientPhotData):
             for idx in model._meta.indexes:
                 declared[idx.name] = (model._meta.model_name, list(idx.fields))
-        self.assertEqual(declared, self.EXPECTED)
+        self.assertEqual(declared, {**self.EXPECTED, **self.LATER})
         # (photometry_id, mag) is deliberately absent: it slowed the rewritten
         # Magnitude-Limited query 2.7x on the synthetic data (docs/dashboard-performance.md).
         self.assertFalse(any(f == ["photometry", "mag"] for _, f in declared.values()))

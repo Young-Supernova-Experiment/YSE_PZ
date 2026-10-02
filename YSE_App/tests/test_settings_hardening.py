@@ -1,10 +1,12 @@
-"""settings.py: SECRET_KEY, ALLOWED_HOSTS and DB TLS come from env / settings.ini."""
+"""settings.py: SECRET_KEY, ALLOWED_HOSTS, DB TLS and the cache backend come from env / settings.ini."""
 
+import base64
 import importlib
 import os
 import sys
 import tempfile
 import textwrap
+import types
 from unittest import mock
 
 from django.core.exceptions import ImproperlyConfigured
@@ -53,6 +55,11 @@ _BASE_INI = textwrap.dedent(
 )
 
 
+# With IS_DEBUG False a CREDENTIALS_KEY is required too (#264); tests of other
+# production-only settings append this to site_extra.
+_CREDENTIALS_SECTION = "\n[secrets]\ncredentials_key: " + base64.urlsafe_b64encode(b"0" * 32).decode()
+
+
 def _load_settings(*, debug, site_extra="", database_extra="", env=None):
     """Import a private copy of YSE_PZ/settings.py against a scratch settings.ini."""
     src = os.path.join(os.path.dirname(live_settings.__file__), "settings.py")
@@ -63,7 +70,8 @@ def _load_settings(*, debug, site_extra="", database_extra="", env=None):
         with open(src) as fh:
             open(target, "w").write(fh.read())
         clean_env = {k: v for k, v in os.environ.items()
-                     if k not in ("DJANGO_SECRET_KEY", "DJANGO_ALLOWED_HOSTS", "YSE_EXPLORER_MAX_EXECUTION_MS")}
+                     if k not in ("DJANGO_SECRET_KEY", "DJANGO_ALLOWED_HOSTS", "YSE_EXPLORER_MAX_EXECUTION_MS",
+                                  "REDIS_URL")}
         clean_env.update(env or {})
         sys.path.insert(0, tmp)
         try:
@@ -91,11 +99,11 @@ class SecretKeyTests(SimpleTestCase):
         self.assertIn("DJANGO_SECRET_KEY", str(ctx.exception))
 
     def test_production_reads_ini_key(self):
-        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file")
+        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file" + _CREDENTIALS_SECTION)
         self.assertEqual(mod.SECRET_KEY, "from-the-ini-file")
 
     def test_env_wins_over_ini(self):
-        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file",
+        mod = _load_settings(debug="False", site_extra="SECRET_KEY: from-the-ini-file" + _CREDENTIALS_SECTION,
                              env={"DJANGO_SECRET_KEY": "from-the-env"})
         self.assertEqual(mod.SECRET_KEY, "from-the-env")
 
@@ -145,3 +153,44 @@ class DatabaseAndTemplateTests(SimpleTestCase):
             _load_settings(debug="True", env={"YSE_EXPLORER_MAX_EXECUTION_MS": "700"}).EXPLORER_QUERY_MAX_EXECUTION_MS,
             700,
         )
+
+
+class CacheBackendTests(SimpleTestCase):
+    """REDIS_URL must never select a backend the installed Django cannot import (#338)."""
+
+    _LOCMEM = "django.core.cache.backends.locmem.LocMemCache"
+    _DJANGO_REDIS = "django_redis.cache.RedisCache"
+    _URL = "redis://127.0.0.1:6379/9"
+
+    def test_without_redis_url_uses_locmem(self):
+        cache = _load_settings(debug="True").CACHES["default"]
+        self.assertEqual(cache["BACKEND"], self._LOCMEM)
+
+    def test_redis_url_with_django_redis_installed(self):
+        fake = types.ModuleType("django_redis")
+        with mock.patch.dict(sys.modules, {"django_redis": fake}):
+            cache = _load_settings(debug="True", env={"REDIS_URL": self._URL}).CACHES["default"]
+        self.assertEqual(cache["BACKEND"], self._DJANGO_REDIS)
+        self.assertEqual(cache["LOCATION"], self._URL)
+
+    def test_redis_url_without_django_redis_warns_and_falls_back(self):
+        # sys.modules[name] = None makes `import name` raise ImportError.
+        with mock.patch.dict(sys.modules, {"django_redis": None, "redis": None}):
+            with self.assertLogs("yse_settings_under_test", level="WARNING") as logs:
+                cache = _load_settings(debug="True", env={"REDIS_URL": self._URL}).CACHES["default"]
+        self.assertEqual(cache["BACKEND"], self._LOCMEM)
+        self.assertEqual(cache["LOCATION"], "yse-default")
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("REDIS_URL is set but no Redis cache backend is importable", logs.output[0])
+        self.assertIn("django-redis", logs.output[0])
+
+    def test_never_selects_django4_builtin_backend_on_django3(self):
+        import django
+
+        if django.VERSION >= (4, 0):
+            self.skipTest("built-in Redis backend exists on this Django")
+        fake_redis = types.ModuleType("redis")
+        with mock.patch.dict(sys.modules, {"django_redis": None, "redis": fake_redis}):
+            with self.assertLogs("yse_settings_under_test", level="WARNING"):
+                cache = _load_settings(debug="True", env={"REDIS_URL": self._URL}).CACHES["default"]
+        self.assertEqual(cache["BACKEND"], self._LOCMEM)

@@ -282,10 +282,43 @@ class DeployChecklistFlowTests(TestCase):
             first = self.client.get(url)
             second = self.client.get(url)
         self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.json()["msg"], "success")
+        self.assertTrue(first.json()["msg"].startswith("success"))
         self.assertTrue(fake.return_value.run_ztf_fp.called)
-        self.assertEqual(Log.objects.filter(transient=transient, comment__startswith="ZTF Forced Phot").count(), 1)
+        logs = Log.objects.filter(transient=transient, comment__startswith="ZTF Forced Phot")
+        self.assertEqual(logs.count(), 1)
+        self.assertIn(self.user.username, logs.get().comment)
         self.assertTrue(second.json()["msg"].startswith("error"))
+        self.assertIn("hours ago", second.json()["msg"])
+
+    def test_forced_photometry_not_blocked_by_unrelated_comment(self):
+        """#399: only an earlier forced-phot request starts the 12 h throttle, not any comment."""
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-comment")
+        Log.objects.create(transient=transient, comment="looks like a SN Ia", **audit_fields(self.user))
+        fake = mock.MagicMock()
+        fake.return_value.run_ztf_fp.return_value = "ztf_fp_ci.log"
+        url = reverse("ztf_forced_phot", kwargs={"slug": transient.slug})
+        with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake):
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["msg"].startswith("success"), response.json())
+        self.assertEqual(Log.objects.filter(transient=transient, comment__startswith="ZTF Forced Phot").count(), 1)
+
+    def test_forced_photometry_failure_is_reported_and_leaves_no_comment(self):
+        """#399: a failing submission answers with an error message instead of a bare 500."""
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-fail")
+        url = reverse("ztf_forced_phot", kwargs={"slug": transient.slug})
+        raising = mock.MagicMock()
+        raising.return_value.run_ztf_fp.side_effect = OSError("network down")
+        no_log = mock.MagicMock()
+        no_log.return_value.run_ztf_fp.return_value = None  # the script's "insufficient parameters" path
+        for fake in (raising, no_log):
+            with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake), \
+                    mock.patch.object(views_module.logger, "exception"):
+                response = self.client.get(url)
+            self.assertEqual(response.status_code, 502)
+            self.assertTrue(response.json()["msg"].startswith("error"), response.json())
+            self.assertIn("nothing was submitted", response.json()["msg"])
+        self.assertFalse(Log.objects.filter(transient=transient).exists())
 
     def test_flux_plot_with_photometry_returns_html(self):
         response = self.client.get(f"/lightcurveplot_flux/{self.transient.id}/")
@@ -434,6 +467,54 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(
             list(resource.groups.values_list("name", flat=True)), ["YSE"]
         )
+        self.assertEqual(body["observing_calendar_url"], reverse("observing_calendar"))
+
+    def test_yse_home_lists_current_resources_soonest_first(self):
+        """#396/#397: the dashboard boxes show what was just added, not a history."""
+        self._survey_stack()  # yse_home needs Pan-STARRS1 and the YSE group
+        audit = audit_fields(self.user)
+        swope = create_telescope(self.user, "Swope")
+        expired_tel = create_telescope(self.user, "ExpiredTooTel")
+        far_tel = create_telescope(self.user, "FarAwayTel")
+
+        def classical(telescope, days):
+            res = ClassicalResource.objects.create(
+                telescope=telescope, principal_investigator=self.pi,
+                begin_date_valid=utc_days_from_now(days, hour=0),
+                end_date_valid=utc_days_from_now(days + 1, hour=0), **audit)
+            res.groups.add(self.yse_group)
+            return res
+
+        swope_night = classical(swope, 12)        # hidden before: Swope, and > 5 days out
+        soon_night = classical(self.telescope, 2)
+        classical(far_tel, 45)                    # beyond the 30-day window
+        current = ToOResource.objects.create(
+            telescope=self.telescope, principal_investigator=self.pi,
+            begin_date_valid=utc_days_from_now(-1, hour=0), end_date_valid=utc_days_from_now(120, hour=0),
+            awarded_too_hours=10, used_too_hours=2.5, **audit)
+        ToOResource.objects.create(
+            telescope=expired_tel, principal_investigator=self.pi,
+            begin_date_valid=utc_days_from_now(-200, hour=0), end_date_valid=utc_days_from_now(-20, hour=0),
+            awarded_too_hours=5, **audit)
+
+        with iers_offline():
+            response = self.client.get(reverse("yse_home"))
+        self.assertEqual(response.status_code, 200)
+        nights = list(response.context["upcoming_observing_nights"])
+        self.assertEqual(nights, [soon_night, swope_night])
+        self.assertEqual(list(response.context["too_resources"]), [current])
+        body = response.content.decode()
+
+        def table(table_id):  # the add forms' telescope drop-downs list every telescope
+            start = body.index(f'id="{table_id}"')
+            return body[start:body.index("</table>", start)]
+
+        too_table, nights_table = table("too_resources"), table("classical_resources")
+        self.assertIn("7.5 of 10.0", too_table)
+        self.assertNotIn("ExpiredTooTel", too_table)
+        self.assertIn("Swope", nights_table)
+        self.assertNotIn("FarAwayTel", nights_table)
+        self.assertNotIn("/delta_too_hours/", body)  # no per-row AJAX calls left
 
     def test_add_too_resource_form_and_resources_table(self):
         n_res = ToOResource.objects.count()
@@ -635,6 +716,47 @@ class DeployChecklistFlowTests(TestCase):
         bands = {o.photometric_band.name for o in obs}
         self.assertEqual(len(bands), 2)
         self.assertTrue(bands <= {"g", "r", "i", "z"})
+
+    def test_select_yse_fields_renders_with_active_and_inactive_fields(self):
+        """/select_yse_fields/ with observed fields (#394: ndarray .exists() 500)."""
+        yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
+        audit = audit_fields(self.user)
+        for name, active, mjds in (("995", True, (60000.1, 60001.1, 60100.1)),
+                                   ("994", False, (60002.1,))):
+            field = SurveyField.objects.create(
+                obs_group=yse_obs_group,
+                field_id=f"{name}.A",
+                cadence=3,
+                instrument=gpc1,
+                ztf_field_id=name,
+                active=active,
+                ra_cen=70.0,
+                dec_cen=-1.0,
+                width_deg=3.3,
+                height_deg=3.3,
+                **audit,
+            )
+            msb = SurveyFieldMSB.objects.create(obs_group=yse_obs_group, name=name, active=active, **audit)
+            msb.survey_fields.add(field)
+            for mjd in mjds:
+                SurveyObservation.objects.create(
+                    mjd_requested=mjd,
+                    obs_mjd=mjd,
+                    survey_field=field,
+                    status=self.task_statuses["Successful"],
+                    exposure_time=27,
+                    photometric_band=bands["g"],
+                    **audit,
+                )
+
+        with iers_offline():
+            response = self.client.get(reverse("select_yse_fields"))
+        self.assertEqual(response.status_code, 200)
+        active = response.context["active_yse_gpc1_field_data"]
+        self.assertEqual([row[0].name for row in active], ["995"])
+        # first observation after the last >60-day gap
+        self.assertAlmostEqual(active[0][1], 60100.1)
+        self.assertEqual([row[0].name for row in response.context["yse_gpc1_field_data"]], ["994"])
 
     def test_survey_obs_schedule_and_ingest_observation_record(self):
         yse_obs_group, _ps1, gpc1, bands = self._survey_stack()

@@ -57,6 +57,8 @@ EXTERNAL_ENDPOINTS = frozenset(
         "get_hst_status",
         "get_chandra_status",
         "get_hst_image",
+        "get_jwst_status",
+        "get_jwst_observations",
         "get_chandra_image",
         "get_ps1_image",
         "get_legacy_image",
@@ -74,6 +76,10 @@ FRAGMENT_NAMES = (
     "transient_detail_summary_spectra_tools_fragment",
     "transient_detail_resources_fragment",
     "transient_detail_photometry_fragment",
+    "transient_detail_analysis_fragment",
+    "transient_detail_annotations_fragment",
+    "transient_detail_salt_fit_fragment",
+    "transient_detail_ngsf_fragment",
 )
 
 # Assets the browser fetches while rendering the page.

@@ -8,6 +8,7 @@ from YSE_App.serializers.observation_task_serializers import *
 from YSE_App.serializers.observatory_serializers import *
 from YSE_App.serializers.on_call_date_serializers import *
 from YSE_App.serializers.phot_serializers import *
+from YSE_App.serializers.phot_stat_serializers import *
 from YSE_App.serializers.photometric_band_serializers import *
 from YSE_App.serializers.principal_investigator_serializers import *
 from YSE_App.serializers.profile_serializers import *
@@ -20,3 +21,14 @@ from YSE_App.serializers.group_serializers import *
 from YSE_App.serializers.tag_serializers import *
 from YSE_App.serializers.gw_serializers import *
 from YSE_App.serializers.surveyfield_serializers import *
+from YSE_App.serializers.candidate_serializers import *
+from YSE_App.serializers.allocation_serializers import *
+from YSE_App.serializers.collaboration_serializers import *
+from YSE_App.serializers.sharing_serializers import *
+from YSE_App.serializers.instrument_log_serializers import *
+from YSE_App.serializers.summary_serializers import TransientSummaryVersionSerializer, TransientSummaryWriteSerializer  # noqa: F401
+from YSE_App.serializers.annotation_serializers import *
+from YSE_App.serializers.analysis_serializers import *
+from YSE_App.serializers.notification_serializers import *
+
+from .feed_serializers import *

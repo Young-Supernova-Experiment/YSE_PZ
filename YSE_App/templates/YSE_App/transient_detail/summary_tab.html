@@ -14,7 +14,8 @@
                                                 <strong>R.A./Dec (2000)</strong>
                                                 <p class="text-muted">
                                                     {{ transient.CoordString.0 }}&nbsp;&nbsp;&nbsp;{{ transient.CoordString.1 }}<br>
-                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small>
+                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small><br>
+                                                    <a class="btn btn-xs btn-outline-primary yse-observability-link" href="{% url 'observability' transient.id %}" title="Tonight's altitude, airmass and moon at every telescope">Observability</a>
                                                 </p>
                                             </div>
                                         </div>
@@ -36,6 +37,7 @@
                                                 <div class="box-header with-border">
                                                     <strong style="float:left;margin-right:10px;">Status:</strong>
                                                     <p style="float:left" id="transient_status_name" >{{ transient.status }}</p>
+                                                    <span id="annotation_badges" style="float:left;margin-left:10px;"></span>
                                                 </div>
                                                 <div class="box-body">
                                                     <div class="btn-group-horizontal">
@@ -118,6 +120,15 @@
                                                     {% else %}
                                                         Unknown
                                                     {% endif %}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div class="col-4">
+                                            <div class="form-group yse-archive-flags" id="archive_flags"
+                                                 title="Known archive coverage at this position: set at ingest (HST, Chandra, Spitzer) and refreshed when the archive tabs answer (HST, JWST, Chandra). Searchable as has_hst / has_jwst / has_chandra.">
+                                                <strong>Archives</strong>
+                                                <p class="text-muted">
+                                                    {% for label, flag in transient.archive_flags %}<span class="badge yse-archive-flag {% if flag %}badge-success{% elif flag is False %}badge-light{% else %}badge-secondary{% endif %}" data-archive="{{ label }}" data-flag="{% if flag %}1{% elif flag is False %}0{% else %}unknown{% endif %}">{{ label }}{% if flag %}{% elif flag is False %}: no{% else %}: ?{% endif %}</span> {% endfor %}
                                                 </p>
                                             </div>
                                         </div>
@@ -241,8 +252,52 @@
                                                         <td></td>
                                                         <td>{{ recent_filter }}</td>
                                                     </tr>
+                                                    {% if photstat and photstat.has_detections %}
+                                                    <tr id="photstat-peak-row">
+                                                        <td>Peak Mag</td>
+                                                        <td>{{ photstat.peak_date|date:"N j, Y, P" }}</td>
+                                                        <td>{{ photstat.peak_mag|floatformat:2 }}</td>
+                                                        <td></td>
+                                                        <td>{{ photstat.peak_band }}</td>
+                                                    </tr>
+                                                    {% endif %}
                                                 </tbody>
                                             </table>
+                                            {% if photstat %}
+                                            <table class="table table-bordered table-sm" id="photstat-summary" title="Stored photometry statistics, classified as the light-curve plot draws them: detections are unflagged points with a magnitude and mag_err &lt;= 0.36 (or no flux information); upper limits are unflagged points with flux / flux_err &lt; 3, shown as -2.5 log10(flux + 3 flux_err) + zero point, and count only before the first detection; rates are mag/day in the band of the first (rise) and last (decay) detection.">
+                                                <thead>
+                                                    <tr>
+                                                        <th colspan="2">Photometry statistics</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr id="photstat-detections">
+                                                        <td>Detections</td>
+                                                        <td><strong>{{ photstat.num_det_global }}</strong> of {{ photstat.num_obs_global }} unflagged point{{ photstat.num_obs_global|pluralize }}</td>
+                                                    </tr>
+                                                    <tr id="photstat-limits">
+                                                        <td>Upper limits (deepest)</td>
+                                                        <td><strong>{{ photstat.num_limits_global }}</strong>{% if photstat.has_detections %} pre-detection{% endif %}{% if photstat.deepest_limit is not None %} (deepest {{ photstat.deepest_limit|floatformat:2 }} mag{% if photstat.deepest_limit_band %} in {{ photstat.deepest_limit_band.name }}{% endif %} on {{ photstat.deepest_limit_date|date:"N j, Y" }}){% endif %}</td>
+                                                    </tr>
+                                                    <tr id="photstat-rise">
+                                                        <td>Rise rate</td>
+                                                        <td>{% if photstat.rise_rate is not None %}<strong>{{ photstat.rise_rate|floatformat:3 }}</strong> mag/day{% if photstat.first_detected_band %} ({{ photstat.first_detected_band.name }}){% endif %}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                                                    </tr>
+                                                    <tr id="photstat-decay">
+                                                        <td>Decay rate</td>
+                                                        <td>{% if photstat.decay_rate is not None %}<strong>{{ photstat.decay_rate|floatformat:3 }}</strong> mag/day{% if photstat.last_detected_band %} ({{ photstat.last_detected_band.name }}){% endif %}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                                                    </tr>
+                                                    <tr id="photstat-nondetection">
+                                                        <td>Last non-detection before discovery</td>
+                                                        <td>{% if photstat.last_non_detection_mjd is not None and photstat.time_to_non_detection is not None %}{{ photstat.last_non_detection_date|date:"N j, Y, P" }} (MJD {{ photstat.last_non_detection_mjd|floatformat:2 }}{% if photstat.last_non_detection_band %}; {{ photstat.last_non_detection_band.name }}{% endif %}){% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                                                    </tr>
+                                                    <tr id="photstat-time-to-nondetection">
+                                                        <td>Time to non-detection</td>
+                                                        <td>{% if photstat.time_to_non_detection is not None %}<strong>{{ photstat.time_to_non_detection|floatformat:1 }}</strong> days before first detection{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                            {% endif %}
                                         </div>
                                     </div>
                                     <div>
@@ -268,11 +323,17 @@
                                                 Request ZTF Forced Phot</span>
                                             </button>
                                             </div>
+                                            {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows hint_compact=True %}
+                                            {# Stored SALT3 fit + Refit (#315); loaded by yseFitStatus in transient_detail.html #}
+                                            <div id="salt_fit_status" class="yse-fit-status-shell" style="padding: 0 10px 4px;"
+                                                 data-fragment-url="{% url 'transient_detail_salt_fit_fragment' transient.id %}"></div>
                                             <div class="box-body" id="lcplot"></div>
                                         </div>
                                     </div>
                                 </div>
                             <div class="col-6 yse-summary-side-col">
+                                {% include "YSE_App/transient_detail/summary_panel.html" %}
+                                {% include "YSE_App/transient_detail/interests_panel.html" %}
                                 {% include "YSE_App/transient_detail/comments_panel.html" %}
                                 <div class="box box-primary">
                                     <div class="box-header">
@@ -507,7 +568,13 @@
                                                 </div>
                                             </div>
                                             {% endif %}
-                                            {% if submit_to_tns %}
+                                            {% if sharing_services %}
+                                                <div class="col-6">
+                                                    <div class="form-group">
+                                                        <a class="btn btn-block btn-primary yse-report-tns" href="#yse-report-modal" data-toggle="modal" data-target="#yse-report-modal">Report to TNS</a>
+                                                    </div>
+                                                </div>
+                                            {% elif submit_to_tns %}
                                                 <div class="col-6">
                                                     <div class="form-group">
                                                         <a class="btn btn-block btn-primary submit_to_tns">Submit to TNS</a>
@@ -525,6 +592,9 @@
                                             {% include "YSE_App/transient_detail_summary_spectra_tools.html" %}
                                         </div>
                                         <div class="box-body" id="specplot"></div>
+                                        {# Last NGSF classification + Run NGSF (#315); loaded by yseFitStatus #}
+                                        <div id="ngsf_status" class="yse-fit-status-shell" style="padding: 0 10px 4px;"
+                                             data-fragment-url="{% url 'transient_detail_ngsf_fragment' transient.id %}"></div>
                                         <p></p>
                                         <div class="row">
                                             <div class="col-12">

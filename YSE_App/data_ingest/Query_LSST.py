@@ -33,7 +33,8 @@ Everything ANTARES-specific is a module constant or a ``[antares]``
 ``settings.ini`` key with a safe default (see ``LSSTIngestConfig``), so a field
 rename on the broker side is a config change, not a code change.
 
-The ``antares_client`` import is guarded (like ``TNS_uploads``, PR #194): the
+The ``antares_client`` import is guarded in the broker provider
+(``YSE_App.brokers.antares``, issue #273; like ``TNS_uploads``, PR #194): the
 web venv can import this module and ``manage.py runcrons`` without the package;
 the cron then logs that it is disabled and exits cleanly.
 """
@@ -52,7 +53,6 @@ from email.mime.text import MIMEText
 from typing import Dict, Iterable, List, Optional
 
 import numpy as np
-from astropy.coordinates import Angle, SkyCoord
 from astropy.time import Time
 from django.conf import settings as djangoSettings
 from django.contrib.auth.models import User
@@ -79,13 +79,14 @@ from YSE_App.models import (
     TransientPhotometry,
 )
 
-try:
-    from antares_client.search import cone_search
+# The ANTARES client lives in the broker provider (YSE_App.brokers.antares,
+# issue #273); this module keeps the Rubin-specific parsing and storage and the
+# cron. ``antares_available()`` reads the provider's guarded import at call time.
+from YSE_App.brokers import antares as _antares_provider
 
-    HAS_ANTARES = True
-except ImportError:  # web venv without the broker client
-    cone_search = None
-    HAS_ANTARES = False
+
+def antares_available() -> bool:
+    return bool(_antares_provider.HAS_ANTARES)
 
 
 # --- Rubin instrument stack ----------------------------------------------------
@@ -412,6 +413,14 @@ def store_points(transient, points: Iterable[dict], *, user, obs_group, instrume
     seen = existing_mjds_by_band(photometry)
     bad_dq = None
     created = 0
+    from YSE_App.services import photstat
+    with photstat.deferred_updates():  # one TransientPhotStat recompute per transient (#268)
+        created = _store_point_rows(points, photometry, bands, cfg, seen, bad_dq, user)
+    return created
+
+
+def _store_point_rows(points, photometry, bands, cfg, seen, bad_dq, user):
+    created = 0
     for p in points:
         band = bands[p["band"]]
         mjds = seen.setdefault(band.id, [])
@@ -445,15 +454,8 @@ def store_points(transient, points: Iterable[dict], *, user, obs_group, instrume
 
 
 def lsst_loci_near(ra: float, dec: float, cfg: LSSTIngestConfig):
-    """ANTARES cone search around a position, LSST loci only."""
-    if not HAS_ANTARES:
-        return []
-    sc = SkyCoord(float(ra), float(dec), unit="deg")
-    return [
-        locus
-        for locus in cone_search(sc, Angle(cfg.cone_radius_arcsec, unit="arcsec"))
-        if is_lsst_locus(locus, cfg.survey_id)
-    ]
+    """ANTARES cone search around a position, LSST loci only (via the provider)."""
+    return _antares_provider.lsst_loci_near(ra, dec, cfg)
 
 
 def getLSSTPhotometry_ANTARES(ra: float, dec: float, cfg: Optional[LSSTIngestConfig] = None) -> Optional[dict]:
@@ -521,7 +523,7 @@ class AntaresLSST(CronJobBase):
         nrows, ntransients = 0, 0
         config = self._config if self._config is not None else read_settings_ini()
         self.cfg = LSSTIngestConfig.from_config(config)
-        if not HAS_ANTARES:
+        if not antares_available():
             print("[AntaresLSST] antares_client is not installed in this environment; nothing to do")
             return
         try:

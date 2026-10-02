@@ -17,6 +17,14 @@
 
 {% block content %}
 <div class="yse-page-dashboard">
+  {% if broker_stale_heartbeats %}
+  <div class="alert alert-warning yse-broker-stale-banner" role="alert">
+    <i class="fa fa-exclamation-triangle"></i>
+    <strong>Broker stream ingest stale:</strong>
+    {% for hb in broker_stale_heartbeats %}<code>{{ hb.connection.slug }}{% if hb.topic %}/{{ hb.topic }}{% endif %}#{{ hb.worker }}</code> last seen {{ hb.last_seen|timesince }} ago{% if hb.last_error %} (last error: {{ hb.last_error|truncatechars:80 }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.
+    {% if user.is_staff %}<a href="{% url 'admin:YSE_App_ingestheartbeat_changelist' %}" class="alert-link">Heartbeats</a>{% endif %}
+  </div>
+  {% endif %}
   <!-- Default box -->
   {% for transient_cat in transient_categories %}
 

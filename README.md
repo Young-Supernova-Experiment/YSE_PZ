@@ -77,20 +77,13 @@ archivePrefix = {arXiv},
 }
 ```
 
-## Fork development (astrofoley/YSE_PZ)
+## Development
 
-This fork’s **`main`** branch tracks [davecoulter/YSE_PZ `develop`](https://github.com/davecoulter/YSE_PZ/tree/develop), plus local Docker/CI fixes and work merged from [YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) (that repo is **archived**; use this repo only). Day-to-day branches should start from **`main`**.
+Development happens in this repository on three long-lived branches:
+`experimental` (feature work, deploys to ziggy `/yse_experimental/`) ->
+`develop` (testing, deploys to `/yse_test/`) -> `master` (production).
+Every change starts as a GitHub issue and lands on `experimental` by pull request;
+see [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
+[docs/branching.md](docs/branching.md) for the promotion rules.
 
-| Branch | Purpose |
-|--------|---------|
-| `main` | Unified develop-based line |
-| `deploy/apache-subpath` | Apache subpath / deploy-only changes (not on `main`) |
-
-**Remotes:** `origin` → davecoulter/YSE_PZ; `astrofoley` → this fork.
-
-**Upstream PR:** When ready, open a cross-fork PR from `astrofoley/main` to `davecoulter/develop` via [compare across forks](https://github.com/davecoulter/YSE_PZ/compare/develop...astrofoley:YSE_PZ:main?expand=1) (not the fork “Contribute” button, which targets simulationstation).
-
-**Integration:** Changes from [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ) merge via `integrate/yse-*` branches. [YSE_PZ_chatgpt](https://github.com/astrofoley/YSE_PZ_chatgpt) is archived.
-
-**CI:** `.github/workflows/ci.yml` runs `py_compile`, Docker compose, `manage.py check`, and `YSE_App.tests` on push/PR. Tests run on Django 3.2 (the production line; the Django 4 upgrade is #133). Branch promotion order (`experimental -> develop -> master`) is enforced by `.github/workflows/promotion-guard.yml`; see [docs/branching.md](docs/branching.md).
-
+**CI:** `.github/workflows/ci.yml` runs lint, `py_compile`, Docker compose, `manage.py check` and `YSE_App.tests` on pushes and PRs to all three branches. Tests run on Django 3.2 LTS, which the project stays on for now. Promotion order is enforced by `.github/workflows/promotion-guard.yml`.

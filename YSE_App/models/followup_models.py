@@ -9,7 +9,6 @@ from YSE_App.models.telescope_resource_models import *
 from YSE_App.models.transient_models import *
 from YSE_App.models.host_models import *
 from YSE_App.models.profile_models import *
-from YSE_App.common.alert import SendFollowingNotice
 
 #class SimpleTransientSpecRequest(BaseModel):
 #	status = models.ForeignKey(FollowupStatus, on_delete=models.SET(get_sentinel_followupstatus))
@@ -53,6 +52,11 @@ class TransientFollowup(Followup):
 	### Entity relationships ###
 	# Required
 	transient = models.ForeignKey(Transient, on_delete=models.CASCADE)
+
+	# Usage accounting on the attached ToO / queued resource (#304): stamped once
+	# when the status reaches Successful, cleared (and refunded) when it leaves it.
+	usage_hours = models.FloatField(default=0.0, help_text="Hours charged to the resource when this follow-up succeeds.")
+	usage_charged_at = models.DateTimeField(null=True, blank=True, editable=False)
 
 	def __str__(self):
 		return "Transient Followup: [%s]; Valid: %s to %s" % (self.transient.name, self.valid_start.strftime('%m/%d/%Y'), self.valid_stop.strftime('%m/%d/%Y'))
@@ -104,14 +108,12 @@ class TransientFollowupRequest(BaseModel):
 
 @receiver(models.signals.post_save, sender=TransientFollowup)
 def execute_after_save(sender, instance, created, *args, **kwargs):
+	"""New follow-up: notify the users following its telescope (issue #69, via notify())."""
 
 	if created:
+		from YSE_App.services.followup_notices import notify_followup_created_safely
 
-		usertelescopes = UserTelescopeToFollow.objects.all()
-		for u in usertelescopes:
-			if instance.classical_resource and u.telescope.name == instance.classical_resource.telescope.name:
-				SendFollowingNotice(instance.id, instance.transient.name,
-									instance.classical_resource.telescope, u.profile)
+		notify_followup_created_safely(instance)
 	
 class HostFollowup(Followup):
 	### Entity relationships ###

@@ -28,10 +28,11 @@
 <!-- Content Header (Page header) -->
 {% block content_header %}
     <h1>{% if 'YSE' in transient.tags|tags_list or 'YSE Forced Phot' in transient.tags|tags_list %}
-        {{transient.name}}   <b>(YSE)</b><br/>
+        {{transient.name}}   <b>(YSE)</b>
         {% else %}
-        {{transient.name}}<br/>
+        {{transient.name}}
         {% endif %}
+        <a href="#" class="yse-fav-star yse-fav-star-header{% if is_favorite %} yse-fav-on{% endif %}" id="yse-fav-header" data-transient-id="{{ transient.id }}" data-state="{% if is_favorite %}on{% else %}off{% endif %}" title="{% if is_favorite %}Remove from my favorites{% else %}Add to my favorites{% endif %}" aria-label="Toggle favorite for {{ transient.name }}" aria-pressed="{% if is_favorite %}true{% else %}false{% endif %}"><i class="fa {% if is_favorite %}fa-star{% else %}fa-star-o{% endif %}" aria-hidden="true"></i><span class="yse-fav-count badge badge-light" title="Users who starred this transient">{{ favorite_count|default:'' }}</span></a><br/>
         <small><a href="{% url 'index' %}">Back</a></small>
     </h1>
     <ol class="breadcrumb">
@@ -48,14 +49,23 @@
             {% if transient_detail_defer %}
             <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
             {% endif %}
+            {% if messages %}
+            <div class="yse-detail-messages">
+                {% for message in messages %}<div class="alert alert-{{ message.level_tag|default:"info" }} py-2 mb-2">{{ message }}</div>{% endfor %}
+            </div>
+            {% endif %}
             <div class="nav-tabs-custom yse-page-transient-summary">
                 <ul class="nav nav-tabs">
                     <li class="nav-item"><a class="nav-link active" href="#summary_tab" data-toggle="tab">Summary</a></li>
                     <li class="nav-item"><a class="nav-link" href="#followup_tab" data-toggle="tab">Follow-up</a></li>
                     <li class="nav-item"><a class="nav-link" href="#resources_tab" data-toggle="tab">Resources</a></li>
                     <li class="nav-item"><a class="nav-link" href="#photometry_tab" data-toggle="tab">Detailed Photometry</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#analysis_tab" data-toggle="tab" id="analysis_tab_header">Analysis</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#annotations_tab" data-toggle="tab" id="annotations_tab_header">Annotations</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#brokers_tab" data-toggle="tab" id="brokers_tab_header">Brokers</a></li>
                     <li class="nav-item"><a class="nav-link" href="#spectra_tab" data-toggle="tab">Spectra</a></li>
                     <li class="nav-item"><a class="nav-link" href="#hst_tab" data-toggle="tab" id="hst_tab_header">HST Data</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#jwst_tab" data-toggle="tab" id="jwst_tab_header">JWST Data</a></li>
                     <li class="nav-item"><a class="nav-link" href="#chandra_tab" data-toggle="tab" id="chandra_tab_header">Chandra Data</a></li>
                     {% if has_gw_candidate_tag %}
                         <li class="nav-item"><a class="nav-link" href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW Info</a></li>
@@ -104,6 +114,11 @@
                             <div class="col-6">
                                 <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
                                 {% include "YSE_App/form_snippets/automated_spectrum_form.html" with form=automated_spectrum_form %}
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-12">
+                                {% include "YSE_App/form_snippets/facility_request_form.html" %}
                             </div>
                         </div>
                         <div class="row">
@@ -169,6 +184,39 @@
                         </div>
 
                     </div>
+                    <div class="tab-pane" id="analysis_tab">
+                        <div id="analysis_container">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Analysis runs load when you open this tab.</p>
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="annotations_tab">
+                        <div id="annotations_container">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Annotations load when you open this tab.</p>
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="brokers_tab">
+                        <div id="brokers_tab_content" data-fragment-url="{% url 'transient_detail_brokers_fragment' transient.id %}" data-import-url="{% url 'transient_broker_import' transient.id %}">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Broker matches load when you open this tab.</p>
+                        </div>
+                        <script>
+                        /* Brokers tab (#275): lazy fragment, independent of the detail-page defer switch. */
+                        document.addEventListener('DOMContentLoaded', function() {
+                            var loaded = false;
+                            function load() {
+                                if (loaded || !window.jQuery) { return; }
+                                loaded = true;
+                                var $c = jQuery('#brokers_tab_content');
+                                $c.html('<p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Asking the brokers…</p>');
+                                jQuery.get($c.data('fragment-url')).done(function(html) { $c.html(html); }).fail(function() {
+                                    loaded = false;
+                                    $c.html('<p class="text-danger">Failed to load the broker matches.</p>');
+                                });
+                            }
+                            jQuery('a[href="#brokers_tab"]').on('shown.bs.tab', load);
+                            if (window.location.hash === '#brokers_tab') { load(); }
+                        });
+                        </script>
+                    </div>
                     <div class="tab-pane" id="spectra_tab">
                         <div id="spectra_tab_content">
                             {% if transient_detail_defer %}
@@ -190,6 +238,26 @@
                                 </tr>
                             </thead>
                             <tbody id="hst_image_list">
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="tab-pane" id="jwst_tab">
+                        <h4>JWST Images for {{transient.name}}</h4>
+                        <p class="text-muted small" id="jwst_summary">Science images in the MAST archive within 1&Prime; of the transient position (spectra are not listed).</p>
+                        <table class="table table-bordered table-striped" id="jwst_observation_table">
+                            <thead>
+                                <tr>
+                                    <th>Date (UT)</th>
+                                    <th>Instrument</th>
+                                    <th>Filter</th>
+                                    <th>Program</th>
+                                    <th>Target</th>
+                                    <th>Exp. (s)</th>
+                                    <th>Preview</th>
+                                    <th>Links</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jwst_observation_list">
                             </tbody>
                         </table>
                     </div>
@@ -226,6 +294,7 @@
             </div>
         </div>
     </div>
+    {% include "YSE_App/transient_detail/report_modal.html" %}
 {% endblock %}
 
 {% block scripts %}
@@ -566,6 +635,10 @@
                         yseMarkArchiveTabUnknown($tab, failLabel, json && json.message);
                     } else if (!json.has_data) {
                         $tab.text(emptyLabel);
+                    } else {
+                        /* Data: the static label ("HST Data", "JWST Data")
+                           stands; tab labels carry no counts (#387). */
+                        $tab.removeAttr('title');
                     }
                 })
                 .fail(function(xhr, status) {
@@ -585,6 +658,12 @@
             "{% url 'get_chandra_status' transient.id %}",
             "No Chandra",
             "Chandra (lookup failed)"
+        );
+        yseUpdateArchiveTabLabel(
+            $("#jwst_tab_header"),
+            "{% url 'get_jwst_status' transient.id %}",
+            "No JWST",
+            "JWST (lookup failed)"
         );
 
         var yseDetailFragmentsLoaded = {};
@@ -648,6 +727,9 @@
             return yseFollowupLoadPromise;
         }
         window.yseLoadFollowupPhased = yseLoadFollowupPhased;
+        /* The Analysis tab script (below, outside this closure) reuses the fragment loader. */
+        window.yseLoadDetailFragment = yseLoadDetailFragment;
+        window.yseDetailFragmentsLoaded = yseDetailFragmentsLoaded;
         window.yseResetFollowupFragmentCache = function() {
             yseFollowupLoadPromise = null;
             delete yseDetailFragmentsLoaded['followup_requests'];
@@ -656,6 +738,7 @@
         };
 
         var yseHstImagesLoaded = false;
+        var yseJwstObservationsLoaded = false;
         var yseChandraImagesLoaded = false;
         $(function() {
             if (window.location.hash === '#followup_tab') {
@@ -680,10 +763,19 @@
                         "{% url 'transient_detail_photometry_fragment' transient.id %}",
                         '#photometry_deferred_tables'
                     );
+                } else if (target === '#annotations_tab') {
+                    yseLoadAnnotationsTab(false);
+                } else if (target === '#analysis_tab') {
+                    yseLoadAnalysisTab(false);
                 } else if (target === '#hst_tab' && !yseHstImagesLoaded) {
                     yseHstImagesLoaded = true;
                     if (window.yseLoadHstImages) {
                         window.yseLoadHstImages();
+                    }
+                } else if (target === '#jwst_tab' && !yseJwstObservationsLoaded) {
+                    yseJwstObservationsLoaded = true;
+                    if (window.yseLoadJwstObservations) {
+                        window.yseLoadJwstObservations();
                     }
                 } else if (target === '#chandra_tab' && !yseChandraImagesLoaded) {
                     yseChandraImagesLoaded = true;
@@ -727,6 +819,7 @@
                     "{% url 'transient_detail_summary_spectra_tools_fragment' transient.id %}",
                     '#summary_spectra_tools'
                 );
+                if (window.yseLoadSummaryCard) { window.yseLoadSummaryCard(); }
                 {% if has_gw_candidate_tag %}
                 yseLoadDetailFragment(
                     'gw',
@@ -1575,10 +1668,24 @@
             $('.ztfrequest').on('click', function(event){
 
                 var url = "{% url 'ztf_forced_phot' transient.slug %}";
+                // The legacy submission runs inside the request and can take a while:
+                // show that it is in flight and always report the outcome (#399).
+                var $btn = $(this);
+                var label = $btn.text();
+                $btn.prop('disabled', true).text('Requesting ZTF forced phot...');
 
                 $.get(url).done(function(json){
                     var message = json.msg;
                     alert(message);
+                    if (String(message).indexOf('success') === 0) {
+                        location.reload();  // show the new comment
+                    }
+                }).fail(function(xhr){
+                    var message = (xhr.responseJSON && xhr.responseJSON.msg) ||
+                        ('error: ZTF forced photometry request failed (HTTP ' + xhr.status + '); nothing was submitted');
+                    alert(message);
+                }).always(function(){
+                    $btn.prop('disabled', false).text(label);
                 });
             });
 
@@ -2107,6 +2214,84 @@
             loadHstImages();
         });
 
+        /* JWST tab body (#330): the same lookup-failed / Retry handling as the
+           HST tab, one loader for both page modes. Values come from MAST, so
+           they are escaped before being written into the table. */
+        function yseEscapeHtml(value) {
+            if (value === null || value === undefined) {
+                return '';
+            }
+            return String(value).replace(/[&<>"']/g, function(ch) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
+            });
+        }
+        function yseJwstRowHtml(row) {
+            var links = [];
+            if (row.portalurl) {
+                links.push('<a href="' + yseEscapeHtml(row.portalurl) + '" target="_blank" rel="noopener" title="Open this observation in the MAST Portal">MAST</a>');
+            }
+            if (row.program) {
+                links.push('<a href="https://www.stsci.edu/jwst/science-execution/program-information?id=' +
+                    encodeURIComponent(row.program) + '" target="_blank" rel="noopener" title="JWST program page">Program ' + yseEscapeHtml(row.program) + '</a>');
+            }
+            if (row.dataurl) {
+                links.push('<a href="' + yseEscapeHtml(row.dataurl) + '" target="_blank" rel="noopener" title="Download the data product">Data</a>');
+            }
+            var preview = '<span class="text-muted">&mdash;</span>';
+            if (row.previewurl) {
+                preview = '<a href="' + yseEscapeHtml(row.previewurl) + '" target="_blank" rel="noopener">' +
+                    '<img src="' + yseEscapeHtml(row.previewurl) + '" style="width:160px" alt="" loading="lazy" ' +
+                    'onerror="this.parentNode.textContent=\'preview\'" /></a>';
+            }
+            var exptime = (row.exptime === null || row.exptime === undefined) ? '' : Math.round(Number(row.exptime));
+            var inst = yseEscapeHtml(row.inst || '');
+            if (row.calib_level !== null && row.calib_level !== undefined) {
+                inst += ' <span class="text-muted small" title="MAST calibration level">(L' + yseEscapeHtml(row.calib_level) + ')</span>';
+            }
+            return '<tr>' +
+                '<td title="MJD ' + yseEscapeHtml(row.mjd) + '">' + yseEscapeHtml(row.obsdate || '') + '</td>' +
+                '<td>' + inst + '</td>' +
+                '<td>' + yseEscapeHtml(row.filters || '') + '</td>' +
+                '<td>' + yseEscapeHtml(row.program || '') + (row.pi ? '<br><span class="text-muted small">' + yseEscapeHtml(row.pi) + '</span>' : '') + '</td>' +
+                '<td>' + yseEscapeHtml(row.target || '') + '</td>' +
+                '<td class="text-right">' + exptime + '</td>' +
+                '<td>' + preview + '</td>' +
+                '<td>' + (links.length ? links.join(' &middot; ') : '<span class="text-muted">&mdash;</span>') + '</td>' +
+                '</tr>';
+        }
+        function loadJwstObservations() {
+            var rows_full = $("#jwst_observation_list");
+            var rows_tab = $("#jwst_tab_header");
+            rows_full.html('<tr><td colspan="8" class="text-muted"><i class="fa fa-spinner fa-spin"></i> Querying the JWST archive (MAST)…</td></tr>');
+            $.get("{% url 'get_jwst_observations' transient.id %}").done(function(json) {
+                var rows = (json && json.rows) || [];
+                rows_full.empty();
+                if (!rows.length) {
+                    rows_tab.text("No JWST").removeAttr('title');
+                    rows_full.html('<tr><td colspan="8" class="text-muted">No JWST images of this position in MAST.</td></tr>');
+                    return;
+                }
+                rows_tab.text("JWST Data").removeAttr('title');
+                for (var i = 0; i < rows.length; i++) {
+                    rows_full.append(yseJwstRowHtml(rows[i]));
+                }
+            }).fail(function(xhr) {
+                /* MAST unreachable or slow: report it and offer a retry
+                   rather than leaving the table empty under a "No JWST" label. */
+                var message = (xhr && xhr.responseJSON && xhr.responseJSON.message) ||
+                    "JWST archive (MAST) lookup failed.";
+                yseJwstObservationsLoaded = false;
+                rows_tab.text("JWST (lookup failed)").attr('title', message);
+                rows_full.html('<tr><td colspan="8" class="text-warning">' + yseEscapeHtml(message) +
+                    ' <a href="#" class="yse-jwst-retry">Retry</a></td></tr>');
+            });
+        }
+        $(document).on('click', '.yse-jwst-retry', function(event) {
+            event.preventDefault();
+            yseJwstObservationsLoaded = true;
+            loadJwstObservations();
+        });
+
         function loadChandraImages() {
             $.get("{% url 'get_chandra_image' transient.id %}").done(function(json){
                 var rows = $("#chandra_image")
@@ -2135,11 +2320,419 @@
             });
         }
         window.yseLoadHstImages = loadHstImages;
+        window.yseLoadJwstObservations = loadJwstObservations;
         window.yseLoadChandraImages = loadChandraImages;
 
 {% if not transient_detail_defer %}
         loadHstImages();
+        loadJwstObservations();
         loadChandraImages();
 {% endif %}
+    </script>
+
+    <script>
+        /* Analysis tab (#314): the fragment is HTML; this drives the run form, the
+           actions and the status polling. Re-run after every fragment reload. */
+        var yseAnalysisPollTimer = null;
+        var yseAnalysisBound = false;
+        function yseAnalysisEscape(value) {
+            if (value === null || value === undefined) { return ''; }
+            return String(value).replace(/[&<>"']/g, function(ch) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
+            });
+        }
+        function yseLoadAnalysisTab(force) {
+            if (force && window.yseDetailFragmentsLoaded) {
+                delete window.yseDetailFragmentsLoaded['analysis'];
+            }
+            if (yseAnalysisPollTimer) {
+                clearTimeout(yseAnalysisPollTimer);
+                yseAnalysisPollTimer = null;
+            }
+            return window.yseLoadDetailFragment(
+                'analysis',
+                "{% url 'transient_detail_analysis_fragment' transient.id %}",
+                '#analysis_container'
+            ).then(yseAnalysisInit);
+        }
+        window.yseLoadAnalysisTab = yseLoadAnalysisTab;
+        function yseAnalysisServices() {
+            var node = document.getElementById('yse_analysis_services_json');
+            if (!node) { return []; }
+            try { return JSON.parse(node.textContent || '[]'); } catch (e) { return []; }
+        }
+        function yseAnalysisRenderFields() {
+            var $select = $('#analysis_service');
+            var slug = $select.val();
+            var services = yseAnalysisServices();
+            var service = null;
+            for (var i = 0; i < services.length; i++) { if (services[i].slug === slug) { service = services[i]; } }
+            var $box = $('#analysis_param_fields').empty();
+            $('#analysis_service_description').text('');
+            $('#analysis_cap_note').hide().text('');
+            if (!service) { return; }
+            $('#analysis_service_description').text($select.find('option:selected').attr('title') || '');
+            var fields = service.fields || [];
+            for (var k = 0; k < fields.length; k++) {
+                var f = fields[k];
+                var id = 'ap_' + yseAnalysisEscape(f.name);
+                var html = '<div class="form-group form-group-sm">';
+                if (f.type === 'boolean') {
+                    html += '<div class="form-check"><input class="form-check-input analysis-param" type="checkbox" id="' + id + '" data-name="' + yseAnalysisEscape(f.name) + '" data-type="boolean"' + (f.default === true || f.default === 'true' ? ' checked' : '') + '>' +
+                        '<label class="form-check-label small" for="' + id + '">' + yseAnalysisEscape(f.label) + '</label></div>';
+                } else {
+                    html += '<label class="small" for="' + id + '">' + yseAnalysisEscape(f.label) + '</label>';
+                    if (f.type === 'choice') {
+                        html += '<select class="form-control form-control-sm analysis-param" id="' + id + '" data-name="' + yseAnalysisEscape(f.name) + '" data-type="choice">';
+                        for (var c = 0; c < (f.choices || []).length; c++) {
+                            var ch = f.choices[c];
+                            html += '<option value="' + yseAnalysisEscape(ch) + '"' + (String(ch) === String(f.default) ? ' selected' : '') + '>' + yseAnalysisEscape(ch) + '</option>';
+                        }
+                        html += '</select>';
+                    } else {
+                        var type = (f.type === 'number' || f.type === 'integer') ? 'number' : 'text';
+                        html += '<input class="form-control form-control-sm analysis-param" type="' + type + '"' + (type === 'number' ? ' step="any"' : '') + ' id="' + id + '" data-name="' + yseAnalysisEscape(f.name) + '" data-type="' + yseAnalysisEscape(f.type) + '" value="' + yseAnalysisEscape(f.default === null || f.default === undefined ? '' : f.default) + '">';
+                    }
+                }
+                if (f.help) { html += '<small class="form-text text-muted">' + yseAnalysisEscape(f.help) + '</small>'; }
+                html += '</div>';
+                $box.append(html);
+            }
+            var cap = service.cap || {};
+            if (cap.limit && !cap.exempt) {
+                var note = cap.remaining === 0 ? 'Daily limit reached (' + cap.limit + ' run(s) per user per day); try again tomorrow.' : cap.remaining + ' of ' + cap.limit + ' run(s) left today.';
+                $('#analysis_cap_note').text(note).show();
+                $('#analysis_run_btn').prop('disabled', cap.remaining === 0);
+            } else {
+                $('#analysis_run_btn').prop('disabled', false);
+            }
+        }
+        function yseAnalysisCollectParams() {
+            var params = {};
+            $('#analysis_param_fields .analysis-param').each(function() {
+                var $f = $(this);
+                var name = $f.data('name');
+                if ($f.data('type') === 'boolean') {
+                    params[name] = $f.is(':checked');
+                } else if ($f.val() !== '') {
+                    params[name] = $f.val();
+                }
+            });
+            return params;
+        }
+        function yseAnalysisPoll() {
+            var $rows = $('#tbl_analysis_runs tr.analysis-run-row').filter(function() {
+                var s = $(this).data('status');
+                return s === 'pending' || s === 'running';
+            });
+            if (!$rows.length) { return; }
+            var pending = $rows.length;
+            var changed = false;
+            $rows.each(function() {
+                var $row = $(this);
+                $.get($row.data('status-url')).done(function(json) {
+                    if (json && json.is_finished) { changed = true; }
+                }).always(function() {
+                    pending -= 1;
+                    if (pending === 0) {
+                        if (changed) {
+                            yseLoadAnalysisTab(true);
+                        } else {
+                            var seconds = parseInt($('#yse_analysis_tab_body').data('poll-seconds'), 10) || 4;
+                            yseAnalysisPollTimer = setTimeout(yseAnalysisPoll, seconds * 1000);
+                        }
+                    }
+                });
+            });
+        }
+        function yseAnalysisInit() {
+            yseAnalysisRenderFields();
+            if ($('#yse_analysis_tab_body').data('active') === 1 || $('#yse_analysis_tab_body').data('active') === '1') {
+                var seconds = parseInt($('#yse_analysis_tab_body').data('poll-seconds'), 10) || 4;
+                yseAnalysisPollTimer = setTimeout(yseAnalysisPoll, seconds * 1000);
+            }
+            if (yseAnalysisBound) { return; }
+            yseAnalysisBound = true;
+            $('#analysis_tab').on('change', '#analysis_service', yseAnalysisRenderFields);
+            $('#analysis_tab').on('click', '#analysis_run_btn', function() {
+                var $btn = $(this).prop('disabled', true);
+                $('#analysis_run_error').text('');
+                $.ajax({
+                    url: $('#yse_analysis_tab_body').data('run-url'),
+                    method: 'POST',
+                    contentType: 'application/json',
+                    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+                    data: JSON.stringify({service: $('#analysis_service').val(), params: yseAnalysisCollectParams()})
+                }).done(function() {
+                    yseLoadAnalysisTab(true);
+                }).fail(function(xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.error) || ('request failed (' + xhr.status + ')');
+                    $('#analysis_run_error').text(msg);
+                    $btn.prop('disabled', false);
+                });
+            });
+            $('#analysis_tab').on('click', '[data-analysis-action]', function() {
+                var $btn = $(this);
+                if ($btn.data('analysis-action') === 'delete' && !window.confirm('Delete this analysis run and its files?')) {
+                    return;
+                }
+                $btn.prop('disabled', true);
+                $.ajax({
+                    url: $btn.data('url'), method: 'POST', headers: {'X-CSRFToken': '{{ csrf_token }}'}
+                }).always(function() {
+                    yseLoadAnalysisTab(true);
+                });
+            });
+        }
+        $(function() {
+            if (window.location.hash === '#analysis_tab') {
+                $('a[href="#analysis_tab"]').tab('show');
+            }
+        });
+    </script>
+
+    <script>
+        /* Summary-tab fit status lines (#315): the stored SALT3 fit under the light
+           curve (#salt_fit_status) and the NGSF classification under the spectrum
+           (#ngsf_status). Each shell carries data-fragment-url; the fragment carries
+           the service slug and, while a run is active, the status URL to poll. Refit /
+           Run NGSF POST to the Analysis tab's run endpoint, so caps and permissions
+           are the same. When a SALT3 refit finishes and the overlay is on, the light
+           curve is re-fetched so the new curves show. */
+        var yseFitStatusTimers = {};
+        function yseFitStatusLoad(shellId) {
+            var $shell = $('#' + shellId);
+            if (!$shell.length) { return $.Deferred().resolve().promise(); }
+            if (yseFitStatusTimers[shellId]) { clearTimeout(yseFitStatusTimers[shellId]); yseFitStatusTimers[shellId] = null; }
+            return $.get($shell.data('fragment-url')).done(function(html) {
+                $shell.html(html);
+                yseFitStatusArm(shellId);
+            }).fail(function() {
+                $shell.html('<span class="text-muted small">Fit status unavailable.</span>');
+            });
+        }
+        function yseFitStatusArm(shellId) {
+            var $body = $('#' + shellId).children('.yse-fit-status').first();
+            var active = $body.data('active');
+            if (active === 1 || active === '1') {
+                var seconds = parseInt($body.data('poll-seconds'), 10) || 4;
+                yseFitStatusTimers[shellId] = setTimeout(function() { yseFitStatusPoll(shellId); }, seconds * 1000);
+            }
+        }
+        function yseFitStatusPoll(shellId) {
+            var $body = $('#' + shellId).children('.yse-fit-status').first();
+            var url = $body.data('status-url');
+            if (!url) { return; }
+            $.get(url).done(function(json) {
+                if (json && json.is_finished) {
+                    yseFitStatusLoad(shellId).done(function() {
+                        if ($body.data('kind') === 'salt' && json.status === 'succeeded') { yseFitStatusRefreshSaltOverlay(); }
+                    });
+                } else {
+                    yseFitStatusArm(shellId);
+                }
+            }).fail(function() { yseFitStatusArm(shellId); });
+        }
+        function yseFitStatusRefreshSaltOverlay() {
+            /* Only when the user has the SALT3 overlay showing: the button then reads "Hide". */
+            if (($('#salt2plot').html() || '').indexOf('Hide') > -1) {
+                $.get("{% url 'salt2plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot")).done(function(html) {
+                    $('#lcplot').html(html);
+                });
+            }
+        }
+        window.yseFitStatusLoad = yseFitStatusLoad;
+        $(function() {
+            $(document).on('click', '.yse-fit-status [data-fit-action="run"]', function() {
+                var $btn = $(this).prop('disabled', true);
+                var $body = $btn.closest('.yse-fit-status');
+                var shellId = $body.parent().attr('id');
+                $body.find('.yse-fit-error').text('');
+                $.ajax({
+                    url: $body.data('run-url'), method: 'POST', contentType: 'application/json',
+                    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+                    data: JSON.stringify({service: $body.data('service'), params: {}})
+                }).done(function() {
+                    yseFitStatusLoad(shellId);
+                    if (window.yseDetailFragmentsLoaded) { delete window.yseDetailFragmentsLoaded['analysis']; }
+                }).fail(function(xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.error) || ('request failed (' + xhr.status + ')');
+                    $body.find('.yse-fit-error').text(msg);
+                    $btn.prop('disabled', false);
+                });
+            });
+            $(document).on('click', '.yse-fit-status .yse-fit-analysis-link', function(e) {
+                e.preventDefault();
+                $('a[href="#analysis_tab"]').tab('show');
+            });
+            yseFitStatusLoad('salt_fit_status');
+            yseFitStatusLoad('ngsf_status');
+        });
+    </script>
+
+    <script>
+        /* AI summary card (#295, #296): loads the card fragment, drives Generate / Edit /
+           History / opt-in, and polls while a summariser run is active. */
+        var yseSummaryPollTimer = null;
+        var yseSummaryBound = false;
+        function yseLoadSummaryCard(force) {
+            var $c = $('#ai_summary_container');
+            if (!$c.length) { return $.Deferred().resolve().promise(); }
+            if (force && window.yseDetailFragmentsLoaded) {
+                delete window.yseDetailFragmentsLoaded['ai_summary'];
+            }
+            if (yseSummaryPollTimer) {
+                clearTimeout(yseSummaryPollTimer);
+                yseSummaryPollTimer = null;
+            }
+            return window.yseLoadDetailFragment('ai_summary', $c.data('fragment-url'), '#ai_summary_container').then(yseSummaryInit);
+        }
+        window.yseLoadSummaryCard = yseLoadSummaryCard;
+        function yseSummaryInit() {
+            var $body = $('#yse_ai_summary_body');
+            var active = $body.data('active');
+            if (active === 1 || active === '1') {
+                var seconds = parseInt($body.data('poll-seconds'), 10) || 3;
+                yseSummaryPollTimer = setTimeout(function() { yseLoadSummaryCard(true); }, seconds * 1000);
+            }
+            if (yseSummaryBound) { return; }
+            yseSummaryBound = true;
+            var $c = $('#ai_summary_container');
+            function fail(xhr) {
+                var msg = 'Request failed.';
+                if (xhr && xhr.responseJSON && xhr.responseJSON.error) { msg = xhr.responseJSON.error; }
+                else if (xhr && xhr.status) { msg = 'Request failed (HTTP ' + xhr.status + ').'; }
+                $('#ai_summary_error').text(msg);
+            }
+            function post(url, data) {
+                return $.ajax({ url: url, method: 'POST', data: data,
+                                headers: { 'X-CSRFToken': $('input[name=csrfmiddlewaretoken]').first().val() || getCookie('csrftoken') } });
+            }
+            function getCookie(name) {
+                var m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+                return m ? m.pop() : '';
+            }
+            $c.on('click', '[data-summary-action]', function() {
+                var $btn = $(this);
+                var action = $btn.data('summary-action');
+                $('#ai_summary_error').text('');
+                if (action === 'generate') {
+                    $btn.prop('disabled', true);
+                    post($c.data('generate-url'), {}).done(function() { yseLoadSummaryCard(true); }).fail(function(xhr) {
+                        $btn.prop('disabled', false); fail(xhr);
+                    });
+                } else if (action === 'edit') {
+                    $('#ai_summary_view').hide(); $('#ai_summary_history').hide(); $('#ai_summary_editor').show();
+                    $('#ai_summary_textarea').focus();
+                } else if (action === 'cancel') {
+                    $('#ai_summary_editor').hide(); $('#ai_summary_view').show();
+                } else if (action === 'save') {
+                    $btn.prop('disabled', true);
+                    post($c.data('edit-url'), { text: $('#ai_summary_textarea').val() }).done(function() {
+                        yseLoadSummaryCard(true);
+                    }).fail(function(xhr) { $btn.prop('disabled', false); $('#ai_summary_editor').hide(); $('#ai_summary_view').show(); fail(xhr); });
+                } else if (action === 'history') {
+                    $('#ai_summary_history').toggle();
+                }
+            });
+            $c.on('change', '#ai_summary_optin', function() {
+                var enabled = $(this).is(':checked') ? '1' : '0';
+                post($c.data('optin-url'), { enabled: enabled }).done(function() { yseLoadSummaryCard(true); }).fail(fail);
+            });
+        }
+    </script>
+    <script>
+        /* Annotations tab (#317, #318): the fragment is HTML; this loads it, drives the
+           Check / Rerun / delete buttons, polls while a check runs, and keeps the tab
+           label count and the Summary-tab verdict badges up to date. */
+        var yseAnnotationsPollTimer = null;
+        var yseAnnotationsBound = false;
+        function yseAnnotationsEscape(value) {
+            if (value === null || value === undefined) { return ''; }
+            return String(value).replace(/[&<>"']/g, function(ch) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch];
+            });
+        }
+        function yseLoadAnnotationsTab(force) {
+            if (force && window.yseDetailFragmentsLoaded) {
+                delete window.yseDetailFragmentsLoaded['annotations'];
+            }
+            if (yseAnnotationsPollTimer) {
+                clearTimeout(yseAnnotationsPollTimer);
+                yseAnnotationsPollTimer = null;
+            }
+            return window.yseLoadDetailFragment(
+                'annotations',
+                "{% url 'transient_detail_annotations_fragment' transient.id %}",
+                '#annotations_container'
+            ).then(yseAnnotationsInit);
+        }
+        window.yseLoadAnnotationsTab = yseLoadAnnotationsTab;
+        function yseAnnotationsSummary() {
+            $.getJSON("{% url 'transient_annotations_summary' transient.id %}").done(function(json) {
+                if (!json) { return; }
+                /* The tab label stays "Annotations": no counts on tabs (#387). */
+                var $badges = $('#annotation_badges');
+                if (!$badges.length) { return; }
+                $badges.empty();
+                var badges = json.badges || [];
+                for (var i = 0; i < badges.length; i++) {
+                    var b = badges[i];
+                    var cls = b.verdict === 'stellar' ? 'badge-danger' : (b.verdict === 'moving object' ? 'badge-info' : 'badge-warning');
+                    $badges.append('<a href="#annotations_tab" class="badge ' + cls + ' annotation-badge mr-1" title="' +
+                        yseAnnotationsEscape(b.summary) + '" data-origin="' + yseAnnotationsEscape(b.origin) + '">' +
+                        yseAnnotationsEscape(b.origin) + ': ' + yseAnnotationsEscape(b.verdict) + '</a>');
+                }
+            });
+        }
+        window.yseAnnotationsSummary = yseAnnotationsSummary;
+        function yseAnnotationsInit() {
+            var $body = $('#yse_annotations_tab_body');
+            var active = $body.data('active');
+            if (active === 1 || active === '1') {
+                var seconds = parseInt($body.data('poll-seconds'), 10) || 4;
+                yseAnnotationsPollTimer = setTimeout(function() {
+                    yseLoadAnnotationsTab(true).then(yseAnnotationsSummary);
+                }, seconds * 1000);
+            }
+            if (yseAnnotationsBound) { return; }
+            yseAnnotationsBound = true;
+            $('#annotations_tab').on('click', '[data-annotation-action]', function() {
+                var $btn = $(this);
+                var action = $btn.data('annotation-action');
+                var payload, url;
+                if (action === 'delete') {
+                    if (!window.confirm('Delete the "' + $btn.data('origin') + '" annotation?')) { return; }
+                    url = $('#yse_annotations_tab_body').data('delete-url');
+                    payload = {origin: $btn.data('origin')};
+                } else {
+                    url = $('#yse_annotations_tab_body').data('run-url');
+                    payload = {service: $btn.data('service')};
+                }
+                $btn.prop('disabled', true);
+                $('#annotation_run_error').text('');
+                $.ajax({
+                    url: url, method: 'POST', contentType: 'application/json',
+                    headers: {'X-CSRFToken': '{{ csrf_token }}'},
+                    data: JSON.stringify(payload)
+                }).done(function() {
+                    yseLoadAnnotationsTab(true).then(yseAnnotationsSummary);
+                }).fail(function(xhr) {
+                    var msg = (xhr.responseJSON && xhr.responseJSON.error) || ('request failed (' + xhr.status + ')');
+                    $('#annotation_run_error').text(msg);
+                    $btn.prop('disabled', false);
+                });
+            });
+            $(document).on('click', 'a.annotation-badge', function(event) {
+                event.preventDefault();
+                $('a[href="#annotations_tab"]').tab('show');
+            });
+        }
+        $(function() {
+            yseAnnotationsSummary();
+            if (window.location.hash === '#annotations_tab') {
+                $('a[href="#annotations_tab"]').tab('show');
+            }
+        });
     </script>
 {% endblock %}

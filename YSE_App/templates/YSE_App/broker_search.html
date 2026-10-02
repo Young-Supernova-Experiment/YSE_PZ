@@ -1,0 +1,94 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Broker search <small class="text-muted">cone search across the enabled alert brokers</small></h1>
+{% endblock %}
+
+{% block content %}
+{% if messages %}
+<div class="row"><div class="col-12">
+	{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+</div></div>
+{% endif %}
+<div class="row">
+	<div class="col-lg-3 col-12">
+		<div class="box box-default box-solid">
+			<div class="box-header with-border"><strong>Position</strong></div>
+			<div class="box-body">
+				<form method="get" action="{% url 'broker_search' %}" id="yse-broker-search-form">
+					<div class="form-group"><label for="bs-name">Object name</label><input class="form-control form-control-sm" id="bs-name" name="name" value="{{ name }}" placeholder="2026abc or ZTF26aaaaaaa"><small class="text-muted">A YSE-PZ transient, alias, or a broker object id.</small></div>
+					<div class="form-row">
+						<div class="form-group col-6"><label for="bs-ra">RA</label><input class="form-control form-control-sm" id="bs-ra" name="ra" value="{% if ra != None %}{{ ra }}{% endif %}" placeholder="150.0 or 10:00:00"></div>
+						<div class="form-group col-6"><label for="bs-dec">Dec</label><input class="form-control form-control-sm" id="bs-dec" name="dec" value="{% if dec != None %}{{ dec }}{% endif %}" placeholder="40.0 or +40:00:00"></div>
+					</div>
+					<div class="form-group"><label for="bs-radius">Radius (arcsec)</label><input class="form-control form-control-sm" id="bs-radius" name="radius" type="number" step="0.5" min="0.1" max="600" value="{{ radius }}"></div>
+					<button type="submit" class="btn btn-sm btn-primary">Search</button>
+				</form>
+			</div>
+		</div>
+		<div class="box box-default box-solid">
+			<div class="box-header with-border"><strong>Brokers</strong></div>
+			<div class="box-body p-0">
+				<table class="table table-sm mb-0"><tbody>
+				{% for p in providers %}
+				<tr data-broker="{{ p.slug }}" data-available="{{ p.available|yesno:'1,0' }}"><td><strong>{{ p.name }}</strong><br><span class="small text-muted">{% if p.available %}{% if 'cone_search' in p.capabilities %}cone search{% else %}no cone search{% endif %}{% if 'save_as_transient' in p.capabilities %}, save{% endif %}{% if 'cutouts' in p.capabilities %}, cutouts{% endif %}{% else %}unavailable: {{ p.unavailable_reason }}{% endif %}</span></td></tr>
+				{% empty %}<tr><td class="text-muted">No broker enabled.</td></tr>{% endfor %}
+				</tbody></table>
+			</div>
+		</div>
+	</div>
+	<div class="col-lg-9 col-12">
+		{% if error %}<div class="alert alert-warning">{{ error }}</div>{% endif %}
+		{% if searched %}
+		<div class="box box-default box-solid">
+			<div class="box-header with-border"><strong>Results</strong> <span class="small text-muted ml-2">RA {{ ra|floatformat:5 }}, Dec {{ dec|floatformat:5 }}, radius {{ radius|floatformat:1 }}&Prime;</span>
+				{% if nearby %}<span class="float-right small">Already in YSE-PZ: {% for t in nearby %}<a href="{% url 'transient_detail' t.slug %}" class="badge badge-success mr-1">{{ t.name }}</a>{% endfor %}</span>{% endif %}</div>
+			<div class="box-body p-0">
+			{% for s in sections %}
+			<div class="yse-broker-section border-bottom" data-broker="{{ s.slug }}" data-error="{% if s.error %}1{% else %}0{% endif %}">
+				<div class="px-2 py-1 bg-light"><strong>{{ s.name }}</strong> <span class="small text-muted">{{ s.alerts|length }} match{{ s.alerts|length|pluralize:"es" }}</span></div>
+				{% if s.error %}
+				<div class="alert alert-warning mb-0 py-1 small yse-broker-error"><i class="fa fa-exclamation-triangle"></i> {{ s.error }}</div>
+				{% elif s.alerts %}
+				<table class="table table-sm table-hover mb-0 yse-broker-results">
+					<thead><tr><th>Object</th><th>Sep.</th><th>Position</th><th>Last det.</th><th>Mag</th><th>RB</th><th>Class</th>{% if s.has_cutouts %}<th>Cutouts</th>{% endif %}<th></th></tr></thead>
+					<tbody>
+					{% for r in s.alerts %}{% with a=r.alert %}
+					<tr class="yse-broker-result" data-object-id="{{ a.object_id }}" data-broker="{{ s.slug }}">
+						<td class="text-nowrap">{% if a.url %}<a href="{{ a.url }}" target="_blank" rel="noopener noreferrer">{{ a.object_id }}</a>{% else %}{{ a.object_id }}{% endif %}</td>
+						<td class="small text-nowrap">{% if r.sep != None %}{{ r.sep|floatformat:2 }}&Prime;{% endif %}</td>
+						<td class="small text-nowrap">{{ a.ra|floatformat:5 }} {{ a.dec|floatformat:5 }}</td>
+						<td class="small text-nowrap">{% if a.mjd %}MJD {{ a.mjd|floatformat:2 }}{% endif %}</td>
+						<td>{% if a.mag != None %}{{ a.mag|floatformat:2 }} {{ a.band }}{% endif %}</td>
+						<td>{% if a.rb != None %}{{ a.rb|floatformat:2 }}{% endif %}</td>
+						<td class="small">{{ a.classification }}</td>
+						{% if s.has_cutouts %}<td class="text-nowrap">{% for kind, url in r.cutouts.items %}<a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="mr-1">{{ kind|slice:":3" }}</a>{% endfor %}</td>{% endif %}
+						<td class="text-nowrap">
+							{% if r.known %}<a class="btn btn-sm btn-outline-success" href="{% url 'transient_detail' r.known.slug %}">In YSE-PZ: {{ r.known.name }}</a>
+							{% elif s.has_save %}
+							<form method="post" action="{% url 'broker_search_save' %}" class="d-inline yse-broker-save-form">
+								{% csrf_token %}
+								<input type="hidden" name="next" value="{{ request.get_full_path }}">
+								<input type="hidden" name="broker" value="{{ s.slug }}">
+								<input type="hidden" name="object_id" value="{{ a.object_id }}">
+								<select name="status" class="form-control form-control-sm d-inline-block w-auto" title="status of the saved transient">{% for st in transient_statuses %}<option value="{{ st }}"{% if st == 'New' %} selected{% endif %}>{{ st }}</option>{% endfor %}</select>
+								<button type="submit" class="btn btn-sm btn-success" title="Create a YSE-PZ transient from this object (obs group {{ a.obs_group }})">Save as transient</button>
+							</form>
+							{% endif %}
+						</td>
+					</tr>
+					{% endwith %}{% endfor %}
+					</tbody>
+				</table>
+				{% else %}<p class="small text-muted px-2 py-1 mb-0">No alert within the radius.</p>{% endif %}
+			</div>
+			{% empty %}<p class="text-muted p-2 mb-0">No enabled broker offers a cone search.</p>{% endfor %}
+			</div>
+		</div>
+		{% else %}
+		<div class="box box-default box-solid"><div class="box-body text-muted">Enter a position (or a name) and search. Results come live from the brokers that are enabled and available here; a saved object lands on the dashboard in the chosen status with the broker name as its alias.</div></div>
+		{% endif %}
+	</div>
+</div>
+{% endblock %}

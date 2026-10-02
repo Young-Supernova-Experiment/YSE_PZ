@@ -51,6 +51,16 @@
         "full_tier_reference_ms": 210,
         "max_ms": 3000,
         "note": "Same fragment with the SQL result cached (1 h TTL in the view); table build + render only."
+      },
+      "search_acceptance_sql": {
+        "baseline_ms": null,
+        "max_ms": 1000,
+        "note": "Issue #286 acceptance search (|b| > 10, peak_mag < 19, num_det >= 3, last detection within 5 d) as the FilterSet queryset over Transient + TransientPhotStat, gating tier 2000 transients (test_search_perf_regression; YSE_PERF_SEARCH_TRANSIENTS overrides). Not scaled with the size: the gal_b / stat-row indexes must keep it flat; the criterion is under 1 s at production volume."
+      },
+      "search_acceptance_page": {
+        "baseline_ms": null,
+        "max_ms": 2500,
+        "note": "GET /search/ with the same parameters: the query, the paginator COUNT, the form's choice lists and the table render."
       }
     }
   }

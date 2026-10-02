@@ -9,9 +9,11 @@ https://docs.djangoproject.com/en/1.11/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/1.11/ref/settings/
 """
+import logging
 import os
 from configparser import RawConfigParser
 
+import django
 from django.core.exceptions import ImproperlyConfigured
 
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
@@ -50,6 +52,35 @@ else:
         'SECRET_KEY is not configured. Set the DJANGO_SECRET_KEY environment '
         'variable or SECRET_KEY under [site_settings] in YSE_PZ/settings.ini '
         '(required whenever IS_DEBUG is False).'
+    )
+
+# Key that encrypts EncryptedCredential payloads at rest (Fernet; see
+# docs/credentials-and-external-services.md). YSE_CREDENTIALS_KEY env var or
+# [secrets] credentials_key in settings.ini; a comma-separated list is accepted,
+# the first key encrypts and every key decrypts (zero-downtime rotation).
+# Generate one with `manage.py generate_credentials_key`. With DEBUG on and no
+# key configured a key derived from SECRET_KEY is used so local docker and CI
+# work out of the box; with DEBUG off a missing key is a configuration error,
+# like SECRET_KEY above.
+_credentials_key = os.environ.get('YSE_CREDENTIALS_KEY', '').strip()
+if not _credentials_key:
+    _credentials_key = config.get('secrets', 'credentials_key', fallback='').strip()
+    if _credentials_key.startswith('<') and _credentials_key.endswith('>'):
+        _credentials_key = ''
+if _credentials_key:
+    CREDENTIALS_KEY = _credentials_key
+elif DEBUG:
+    import base64 as _b64
+    import hashlib as _hashlib
+    CREDENTIALS_KEY = _b64.urlsafe_b64encode(
+        _hashlib.sha256(('yse-credentials:' + SECRET_KEY).encode()).digest()
+    ).decode()
+else:
+    raise ImproperlyConfigured(
+        'CREDENTIALS_KEY is not configured. Set the YSE_CREDENTIALS_KEY environment '
+        'variable or credentials_key under [secrets] in YSE_PZ/settings.ini '
+        '(required whenever IS_DEBUG is False). Generate a key with '
+        '`python manage.py generate_credentials_key`.'
     )
 
 # Hosts this stack answers for. DJANGO_ALLOWED_HOSTS env var or a comma-separated
@@ -127,6 +158,33 @@ CRON_CLASSES = [
     # Personal-dashboard saved-query cache warmer; no-op unless
     # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
     'YSE_App.data_ingest.Dashboard_Cache_Warm.WarmDashboardQueries',
+    # Background job queue: one run_jobs pass per runcrons run (#263); no-op
+    # when JOB_RUNNER_CRON_ENABLED is False (see the end of this file).
+    'YSE_App.data_ingest.Job_Queue.RunQueuedJobs',
+    # Daily retention of notification and finished-job rows (#320); no-op when
+    # NOTIFICATION_PRUNE_CRON_ENABLED is False.
+    'YSE_App.data_ingest.Job_Queue.PruneNotifications',
+    # Broker polling ingest to candidates (#276): enqueues brokers.ingest jobs;
+    # no-op unless BROKER_INGEST_CRON_ENABLED is set ([brokers] in settings.ini).
+    'YSE_App.data_ingest.Broker_Ingest.BrokerPoll',
+    # Sharing services (#324): queue the TNS retrieval and auto-publish sweep jobs;
+    # no-ops unless enabled under [sharing] in settings.ini.
+    'YSE_App.data_ingest.Sharing_Jobs.TNSRetrieval',
+    'YSE_App.data_ingest.Sharing_Jobs.AutoPublishSweep',
+    # Instrument logs and weather (#309): queue the facility-API log pull and the
+    # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
+    'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
+    'YSE_App.data_ingest.Instrument_Logs.WeatherRefresh',
+    # Facility queue (#300): queue one facility.poll job for open LCO / ZTF / ATLAS
+    # requests; no-op unless FACILITY_POLL_CRON_ENABLED is set ([site_settings]).
+    'YSE_App.data_ingest.Facility_Queue.FacilityPoll',
+    # Other feeds (#280): queue feeds.poll per enabled FeedSource and the minor-planet
+    # screening sweep; no-ops unless enabled under [feeds] in settings.ini.
+    'YSE_App.data_ingest.Feeds.FeedPoll',
+    'YSE_App.data_ingest.Feeds.MinorPlanetScreen',
+    # AI summaries (#296): nightly batch of summariser runs for transients with new
+    # comments / spectra / follow-ups; no-op unless SUMMARY_BATCH_CRON_ENABLED ([llm]).
+    'YSE_App.data_ingest.Summary_Jobs.SummaryRefresh',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -212,21 +270,49 @@ DATABASES = {
     }
 }
 
+# Shared cache. With REDIS_URL set, every web process and the cron runner share
+# one cache (dashboard saved-query results, plot HTML); without it each process
+# has its own LocMemCache. The project runs Django 3.2, which has no built-in
+# Redis backend (django.core.cache.backends.redis is 4.0+), so the Redis
+# backend comes from the django-redis package (requirements.txt). If REDIS_URL
+# is set but that package is missing we log a warning and keep LocMemCache
+# rather than fail every request with InvalidCacheBackendError (#338).
+_LOCMEM_CACHE = {
+    'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+    'LOCATION': 'yse-default',
+}
+
+
+def _redis_cache_backend():
+    """Return the importable Redis cache backend path, or None."""
+    try:
+        import django_redis  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        return 'django_redis.cache.RedisCache'
+    if django.VERSION >= (4, 0):
+        try:
+            import redis  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            return 'django.core.cache.backends.redis.RedisCache'
+    return None
+
+
 _redis_url = os.environ.get('REDIS_URL', '').strip()
-if _redis_url:
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-            'LOCATION': _redis_url,
-        }
-    }
+_redis_backend = _redis_cache_backend() if _redis_url else None
+if _redis_url and _redis_backend is None:
+    logging.getLogger(__name__).warning(
+        'REDIS_URL is set but no Redis cache backend is importable on Django %s '
+        '(pip install django-redis); using the per-process LocMemCache instead.',
+        django.get_version(),
+    )
+if _redis_backend:
+    CACHES = {'default': {'BACKEND': _redis_backend, 'LOCATION': _redis_url}}
 else:
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'yse-default',
-        }
-    }
+    CACHES = {'default': dict(_LOCMEM_CACHE)}
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
 
@@ -369,3 +455,297 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
+
+# ---------------------------------------------------------------------------
+# Background job queue (YSE_App.jobs; issue #263) and notification queue
+# (YSE_App.services.notify; issue #266). All keys optional, [site_settings] in
+# settings.ini; docs/background-jobs.md explains each one.
+JOB_RUNNER_MAX_ATTEMPTS = config.getint('site_settings', 'JOB_RUNNER_MAX_ATTEMPTS', fallback=3)
+JOB_RUNNER_BACKOFF_SECONDS = config.getint('site_settings', 'JOB_RUNNER_BACKOFF_SECONDS', fallback=60)
+JOB_RUNNER_BACKOFF_MAX_SECONDS = config.getint('site_settings', 'JOB_RUNNER_BACKOFF_MAX_SECONDS', fallback=3600)
+JOB_RUNNER_STALE_MINUTES = config.getint('site_settings', 'JOB_RUNNER_STALE_MINUTES', fallback=60)
+JOB_RUNNER_PASS_LIMIT = config.getint('site_settings', 'JOB_RUNNER_PASS_LIMIT', fallback=100)
+# The RunQueuedJobs django_cron class drains the queue from `manage.py runcrons`;
+# set False once a `run_jobs --loop` worker (systemd) owns the queue.
+JOB_RUNNER_CRON_ENABLED = (
+    os.environ.get('YSE_JOB_RUNNER_CRON', '').strip() not in ('0', 'false', 'no')
+    and config.getboolean('site_settings', 'JOB_RUNNER_CRON_ENABLED', fallback=True)
+)
+JOB_RUNNER_CRON_MINUTES = config.getint('site_settings', 'JOB_RUNNER_CRON_MINUTES', fallback=1)
+JOB_RUNNER_CRON_BUDGET_SECONDS = config.getint('site_settings', 'JOB_RUNNER_CRON_BUDGET_SECONDS', fallback=50)
+# Run jobs synchronously inside enqueue() (development, tests); no runner needed.
+JOB_RUNNER_INLINE = (
+    os.environ.get('YSE_JOB_RUNNER_INLINE', '').strip() == '1'
+    or config.getboolean('site_settings', 'JOB_RUNNER_INLINE', fallback=False)
+)
+# Extra modules whose import registers @job handlers (comma-separated).
+JOB_HANDLER_MODULES = [
+    m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
+]
+
+# Facility APIs (#298): extra adapter modules (comma-separated) and the HTTP
+# timeout for submissions / status polls (docs/facility-apis.md).
+FACILITY_API_MODULES = [
+    m.strip() for m in config.get('site_settings', 'FACILITY_API_MODULES', fallback='').split(',') if m.strip()
+]
+FACILITY_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'FACILITY_HTTP_TIMEOUT_SECONDS', fallback=30)
+# Facility queue (#300): submission attempts on transport errors (bounded by the
+# job's own max attempts), their backoff, the poll cron (off by default) and whether
+# the allocation's audience groups are notified when a request finishes.
+FACILITY_SUBMIT_MAX_ATTEMPTS = config.getint('site_settings', 'FACILITY_SUBMIT_MAX_ATTEMPTS', fallback=3)
+FACILITY_SUBMIT_BACKOFF_SECONDS = config.getint('site_settings', 'FACILITY_SUBMIT_BACKOFF_SECONDS', fallback=120)
+FACILITY_POLL_CRON_ENABLED = (
+    os.environ.get('YSE_FACILITY_POLL_CRON', '').strip() == '1'
+    or config.getboolean('site_settings', 'FACILITY_POLL_CRON_ENABLED', fallback=False)
+)
+FACILITY_POLL_CRON_MINUTES = config.getint('site_settings', 'FACILITY_POLL_CRON_MINUTES', fallback=10)
+FACILITY_POLL_LIMIT = config.getint('site_settings', 'FACILITY_POLL_LIMIT', fallback=200)
+FACILITY_NOTIFY_GROUPS = config.getboolean('site_settings', 'FACILITY_NOTIFY_GROUPS', fallback=False)
+# Liverpool Telescope RTML socket (facility 'lt').
+LT_RTML_HOST = config.get('site_settings', 'LT_RTML_HOST', fallback='telescope.livjm.ac.uk')
+LT_RTML_PORT = config.getint('site_settings', 'LT_RTML_PORT', fallback=8080)
+
+# Instrument logs, weather widget and SkyCam (#309: #310, #311). All keys optional,
+# under [observatory] in settings.ini; docs/instrument-logs-weather.md explains each.
+# The per-telescope endpoints (weather_url, weather_link, skycam_url) live on the
+# Telescope rows (admin). Both crons queue jobs and are off by default.
+INSTRUMENT_LOG_PULL_CRON_ENABLED = (
+    os.environ.get('YSE_INSTRUMENT_LOG_PULL_CRON', '').strip() == '1'
+    or config.getboolean('observatory', 'INSTRUMENT_LOG_PULL_CRON_ENABLED', fallback=False)
+)
+INSTRUMENT_LOG_PULL_CRON_MINUTES = config.getint('observatory', 'INSTRUMENT_LOG_PULL_CRON_MINUTES', fallback=60)
+# Each pull asks the facility for the last N hours (the fingerprint de-duplicates overlaps).
+INSTRUMENT_LOG_PULL_HOURS = config.getint('observatory', 'INSTRUMENT_LOG_PULL_HOURS', fallback=24)
+WEATHER_REFRESH_CRON_ENABLED = (
+    os.environ.get('YSE_WEATHER_REFRESH_CRON', '').strip() == '1'
+    or config.getboolean('observatory', 'WEATHER_REFRESH_CRON_ENABLED', fallback=False)
+)
+WEATHER_REFRESH_CRON_MINUTES = config.getint('observatory', 'WEATHER_REFRESH_CRON_MINUTES', fallback=10)
+# A snapshot younger than this is served from the Telescope.weather cache without a fetch.
+WEATHER_CACHE_MINUTES = config.getint('observatory', 'WEATHER_CACHE_MINUTES', fallback=10)
+WEATHER_HTTP_TIMEOUT_SECONDS = config.getint('observatory', 'WEATHER_HTTP_TIMEOUT_SECONDS', fallback=10)
+# The widget reloads the SkyCam image and re-reads the weather every N seconds (0 = never).
+SKYCAM_REFRESH_SECONDS = config.getint('observatory', 'SKYCAM_REFRESH_SECONDS', fallback=300)
+WEATHER_WIDGET_REFRESH_SECONDS = config.getint('observatory', 'WEATHER_WIDGET_REFRESH_SECONDS', fallback=600)
+# Analysis services (#312; docs/analysis-services.md): webhook POST timeout, size
+# cap per result file and files per run. Result files live under
+# MEDIA_ROOT/service_runs/<run uuid>/ and are served by an access-checked view.
+ANALYSIS_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'ANALYSIS_HTTP_TIMEOUT_SECONDS', fallback=30)
+ANALYSIS_MAX_ATTACHMENT_BYTES = config.getint('site_settings', 'ANALYSIS_MAX_ATTACHMENT_BYTES', fallback=25 * 1024 * 1024)
+ANALYSIS_MAX_FILES_PER_RUN = config.getint('site_settings', 'ANALYSIS_MAX_FILES_PER_RUN', fallback=20)
+# NGSF spectral classification (#315; docs/ngsf.md): the command that runs Next Generation
+# SuperFit (a program name on PATH or a full command such as "python /opt/NGSF/run.py"; an
+# optional "{params}" marks where the parameters.json path goes, else it is appended), the
+# directory holding NGSF's template bank and its base parameters.json, and how long one
+# subprocess may run. Empty NGSF_COMMAND = not installed: the Summary tab says so.
+NGSF_COMMAND = config.get('site_settings', 'NGSF_COMMAND', fallback='ngsf')
+NGSF_HOME = config.get('site_settings', 'NGSF_HOME', fallback='')
+NGSF_SUBPROCESS_TIMEOUT = config.getint('site_settings', 'NGSF_SUBPROCESS_TIMEOUT', fallback=1500)
+
+# Annotations (#316; docs/annotations.md): catalogue-check HTTP timeout, cone radius,
+# how long a queued check may stay pending, which checks run for every new
+# transient (comma-separated slugs; empty = none) and TAP endpoint overrides.
+ANNOTATION_HTTP_TIMEOUT_SECONDS = config.getint('site_settings', 'ANNOTATION_HTTP_TIMEOUT_SECONDS', fallback=30)
+ANNOTATION_SEARCH_RADIUS_ARCSEC = config.getfloat('site_settings', 'ANNOTATION_SEARCH_RADIUS_ARCSEC', fallback=3.0)
+ANNOTATION_RUN_STALE_MINUTES = config.getint('site_settings', 'ANNOTATION_RUN_STALE_MINUTES', fallback=60)
+ANNOTATION_AUTORUN_SERVICES = config.get('site_settings', 'ANNOTATION_AUTORUN_SERVICES', fallback='').strip()
+GAIA_TAP_URL = config.get('site_settings', 'GAIA_TAP_URL', fallback='').strip()
+VIZIER_TAP_URL = config.get('site_settings', 'VIZIER_TAP_URL', fallback='').strip()
+
+# AI summaries (#294; docs/ai-summaries.md). All keys optional, under [llm] in
+# settings.ini. The provider key is never here: it lives in an EncryptedCredential
+# (attached to the ai_summary ExternalService, or named by LLM_CREDENTIAL).
+# LLM_PROVIDER: template (default; deterministic, no network), openai (any
+# OpenAI-compatible /chat/completions endpoint) or anthropic (Messages API).
+LLM_PROVIDER = (os.environ.get('YSE_LLM_PROVIDER', '').strip()
+                or config.get('llm', 'LLM_PROVIDER', fallback='template')).strip().lower() or 'template'
+LLM_MODEL = config.get('llm', 'LLM_MODEL', fallback='').strip()
+# API model-ID default when LLM_PROVIDER is anthropic and LLM_MODEL is blank.
+LLM_ANTHROPIC_DEFAULT_MODEL = config.get('llm', 'LLM_ANTHROPIC_DEFAULT_MODEL', fallback='claude-opus-5-5').strip()
+LLM_API_BASE = config.get('llm', 'LLM_API_BASE', fallback='').strip()
+LLM_CREDENTIAL = config.get('llm', 'LLM_CREDENTIAL', fallback='llm').strip()
+LLM_MAX_TOKENS = config.getint('llm', 'LLM_MAX_TOKENS', fallback=600)
+_llm_temperature = config.get('llm', 'LLM_TEMPERATURE', fallback='').strip()
+LLM_TEMPERATURE = float(_llm_temperature) if _llm_temperature else None
+LLM_HTTP_TIMEOUT_SECONDS = config.getint('llm', 'LLM_HTTP_TIMEOUT_SECONDS', fallback=60)
+# Embeddings for /summary_search/: an OpenAI-compatible /embeddings endpoint, or
+# (both blank) the built-in hashed bag-of-words embedder that needs no key.
+LLM_EMBEDDING_API_BASE = config.get('llm', 'LLM_EMBEDDING_API_BASE', fallback='').strip()
+LLM_EMBEDDING_MODEL = config.get('llm', 'LLM_EMBEDDING_MODEL', fallback='').strip()
+SUMMARY_MAX_COMMENTS = config.getint('llm', 'SUMMARY_MAX_COMMENTS', fallback=15)
+SUMMARY_PROMPT_MAX_CHARS = config.getint('llm', 'SUMMARY_PROMPT_MAX_CHARS', fallback=12000)
+SUMMARY_RUN_STALE_MINUTES = config.getint('llm', 'SUMMARY_RUN_STALE_MINUTES', fallback=30)
+# Human edits: every user who can see the transient (default) or staff / can_edit_summary only.
+SUMMARY_EDIT_STAFF_ONLY = config.getboolean('llm', 'SUMMARY_EDIT_STAFF_ONLY', fallback=False)
+SUMMARY_SEARCH_LIMIT = config.getint('llm', 'SUMMARY_SEARCH_LIMIT', fallback=25)
+SUMMARY_SEARCH_MODE = config.get('llm', 'SUMMARY_SEARCH_MODE', fallback='embedding').strip().lower()
+# Cosine similarity below this is noise (hash collisions of the local embedder) and is not listed.
+SUMMARY_SEARCH_MIN_SCORE = config.getfloat('llm', 'SUMMARY_SEARCH_MIN_SCORE', fallback=0.1)
+# Nightly batch (SummaryRefresh cron -> summaries.refresh_stale job); off by default.
+SUMMARY_BATCH_CRON_ENABLED = (
+    os.environ.get('YSE_SUMMARY_BATCH_CRON', '').strip() == '1'
+    or config.getboolean('llm', 'SUMMARY_BATCH_CRON_ENABLED', fallback=False)
+)
+SUMMARY_BATCH_CRON_MINUTES = config.getint('llm', 'SUMMARY_BATCH_CRON_MINUTES', fallback=1440)
+SUMMARY_BATCH_HOURS = config.getint('llm', 'SUMMARY_BATCH_HOURS', fallback=24)
+SUMMARY_BATCH_MAX = config.getint('llm', 'SUMMARY_BATCH_MAX', fallback=200)
+
+# Email delivery defaults to "on when [SMTP_provider] holds real credentials"
+# (the senders it replaced, alert.py and the comment-mention emails, sent
+# unconditionally); NOTIFICATION_EMAIL_ENABLED in settings.ini or env
+# YSE_NOTIFICATION_EMAIL=1/0 overrides.
+_smtp_configured = bool(
+    (SMTP_LOGIN or '').strip() and not (SMTP_LOGIN or '').strip().startswith('<')
+    and (SMTP_PASSWORD or '').strip() and not (SMTP_PASSWORD or '').strip().startswith('<')
+)
+_email_env = os.environ.get('YSE_NOTIFICATION_EMAIL', '').strip()
+NOTIFICATION_EMAIL_ENABLED = (
+    _email_env == '1' if _email_env in ('0', '1')
+    else config.getboolean('site_settings', 'NOTIFICATION_EMAIL_ENABLED', fallback=_smtp_configured)
+)
+NOTIFICATION_SLACK_ENABLED = config.getboolean('site_settings', 'NOTIFICATION_SLACK_ENABLED', fallback=True)
+NOTIFICATION_SLACK_TIMEOUT_SECONDS = config.getint('site_settings', 'NOTIFICATION_SLACK_TIMEOUT_SECONDS', fallback=10)
+NOTIFICATION_EMAIL_SUBJECT_PREFIX = config.get('site_settings', 'NOTIFICATION_EMAIL_SUBJECT_PREFIX', fallback='[YSE-PZ] ')
+# Absolute prefix for links in emails/Slack posts; defaults to YSE_PUBLIC_BASE_URL.
+NOTIFICATION_BASE_URL = (
+    os.environ.get('YSE_NOTIFICATION_BASE_URL', '').strip()
+    or config.get('site_settings', 'NOTIFICATION_BASE_URL', fallback='')
+    or YSE_PUBLIC_BASE_URL
+)
+NOTIFICATION_LIST_PAGE_SIZE = config.getint('site_settings', 'NOTIFICATION_LIST_PAGE_SIZE', fallback=50)
+# Favorite-transient activity (#323): events on one transient for one user
+# within this window share a notification and its delayed email/Slack
+# delivery; 0 sends every event on its own.
+FAVORITE_ACTIVITY_BATCH_MINUTES = config.getint('site_settings', 'FAVORITE_ACTIVITY_BATCH_MINUTES', fallback=60)
+# Retention (#320): the notifications.prune job / PruneNotifications cron deletes
+# read notifications, unread notifications and finished job rows older than
+# these many days (0 disables that part); the cron runs every
+# NOTIFICATION_PRUNE_CRON_MINUTES from `manage.py runcrons`.
+NOTIFICATION_RETENTION_DAYS = config.getint('site_settings', 'NOTIFICATION_RETENTION_DAYS', fallback=90)
+NOTIFICATION_UNREAD_RETENTION_DAYS = config.getint('site_settings', 'NOTIFICATION_UNREAD_RETENTION_DAYS', fallback=365)
+JOB_RETENTION_DAYS = config.getint('site_settings', 'JOB_RETENTION_DAYS', fallback=30)
+NOTIFICATION_PRUNE_CRON_ENABLED = config.getboolean('site_settings', 'NOTIFICATION_PRUNE_CRON_ENABLED', fallback=True)
+NOTIFICATION_PRUNE_CRON_MINUTES = config.getint('site_settings', 'NOTIFICATION_PRUNE_CRON_MINUTES', fallback=1440)
+
+# Django's mail backend, fed from the existing [SMTP_provider] block so
+# django.core.mail.send_mail (notification emails) uses the same account as
+# YSE_App/common/alert.py. A "<...>" placeholder counts as unset.
+def _ini_value(value):
+    value = (value or '').strip()
+    return '' if value.startswith('<') else value
+
+EMAIL_BACKEND = (
+    os.environ.get('YSE_EMAIL_BACKEND', '').strip()
+    or config.get('SMTP_provider', 'EMAIL_BACKEND', fallback='django.core.mail.backends.smtp.EmailBackend')
+)
+EMAIL_HOST = _ini_value(SMTP_HOST) or 'localhost'
+EMAIL_PORT = int(_ini_value(SMTP_PORT) or 587) if _ini_value(SMTP_PORT).isdigit() or not _ini_value(SMTP_PORT) else 587
+EMAIL_HOST_USER = _ini_value(SMTP_LOGIN)
+EMAIL_HOST_PASSWORD = _ini_value(SMTP_PASSWORD)
+EMAIL_USE_TLS = config.getboolean('SMTP_provider', 'SMTP_USE_TLS', fallback=True)
+EMAIL_TIMEOUT = config.getint('SMTP_provider', 'SMTP_TIMEOUT_SECONDS', fallback=30)
+DEFAULT_FROM_EMAIL = _ini_value(config.get('SMTP_provider', 'FROM_ADDRESS', fallback='')) or (
+    EMAIL_HOST_USER if '@' in EMAIL_HOST_USER
+    else ('%s@gmail.com' % EMAIL_HOST_USER if EMAIL_HOST_USER else 'yse-pz@localhost')
+)
+
+# ---------------------------------------------------------------------------
+# Alert brokers (YSE_App.brokers; issues #272, #276). All keys optional, under
+# [brokers] in settings.ini; docs/brokers.md explains each one.
+# Comma-separated provider slugs to offer (empty = every shipped provider:
+# antares, fink, alerce). A provider whose client package is missing is listed
+# as unavailable rather than erroring.
+BROKERS_ENABLED = [
+    s.strip() for s in config.get('brokers', 'enabled', fallback='').split(',') if s.strip()
+]
+# Extra modules whose import registers BrokerProvider subclasses (comma-separated).
+BROKER_PROVIDER_MODULES = [
+    m.strip() for m in config.get('brokers', 'PROVIDER_MODULES', fallback='').split(',') if m.strip()
+]
+# The BrokerPoll django_cron class enqueues one brokers.ingest job per broker
+# with enabled filters; off by default (env YSE_BROKER_INGEST_CRON=1 or ini).
+BROKER_INGEST_CRON_ENABLED = (
+    os.environ.get('YSE_BROKER_INGEST_CRON', '').strip() == '1'
+    or config.getboolean('brokers', 'INGEST_CRON_ENABLED', fallback=False)
+)
+BROKER_INGEST_CRON_MINUTES = config.getint('brokers', 'INGEST_CRON_MINUTES', fallback=60)
+BROKER_HTTP_TIMEOUT_SECONDS = config.getint('brokers', 'HTTP_TIMEOUT_SECONDS', fallback=30)
+# A candidate within this many arcsec of an existing transient is linked to it instead of creating a new one.
+BROKER_MATCH_RADIUS_ARCSEC = config.getfloat('brokers', 'MATCH_RADIUS_ARCSEC', fallback=2.0)
+# User that auto-saved transients are stamped with (falls back to any superuser).
+BROKER_AUTO_SAVE_USERNAME = config.get('brokers', 'AUTO_SAVE_USERNAME', fallback='admin')
+BROKER_CANDIDATES_PAGE_SIZE = config.getint('brokers', 'CANDIDATES_PAGE_SIZE', fallback=50)
+# Override the public REST endpoints (tests, mirrors).
+BROKER_FINK_API_URL = config.get('brokers', 'FINK_API_URL', fallback='') or None
+BROKER_ALERCE_API_URL = config.get('brokers', 'ALERCE_API_URL', fallback='') or None
+BROKER_LASAIR_API_URL = config.get('brokers', 'LASAIR_API_URL', fallback='') or None
+# Stream consumers (broker_ingest, #278): messages per batch / commit, and how old a
+# running worker's heartbeat may be before the dashboard shows the banner.
+BROKER_STREAM_BATCH_SIZE = config.getint('brokers', 'STREAM_BATCH_SIZE', fallback=100)
+BROKER_STREAM_STALE_MINUTES = config.getfloat('brokers', 'STREAM_STALE_MINUTES', fallback=15.0)
+# Transient-detail Brokers tab (#275): cone-search radius around the transient.
+BROKER_DETAIL_RADIUS_ARCSEC = config.getfloat('brokers', 'DETAIL_RADIUS_ARCSEC', fallback=5.0)
+# Sharing services: TNS reporting, submission queue, TNS retrieval (#324;
+# docs/tns-sharing.md). All keys optional, under [sharing] in settings.ini.
+# The bot credentials live in EncryptedCredential rows, not here.
+TNS_API_URL = config.get('sharing', 'TNS_API_URL', fallback='https://www.wis-tns.org/api')
+TNS_SANDBOX_API_URL = config.get('sharing', 'TNS_SANDBOX_API_URL', fallback='https://sandbox.wis-tns.org/api')
+TNS_HTTP_TIMEOUT_SECONDS = config.getint('sharing', 'TNS_HTTP_TIMEOUT_SECONDS', fallback=60)
+# New SharingService rows start in sandbox mode; the per-service "testing" flag decides at run time.
+SHARING_DEFAULT_TESTING = config.getboolean('sharing', 'DEFAULT_TESTING', fallback=True)
+# Rename the transient to its TNS designation when a discovery report is accepted
+# (the old name is kept as an alternate name); per-service config.rename_transient overrides.
+SHARING_RENAME_ON_ACCEPT = config.getboolean('sharing', 'RENAME_ON_ACCEPT', fallback=True)
+# bulk-report-reply polling: first poll after N seconds, then the queue's backoff, up to M polls.
+SHARING_POLL_DELAY_SECONDS = config.getint('sharing', 'POLL_DELAY_SECONDS', fallback=10)
+SHARING_POLL_MAX_ATTEMPTS = config.getint('sharing', 'POLL_MAX_ATTEMPTS', fallback=12)
+# Actor for rule- and job-created rows (falls back to the first superuser).
+SHARING_SYSTEM_USERNAME = config.get('sharing', 'SYSTEM_USERNAME', fallback='')
+# Auto-publisher rules: evaluate on every Transient save (cheap no-op without rules) and/or sweep hourly.
+SHARING_AUTOPUBLISH_ON_SAVE = config.getboolean('sharing', 'AUTOPUBLISH_ON_SAVE', fallback=True)
+SHARING_AUTOPUBLISH_CRON_ENABLED = (
+    os.environ.get('YSE_SHARING_AUTOPUBLISH_CRON', '').strip() == '1'
+    or config.getboolean('sharing', 'AUTOPUBLISH_CRON_ENABLED', fallback=False)
+)
+SHARING_AUTOPUBLISH_CRON_MINUTES = config.getint('sharing', 'AUTOPUBLISH_CRON_MINUTES', fallback=60)
+# TNS retrieval (#327): match internally named transients to TNS by cone search.
+SHARING_TNS_RETRIEVAL_CRON_ENABLED = (
+    os.environ.get('YSE_SHARING_TNS_RETRIEVAL_CRON', '').strip() == '1'
+    or config.getboolean('sharing', 'TNS_RETRIEVAL_CRON_ENABLED', fallback=False)
+)
+SHARING_TNS_RETRIEVAL_CRON_MINUTES = config.getint('sharing', 'TNS_RETRIEVAL_CRON_MINUTES', fallback=60)
+SHARING_TNS_RETRIEVAL_SERVICE = config.get('sharing', 'TNS_RETRIEVAL_SERVICE', fallback='')
+SHARING_TNS_RETRIEVAL_SINCE_DAYS = config.getfloat('sharing', 'TNS_RETRIEVAL_SINCE_DAYS', fallback=30)
+SHARING_TNS_RETRIEVAL_STATUSES = [
+    s.strip() for s in config.get(
+        'sharing', 'TNS_RETRIEVAL_STATUSES', fallback='New,Watch,Following,FollowupRequested,Interesting'
+    ).split(',') if s.strip()
+]
+SHARING_TNS_RETRIEVAL_RADIUS_ARCSEC = config.getfloat('sharing', 'TNS_RETRIEVAL_RADIUS_ARCSEC', fallback=3.0)
+SHARING_TNS_RETRIEVAL_MAX_PER_RUN = config.getint('sharing', 'TNS_RETRIEVAL_MAX_PER_RUN', fallback=50)
+SHARING_TNS_REQUEST_INTERVAL_SECONDS = config.getfloat('sharing', 'TNS_REQUEST_INTERVAL_SECONDS', fallback=1.0)
+# Other feeds: Hermes / SCiMMA, Einstein Probe, JPL Scout (#280; docs/feeds-*.md).
+# All keys optional, under [feeds] in settings.ini. Sources are FeedSource rows
+# (admin), credentials EncryptedCredential rows; nothing secret lives here.
+FEEDS_POLL_CRON_ENABLED = (
+    os.environ.get('YSE_FEEDS_POLL_CRON', '').strip() == '1'
+    or config.getboolean('feeds', 'POLL_CRON_ENABLED', fallback=False)
+)
+FEEDS_POLL_CRON_MINUTES = config.getint('feeds', 'POLL_CRON_MINUTES', fallback=15)
+FEEDS_HTTP_TIMEOUT_SECONDS = config.getint('feeds', 'HTTP_TIMEOUT_SECONDS', fallback=30)
+FEEDS_HERMES_API_URL = config.get('feeds', 'HERMES_API_URL', fallback='https://hermes.lco.global/api/v0')
+FEEDS_HERMES_KAFKA_URL = config.get('feeds', 'HERMES_KAFKA_URL', fallback='kafka://kafka.scimma.org/')
+FEEDS_GCN_KAFKA_DOMAIN = config.get('feeds', 'GCN_KAFKA_DOMAIN', fallback='gcn.nasa.gov')
+FEEDS_SCOUT_API_URL = config.get('feeds', 'SCOUT_API_URL', fallback='https://ssd-api.jpl.nasa.gov/scout.api')
+FEEDS_SBIDENT_API_URL = config.get('feeds', 'SBIDENT_API_URL', fallback='https://ssd-api.jpl.nasa.gov/sb_ident.api')
+# Minor-planet screening of new transients (#283): on creation (signal) and/or a periodic sweep.
+FEEDS_MPC_SCREEN_ON_CREATE = config.getboolean('feeds', 'MPC_SCREEN_ON_CREATE', fallback=False)
+FEEDS_MPC_SCREEN_CRON_ENABLED = (
+    os.environ.get('YSE_FEEDS_MPC_SCREEN_CRON', '').strip() == '1'
+    or config.getboolean('feeds', 'MPC_SCREEN_CRON_ENABLED', fallback=False)
+)
+FEEDS_MPC_SCREEN_CRON_MINUTES = config.getint('feeds', 'MPC_SCREEN_CRON_MINUTES', fallback=360)
+FEEDS_MPC_SCREEN_RADIUS_ARCSEC = config.getfloat('feeds', 'MPC_SCREEN_RADIUS_ARCSEC', fallback=5.0)
+FEEDS_MPC_SCREEN_SINCE_DAYS = config.getfloat('feeds', 'MPC_SCREEN_SINCE_DAYS', fallback=3.0)
+FEEDS_MPC_SCREEN_MAX_PER_RUN = config.getint('feeds', 'MPC_SCREEN_MAX_PER_RUN', fallback=50)
+FEEDS_MPC_SCREEN_OBS_CODE = config.get('feeds', 'MPC_SCREEN_OBS_CODE', fallback='500')

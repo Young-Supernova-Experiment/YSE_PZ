@@ -1005,12 +1005,60 @@ class ExplorerQueryCacheReuseTests(TestCase):
 
         cache.set(explorer_query_cache_key(self.query.id), ["perf-pdash-q0"], timeout=3600)
         watch = TransientStatus.objects.get(name="Watch")
-        _response, runs = self._explorer_runs(
+        response, runs = self._explorer_runs(
             reverse("change_status_for_query", kwargs={"query_id": self.user_query.id, "status_id": watch.id}),
-            expect_status=302,
         )
         self.assertEqual(runs, 0)
         self.assertEqual(Transient.objects.get(name="perf-pdash-q0").status, watch)
+        # #398: JSON with the count instead of a redirect the browser re-sent as PATCH
+        self.assertEqual(response.json()["n_changed"], 1)
+        self.assertEqual(response.json()["n_selected"], 1)
+        self.assertTrue(response.json()["msg"].startswith("success"))
+
+    def test_change_status_for_query_is_one_update_and_skips_unchanged(self):
+        """#398: one UPDATE however many transients; the per-row save() loop timed out."""
+        from django.core.cache import cache
+
+        from YSE_App.models import TransientStatus
+        from YSE_App.views import explorer_query_cache_key
+
+        cache.set(explorer_query_cache_key(self.query.id), ["perf-pdash-q0"], timeout=3600)
+        watch = TransientStatus.objects.get(name="Watch")
+        url = reverse("change_status_for_query", kwargs={"query_id": self.user_query.id, "status_id": watch.id})
+        with CaptureQueriesContext(connection) as ctx:
+            first = self.client.patch(url)
+        updates = [q for q in ctx.captured_queries if q["sql"].lstrip().upper().startswith("UPDATE")]
+        self.assertEqual(len(updates), 1, [q["sql"] for q in updates])
+        self.assertEqual(first.json()["n_changed"], 1)
+        again = self.client.patch(url)
+        self.assertEqual(again.json()["n_changed"], 0)
+        self.assertEqual(again.json()["n_selected"], 1)
+
+    def test_change_status_for_query_refuses_another_users_query(self):
+        from YSE_App.models import TransientStatus
+
+        other = create_test_user("speed_explorer_cache_other", is_staff=False)
+        self.client.force_login(other)
+        before = Transient.objects.get(name="perf-pdash-q0").status_id
+        watch = TransientStatus.objects.get(name="Watch")
+        response = self.client.patch(
+            reverse("change_status_for_query", kwargs={"query_id": self.user_query.id, "status_id": watch.id}))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Transient.objects.get(name="perf-pdash-q0").status_id, before)
+
+    def test_change_status_for_query_reports_a_failing_query(self):
+        from YSE_App import views as views_module
+        from YSE_App.models import TransientStatus
+
+        before = Transient.objects.get(name="perf-pdash-q0").status_id
+        watch = TransientStatus.objects.get(name="Watch")
+        with mock.patch.object(views_module, "run_explorer_query_cached", side_effect=RuntimeError("boom")), \
+                mock.patch.object(views_module.logger, "exception"):
+            response = self.client.patch(
+                reverse("change_status_for_query", kwargs={"query_id": self.user_query.id, "status_id": watch.id}))
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("no status changed", response.json()["msg"])
+        self.assertEqual(Transient.objects.get(name="perf-pdash-q0").status_id, before)
 
 
 # ------------------------------------------------------------- Batch A residual

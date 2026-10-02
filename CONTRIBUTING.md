@@ -1,22 +1,60 @@
-# Contributing to astrofoley/YSE_PZ
+# Contributing to YSE_PZ
 
-This fork’s day-to-day development targets **`main`** on [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ). Upstream is [davecoulter/YSE_PZ](https://github.com/davecoulter/YSE_PZ) (`develop`); cross-fork PRs come later when that workflow is verified.
+All development happens in [Young-Supernova-Experiment/YSE_PZ](https://github.com/Young-Supernova-Experiment/YSE_PZ).
+The old `astrofoley/YSE_PZ` fork, its `main` branch, and `davecoulter/YSE_PZ` are no
+longer part of the workflow; do not open pull requests against them.
 
-**Upstream policy:** Do **not** open pull requests to [davecoulter/YSE_PZ](https://github.com/davecoulter/YSE_PZ) (legacy upstream). Integration work from [astrofoley/YSE_PZ](https://github.com/astrofoley/YSE_PZ) lands here via branches such as `integrate/yse-*` (see open integration PRs).
+## Branches
+
+| Branch | Deployed to | Gets code from |
+| --- | --- | --- |
+| `experimental` | ziggy `/yse_experimental/` (automatic, Deploy Stack workflow) | feature/fix branches, by PR |
+| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR |
+| `master` | production (deployed by hand) | **only** `develop`, by the release PR |
+
+Details, the promotion guard, and dependency notes: [docs/branching.md](docs/branching.md).
 
 ## Workflow
 
-1. Branch from current `main`:
+1. **One GitHub issue per change.** Open an issue for each individual bug, feature or
+   chore before working on it, even small ones.
+2. **One worktree branch per group of related issues**, branched from `experimental`:
    ```bash
-   git fetch astrofoley
-   git checkout main-unified   # or: git checkout main && git pull astrofoley main
-   git checkout -b fix/issue-N-short-description
+   git fetch origin +refs/heads/experimental:refs/remotes/origin/experimental
+   git worktree add -b fix/<short-description> ../wt-<short-description> origin/experimental
    ```
-2. Make changes; reference the [issue](https://github.com/astrofoley/YSE_PZ/issues) in commits/PR body (`Fixes #N`).
-3. Open a PR into **`main`** on astrofoley/YSE_PZ (not direct pushes unless trivial).
-4. Wait for CI; merge when green.
+   Unrelated issues get separate branches. Non-conflicting small fixes may share a PR
+   as long as every issue is linked.
+3. **Open a detailed PR into `experimental`.** The body says what changed and why, how it
+   was tested, any migrations (numbered by merge order: renumber if another PR landed
+   first), new dependencies, and any step someone must run on the server. Link every
+   issue on its own line with `Fixes #N`.
+4. **Auto-merge into `experimental`** (merge commit, not squash/rebase) once CI
+   (`lint`, `docker-test`) is green. The merge deploys to `/yse_experimental/`.
+   On each issue, comment that it is implemented in experimental and add the label
+   `landed:experimental`. Do **not** close the issue.
+5. **Ryan tests on `/yse_experimental/`.** Follow-up fixes go through steps 1 to 4 again.
+6. **Promotion PR `experimental` -> `develop`**, opened from the `experimental` branch
+   itself (never push a branch named `experimental`). Its body lists the PRs and issues it
+   carries, the migrations, and server steps. Merging deploys to `/yse_test/`.
+7. **David tests on `/yse_test/`.** If he hotfixes `develop` directly while reviewing, the
+   same change is backported to `experimental` right away (issue + PR) so the branches
+   do not drift.
+8. **David merges `develop` -> `master`** (the standing release PR) and deploys
+   production by hand. Only David merges to `master`.
 
-**Remotes:** `astrofoley` → this fork; `origin` → davecoulter/YSE_PZ.
+Issues close **only** when the `develop` -> `master` PR merges: GitHub auto-closes
+issues only for PRs into the default branch (`master`), so the release PR body carries a
+"Closes on merge" list with a `Fixes #N` line for every issue promoted since the last
+release.
+
+### Tests in PRs
+
+- Tests must not reach external services (TNS, brokers, MAST, Gaia, ...): mock HTTP.
+- In CI the `explorer` database alias is a read-only MySQL user; do not declare
+  `databases = {'default', 'explorer'}` in a test case.
+- A `docker-test` exit code 137 before any test ran is the runner being killed for memory;
+  re-run once before debugging.
 
 ## Local Docker
 

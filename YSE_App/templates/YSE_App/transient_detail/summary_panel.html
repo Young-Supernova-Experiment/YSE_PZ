@@ -1,0 +1,15 @@
+{# AI summary card (#295, #296): the shell; summary_card.html is loaded into it by the page's JS. #}
+<div class="box box-primary yse-ai-summary-box" id="ai_summary_box">
+    <div class="box-header">
+        <h3 class="box-title">Summary</h3>
+        <small class="text-muted" id="ai_summary_meta_header"></small>
+        <a class="pull-right float-right small" href="{% url 'summary_search' %}" title="Search all summaries in natural language"><i class="fa fa-search"></i> Search summaries</a>
+    </div>
+    <div class="box-body" id="ai_summary_container"
+         data-fragment-url="{% url 'transient_detail_summary_fragment' transient.id %}"
+         data-generate-url="{% url 'transient_summary_generate' transient.id %}"
+         data-edit-url="{% url 'transient_summary_edit' transient.id %}"
+         data-optin-url="{% url 'transient_summary_optin' transient.id %}">
+        <p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Loading…</p>
+    </div>
+</div>

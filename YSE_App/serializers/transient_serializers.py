@@ -23,6 +23,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Transient
         fields = "__all__"
+        # Edits go through PATCH /api/transients/<id>/summary/ (audited history, #295).
+        read_only_fields = ("summary", "summary_modified")
         
     def create(self, validated_data):
 
@@ -80,6 +82,7 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         instance.TNS_spec_class = validated_data.get('TNS_spec_class', instance.TNS_spec_class)
 
         instance.has_hst = validated_data.get('has_hst', instance.has_hst)
+        instance.has_jwst = validated_data.get('has_jwst', instance.has_jwst)
         instance.has_chandra = validated_data.get('has_chandra', instance.has_chandra)
         instance.has_spitzer = validated_data.get('has_spitzer', instance.has_spitzer)
 

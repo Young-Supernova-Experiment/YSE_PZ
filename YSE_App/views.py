@@ -6,7 +6,7 @@ from django.template import loader
 from django.views import generic
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.db.models import Q
 from rest_framework.renderers import JSONRenderer
 import requests
@@ -28,6 +28,8 @@ from astropy.utils import iers
 
 logger = logging.getLogger(__name__)
 QUERY_CACHE_VERSION = os.environ.get('YSE_QUERY_CACHE_VERSION', '2')
+# yse_home "Next Telescope Nights": classical runs starting within this many days (#397).
+YSE_HOME_CLASSICAL_DAYS_AHEAD = 30
 iers.conf.auto_download = True
 from astropy.utils.iers import conf
 conf.auto_max_age = None
@@ -78,11 +80,13 @@ from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from django.template import RequestContext
 from urllib.parse import unquote
 
 from .common.utilities import date_to_mjd, mjd_to_date
 from django.views.generic.list import ListView
+from django.views.generic.base import TemplateView
 
 # Create your views here.
 
@@ -198,9 +202,20 @@ def dashboard(request):
         'all_transient_statuses': TransientStatus.objects.order_by('name'),
         'anchor': anchor,
         'main_dashboard_defer': defer,
+        'broker_stale_heartbeats': _broker_stale_heartbeats(),
     }
 
     return render(request, 'YSE_App/dashboard.html', context)
+
+
+def _broker_stale_heartbeats():
+    """Stream workers (#278) whose heartbeat is older than BROKER_STREAM_STALE_MINUTES; [] on any error."""
+    try:
+        from YSE_App.brokers.streams import stale_heartbeats
+
+        return stale_heartbeats()
+    except Exception:  # noqa: BLE001 - the dashboard must render even if the table is missing
+        return []
 
 
 @login_required
@@ -932,12 +947,19 @@ def yse_home(request):
             context[key] = _yse_home_section_tuple(request, section)
 
     #obsnights = view_utils.get_obs_nights_happening_soon(request.user)
+    # Upcoming classical nights, all telescopes (Swope included), far enough ahead
+    # that a run added from the form below shows up here (#397).
+    now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
     obsnights = ObservingResourceService.GetAuthorizedClassicalResource_ByUser(request.user).\
-        filter(begin_date_valid__lte=datetime.datetime.utcnow()+datetime.timedelta(5)).\
-        filter(begin_date_valid__gte=datetime.datetime.utcnow()-datetime.timedelta(1)).\
-        select_related().order_by('begin_date_valid')
+        filter(begin_date_valid__lte=now_utc+datetime.timedelta(YSE_HOME_CLASSICAL_DAYS_AHEAD)).\
+        filter(end_date_valid__gte=now_utc).\
+        select_related('telescope', 'principal_investigator').order_by('begin_date_valid')
 
-    too_resources = view_utils.get_too_resources(request.user)
+    # Only allocations still valid, soonest first; expired ones made the list a
+    # long alphabetical history in which a new resource was hard to find (#396).
+    too_resources = view_utils.get_too_resources(request.user).\
+        filter(end_date_valid__gte=now_utc).\
+        select_related('telescope', 'principal_investigator').order_by('begin_date_valid')
     all_transient_statuses = TransientStatus.objects.all()
 
     # get current fields: tonight's and last night's GPC observations, bounded
@@ -1163,7 +1185,20 @@ def observing_night(request, telescope, obs_date, pi_name):
         'classical_obs_date':classical_obs_date,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
+    context.update(_telescope_widgets_context(classical_obs_date.resource.telescope, request.user))
     return render(request, 'YSE_App/observing_night.html', context)
+
+
+def _telescope_widgets_context(telescope, user):
+    """Weather / SkyCam widget context and the last week's instrument logs for an observing-night page (#309)."""
+    from YSE_App.services import instrument_logs as _il
+    from YSE_App.services import weather as _wx
+
+    return {
+        'telescope_obj': telescope,
+        'weather_widget': _wx.widget_context(telescope, user=user, allow_fetch=False),
+        'recent_instrument_logs': _il.recent_logs_for_telescope(telescope, days=7, limit=20),
+    }
 
 @login_required
 def yse_observing_night(request, obs_date):
@@ -1204,6 +1239,7 @@ def yse_observing_night(request, obs_date):
 
     context['obs_date_str'] = datetime.datetime(
             int(obs_date.split('-')[0]),int(obs_date.split('-')[1]),int(obs_date.split('-')[2])).strftime('%m/%d/%Y')
+    context.update(_telescope_widgets_context(telescope, request.user))
     return render(request, 'YSE_App/yse_observing_night.html', context)
 
 
@@ -1327,6 +1363,7 @@ def _load_transient_followups(transient_id, user):
                     ),
                 ),
                 'requests__requestor',
+                'facility_requests__allocation',
             ),
             user,
         )
@@ -1369,6 +1406,9 @@ def _transient_followup_form_context(request, transient_obj):
         'too_resource_form': ToOResourceForm(),
         'automated_spectrum_form': AutomatedSpectrumRequest(),
     }
+    from YSE_App.allocation_views import facility_panel_context
+
+    ctx.update(facility_panel_context(request.user, transient_obj))
     if transient_followup_form.fields["valid_start"].initial:
         ctx['followup_initial_dates'] = (
             transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
@@ -1461,10 +1501,15 @@ def transient_detail_spectra_tab_fragment(request, transient_id):
     )
     for spectrum in spectra:
         spectrum.n_points = point_counts.get(spectrum.id, 0)
+    from YSE_App.collaboration_views import data_access_context
+
+    ctx = {'transient': transient_obj, 'all_transient_spectra': spectra}
+    # Restricted spectra the user cannot see: count + owner group + "Request access" (#293).
+    ctx.update(data_access_context(request, transient_obj, kinds=('spectrum',)))
     return render(
         request,
         'YSE_App/transient_detail_spectra_tab.html',
-        {'transient': transient_obj, 'all_transient_spectra': spectra},
+        ctx,
     )
 
 
@@ -1483,13 +1528,21 @@ def transient_detail_summary_spectra_tools_fragment(request, transient_id):
 def transient_detail_resources_fragment(request, transient_id):
     get_object_or_404(Transient, pk=transient_id)
     obsnights = view_utils.get_obs_nights_happening_soon(request.user)
-    too_resources = view_utils.get_too_resources(request.user)
+    too_resources = view_utils.get_too_resources(request.user).select_related()
+    # Weather / SkyCam widgets (#311) beside the resources whose telescope has one configured
+    from YSE_App.services import weather as _wx
+
+    widgets = {}
+    for telescope in ([n.resource.telescope for n in obsnights] + [r.telescope for r in too_resources]):
+        if telescope.has_weather_widget and telescope.pk not in widgets:
+            widgets[telescope.pk] = _wx.widget_context(telescope, user=request.user, allow_fetch=False, compact=True)
     return render(
         request,
         'YSE_App/transient_detail_resources_tables.html',
         {
             'observing_nights': obsnights,
-            'too_resource_list': too_resources.select_related(),
+            'too_resource_list': too_resources,
+            'weather_widgets': list(widgets.values()),
         },
     )
 
@@ -1514,14 +1567,18 @@ def transient_detail_photometry_fragment(request, transient_id):
         'phot_data__photometry',
         'phot_data__band',
     )
+    from YSE_App.collaboration_views import data_access_context
+
+    ctx = {
+        'transient': transient_obj,
+        'allphotdata': allphotdata,
+        'diff_images': diff_images,
+    }
+    ctx.update(data_access_context(request, transient_obj, kinds=('photometry',)))
     return render(
         request,
         'YSE_App/transient_detail_photometry_tables.html',
-        {
-            'transient': transient_obj,
-            'allphotdata': allphotdata,
-            'diff_images': diff_images,
-        },
+        ctx,
     )
 
 
@@ -1710,12 +1767,32 @@ def transient_detail(request, slug):
             'transients_near_host':transients_near_host,
             'transient_detail_defer': defer_detail,
         }
+        if not defer_detail:
+            # Facility-request panel (#300) is part of the follow-up tab when it is rendered inline.
+            context.update({k: v for k, v in followup_form_ctx.items()
+                            if k in ('facility_allocations', 'facility_requests')})
 
         if not defer_detail and transient_followup_form.fields["valid_start"].initial:
             context['followup_initial_dates'] = \
                 (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
                  transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))           
         
+        # Stored photometry statistics (#268): peak, detections, rise/decay.
+        # A transient the backfill has not reached yet gets its row computed
+        # here, once, from its own photometry (#345); a failure renders the
+        # block empty rather than failing the page.
+        from YSE_App.services.photstat import stat_for_transient
+
+        context['photstat'] = stat_for_transient(transient_obj.id)
+
+        # "Working on this" interests box (#290) and the restricted-data hints (#293).
+        from YSE_App.collaboration_views import collaboration_context
+        from YSE_App.services import favorites as favorites_svc
+
+        context.update(collaboration_context(request, transient_obj))
+        # Star state for the header (#323): one aggregate query.
+        context['is_favorite'], context['favorite_count'] = favorites_svc.favorite_state(request.user, transient_id)
+
         if lastphotdata and firstphotdata:
             context['recent_mag'] = format_magnitude_with_error(
                 lastphotdata.mag, lastphotdata.mag_err
@@ -1774,6 +1851,11 @@ def transient_detail(request, slug):
         context['submit_to_tns'] = submit_to_tns
         if tns_sandbox_comment:
             context['tns_sandbox_url'] = tns_sandbox_comment.split()[2]
+
+        # "Report to TNS" dialog (#326): the sharing services this user may report through.
+        from YSE_App.sharing_views import report_dialog_context
+
+        context.update(report_dialog_context(request.user, transient_obj))
         
         return render(request,
             'YSE_App/transient_detail.html',
@@ -2225,26 +2307,48 @@ def upload_spectrum(request):
 @csrf_exempt
 @login_or_basic_auth_required
 def change_status_for_query(request, query_id, status_id):
+    """Set every transient a saved dashboard query selects to one status (#398).
 
-    transients = []
-    q = UserQuery.objects.get(pk=query_id)
+    One UPDATE instead of save() per transient: on a large query (Auto Ignore)
+    the per-row saves -- galactic coordinates, audit log, auto-publish rules --
+    ran for minutes until the request timed out. The auto-publisher's periodic
+    sweep still evaluates the changed transients. Answers JSON with the count;
+    the old redirect was re-sent by the browser as a PATCH to the dashboard.
+    """
+    q = get_object_or_404(UserQuery, pk=query_id)
+    if request.user.is_authenticated:
+        if q.user_id != request.user.id and not request.user.is_staff:
+            return JsonResponse({'msg': 'error: that saved query belongs to another user'}, status=403)
+        acting_user = request.user
+    else:
+        # HTTP basic auth (scripts): the decorator checked the credentials but does
+        # not log the caller in, so keep the old behaviour and credit the query owner.
+        acting_user = q.user
+    new_status = get_object_or_404(TransientStatus, pk=status_id)
+
     if q.query:
         try:
-            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query)).order_by('-disc_date')
-        except:
-            # Query bombed
-            pass
-
-
+            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query))
+        except Exception as exc:  # noqa: BLE001 - saved SQL can fail or time out
+            logger.exception('change_status_for_query: query %s failed', query_id)
+            return JsonResponse({'msg': 'error: the saved query failed (%s); no status changed' % type(exc).__name__},
+                                status=502)
     elif q.python_query:
-        transients = getattr(yse_python_queries,q.python_query)()
+        transients = getattr(yse_python_queries, q.python_query)()
+    else:
+        transients = Transient.objects.none()
 
-    new_status = TransientStatus.objects.get(pk=status_id)
-    for t in transients:
-        t.status = new_status
-        t.save()
+    from django.utils import timezone
 
-    return redirect('personaldashboard')
+    pks = list(transients.values_list('pk', flat=True))
+    n_changed = Transient.objects.filter(pk__in=pks).exclude(status=new_status).update(
+        status=new_status, modified_by=acting_user, modified_date=timezone.now())
+
+    return JsonResponse({
+        'msg': 'success: %d of %d transients changed to %s' % (n_changed, len(pks), new_status.name),
+        'n_changed': n_changed,
+        'n_selected': len(pks),
+    })
 
 def _followup_tab_redirect(slug):
     return HttpResponseRedirect(
@@ -2298,51 +2402,172 @@ def delete_followup_request(request, request_id):
         parent.delete()
     return _followup_tab_redirect(slug)
     
+SEARCH_PER_PAGE_CHOICES = (25, 50, 100, 200)
+
+
+def search_results_queryset():
+    """Base queryset for the search page: the dashboard annotations plus the FKs the table shows."""
+    return annotate_dashboard_transient_fields(
+        Transient.objects.select_related('best_spec_class').order_by('-disc_date', '-pk')
+    )
+
+
 @method_decorator(login_required, name='dispatch')
-class SearchResultsView(ListView):
-    model = Transient
+class SearchResultsView(TemplateView):
+    """``/search/``: the shared ``TransientSearchFilterSet`` as a form over a sortable table (#284).
+
+    The query string is the whole state (filters, ``sort``, ``page``,
+    ``per_page``), so a URL reproduces a search. The header box's ``q`` is
+    expanded by ``quick_search_params`` (a name, or coordinates for a cone),
+    as before. Results are one query per page (bounding box + EXISTS
+    subqueries, the dashboard's recent-photometry annotations, the stat-row
+    LEFT JOIN) plus the paginator's COUNT and the form's choice lists.
+    """
+
     template_name = 'YSE_App/search_results.html'
 
-    def get_context_data(self):
-        query = self.request.GET.get('q')
+    def get_context_data(self, **kwargs):
+        from YSE_App.filters.transient_search import (
+            FIELD_GROUPS,
+            TransientSearchFilterSet,
+            quick_search_params,
+        )
+        from .table_utils import SearchTransientTable
 
-        transients = None
-        # a few use cases
-        # if there's a gap or a comma in the middle, assume RA/Dec
-        size = 5/3600. # box size
-        if ',' in query or len(query.split()) > 1:
-            if ',' in query:
-                if len(query.split(',')) == 2:
-                    ra,dec = query.split(',')
-                elif len(query.split(',')) == 3:
-                    ra,dec,size = query.split(',')
-            else:
-                if len(query.split()) == 2:
-                    ra,dec = query.split()
-                elif len(query.split()) == 3:
-                    ra,dec,size = query.split()
-            try:
-                ra,dec = float(ra),float(dec)
-                decimal = True
-            except:
-                sc = SkyCoord(ra,dec,unit=(u.hour,u.deg))
-                ra,dec = sc.ra.deg,sc.dec.deg
-                decimal = False
+        context = super().get_context_data(**kwargs)
+        params = quick_search_params(self.request.GET)
+        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(), request=self.request)
+        cone = filterset.cone
 
-            ramin,ramax,decmin,decmax = getRADecBox(ra,dec,size=float(size))
-            transients = Transient.objects.filter(Q(ra__gt=ramin) & Q(ra__lt=ramax) & Q(dec__gt=decmin) & Q(dec__lt=decmax))
-                
-        if transients is None:
-            # otherwise execute a simple search on name
-            transients = Transient.objects.filter(name__icontains=query)
-        
-        context = super().get_context_data()
-        transientfilter = TransientFilter(self.request.GET, queryset=transients,prefix='')
-        table = TransientTable(transientfilter.qs,prefix='')
-        RequestConfig(self.request, paginate={'per_page': 10}).configure(table)
-        context['transient_search_results'] = (table,'Search Results','Search Results',transientfilter)
+        try:
+            per_page = int(params.get('per_page', SEARCH_PER_PAGE_CHOICES[0]))
+        except (TypeError, ValueError):
+            per_page = SEARCH_PER_PAGE_CHOICES[0]
+        if per_page not in SEARCH_PER_PAGE_CHOICES:
+            per_page = SEARCH_PER_PAGE_CHOICES[0]
 
+        excluded = () if cone else ('separation',)
+        if not filterset.uses_gal_b:
+            excluded = excluded + ('gal_b',)
+        annotation_column = filterset.annotation_column_spec
+        if annotation_column is None:
+            excluded = excluded + ('annotation_value',)
+        table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
+        if annotation_column is not None:
+            table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
+        RequestConfig(self.request, paginate={'per_page': per_page}).configure(table)
+
+        visible = {name for _, names in FIELD_GROUPS for name in names}
+        form = filterset.form
+        groups = []
+        counts = filterset.group_counts()
+        for title, names in FIELD_GROUPS:
+            groups.append({
+                'title': title,
+                'key': title.lower(),
+                'fields': [form[name] for name in names],
+                'active': counts.get(title, 0),
+            })
+        # Parameters the form does not render (legacy API names, ``q``) travel
+        # as hidden inputs so a resubmitted form keeps them; ``page`` resets.
+        carried = [
+            (key, value)
+            for key in params
+            for value in params.getlist(key)
+            if key not in visible and key not in ('page', 'per_page', 'ordering', 'q') and value != ''
+        ]
+        chips = []
+        for name, label, value in filterset.active_filters():
+            without = params.copy()
+            without.pop(name, None)
+            without.pop('page', None)
+            chips.append({'name': name, 'label': label, 'value': value, 'remove_url': '?' + without.urlencode()})
+
+        context.update({
+            'filterset': filterset,
+            'filter_groups': groups,
+            'ordering_field': form['ordering'],
+            'carried_params': carried,
+            'active_chips': chips,
+            'cone': cone,
+            'annotation_column': filterset.annotation_column_label,
+            'table': table,
+            'result_count': table.page.paginator.count if hasattr(table, 'page') else None,
+            'per_page': per_page,
+            'per_page_choices': SEARCH_PER_PAGE_CHOICES,
+            'all_transient_statuses': TransientStatus.objects.order_by('name'),
+            'api_url': '%s?%s' % (reverse('transient-list'), params.urlencode()) if params else reverse('transient-list'),
+        })
+        context.update(self._save_search_context(params, filterset))
+        # Backwards-compatible name used by older templates/tests.
+        context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         return context
+
+    def _save_search_context(self, params, filterset):
+        """The "Save as SQL query" modal: compiled SQL preview, title suggestion, last result."""
+        from explorer.models import Query
+        from YSE_App.services.search_queries import (
+            SearchSaveError,
+            compile_search_sql,
+            default_search_title,
+        )
+
+        search_params = params.copy()
+        for key in ('page', 'saved_query', 'saved_user_query', 'save_error'):
+            search_params.pop(key, None)
+        ctx = {
+            'save_search_params': search_params.urlencode(),
+            'save_search_sql': None,
+            'save_search_error': None,
+            'save_search_title': default_search_title(filterset) if filterset.is_valid() else '',
+            'saved_query': None,
+            'saved_user_query_id': None,
+            'save_error': self.request.GET.get('save_error') or None,
+            'can_open_explorer': self.request.user.is_staff or self.request.user.is_superuser,
+        }
+        try:
+            ctx['save_search_sql'] = compile_search_sql(search_params, request=self.request)
+        except SearchSaveError as exc:
+            ctx['save_search_error'] = str(exc)
+        saved_id = self.request.GET.get('saved_query')
+        if saved_id and saved_id.isdigit():
+            ctx['saved_query'] = Query.objects.filter(pk=int(saved_id)).first()
+            uq = self.request.GET.get('saved_user_query')
+            ctx['saved_user_query_id'] = int(uq) if uq and uq.isdigit() else None
+        return ctx
+
+
+@login_required
+@require_POST
+def save_search(request):
+    """POST from the search page: save the current search as an Explorer query (#287).
+
+    Fields: ``title``, ``params`` (the search page's query string),
+    ``add_to_dashboard`` (checkbox). Redirects back to the same search with
+    ``saved_query=<id>`` (and ``saved_user_query=<id>``) for the confirmation,
+    or with ``save_error=<message>``.
+    """
+    from django.http import QueryDict
+    from YSE_App.services.search_queries import SearchSaveError, save_search_query
+
+    params = QueryDict(request.POST.get('params', ''), mutable=True)
+    for key in ('page', 'saved_query', 'saved_user_query', 'save_error'):
+        params.pop(key, None)
+    search_url = request.build_absolute_uri('%s?%s' % (reverse('search'), params.urlencode()))
+    back = params.copy()
+    try:
+        result = save_search_query(
+            request.user, params, request.POST.get('title', ''),
+            add_to_dashboard=request.POST.get('add_to_dashboard') in ('on', 'true', '1'),
+            request=request, search_url=search_url,
+        )
+    except SearchSaveError as exc:
+        back['save_error'] = str(exc)
+        return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
+    back['saved_query'] = str(result['query'].id)
+    if result['user_query'] is not None:
+        back['saved_user_query'] = str(result['user_query'].id)
+    return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
 
 #@login_required
 #def atlas_forced_phot(request,slug):
@@ -2361,6 +2586,29 @@ class SearchResultsView(ListView):
 #    return JsonResponse(context) #HttpResponse('')
 
     
+ZTF_FORCED_PHOT_LOG_PREFIX = 'ZTF Forced Phot'
+
+
+def _ztf_forced_phot_via_allocation(request, transient):
+    """Submit through the first usable 'ztf' allocation; None when there is none (legacy path)."""
+    from YSE_App.facilities import FacilityValidationError
+    from YSE_App.services import facility_requests as fr
+
+    allocation = fr.allocations_for_user(request.user).filter(facility='ztf').order_by('-end_date').first()
+    if allocation is None:
+        return None
+    existing = fr.open_request_for(allocation, transient)
+    if existing is not None:
+        return 'error: a ZTF forced-photometry request is already %s (submitted %s)' % (
+            existing.get_state_display().lower(), (existing.submitted_at or existing.created_date).strftime('%Y-%m-%d %H:%M UT'))
+    try:
+        req = fr.submit_request(allocation, transient, request.user, {})
+    except (FacilityValidationError, fr.FacilityRequestError) as exc:
+        return 'error: %s' % exc
+    return 'success: ZTF forced photometry request %d is %s; the light curve is ingested when the service finishes' % (
+        req.pk, req.get_state_display().lower())
+
+
 @login_required
 def ztf_forced_phot(request,slug):
 
@@ -2369,37 +2617,58 @@ def ztf_forced_phot(request,slug):
 
     transient = Transient.objects.get(slug=slug)
 
-    # make sure this request wasn't run w/i the last 12 hours
-    old_log = Log.objects.filter(transient=transient).\
-        filter(modified_date__gt=datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)-datetime.timedelta(0.5))
-    if len(old_log):
-        context = {'msg':'error: forced phot was requested %.1f hours ago (must be >12)'%((datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)-old_log[0].modified_date).seconds/3600.)}
-        #response = HttpResponse(context, content_type='text/plain') #JsonResponse(context)
-        return JsonResponse(context) #HttpResponse('')
-    
-    # run ZTF forced phot script
-    ztf = ZTF_Forced_Phot.ZTF_Forced_Phot(
-        ztf_email_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,ztf_email_password=djangoSettings.SMTP_PASSWORD,
-        ztf_email_imapserver='imap.gmail.com',ztf_user_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,
-        ztf_user_password=djangoSettings.ZTFPASS)
+    # A 'ztf' allocation open to the user (#301) submits through the facility adapter: the request
+    # is recorded, polled and ingested by the queue, and an open request replaces the 12 h throttle.
+    facility_msg = _ztf_forced_phot_via_allocation(request, transient)
+    if facility_msg is not None:
+        if facility_msg.startswith('success'):
+            Log.objects.create(
+                created_by=request.user, modified_by=request.user, transient=transient,
+                comment='%s requested by %s via the facility queue: %s' % (
+                    ZTF_FORCED_PHOT_LOG_PREFIX, request.user.username, facility_msg))
+        return JsonResponse({'msg': facility_msg})
 
-    log_file_name = ztf.run_ztf_fp(
-        all_jd=False, days=60, decl=transient.dec, directory_path=djangoSettings.ZTFTMPDIR,
-        do_plot=False, emailcheck=0, fivemindelay=60, jdend=None,
-        jdstart=None, logfile=None, mjdend=None, mjdstart=None,
-        plotfile=None, ra=transient.ra, skip_clean=False, source_name=slug,
-        verbose=False)
+    # make sure this request wasn't run w/i the last 12 hours. Only earlier forced-phot
+    # comments count (#399): any comment on the transient used to block the request.
+    now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
+    old_log = Log.objects.filter(
+        transient=transient, comment__startswith=ZTF_FORCED_PHOT_LOG_PREFIX,
+        modified_date__gt=now - datetime.timedelta(0.5)).order_by('-modified_date').first()
+    if old_log is not None:
+        hours_ago = (now - old_log.modified_date).total_seconds() / 3600.
+        return JsonResponse({'msg': 'error: forced phot was requested %.1f hours ago (must be >12)' % hours_ago})
+
+    # run ZTF forced phot script; a failure is reported to the page instead of a bare 500 (#399)
+    try:
+        ztf = ZTF_Forced_Phot.ZTF_Forced_Phot(
+            ztf_email_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,ztf_email_password=djangoSettings.SMTP_PASSWORD,
+            ztf_email_imapserver='imap.gmail.com',ztf_user_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,
+            ztf_user_password=djangoSettings.ZTFPASS)
+
+        log_file_name = ztf.run_ztf_fp(
+            all_jd=False, days=60, decl=transient.dec, directory_path=djangoSettings.ZTFTMPDIR,
+            do_plot=False, emailcheck=0, fivemindelay=60, jdend=None,
+            jdstart=None, logfile=None, mjdend=None, mjdstart=None,
+            plotfile=None, ra=transient.ra, skip_clean=False, source_name=slug,
+            verbose=False)
+    except Exception as exc:  # noqa: BLE001 - network, IMAP or config failure inside the legacy script
+        logger.exception('ZTF forced phot request failed for %s', slug)
+        return JsonResponse(
+            {'msg': 'error: ZTF forced photometry request failed (%s); nothing was submitted' % type(exc).__name__},
+            status=502)
+    if not log_file_name:
+        return JsonResponse(
+            {'msg': 'error: ZTF did not accept the forced photometry request (no job log returned); nothing was submitted'},
+            status=502)
 
     # then need to do some logging
-    commentstr = """ZTF Forced Phot
+    commentstr = """%s requested by %s
 log_file_name=%s
-job_submitted=%s"""%(log_file_name,datetime.datetime.utcnow().isoformat())
+job_submitted=%s"""%(ZTF_FORCED_PHOT_LOG_PREFIX,request.user.username,log_file_name,now.isoformat())
 
-    l = Log.objects.create(
+    Log.objects.create(
         created_by=request.user,modified_by=request.user,
         transient=transient,comment=commentstr)
 
-    context = {'msg':'success'}
-    #response = HttpResponse(context, content_type='text/plain') #JsonResponse(context)
-    return JsonResponse(context) #HttpResponse('')
+    return JsonResponse({'msg': 'success: ZTF forced photometry requested; a comment was added to this transient'})
 

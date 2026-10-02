@@ -51,6 +51,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from YSE_App.common.filter_display import band_effective_wavelength
+from YSE_App.services import phot_points
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ FLUX_ZERO_POINT = 27.5
 MIN_DETECTIONS = 5
 # The light-curve plot hides detections with mag_err > 0.36 when flux info
 # exists (they are effectively upper limits); the fit ignores them too.
-MAX_MAG_ERR = 0.36
+MAX_MAG_ERR = phot_points.MAX_MAG_ERR
 MAG_ERR_FLOOR = 0.01
 TAU_RISE_BOUNDS = (0.5, 50.0)
 TAU_FALL_BOUNDS = (1.0, 300.0)
@@ -181,17 +182,7 @@ def is_usable_detection(mag, mag_err, flux=None, flux_err=None, flagged: bool = 
     ``data_quality``-flagged, and either has no flux information or a
     magnitude error at or below ``MAX_MAG_ERR``.
     """
-    if flagged or mag is None or mag_err is None:
-        return False
-    try:
-        mag, mag_err = float(mag), float(mag_err)
-    except (TypeError, ValueError):
-        return False
-    if not (math.isfinite(mag) and math.isfinite(mag_err)):
-        return False
-    if flux is not None and flux_err is not None and mag_err > MAX_MAG_ERR:
-        return False
-    return True
+    return (not flagged) and phot_points.is_detection(mag, mag_err, flux, flux_err)
 
 
 # ----------------------------------------------------------------------- fit

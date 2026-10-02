@@ -1,0 +1,82 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Allocations <small class="text-muted">staff</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-12">
+		<div class="card">
+			<div class="card-header">
+				<form class="form-inline" method="get" action="{% url 'allocations' %}">
+					<label class="mr-2" for="alloc-filter-show">Show</label>
+					<select class="form-control form-control-sm mr-3" id="alloc-filter-show" name="show">
+						<option value="current"{% if show == 'current' %} selected{% endif %}>active and current</option>
+						<option value="all"{% if show == 'all' %} selected{% endif %}>all</option>
+						<option value="inactive"{% if show == 'inactive' %} selected{% endif %}>inactive or expired</option>
+					</select>
+					<label class="mr-2" for="alloc-filter-telescope">Telescope</label>
+					<select class="form-control form-control-sm mr-3" id="alloc-filter-telescope" name="telescope">
+						<option value="">all</option>
+						{% for t in telescopes %}
+						<option value="{{ t }}"{% if t == telescope %} selected{% endif %}>{{ t }}</option>
+						{% endfor %}
+					</select>
+					<button class="btn btn-sm btn-primary" type="submit">Filter</button>
+					<a class="btn btn-sm btn-success ml-auto" id="alloc-new-btn" href="{% url 'allocation_create' %}"><i class="fa fa-plus"></i> New allocation</a>
+				</form>
+			</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-hover table-sm" id="allocations_tbl">
+					<thead>
+						<tr>
+							<th>Allocation</th>
+							<th>Telescope / instrument</th>
+							<th>PI</th>
+							<th>Semester</th>
+							<th>Audience</th>
+							<th>Hours used / allocated</th>
+							<th>Facility API</th>
+							<th>Credential</th>
+							<th>Requests</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for row in rows %}
+						{% with a=row.a %}
+						<tr data-allocation-id="{{ a.id }}" data-status="{% if not a.is_active %}inactive{% elif not row.current %}expired{% else %}current{% endif %}"{% if not a.is_active or not row.current %} class="text-muted"{% endif %}>
+							<td><a href="{% url 'allocation_edit' a.id %}">{{ a.name }}</a>{% if a.proposal_id %}<br><small class="text-muted">{{ a.proposal_id }}</small>{% endif %}</td>
+							<td>{{ a.telescope.name }}{% if a.instrument %}<br><small>{{ a.instrument.name }}</small>{% endif %}</td>
+							<td>{% if a.principal_investigator %}{{ a.principal_investigator.name }}{% else %}-{% endif %}</td>
+							<td>{{ a.start_date|date:"Y-m-d" }} &ndash; {{ a.end_date|date:"Y-m-d" }}</td>
+							<td><small>{{ row.group_names }}</small></td>
+							<td style="min-width: 160px">
+								<div class="progress progress-xs" title="{{ a.percent_used }}% used">
+									<div class="progress-bar {% if a.percent_used >= 90 %}bg-danger{% elif a.percent_used >= 70 %}bg-warning{% else %}bg-success{% endif %}" style="width: {{ a.percent_used }}%"></div>
+								</div>
+								<small>{{ a.hours_used|floatformat:2 }} / {{ a.hours_allocated|floatformat:2 }} h ({{ a.hours_remaining|floatformat:2 }} left)</small>
+							</td>
+							<td>{% if a.facility %}<span class="badge badge-info">{{ a.facility }}</span> <small>{{ row.facility_name }}</small>{% else %}<span class="text-muted">manual</span>{% endif %}</td>
+							<td>{% if a.credential %}{% if a.has_credential %}<span class="badge badge-success" title="{{ a.credential.name }}">set</span>{% else %}<span class="badge badge-warning" title="{{ a.credential.name }}">no secret</span>{% endif %}{% else %}<span class="badge badge-secondary">none</span>{% endif %}</td>
+							<td>{{ a.n_requests }}{% if a.n_open %} <small class="text-info">({{ a.n_open }} open)</small>{% endif %}</td>
+							<td><a class="btn btn-xs btn-outline-primary" href="{% url 'allocation_edit' a.id %}">Edit</a></td>
+						</tr>
+						{% endwith %}
+						{% empty %}
+						<tr><td colspan="10" class="text-muted">No allocations{% if show != 'all' or telescope %} for this filter{% endif %}. <a href="{% url 'allocation_create' %}">Create one</a>.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			<div class="card-footer text-muted">
+				Facility APIs available: {% for f in facilities %}<code title="{{ f.description }}">{{ f.slug }}</code>{% if not forloop.last %}, {% endif %}{% empty %}none{% endfor %}.
+				Credentials are stored encrypted (<a href="{% url 'admin:YSE_App_encryptedcredential_changelist' %}">Encrypted credentials</a>; values are never displayed);
+				submissions are recorded as <a href="{% url 'external_service_runs' %}">service runs</a>. See <code>docs/facility-apis.md</code>.
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}
