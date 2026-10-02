@@ -609,7 +609,7 @@
             $tab.text(failLabel);
             $tab.attr('title', message || 'Archive lookup failed; open the tab to retry.');
         }
-        function yseUpdateArchiveTabLabel($tab, url, emptyLabel, failLabel, countLabel) {
+        function yseUpdateArchiveTabLabel($tab, url, emptyLabel, failLabel) {
             if (!$tab.length) {
                 return;
             }
@@ -619,10 +619,10 @@
                         yseMarkArchiveTabUnknown($tab, failLabel, json && json.message);
                     } else if (!json.has_data) {
                         $tab.text(emptyLabel);
-                    } else if (countLabel && json.count) {
-                        /* e.g. "JWST Data (2)": the count is cheap here and
-                           saves opening the tab to see whether it is worth it. */
-                        $tab.text(countLabel + ' (' + json.count + ')').removeAttr('title');
+                    } else {
+                        /* Data: the static label ("HST Data", "JWST Data")
+                           stands; tab labels carry no counts (#387). */
+                        $tab.removeAttr('title');
                     }
                 })
                 .fail(function(xhr, status) {
@@ -647,8 +647,7 @@
             $("#jwst_tab_header"),
             "{% url 'get_jwst_status' transient.id %}",
             "No JWST",
-            "JWST (lookup failed)",
-            "JWST Data"
+            "JWST (lookup failed)"
         );
 
         var yseDetailFragmentsLoaded = {};
@@ -2242,7 +2241,7 @@
                     rows_full.html('<tr><td colspan="8" class="text-muted">No JWST images of this position in MAST.</td></tr>');
                     return;
                 }
-                rows_tab.text("JWST Data (" + rows.length + ")").removeAttr('title');
+                rows_tab.text("JWST Data").removeAttr('title');
                 for (var i = 0; i < rows.length; i++) {
                     rows_full.append(yseJwstRowHtml(rows[i]));
                 }
@@ -2642,7 +2641,7 @@
         function yseAnnotationsSummary() {
             $.getJSON("{% url 'transient_annotations_summary' transient.id %}").done(function(json) {
                 if (!json) { return; }
-                $('#annotations_tab_header').text('Annotations' + (json.count ? ' (' + json.count + ')' : ''));
+                /* The tab label stays "Annotations": no counts on tabs (#387). */
                 var $badges = $('#annotation_badges');
                 if (!$badges.length) { return; }
                 $badges.empty();

@@ -2373,7 +2373,12 @@ def get_chandra_status(request, transient_id):
 
 @login_required
 def get_jwst_status(request, transient_id):
-    """Lightweight JWST availability for the tab label (count only)."""
+    """Lightweight JWST availability for the tab label.
+
+    The same images-only selection as the tab body (``jwstObservations``,
+    #387); the answer also sets ``Transient.has_jwst``. Cache key ``v2``: the
+    ``v1`` answers were counted before NIRSpec / MIRI spectroscopy was excluded.
+    """
     try:
         t = Transient.objects.get(pk=transient_id)
     except Transient.DoesNotExist:
@@ -2385,7 +2390,7 @@ def get_jwst_status(request, transient_id):
         jwst.query()
         return int(jwst.count)
 
-    return JsonResponse(_archive_status_payload(f'jwst_status_v1_{transient_id}', _lookup, 'JWST',
+    return JsonResponse(_archive_status_payload(f'jwst_status_v2_{transient_id}', _lookup, 'JWST',
                                                 transient_id=t.pk, flag_field='has_jwst'))
 
 
@@ -2501,7 +2506,7 @@ def get_jwst_observations(request, transient_id):
 
     return _archive_table_response(
         transient_id, 'JWST', _lookup, {'count': 0, 'rows': []},
-        cache_key=f'jwst_observations_v1_{transient_id}',
+        cache_key=f'jwst_observations_v2_{transient_id}',
     )
 
 def get_chandra_image(request,transient_id):

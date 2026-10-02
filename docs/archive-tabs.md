@@ -8,14 +8,16 @@ way, so a MAST outage looks the same everywhere and is never mistaken for "no da
 
 | tab label | meaning |
 |---|---|
-| `HST Data`, `JWST Data (2)` | the archive answered and has data (JWST shows the count) |
+| `HST Data`, `JWST Data`, `Chandra Data` | the archive answered and has data (no counts on tab labels, #387) |
 | `No HST`, `No JWST`, `No Chandra` | the archive answered that there is nothing at this position |
 | `HST (lookup failed)`, `JWST (lookup failed)` | the archive timed out or the query raised; the tooltip says why and opening the tab retries |
 
 Opening a tab loads its body; while MAST answers the body shows a spinner. On a failure the body
-shows the message with a **Retry** link. All three tabs list **images only**, no spectra (#356):
-the HST lookup whitelists the imaging instruments and filters, the JWST lookup asks MAST for
-`dataproduct_type='image'` and drops anything else that comes back. The JWST body lists one row
+shows the message with a **Retry** link. All three tabs list **images only**, no spectra (#356,
+#387): the HST lookup whitelists the imaging instruments and filters; the JWST lookup asks MAST
+for `dataproduct_type='image'` in the imaging modes only and applies the same rule again to what
+comes back (`is_jwst_image`, below), because MAST's `dataproduct_type` is not reliable for JWST
+(NIRSpec and MIRI spectroscopy can be labelled `image`). The JWST body lists one row
 per image: date (UT, tooltip MJD), instrument and calibration level, filter, program id and PI,
 target name, exposure time, a preview thumbnail when MAST has one, and links to the observation
 in the MAST Portal, to the JWST program page and to the data product.
@@ -42,7 +44,7 @@ HTTP 502 (`error: lookup_failed`) and one that times out answers 504 (`error: ti
   label payload for every archive: answers are cached for `ARCHIVE_STATUS_CACHE_SECONDS` (1 h),
   timeouts and errors for `ARCHIVE_STATUS_FAILURE_CACHE_SECONDS` (60 s) so a reload retries soon.
   Timeout: `YSE_ARCHIVE_STATUS_TIMEOUT` (default 8 s). Cache keys: `hst_status_v3_<id>`,
-  `jwst_status_v1_<id>`, `chandra_status_v3_<id>`.
+  `jwst_status_v2_<id>`, `chandra_status_v3_<id>`.
 - A fresh answer (`has_data` true / false, never a failure) is also written to the transient's
   archive flag (`_record_archive_flag`): `has_jwst` (#383; nothing else sets it), `has_hst` and
   `has_chandra` (otherwise set at TNS ingest). The write is a single `UPDATE` only when the value
@@ -51,7 +53,7 @@ HTTP 502 (`error: lookup_failed`) and one that times out answers 504 (`error: ti
   searchable (`has_jwst=true`, `legacy.has_jwst`; `docs/transient-search.md`).
 - `_archive_table_response(transient_id, archive_name, lookup, empty_payload, cache_key)` does
   the same for the tab bodies (HST and JWST) with the longer `YSE_ARCHIVE_TABLE_TIMEOUT`
-  (default 45 s) and caches successful JWST answers for an hour (`jwst_observations_v1_<id>`).
+  (default 45 s) and caches successful JWST answers for an hour (`jwst_observations_v2_<id>`).
 
 ## MAST queries (`YSE_App/common/mast_query.py`)
 
@@ -64,8 +66,24 @@ HTTP 502 (`error: lookup_failed`) and one that times out answers 504 (`error: ti
   (`mast:` product URIs turned into `https://mast.stsci.edu/api/v0.1/Download/file?uri=...`
   links) and `portalurl` (a MAST Portal deep link filtered on `obs_id`). `set_table` keeps only
   the rows whose `dataproduct_type` is in `product_types` (pass `('image', 'spectrum')` or `None`
-  to widen a one-off query). Masked cells are `None`. The class does not catch exceptions; the
-  views' timeout/error handling does.
+  to widen a one-off query) and that the subclass hook `accepts(row)` lets through. Masked cells
+  are `None`. The class does not catch exceptions; the views' timeout/error handling does.
+- `JwstImages(ra, dec, radius)` (what `jwstObservations` returns) is the images-only JWST form
+  used by the tab body, the tab label and the `has_jwst` flag, so the three cannot disagree. It
+  restricts the MAST query to `JWST_IMAGING_MODES` and keeps a returned row only when
+  `is_jwst_image(row)` holds, i.e. all of:
+  - `dataproduct_type == 'image'`;
+  - `instrument_name` is in the allowlist `JWST_IMAGING_MODES` = `NIRCAM/IMAGE`, `NIRCAM/CORON`,
+    `MIRI/IMAGE`, `MIRI/CORON`, `NIRISS/IMAGE`, `NIRISS/AMI`. Everything else is out: every
+    `NIRSPEC/*` mode (MSA, SLIT, IFU, IMAGE), `MIRI/IFU` (MRS), `MIRI/SLIT` and `MIRI/SLITLESS`
+    (LRS), `NIRCAM/GRISM` (WFSS), `NIRISS/WFSS`, `NIRISS/SOSS`, every `*/TARGACQ`, and any mode
+    name MAST adds later (allowlist, not denylist);
+  - `filters` names no dispersive element (`jwst_filters_are_spectroscopic`): the LRS prism
+    `P750L`, the MRS settings `SHORT` / `MEDIUM` / `LONG`, `PRISM`, anything starting `GRISM`,
+    `GR150` or `GR700`, and NIRSpec gratings (`G140M` ... `G395H`). This is belt and braces for
+    rows whose instrument mode passed but whose filter says spectroscopy.
+
+  To widen the selection for a one-off script use `MastObservations` directly.
 
 Tests: `YSE_App/tests/test_archive_status_views.py` (HST/Chandra),
 `YSE_App/tests/test_jwst_tab.py` (helper with a recorded table, status and body endpoints, cache
