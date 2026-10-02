@@ -87,24 +87,22 @@
             <thead>
               <tr>
                 <th>Telescope</th>
-                <th>Night</th>  
+                <th>Night (UT)</th>
                 <th>PI</th>
               </tr>
             </thead>
             <tbody>
               {% for n in upcoming_observing_nights %}
-              {% if n.telescope.name != 'Swope' %}
                 <tr>
                     <td>{{ n.telescope }}</td>
-                    <td>{{ n.begin_date_valid }}</td>
-                    <td>{{ n.principal_investigator }}</td>
+                    <td data-order="{{ n.begin_date_valid|date:'c' }}">{{ n.begin_date_valid|date:'Y-m-d' }}</td>
+                    <td>{{ n.principal_investigator|default:'' }}</td>
                 </tr>
-                {% endif %}
               {% endfor %}
               </tbody>
             </table>
             {% else %}
-              No upcoming observing nights
+              No telescope nights in the next {{ classical_days_ahead }} days
             {% endif %}
             </div>
             <div class="box-footer">
@@ -121,22 +119,24 @@
             <thead>
               <tr>
                 <th>Telescope</th>
-                <th type='numeric'>ToO Hours</th>
-                <th>PI</th>  
+                <th>Valid (UT)</th>
+                <th type='numeric'>Hours left</th>
+                <th>PI</th>
               </tr>
             </thead>
             <tbody>
               {% for t in too_resources %}
                 <tr>
                     <td>{{ t.telescope }}</td>
-                    <td id="delta_too_hours_{{t.id}}"></td>
-                    <td>{{ t.principal_investigator }}</td>
+                    <td data-order="{{ t.begin_date_valid|date:'c' }}">{{ t.begin_date_valid|date:'Y-m-d' }} to {{ t.end_date_valid|date:'Y-m-d' }}</td>
+                    <td>{% if t.remaining_hours is not None %}{{ t.remaining_hours }} of {{ t.awarded_too_hours }}{% endif %}</td>
+                    <td>{{ t.principal_investigator|default:'' }}</td>
                 </tr>
               {% endfor %}
               </tbody>
             </table>
             {% else %}
-              No upcoming observing nights
+              No current ToO resources
             {% endif %}
           </div>
           <div class="box-footer"></div>
@@ -371,27 +371,24 @@
     });
 {% endif %}
     $( document ).ready(function(){
-        {% for too_resource in too_resources %}
-          {% if too_resource.used_too_hours < too_resource.awarded_too_hours %}
-
-              $.get("{% url 'delta_too_hours' too_resource.id %}").done(function(json){
-                  var rows = $("#delta_too_hours_{{too_resource.id}}")
-                  $(rows).append(json["delta_too_hours"])
-              });
-          {% endif %}
-        {% endfor %}
+        // ToO hours left are rendered server-side (#396); no per-row delta_too_hours calls.
       window.location = '#{{ anchor }}'
 
     $('#YSE_fields_tonight').DataTable();
     $('#YSE_fields_lastnight').DataTable();
-    $('#classical_resources').DataTable();
-    $('#too_resources').DataTable();
+    // keep the server's soonest-first order instead of sorting by telescope (#396, #397)
+    $('#classical_resources').DataTable({order: []});
+    $('#too_resources').DataTable({order: []});
     $('.dataTables_length').addClass('bs-select');
   });
   $(function () {
 
       // too resource
+      // Default to a semester-long allocation starting today (UT). The old default,
+      // today 00:00-23:59 local time, gave a resource that had often already expired (#396).
       $('#too_resource_date_range').daterangepicker({ 
+        startDate: moment.utc().startOf('day'),
+        endDate: moment.utc().startOf('day').add(6, 'months'),
         timePicker24Hour: true,
         timePicker: true, 
         timePickerIncrement: 1, 
@@ -529,8 +526,8 @@
 
           // handle a successful response
           success : function(json) {
-            
-            // Required fields
+              alert('ToO resource saved' + (json.summary ? ': ' + json.summary : '') +
+                    '. It is listed under ToO Resources while it is valid.');
               location.reload();
           },
 

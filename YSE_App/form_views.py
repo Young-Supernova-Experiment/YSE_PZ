@@ -223,7 +223,8 @@ class AddClassicalResourceFormView(FormView):
 			obs_date = form.cleaned_data['observing_date']
 			data = {
 				'message': "Successfully submitted form data.",
-				'observing_calendar_url': '/observing_calendar/',
+				# reverse() keeps the stack prefix (/yse_test/, /yse_experimental/) (#397)
+				'observing_calendar_url': reverse('observing_calendar'),
 				'obs_date': obs_date.strftime('%Y-%m-%d'),
 				'telescope': str(instance.telescope.name),
 			}
@@ -250,13 +251,16 @@ class AddToOResourceFormView(FormView):
 			instance = form.save(commit=False)
 			instance.created_by = self.request.user
 			instance.modified_by = self.request.user
-			
-			instance.save() #update_fields=['created_by','modified_by']
 
-			print(form.cleaned_data)
+			instance.save() #update_fields=['created_by','modified_by']
 
 			data = {
 				'message': "Successfully submitted form data.",
+				# shown in the dashboard's confirmation alert (#396)
+				'summary': '%s, %s to %s UT' % (
+					instance.telescope.name,
+					instance.begin_date_valid.strftime('%Y-%m-%d'),
+					instance.end_date_valid.strftime('%Y-%m-%d')),
 			}
 			return JsonResponse(data)
 		else:
