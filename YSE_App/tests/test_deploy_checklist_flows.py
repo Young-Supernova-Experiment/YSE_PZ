@@ -805,6 +805,115 @@ class DeployChecklistFlowTests(TestCase):
         self.assertAlmostEqual(active[0][1], 60100.1)
         self.assertEqual([row[0].name for row in response.context["yse_gpc1_field_data"]], ["994"])
 
+    @staticmethod
+    def _old_yse_observing_calendar_rows():
+        """The view's per-night algorithm before #420, verbatim apart from returning rows."""
+        import dateutil.parser
+        import astropy.units as u
+        from astroplan import Observer, moon_illumination
+        from astropy.coordinates import EarthLocation
+        from astropy.time import Time
+        from django.db.models import Q
+
+        from YSE_App.common.utilities import date_to_mjd
+        from YSE_App.models import Telescope
+
+        telescope = Telescope.objects.get(name='Pan-STARRS1')
+        location = EarthLocation.from_geodetic(
+            telescope.longitude*u.deg, telescope.latitude*u.deg, telescope.elevation*u.m)
+        tel = Observer(location=location, timezone="UTC")
+        todaydate = dateutil.parser.parse(datetime.datetime.today().strftime('%Y-%m-%d 00:00:00'))
+        base = todaydate-datetime.timedelta(10)
+        date_list = [base + datetime.timedelta(days=x) for x in range(40)]
+        obstuple = ()
+        colors = ['#dd4b39', '#f39c12', '#00c0ef']
+        for i, date in enumerate(date_list):
+            time = Time(date_to_mjd(date.strftime('%Y-%m-%d 00:00:00')), format='mjd')
+            sunset_forobs = tel.sun_set_time(time, which="next")
+            sunrise_forobs = tel.sun_rise_time(time, which="next")
+            obs = {}
+            for inst in ('GPC1', 'GPC2'):
+                obs[inst] = SurveyObservation.objects.filter(
+                    Q(mjd_requested__gte=date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte=date_to_mjd(sunset_forobs)-0.1)).\
+                    filter(Q(mjd_requested__lte=date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte=date_to_mjd(sunrise_forobs)+0.1)).\
+                    filter(survey_field__instrument__name=inst)
+            if not len(obs['GPC1']) and not len(obs['GPC2']):
+                continue
+            strings = {}
+            for inst, qs in obs.items():
+                obs_ids = qs.filter(obs_mjd__isnull=False).values_list('survey_field__ztf_field_id', flat=True).distinct()
+                sched_ids = qs.filter(obs_mjd__isnull=True).values_list('survey_field__ztf_field_id', flat=True).distinct()
+                obs_str, sched_str = '', ''
+                for z in obs_ids:
+                    filters = qs.filter(survey_field__ztf_field_id=z).values_list('photometric_band__name', flat=True).distinct()
+                    obs_str += '%s: %s; ' % (z.__str__(), ','.join([f.__str__() for f in filters]))
+                for z in sched_ids:
+                    if z in obs_ids:
+                        continue
+                    filters = qs.filter(survey_field__ztf_field_id=z).values_list('photometric_band__name', flat=True).distinct()
+                    sched_str += '%s: %s; ' % (z.__str__(), ','.join([f.__str__() for f in filters]))
+                strings[inst] = (obs_str[:-2], sched_str[:-2])
+            moon = '%i%%' % (moon_illumination(time)*100)
+            p1, p2 = len(obs['GPC1']), len(obs['GPC2'])
+            if p1 and p2:
+                obstuple += ((strings['GPC1'][0], date, moon, colors[i % 3], strings['GPC1'][1], strings['GPC2'][0], strings['GPC2'][1]),)
+            elif p1:
+                obstuple += ((strings['GPC1'][0], date, moon, colors[i % 3], strings['GPC1'][1], 'None', 'None'),)
+            else:
+                obstuple += (('None', date, moon, colors[i % 3], 'None', strings['GPC2'][0], strings['GPC2'][1]),)
+        return obstuple
+
+    def test_yse_observing_calendar_matches_the_old_algorithm(self):
+        """#420: one windowed query + cached sun times give the same rows as the per-night queries."""
+        from django.core.cache import cache
+
+        from YSE_App.common.utilities import date_to_mjd
+
+        yse_obs_group, ps1, gpc1, bands = self._survey_stack()
+        gpc2, bands2 = create_instrument(self.user, ps1, "GPC2", band_names=("g", "r", "i", "z"))
+        audit = audit_fields(self.user)
+
+        def field(name, instrument, ztf_id):
+            return SurveyField.objects.create(
+                obs_group=yse_obs_group, field_id=name, cadence=3, instrument=instrument,
+                ztf_field_id=ztf_id, active=True, ra_cen=50.0, dec_cen=-5.0,
+                width_deg=3.3, height_deg=3.3, **audit)
+
+        f1, f2, f3 = field("810.A", gpc1, "810"), field("811.A", gpc1, "811"), field("812.A", gpc1, None)
+        f4 = field("820.A", gpc2, "820")
+        today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def mjd(days, hour):
+            return date_to_mjd(today + datetime.timedelta(days=days, hours=hour))
+
+        rows = [
+            # (field, band, mjd_requested, obs_mjd)
+            (f1, bands["g"], mjd(0, 8), mjd(0, 8.5)),      # observed tonight
+            (f1, bands["r"], mjd(0, 9), None),               # same field, another band, scheduled
+            (f2, bands["i"], mjd(0, 10), None),              # scheduled only
+            (f3, bands["z"], mjd(0, 11), mjd(0, 11.2)),      # no ZTF id
+            (f4, bands2["g"], mjd(0, 9), mjd(0, 9.1)),       # PS2 the same night
+            (f2, bands["r"], None, mjd(-3, 7)),              # observed only, mjd_requested NULL
+            (f4, bands2["z"], mjd(5, 12), None),             # PS2-only night
+            (f1, bands["g"], mjd(-12, 8), mjd(-12, 8)),      # before the window
+            (f2, bands["g"], None, None),                    # never matches
+        ]
+        for f, band, requested, observed in rows:
+            SurveyObservation.objects.create(
+                mjd_requested=requested, obs_mjd=observed, survey_field=f,
+                status=self.task_statuses["Requested"], exposure_time=27, photometric_band=band, **audit)
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        with iers_offline():
+            expected = self._old_yse_observing_calendar_rows()
+            response = self.client.get(reverse("yse_observing_calendar"))
+            again = self.client.get(reverse("yse_observing_calendar"))  # cached sun times
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(expected), 3)
+        self.assertEqual(response.context["all_obs"], expected)
+        self.assertEqual(again.context["all_obs"], expected)
+
     def test_survey_obs_schedule_and_ingest_observation_record(self):
         yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
         audit = audit_fields(self.user)
