@@ -75,7 +75,7 @@ from .table_utils import (
     prefetch_followup_resources,
 )
 from .queries.yse_python_queries import *
-from .services.night_astro import twilight_times
+from .services.night_astro import calendar_sun_times, twilight_times
 from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
@@ -1000,76 +1000,87 @@ def yse_home(request):
     return render(request, 'YSE_App/yse_home.html', context)
 
 
+def _calendar_field_strings(rows):
+    """'field: band,band; ...' for observed and for only-scheduled fields of one night.
+
+    ``rows`` are (ztf_field_id, band, observed) ordered by survey field, then row id. Fields and bands keep
+    their first-seen order; a field's bands come from all its rows that night, and a
+    field observed at all is left out of the scheduled string (the view's old rules).
+    """
+    bands = {}
+    observed, scheduled = [], []
+    for field_id, band, was_observed in rows:
+        field_bands = bands.setdefault(field_id, [])
+        if band not in field_bands:
+            field_bands.append(band)
+        target = observed if was_observed else scheduled
+        if field_id not in target:
+            target.append(field_id)
+    def fmt(field_ids):
+        return ''.join('%s: %s; ' % (z.__str__(), ','.join(f.__str__() for f in bands[z])) for z in field_ids)
+    return fmt(observed), fmt([z for z in scheduled if z not in observed])
+
+
 @login_required
 def yse_observing_calendar(request):
+    """PS1 / PS2 fields per night, ten nights back to thirty ahead.
 
-    all_obs = SurveyObservation.objects.all().select_related()
-    all_dates,all_ztf_ids,all_filters = np.array([]),np.array([]),np.array([])
-
+    One query fetches every GPC1/GPC2 observation in the 40-night window; each night
+    then applies the old per-night filter in Python (a NULL MJD never matches, as in
+    SQL). The sun times are cached per night. The old view ran two astroplan solves
+    and 6 + one-per-field queries for every night (#420).
+    """
     telescope = Telescope.objects.get(name='Pan-STARRS1')
-    location = EarthLocation.from_geodetic(
-        telescope.longitude*u.deg,telescope.latitude*u.deg,
-        telescope.elevation*u.m)
-    tel = Observer(location=location, timezone="UTC")
 
     todaydate = dateutil.parser.parse(datetime.datetime.today().strftime('%Y-%m-%d 00:00:00'))
     base = todaydate-datetime.timedelta(10)
     date_list = [base + datetime.timedelta(days=x) for x in range(40)]
+    nights = [(date, calendar_sun_times(telescope, date)) for date in date_list]
     obstuple = ()
     colors = ['#dd4b39', 
               '#f39c12', 
               '#00c0ef']
 
-    for i,date in enumerate(date_list):
+    lo = min(sun['sunset_mjd'] for _, sun in nights) - 0.1
+    hi = max(sun['sunrise_mjd'] for _, sun in nights) + 0.1
+    window_rows = list(
+        SurveyObservation.objects.filter(survey_field__instrument__name__in=('GPC1', 'GPC2'))
+        .filter(Q(mjd_requested__gte=lo) | Q(obs_mjd__gte=lo))
+        .filter(Q(mjd_requested__lte=hi) | Q(obs_mjd__lte=hi))
+        # survey field, then row: the order MySQL returned the old per-night DISTINCT
+        # queries in (through the survey_field_id index), so fields and bands list as before
+        .order_by('survey_field_id', 'pk')
+        .values_list('mjd_requested', 'obs_mjd', 'survey_field__instrument__name',
+                     'survey_field__ztf_field_id', 'photometric_band__name')
+    )
 
-        time = Time(date_to_mjd(date.strftime('%Y-%m-%d 00:00:00')),format='mjd')
-        
-        sunset_forobs = tel.sun_set_time(time,which="next")
-        sunrise_forobs = tel.sun_rise_time(time,which="next")
-        survey_obs_ps1 = SurveyObservation.objects.filter(
-            Q(mjd_requested__gte = date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte = date_to_mjd(sunset_forobs)-0.1)).\
-            filter(Q(mjd_requested__lte = date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte = date_to_mjd(sunrise_forobs)+0.1)).\
-            filter(survey_field__instrument__name='GPC1')
-        survey_obs_ps2 = SurveyObservation.objects.filter(
-            Q(mjd_requested__gte = date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte = date_to_mjd(sunset_forobs)-0.1)).\
-            filter(Q(mjd_requested__lte = date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte = date_to_mjd(sunrise_forobs)+0.1)).\
-            filter(survey_field__instrument__name='GPC2')
+    def _ge(value, edge):
+        return value is not None and value >= edge
 
-        if not len(survey_obs_ps1) and not len(survey_obs_ps2): continue
-        ztf_obs_ps1_ids = survey_obs_ps1.filter(obs_mjd__isnull=False).values_list('survey_field__ztf_field_id',flat=True).distinct()
-        ztf_sched_ps1_ids = survey_obs_ps1.filter(obs_mjd__isnull=True).values_list('survey_field__ztf_field_id',flat=True).distinct()
-        ztf_obs_ps2_ids = survey_obs_ps2.filter(obs_mjd__isnull=False).values_list('survey_field__ztf_field_id',flat=True).distinct()
-        ztf_sched_ps2_ids = survey_obs_ps2.filter(obs_mjd__isnull=True).values_list('survey_field__ztf_field_id',flat=True).distinct()
-        
-        ztf_obs_ps1_str = ''
-        for z in ztf_obs_ps1_ids:
-            filters = survey_obs_ps1.filter(survey_field__ztf_field_id=z).values_list('photometric_band__name',flat=True).distinct()
-            ztf_obs_ps1_str += '%s: %s; '%(z.__str__(),','.join([f.__str__() for f in filters]))
-        ztf_sched_ps1_str = ''
-        for z in ztf_sched_ps1_ids:
-            if z in ztf_obs_ps1_ids: continue
-            filters = survey_obs_ps1.filter(survey_field__ztf_field_id=z).values_list('photometric_band__name',flat=True).distinct()
-            ztf_sched_ps1_str += '%s: %s; '%(z.__str__(),','.join([f.__str__() for f in filters]))
-        ztf_obs_ps2_str = ''
-        for z in ztf_obs_ps2_ids:
-            filters = survey_obs_ps2.filter(survey_field__ztf_field_id=z).values_list('photometric_band__name',flat=True).distinct()
-            ztf_obs_ps2_str += '%s: %s; '%(z.__str__(),','.join([f.__str__() for f in filters]))
-        ztf_sched_ps2_str = ''
-        for z in ztf_sched_ps2_ids:
-            if z in ztf_obs_ps2_ids: continue
-            filters = survey_obs_ps2.filter(survey_field__ztf_field_id=z).values_list('photometric_band__name',flat=True).distinct()
-            ztf_sched_ps2_str += '%s: %s; '%(z.__str__(),','.join([f.__str__() for f in filters]))
+    def _le(value, edge):
+        return value is not None and value <= edge
 
-            
-        if len(survey_obs_ps1) and len(survey_obs_ps2):
+    for i, (date, sun) in enumerate(nights):
+        start, end = sun['sunset_mjd'] - 0.1, sun['sunrise_mjd'] + 0.1
+        per_instrument = {'GPC1': [], 'GPC2': []}
+        for mjd_requested, obs_mjd, instrument, field_id, band in window_rows:
+            if (_ge(mjd_requested, start) or _ge(obs_mjd, start)) and \
+                    (_le(mjd_requested, end) or _le(obs_mjd, end)):
+                per_instrument[instrument].append((field_id, band, obs_mjd is not None))
+        has_ps1, has_ps2 = bool(per_instrument['GPC1']), bool(per_instrument['GPC2'])
+        if not has_ps1 and not has_ps2: continue
+        ztf_obs_ps1_str, ztf_sched_ps1_str = _calendar_field_strings(per_instrument['GPC1'])
+        ztf_obs_ps2_str, ztf_sched_ps2_str = _calendar_field_strings(per_instrument['GPC2'])
+
+        if has_ps1 and has_ps2:
             obstuple += ((ztf_obs_ps1_str[:-2],date,
-                          '%i%%'%(moon_illumination(time)*100),colors[i%len(colors)],ztf_sched_ps1_str[:-2],ztf_obs_ps2_str[:-2],ztf_sched_ps2_str[:-2]),)
-        elif len(survey_obs_ps1) and not len(survey_obs_ps2):
+                          sun['moon_illum'],colors[i%len(colors)],ztf_sched_ps1_str[:-2],ztf_obs_ps2_str[:-2],ztf_sched_ps2_str[:-2]),)
+        elif has_ps1:
             obstuple += ((ztf_obs_ps1_str[:-2],date,
-                          '%i%%'%(moon_illumination(time)*100),colors[i%len(colors)],ztf_sched_ps1_str[:-2],'None','None'),)
-        elif len(survey_obs_ps2) and not len(survey_obs_ps1):
+                          sun['moon_illum'],colors[i%len(colors)],ztf_sched_ps1_str[:-2],'None','None'),)
+        else:
             obstuple += (('None',date,
-                          '%i%%'%(moon_illumination(time)*100),colors[i%len(colors)],'None',ztf_obs_ps2_str[:-2],ztf_sched_ps2_str[:-2]),)
+                          sun['moon_illum'],colors[i%len(colors)],'None',ztf_obs_ps2_str[:-2],ztf_sched_ps2_str[:-2]),)
 
     context = {
         'all_obs': obstuple,

@@ -32,6 +32,34 @@ To avoid this next time, make hand edits in that checkout as `foley` (`sudo -u f
 - **Change All Statuses** ([#398](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/398), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406)): one UPDATE instead of saving each transient (Auto Ignore, 2939 transients, now about 23 s); the result is reported.
 - **Forced phot** ([#399](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/399), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403)): errors are reported; a comment names the requester. If the legacy path still fails, the alert names the exception and the Apache error log has the traceback: check the `[ztf]` keys in `settings.ini`.
 
+**REQUIRED (2026-10-07): no job runner on the test stacks, so SALT fits stay "queued"** ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)). `/yse_test/jobs/status.json` shows two `external_service.run` jobs queued at 22:14 UTC and **0 done ever**: nothing drains the job queue on the shared `YSE_test` database. SALT3/sncosmo, NGSF and Bazin fits, annotations, sharing, summaries and weather all run on that queue. Section 3.18 sets this up for production only. One runner covers **both** yse_test and yse_experimental, since they share the database. These steps use the yse_test checkout and interpreter. (The earlier 403 was most likely the service still disabled; `sncosmo_fit` is enabled now.)
+
+```bash
+cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.py run_jobs --status
+```
+**Expected:** counts with `queued: 2` (or more), and `external_service.run` among the registered kinds.
+
+```bash
+cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.py run_jobs --budget 300
+```
+**Expected:** it processes the queued jobs and exits. A SALT3 fit takes a minute or two. A `PermissionError` under `service_runs` means the step-1.6 permissions (`<MEDIA_ROOT>/service_runs`, group-writable for the web user and for `foley`) are missing on this stack.
+
+**Check:** `run_jobs --status` shows them `done` (or `failed` with an error to send Ryan), and the transient's Summary tab shows the SALT3 fit. Then make it permanent (as `foley`, `crontab -e`), one line only for the shared database:
+
+```bash
+* * * * * cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.py run_jobs --budget 50 >> /data/yse_pz/logs/run_jobs_yse_test.log 2>&1
+```
+**Check after a few minutes:** a new Refit on `/yse_test/` or `/yse_experimental/` changes from "queued" to the fit result within about two minutes, and `/yse_test/jobs/` lists recent `done` jobs.
+
+**REQUIRED (2026-10-07): ZTF forced phot on yse_test is rejected by ZTF** ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411)). The alert reads `wget exited with status 8: ... ERROR 400: Bad Request.`, so the directory and wget are fine and ZTF refused the request. ZTF's 400 page names the reason; for an address it does not know it says `Error: e-mail address is unknown.` ([#433](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/433) shows that text in the alert once it reaches yse_test). The view submits as `<SMTP_LOGIN>@gmail.com` with the `ztfforcedphotpass` password. Compare the yse_test values with production's, without printing the passwords:
+
+```bash
+for f in /data/yse_pz/YSE_PZ/YSE_PZ/settings.ini /data/yse_pz/YSE_PZ_test/YSE_PZ/settings.ini; do echo "$f"; grep -E '^SMTP_LOGIN' "$f"; grep -E '^ztfforcedphotpass' "$f" | sha256sum; done
+```
+**Expected:** the same `SMTP_LOGIN` line and the same hash for both files. `SMTP_LOGIN` + `@gmail.com` must be the address registered with the ZTF forced-photometry service, and `ztfforcedphotpass` its password. **If not:** copy production's two values into yse_test's `settings.ini`, then `sudo systemctl restart apache2` (settings are read when the web process starts). **Check:** "Request ZTF Forced Phot" on `/yse_test/` alerts `success: ...` and adds a comment.
+
+**YSE forced phot cron (2026-10-07):** fixed by [#419](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/419). It reaches yse_test with promotion [#428](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/428); then re-run `runcrons YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhot --force`. Runs since pstamp began redirecting http to https submitted nothing.
+
 **REQUIRED (2026-10-06): ZTF forced phot on yse_test fails with `FileNotFoundError`** ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411)). The request writes wget's log to `<ztfforcedtmpdir>/forced_phot_out/` and, as the Apache user, could not create the file there. After [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412) reaches yse_test, the alert names wget's actual error. These checks find and fix the cause now. Run them for the yse_test checkout; repeat with `/data/yse_pz/YSE_PZ` for production.
 
 ```bash
@@ -1386,6 +1414,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
 * 2026-10-02 00:35 UTC v24 (Markdown copy only), informational. [#389](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/389) (JWST tab), [#392](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/392) (backport of develop 82b2580) and [#393](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/393) (docs) merged to experimental; no migrations, no dependencies: **nothing required**. Suggestion: the 82b2580 commit on `develop` is git-authored as "Dave Coulter"; check `git config user.name` / `user.email` in the Ziggy checkout you committed from.

@@ -258,7 +258,7 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 
 	try:
 		response = requests.get(
-			url="http://ps1images.stsci.edu/cgi-bin/ps1cutouts",
+			url="https://ps1images.stsci.edu/cgi-bin/ps1cutouts",
 			params={
 				"pos": pos,
 				"filter": filt,
@@ -286,7 +286,7 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 		imagetype = item.group("imagetype")
 		skycellid = item.group("skycellid")
 		ffilter = item.group("ffilter")
-		fiturl = 'http://ps1images.stsci.edu%s'%item.group("fiturl")
+		fiturl = 'https://ps1images.stsci.edu%s'%item.group("fiturl")
 		if fiturl[0:5] != "http:":
 			fiturl = "http:" + fiturl
 			mjd = item.group("mjd")
@@ -309,7 +309,7 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 	else: return(None)
 
 def getDSSImage(ra,dec,filt,size,outfile):
-	QueryUrl="http://archive.eso.org/dss/dss/image?ra=%s&dec=%s&x=%i&y=%i&units=arcmin&Sky-Survey=2r&mime-type=download-fits"%(ra,dec,size,size)
+	QueryUrl="https://archive.eso.org/dss/dss/image?ra=%s&dec=%s&x=%i&y=%i&units=arcmin&Sky-Survey=2r&mime-type=download-fits"%(ra,dec,size,size)
 	if not os.path.dirname(outfile):
 		outdlfile = '%.7f_%.7f_%s.DSS.fits'%(ra,dec,time.time())
 	else:

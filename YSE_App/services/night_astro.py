@@ -90,3 +90,28 @@ def cached_rise_set(key):
 
 def store_rise_set(key, rise_set):
     cache.set(key, dict(rise_set), timeout=NIGHT_CACHE_TIMEOUT)
+
+
+def calendar_sun_times(telescope, date):
+    """
+    The YSE observing calendar's per-night sun times, exactly as it computed them inline.
+
+    ``date`` is a naive datetime at 00:00. Builds ``Time`` from the MJD as the view did
+    (not from the ISO string, as ``twilight_times`` does), so the window edges are
+    bit-for-bit the old ones. Returns ``sunset_mjd`` / ``sunrise_mjd`` (``date_to_mjd`` of
+    the next sunset and sunrise) and ``moon_illum`` (the template's ``'NN%'``). Two
+    astroplan root-finds on a miss, a cache read afterwards.
+    """
+    date_str = date.strftime('%Y-%m-%d 00:00:00')
+    key = 'calendar_sun_%s_%s' % (_site_key(telescope), date_str.replace(' ', 'T'))
+    result = cache.get(key)
+    if result is None:
+        time = Time(date_to_mjd(date_str), format='mjd')
+        tel = observer_for(telescope)
+        result = {
+            'sunset_mjd': date_to_mjd(tel.sun_set_time(time, which="next")),
+            'sunrise_mjd': date_to_mjd(tel.sun_rise_time(time, which="next")),
+            'moon_illum': '%i%%' % (moon_illumination(time) * 100),
+        }
+        cache.set(key, result, timeout=NIGHT_CACHE_TIMEOUT)
+    return result

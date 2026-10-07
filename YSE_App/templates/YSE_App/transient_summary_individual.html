@@ -204,8 +204,8 @@
                   <div class="item carousel-item active">
                     <strong>SDSS Footprint</strong>
                     <div style="width:400px;height:400px;">
-                      <a href="http://skyserver.sdss3.org/public/en/tools/chart/navi.aspx?opt=G&amp;ra={{ transient.ra }}&amp;dec={{ transient.dec }}&amp;scale=0.1981" target="_blank" title="Link to SDSS Navigate Tool" class="sdss-image-link">
-                      <img src="http://skyservice.pha.jhu.edu/DR14/ImgCutout/getjpeg.aspx?ra={{ transient.ra }}&dec={{ transient.dec }}&scale=0.5&width=200&height=200&opt=G&query=&Grid=on " style='width:400px' border="0">
+                      <a href="https://skyserver.sdss.org/public/en/tools/chart/navi.aspx?opt=G&amp;ra={{ transient.ra }}&amp;dec={{ transient.dec }}&amp;scale=0.1981" target="_blank" title="Link to SDSS Navigate Tool" class="sdss-image-link">
+                      <img src="https://skyservice.pha.jhu.edu/DR14/ImgCutout/getjpeg.aspx?ra={{ transient.ra }}&dec={{ transient.dec }}&scale=0.5&width=200&height=200&opt=G&query=&Grid=on " style='width:400px' border="0">
                       </a>
                     </div>
                   </div>
@@ -360,7 +360,7 @@
         $.get("{% url 'get_ps1_image' transient.id %}").done(function(json){
           var rows = $("#ps1_image_{{transient.id}}")
           if (json["jpegurl"]) {
-          htmltext = "<a href=\"http://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos={{ transient.ra }}%2B{{ transient.dec }}&amp;filter=color\" class=\"ps1-thumb\" title=\"Link to PanSTARRS-1\" target=\"_blank\"><img src=\"" + json["jpegurl"] + "\" style='width:400px' alt=\"\" /></a>"
+          htmltext = "<a href=\"https://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos={{ transient.ra }}%2B{{ transient.dec }}&amp;filter=color\" class=\"ps1-thumb\" title=\"Link to PanSTARRS-1\" target=\"_blank\"><img src=\"" + json["jpegurl"] + "\" style='width:400px' alt=\"\" /></a>"
           } else {
             var htmltext = "<p class=\"text-muted\">Coordinates are outside the PS1 footprint</p>"
           }
