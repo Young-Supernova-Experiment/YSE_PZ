@@ -32,6 +32,30 @@ To avoid this next time, make hand edits in that checkout as `foley` (`sudo -u f
 - **Change All Statuses** ([#398](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/398), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406)): one UPDATE instead of saving each transient (Auto Ignore, 2939 transients, now about 23 s); the result is reported.
 - **Forced phot** ([#399](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/399), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403)): errors are reported; a comment names the requester. If the legacy path still fails, the alert names the exception and the Apache error log has the traceback: check the `[ztf]` keys in `settings.ini`.
 
+**REQUIRED (2026-10-06): ZTF forced phot on yse_test fails with `FileNotFoundError`** ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411)). The request writes wget's log to `<ztfforcedtmpdir>/forced_phot_out/` and, as the Apache user, could not create the file there. After [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412) reaches yse_test, the alert names wget's actual error. These checks find and fix the cause now. Run them for the yse_test checkout; repeat with `/data/yse_pz/YSE_PZ` for production.
+
+```bash
+grep -E '^ztfforcedtmpdir' /data/yse_pz/YSE_PZ_test/YSE_PZ/settings.ini
+```
+**Expected:** one line, e.g. `ztfforcedtmpdir=/data/yse_pz/tmp`. Call that path `<ZTFTMPDIR>`. With no line, the `[ztf]` value from `public_settings.ini` (`/data/yse_pz/tmp`) applies.
+
+```bash
+ps -o user= -C apache2 | sort -u
+```
+**Expected:** `root` plus one other user, e.g. `www-data`. Call the other one `<APACHE_USER>`.
+
+```bash
+ls -ld <ZTFTMPDIR> <ZTFTMPDIR>/forced_phot_out
+sudo -u <APACHE_USER> test -w <ZTFTMPDIR>/forced_phot_out && echo writable
+sudo -u <APACHE_USER> sh -c 'command -v wget'
+```
+**Expected:** both directories listed, `writable`, and a path such as `/usr/bin/wget`. **If not:**
+- If `forced_phot_out` is missing, create it with `sudo mkdir -p <ZTFTMPDIR>/forced_phot_out`.
+- If it is not writable, give the Apache user write access without taking it from the cron user that reads it (`foley`): `sudo chgrp <APACHE_USER> <ZTFTMPDIR>/forced_phot_out && sudo chmod 2775 <ZTFTMPDIR>/forced_phot_out`.
+- If wget is missing, install it: `sudo apt-get install wget`.
+
+**Check:** "Request ZTF Forced Phot" on a transient on `/yse_test/` alerts `success: ZTF forced photometry requested...` and adds a comment.
+
 **Pending for David:**  items in [section 5](#pending). **Section 1 on yse\_experimental** (1.2 PhotStat backfill, 1.5 TNS sharing service, 1.6 analysis services, 1.7 annotation services) was reported done by David at 23:44 UTC, not independently verified. 1.10 `register_summary_service` (#373) was reported done at 23:50 UTC. **Nothing required is left on yse\_experimental.** **Then:** merge #143, then the production deploy in [section 3](#prod) (backup, pull, pip, settings.ini keys incl. the new required `[secrets] credentials_key`, EXPLAIN, migrate 0004-0029 with 0010 and 0027 as the slow steps, saved-query rewrite, collectstatic, Apache, LSST cron), the #260 spectra check, and #187.
 
 Last updated 2026-09-30 02:08 UTC · nothing on production has changed yet
@@ -1362,6 +1386,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
 * 2026-10-02 00:35 UTC v24 (Markdown copy only), informational. [#389](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/389) (JWST tab), [#392](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/392) (backport of develop 82b2580) and [#393](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/393) (docs) merged to experimental; no migrations, no dependencies: **nothing required**. Suggestion: the 82b2580 commit on `develop` is git-authored as "Dave Coulter"; check `git config user.name` / `user.email` in the Ziggy checkout you committed from.
 * 2026-09-30 02:08 UTCv23, informational. #386 (broker streams; experimental 02:04 UTC as 41a5226; migration 0029 via Deploy Stack run 36658108677, schema-only): nothing required. Optional step 1.15 (fastavro / antares-client, credential kinds, a Broker connection left disabled, BrokerFilters, `broker_ingest --dry-run` smoke test, consumer under systemd, `[brokers]` stream keys), mirrored as production 3.31; 1.1 lists 0029; 3.18 says 0012-0029; an optional pending row.

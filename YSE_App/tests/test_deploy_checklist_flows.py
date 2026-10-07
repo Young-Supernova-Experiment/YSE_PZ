@@ -320,6 +320,25 @@ class DeployChecklistFlowTests(TestCase):
             self.assertIn("nothing was submitted", response.json()["msg"])
         self.assertFalse(Log.objects.filter(transient=transient).exists())
 
+    def test_forced_photometry_failure_names_the_cause(self):
+        """#411: the alert carries wget's message (submit error) but not arbitrary exception text."""
+        from YSE_App.data_ingest import ZTF_Forced_Phot as fp
+
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-cause")
+        url = reverse("ztf_forced_phot", kwargs={"slug": transient.slug})
+        cases = (
+            (fp.ZTFForcedPhotSubmitError("wget exited with status 3: x.txt: Permission denied"), "Permission denied"),
+            (ValueError("internal detail"), "(ValueError)"),
+        )
+        for exc, expected in cases:
+            fake = mock.MagicMock()
+            fake.return_value.run_ztf_fp.side_effect = exc
+            with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake), \
+                    mock.patch.object(views_module.logger, "exception"):
+                msg = self.client.get(url).json()["msg"]
+            self.assertIn(expected, msg)
+        self.assertNotIn("internal detail", msg)
+
     def test_flux_plot_with_photometry_returns_html(self):
         response = self.client.get(f"/lightcurveplot_flux/{self.transient.id}/")
         self.assertEqual(response.status_code, 200)
