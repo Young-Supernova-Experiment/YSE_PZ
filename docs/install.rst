@@ -237,7 +237,7 @@ Make sure to put single quotes around your password!
 
 Anaconda Python
 ---------------
-`<http://anaconda.org>`_
+`<https://anaconda.org>`_
 
 Database File and settings.ini file
 -----------------------------------

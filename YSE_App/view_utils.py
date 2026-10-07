@@ -2232,7 +2232,7 @@ def get_ps1_image(request,transient_id):
     except t.DoesNotExist:
         raise Http404("Transient id does not exist")
 
-    ps1url = ("http://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
+    ps1url = ("https://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
     try:
         response = requests.get(url=ps1url,timeout=5)
     except requests.RequestException as exc:
@@ -2555,12 +2555,12 @@ def get_legacy_image(request,transient_id):
     except t.DoesNotExist:
         raise Http404("Transient id does not exist")
 
-    jpegurl = "http://legacysurvey.org/viewer/jpeg-cutout?ra=%.7f&dec=%.7f&pixscale=0.27&bands=grz"%(
+    jpegurl = "https://www.legacysurvey.org/viewer/jpeg-cutout?ra=%.7f&dec=%.7f&pixscale=0.27&bands=grz"%(
         t.ra,t.dec)
 
-    #fitsurl = "http://legacysurvey.org/viewer/fits-cutout?ra=%.7f&dec=%.7f&layer=dr8&pixscale=0.27&bands=grz"%(
+    #fitsurl = "https://www.legacysurvey.org/viewer/fits-cutout?ra=%.7f&dec=%.7f&layer=dr8&pixscale=0.27&bands=grz"%(
     #   t.ra,t.dec)
-    fitsurl = "http://legacysurvey.org/viewer?ra=%.7f&dec=%.7f"%(t.ra,t.dec)
+    fitsurl = "https://www.legacysurvey.org/viewer?ra=%.7f&dec=%.7f"%(t.ra,t.dec)
     
     print(jpegurl,fitsurl)
     jpegurldict = {"jpegurl":jpegurl,

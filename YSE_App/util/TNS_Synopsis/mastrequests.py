@@ -51,7 +51,7 @@ class MastCasJobs(CasJobs):
     """
     def __init__(self, username=None, password=None, userid=None,
                  request_type="GET", context="PanSTARRS_DR1",
-                 base_url="http://mastweb.stsci.edu/ps1casjobs/services/jobs.asmx",
+                 base_url="https://mastweb.stsci.edu/ps1casjobs/services/jobs.asmx",
                  wsid_url=None, fast_url=None):
 
         if base_url.lower().find("//mastweb.stsci.edu/") >= 0:
