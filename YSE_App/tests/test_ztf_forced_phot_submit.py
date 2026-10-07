@@ -18,13 +18,13 @@ def _client():
         ztf_user_address="a@example.com", ztf_user_password="SECRETPASS")
 
 
-def _popen(returncode, stderr=b"", create_file=False):
+def _popen(returncode, stderr=b"", create_file=False, content="ok"):
     """A Popen stand-in; with create_file it writes the -O target like wget would."""
     def factory(command, **kwargs):
         if create_file:
             target = command.split(" -O ")[1].split(" ")[0]
             with open(target, "w") as fh:
-                fh.write("ok")
+                fh.write(content)
         proc = mock.MagicMock()
         proc.communicate.return_value = (b"", stderr)
         proc.returncode = returncode
@@ -72,3 +72,18 @@ class ZTFForcedPhotSubmitTests(SimpleTestCase):
         summary = fp._wget_error_summary(b"ERROR: bad request userpass=SECRETPASS\n")
         self.assertIn("userpass=***", summary)
         self.assertNotIn("SECRETPASS", summary)
+
+    def test_ztf_rejection_reason_is_reported(self):
+        """ZTF's 400 page says why (#411); --content-on-error keeps it for the message."""
+        page = ("<html><body><h2>Forced-Photometry Service</h2>"
+                "<p>Error: e-mail address is unknown.</p></body></html>")
+        stderr = b"2026-10-07 23:26:35 ERROR 400: Bad Request.\n"
+        with mock.patch.object(fp.subprocess, "Popen",
+                               side_effect=_popen(8, stderr=stderr, create_file=True, content=page)) as popen:
+            with self.assertRaises(fp.ZTFForcedPhotSubmitError) as ctx:
+                _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=False)
+        self.assertIn("--content-on-error", popen.call_args.args[0])
+        message = str(ctx.exception)
+        self.assertIn("ERROR 400: Bad Request.", message)
+        self.assertIn("ZTF says: e-mail address is unknown.", message)
+        self.assertEqual(os.listdir(os.path.join(self.tmpdir, "forced_phot_out")), [])
