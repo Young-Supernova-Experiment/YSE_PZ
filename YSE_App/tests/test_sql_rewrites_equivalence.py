@@ -19,6 +19,7 @@ gives the same TO_DAYS difference at any hour.
 """
 
 import datetime
+import itertools
 
 from django.db import connection, connections
 from django.db.models.expressions import RawSQL
@@ -198,12 +199,24 @@ class SavedQueryRewriteEquivalenceTests(TestCase):
         if not IS_MYSQL:
             self.skipTest("saved Explorer SQL is MySQL dialect; run on the docker MySQL / CI")
 
-    def _assert_same(self, original, rewritten, *, ordered, min_rows):
+    def _assert_same(self, original, rewritten, *, ordered, min_rows, sort_column=None):
+        """Same rows; with ``ordered``, the same order.
+
+        ``sort_column`` is the output column the queries ORDER BY when that key can tie:
+        tied rows have no defined order in either query (#429), so then the key sequence
+        must match and each run of equal keys must hold the same rows.
+        """
         old, new = _rows(original), _rows(rewritten)
         self.assertGreaterEqual(len(old), min_rows, "fixture does not exercise the query")
         self.assertEqual(sorted(old), sorted(new))
-        if ordered:
+        if not ordered:
+            return
+        if sort_column is None:
             self.assertEqual(old, new)
+            return
+        self.assertEqual([r[sort_column] for r in old], [r[sort_column] for r in new])
+        groups = lambda rows: [sorted(g) for _, g in itertools.groupby(rows, key=lambda r: r[sort_column])]
+        self.assertEqual(groups(old), groups(new))
 
     def test_magnitude_limited(self):
         self._assert_same(dsq.MAG_LIMITED_ORIGINAL_M2M, dsq.MAG_LIMITED_REWRITE_M2M, ordered=False, min_rows=3)
@@ -214,7 +227,7 @@ class SavedQueryRewriteEquivalenceTests(TestCase):
             self.assertNotIn(excluded, names)
 
     def test_fast_and_young(self):
-        self._assert_same(dsq.FAST_YOUNG_ORIGINAL, dsq.FAST_YOUNG_REWRITE, ordered=True, min_rows=2)
+        self._assert_same(dsq.FAST_YOUNG_ORIGINAL, dsq.FAST_YOUNG_REWRITE, ordered=True, min_rows=2, sort_column=2)  # ORDER BY first_detection DESC
         names = [r[0] for r in _rows(dsq.FAST_YOUNG_REWRITE)]
         self.assertIn("2025aaa", names)
         self.assertIn("2025aaf", names)  # first detection 7 calendar days ago (< 8)
@@ -224,7 +237,7 @@ class SavedQueryRewriteEquivalenceTests(TestCase):
         self.assertNotIn("2025aae", names)
 
     def test_new_transients_last_two_days(self):
-        self._assert_same(dsq.NEW_TWO_DAYS_ORIGINAL, dsq.NEW_TWO_DAYS_REWRITE, ordered=True, min_rows=2)
+        self._assert_same(dsq.NEW_TWO_DAYS_ORIGINAL, dsq.NEW_TWO_DAYS_REWRITE, ordered=True, min_rows=2, sort_column=2)  # ORDER BY first_detection DESC
         names = [r[0] for r in _rows(dsq.NEW_TWO_DAYS_REWRITE)]
         self.assertIn("2025aaa", names)
         self.assertIn("2025aap", names)  # first detection 8 days ago is fine here (< 15)
