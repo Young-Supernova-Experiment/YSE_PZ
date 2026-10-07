@@ -914,6 +914,31 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(response.context["all_obs"], expected)
         self.assertEqual(again.context["all_obs"], expected)
 
+    def test_yse_observing_calendar_lists_fields_by_survey_field(self):
+        """#420: fields and bands follow survey field, then row id, as the old DISTINCT queries
+        returned them on Ziggy, not the order the observations were inserted."""
+        from django.core.cache import cache
+
+        from YSE_App.common.utilities import date_to_mjd
+
+        yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
+        audit = audit_fields(self.user)
+        first, second = (SurveyField.objects.create(
+            obs_group=yse_obs_group, field_id=name, cadence=3, instrument=gpc1, ztf_field_id=ztf,
+            active=True, ra_cen=50.0, dec_cen=-5.0, width_deg=3.3, height_deg=3.3, **audit)
+            for name, ztf in (("830.A", "830"), ("831.A", "831")))
+        tonight = date_to_mjd(timezone.now().replace(hour=9, minute=0, second=0, microsecond=0))
+        # inserted second field first, and the first field's bands in r, g order
+        for field, band in ((second, "i"), (first, "r"), (first, "g")):
+            SurveyObservation.objects.create(
+                mjd_requested=tonight, obs_mjd=tonight, survey_field=field,
+                status=self.task_statuses["Requested"], exposure_time=27, photometric_band=bands[band], **audit)
+        cache.clear()
+        self.addCleanup(cache.clear)
+        with iers_offline():
+            rows = self.client.get(reverse("yse_observing_calendar")).context["all_obs"]
+        self.assertEqual([row[0] for row in rows], ["830: r,g; 831: i"])
+
     def test_survey_obs_schedule_and_ingest_observation_record(self):
         yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
         audit = audit_fields(self.user)

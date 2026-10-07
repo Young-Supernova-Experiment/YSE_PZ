@@ -1003,7 +1003,7 @@ def yse_home(request):
 def _calendar_field_strings(rows):
     """'field: band,band; ...' for observed and for only-scheduled fields of one night.
 
-    ``rows`` are (ztf_field_id, band, observed) in row-id order. Fields and bands keep
+    ``rows`` are (ztf_field_id, band, observed) ordered by survey field, then row id. Fields and bands keep
     their first-seen order; a field's bands come from all its rows that night, and a
     field observed at all is left out of the scheduled string (the view's old rules).
     """
@@ -1047,7 +1047,9 @@ def yse_observing_calendar(request):
         SurveyObservation.objects.filter(survey_field__instrument__name__in=('GPC1', 'GPC2'))
         .filter(Q(mjd_requested__gte=lo) | Q(obs_mjd__gte=lo))
         .filter(Q(mjd_requested__lte=hi) | Q(obs_mjd__lte=hi))
-        .order_by('pk')
+        # survey field, then row: the order MySQL returned the old per-night DISTINCT
+        # queries in (through the survey_field_id index), so fields and bands list as before
+        .order_by('survey_field_id', 'pk')
         .values_list('mjd_requested', 'obs_mjd', 'survey_field__instrument__name',
                      'survey_field__ztf_field_id', 'photometric_band__name')
     )
