@@ -1245,7 +1245,10 @@
 
             // Follow-up form widgets load with deferred fragments (see initFollowupTabWidgets).
       // classical resource
-      $('#add_classical_resource').on('submit', function(event){
+      // The resource forms arrive with the follow-up fragments after this script runs,
+      // so bind through the document; a direct .on() found no form, and the browser's
+      // plain POST saved nothing (#396, #397).
+      $(document).on('submit', '#add_classical_resource', function(event){
         event.preventDefault();
         add_classical_resource();
       });
@@ -1268,7 +1271,7 @@
                 + (json.obs_date || 'night') + ' UT).';
               msg += ' It appears on the Observing Calendar, not On-Call Calendar (/calendar/).';
               if (json.observing_calendar_url) {
-                if (window.confirm(msg + '\\n\\nOpen Observing Calendar now?')) {
+                if (window.confirm(msg + '\n\nOpen Observing Calendar now?')) {
                   window.location.href = json.observing_calendar_url;
                   return;
                 }
@@ -1286,7 +1289,7 @@
         }
 
 // classical resource
-      $('#add_too_resource').on('submit', function(event){
+      $(document).on('submit', '#add_too_resource', function(event){
         event.preventDefault();
         add_too_resource();
       });
@@ -1304,8 +1307,7 @@
 
           // handle a successful response
           success : function(json) {
-            
-            // Required fields
+              alert('ToO resource saved' + (json.summary ? ': ' + json.summary : '') + '.');
               location.reload();
           },
 
@@ -1429,6 +1431,9 @@
             }
             if ($('#too_resource_date_range').length && !$('#too_resource_date_range').data('daterangepicker')) {
                 $('#too_resource_date_range').daterangepicker({
+                    // today (UT) through six months later, as on yse_home (#396)
+                    startDate: moment.utc().startOf('day'),
+                    endDate: moment.utc().startOf('day').add(6, 'months'),
                     timePicker24Hour: true,
                     timePicker: true,
                     timePickerIncrement: 1,

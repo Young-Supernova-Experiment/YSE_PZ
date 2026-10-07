@@ -188,10 +188,22 @@ class AddTransientFollowupFormView(FormView):
 			self._transient_detail_success_url(instance.transient)
 		)
 
+def _resource_form_redirect(request):
+	"""Where a plain (non-AJAX) resource form POST returns: the page it came from on this
+	site, else the dashboard. success_url pointed at /form-success/, which does not exist
+	and dropped the stack prefix (#396, #397)."""
+	from django.utils.http import url_has_allowed_host_and_scheme
+
+	referer = request.META.get('HTTP_REFERER', '')
+	if referer and url_has_allowed_host_and_scheme(
+			referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+		return HttpResponseRedirect(referer)
+	return HttpResponseRedirect(reverse('yse_home'))
+
+
 class AddClassicalResourceFormView(FormView):
 	form_class = ClassicalResourceForm
 	template_name = 'YSE_App/form_snippets/classical_resource_form.html'
-	success_url = '/form-success/'
 	
 	def form_invalid(self, form):
 		response = super(AddClassicalResourceFormView, self).form_invalid(form)
@@ -201,41 +213,39 @@ class AddClassicalResourceFormView(FormView):
 			return response
 
 	def form_valid(self, form):
-		response = super(AddClassicalResourceFormView, self).form_valid(form)
-		if is_ajax(self.request):
+		# Saved on both paths: a plain POST (form loaded after the page bound its
+		# handler) used to redirect without saving anything (#397).
+		instance = form.save(commit=False)
+		instance.created_by = self.request.user
+		instance.modified_by = self.request.user
+		instance.begin_date_valid = form.cleaned_data['observing_date']
+		instance.end_date_valid = form.cleaned_data['observing_date'] + datetime.timedelta(1)
+		
+		instance.save() #update_fields=['created_by','modified_by']
+		instance.groups.set(Group.objects.filter(name='YSE'))
+		instance.save()
 
-			instance = form.save(commit=False)
-			instance.created_by = self.request.user
-			instance.modified_by = self.request.user
-			instance.begin_date_valid = form.cleaned_data['observing_date']
-			instance.end_date_valid = form.cleaned_data['observing_date'] + datetime.timedelta(1)
-			
-			instance.save() #update_fields=['created_by','modified_by']
-			instance.groups.set(Group.objects.filter(name='YSE'))
-			instance.save()
 
+		obsdatedict = {'created_by':self.request.user,'modified_by':self.request.user,
+					   'resource':instance,'night_type':ClassicalNightType.objects.filter(name='Full')[0],
+					   'obs_date':form.cleaned_data['observing_date']}
+		ClassicalObservingDate.objects.create(**obsdatedict)
 
-			obsdatedict = {'created_by':self.request.user,'modified_by':self.request.user,
-						   'resource':instance,'night_type':ClassicalNightType.objects.filter(name='Full')[0],
-						   'obs_date':form.cleaned_data['observing_date']}
-			ClassicalObservingDate.objects.create(**obsdatedict)
-
-			obs_date = form.cleaned_data['observing_date']
-			data = {
-				'message': "Successfully submitted form data.",
-				# reverse() keeps the stack prefix (/yse_test/, /yse_experimental/) (#397)
-				'observing_calendar_url': reverse('observing_calendar'),
-				'obs_date': obs_date.strftime('%Y-%m-%d'),
-				'telescope': str(instance.telescope.name),
-			}
-			return JsonResponse(data)
-		else:
-			return response
+		if not is_ajax(self.request):
+			return _resource_form_redirect(self.request)
+		obs_date = form.cleaned_data['observing_date']
+		data = {
+			'message': "Successfully submitted form data.",
+			# reverse() keeps the stack prefix (/yse_test/, /yse_experimental/) (#397)
+			'observing_calendar_url': reverse('observing_calendar'),
+			'obs_date': obs_date.strftime('%Y-%m-%d'),
+			'telescope': str(instance.telescope.name),
+		}
+		return JsonResponse(data)
 
 class AddToOResourceFormView(FormView):
 	form_class = ToOResourceForm
-	template_name = 'YSE_App/form_snippets/classical_resource_form.html'
-	success_url = '/form-success/'
+	template_name = 'YSE_App/form_snippets/too_resource_form.html'
 	
 	def form_invalid(self, form):
 		response = super(AddToOResourceFormView, self).form_invalid(form)
@@ -245,26 +255,24 @@ class AddToOResourceFormView(FormView):
 			return response
 
 	def form_valid(self, form):
-		response = super(AddToOResourceFormView, self).form_valid(form)
-		if is_ajax(self.request):
+		# Saved on both paths, as for classical resources (#396).
+		instance = form.save(commit=False)
+		instance.created_by = self.request.user
+		instance.modified_by = self.request.user
 
-			instance = form.save(commit=False)
-			instance.created_by = self.request.user
-			instance.modified_by = self.request.user
+		instance.save() #update_fields=['created_by','modified_by']
 
-			instance.save() #update_fields=['created_by','modified_by']
-
-			data = {
-				'message': "Successfully submitted form data.",
-				# shown in the dashboard's confirmation alert (#396)
-				'summary': '%s, %s to %s UT' % (
-					instance.telescope.name,
-					instance.begin_date_valid.strftime('%Y-%m-%d'),
-					instance.end_date_valid.strftime('%Y-%m-%d')),
-			}
-			return JsonResponse(data)
-		else:
-			return response
+		if not is_ajax(self.request):
+			return _resource_form_redirect(self.request)
+		data = {
+			'message': "Successfully submitted form data.",
+			# shown in the confirmation alert (#396)
+			'summary': '%s, %s to %s UT' % (
+				instance.telescope.name,
+				instance.begin_date_valid.strftime('%Y-%m-%d'),
+				instance.end_date_valid.strftime('%Y-%m-%d')),
+		}
+		return JsonResponse(data)
 		
 		
 class AddTransientObservationTaskFormView(FormView):
