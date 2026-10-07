@@ -5,7 +5,7 @@
 	<div class="box box-primary box-solid">
 		<div class="box-header with-border">
 			<button id="move_yse_field_btn" type="button" class="btn btn-box-tool" data-widget="collapse" style="height: 30px;"><h3 class="box-title">Change Field</h3></button>
-			<div class="box-tools pull-right">
+			<div class="box-tools float-right">
 				<button id="move_yse_field_btn" type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-plus"></i></button>
 			</div>
 		</div>
@@ -19,7 +19,7 @@
 				<input type="hidden" id="instrument" value="{{ GPC1 }}"/>
 				<input type="hidden" id="width_deg" value="3.1"/>
 				<input type="hidden" id="height_deg" value="3.1"/>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Field Name</label>
 						<input type="text" list="field" name="field_id" id="field_datalist" class="form-control">
@@ -30,19 +30,19 @@
 						</datalist>
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>RA</label>
 						{% render_field form.ra_str class+="form-control" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Dec</label>
 						{% render_field form.dec_str class+="form-control" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Instrument</label>
 						<!--<input type="text" list="instrument" name="instrument" id="instrument_datalist" class="form-control">
@@ -54,14 +54,14 @@
 					</div>
 				</div>
 				<div class="row">
-					<div class="col-xs-6">
+					<div class="col-6">
 						<div class="form-group">
 							<label>Targeted Transients</label>
 							{% render_field form.targeted_transients class+="form-control" id="Transients" %}
 						</div>
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Targeted Galaxies</label>
 						{% render_field form.targeted_galaxies class+="form-control" %}
@@ -69,7 +69,7 @@
 				</div>
 
 			</div>
-				<div class="col-xs-12">
+				<div class="col-12">
 					<div class="form-group">
 						<br>
 						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>

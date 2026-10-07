@@ -178,6 +178,21 @@ def parse_mdc(mdc_text):
             
     return mdc
             
+
+def _pstamp_post(session, url, **kwargs):
+    """POST to the IPP postage-stamp server without following redirects (#422).
+
+    pstamp answers http:// with a 301 to https://, and requests re-sends a redirected
+    POST as a GET without its body: the upload "succeeded" without submitting anything
+    and status.php returned a page with no status table. Fail loudly instead.
+    """
+    page = session.post(url, allow_redirects=False, **kwargs)
+    if page.is_redirect or page.is_permanent_redirect:
+        raise RuntimeError(
+            'pstamp POST to %s was redirected to %s; nothing was sent. '
+            'Use the https:// URL.' % (url, page.headers.get('Location')))
+    return page
+
 class ForcedPhot(CronJobBase):
 
     RUN_EVERY_MINS = 30
@@ -558,7 +573,6 @@ class ForcedPhot(CronJobBase):
                 elif img_dict[k]['diff_image_camera'][i] == 'gpc2':
                     photometrydict_ps2['photdata']['%s_%i'%(mjd_to_date(img_dict[k]['diff_image_mjd'][i]),i)] = phot_upload_dict
                 else:
-                    import pdb; pdb.set_trace()
                     raise RuntimeError("couldn't figure out the instrument")
                     
             PhotUploadAll['PS1'] = photometrydict_ps1
@@ -748,12 +762,12 @@ class ForcedPhot(CronJobBase):
     
     def get_status(self,request_name):
         
-        status_link = 'http://pstamp.ipp.ifa.hawaii.edu/status.php'
+        status_link = 'https://pstamp.ipp.ifa.hawaii.edu/status.php'
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
 
-        page = session.post(status_link)
-        page = session.post(status_link)
+        page = _pstamp_post(session, status_link)
+        page = _pstamp_post(session, status_link)
         
         if page.status_code == 200:
             lines_out = []
@@ -896,14 +910,14 @@ class ForcedPhot(CronJobBase):
 
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
-        stampurl = 'http://pstamp.ipp.ifa.hawaii.edu/upload.php'
+        stampurl = 'https://pstamp.ipp.ifa.hawaii.edu/upload.php'
 
         # First login. Returns session cookie in response header. Even though status_code=401, it is ok
-        page = session.post(stampurl)
+        page = _pstamp_post(session, stampurl)
 
         if type(filename_or_obj) == str: files = {'filename':open(filename,'rb')}
         else: files = {'filename':filename_or_obj.getvalue()}
-        page = session.post(stampurl, files=files)
+        page = _pstamp_post(session, stampurl, files=files)
 
 class ForcedPhotUpdate(CronJobBase):
 

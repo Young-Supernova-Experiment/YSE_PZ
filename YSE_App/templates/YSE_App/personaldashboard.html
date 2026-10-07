@@ -15,11 +15,21 @@
 {% endblock %}
 
 {% block content %}
+<div class="yse-page-dashboard">
+
+<div class="box" id="yse-favorites-box">
+  <div class="box-header with-border">
+    <h3 class="box-title">My favorites <small><a href="{% url 'my_favorites' %}">all favorites</a></small></h3>
+  </div>
+  <div class="pdash-section-loading yse-favorites-loading" id="pdash-section-favorites" data-url="{% url 'my_favorites_section' %}">
+    <p><i class="fa fa-spinner fa-spin"></i> Loading favorites…</p>
+  </div>
+</div>
 
 {% if not transient_categories %}
   <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_query_form.html" with form=add_dashboard_query_form %}
         </div>
@@ -29,6 +39,7 @@
   {% if followup_notices %}
     <h3>
         &nbsp; Followup Notifications Requested for These Telescopes:
+        <small><a href="{% url 'notification_preferences' %}" class="yse-notif-prefs-link">notification preferences</a></small>
     </h3>
   {% endif %}
 
@@ -49,8 +60,8 @@
       {% endfor %}
 
     <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_followup_notice_form.html" with form=add_followup_notice_form %}
         </div>
@@ -75,12 +86,12 @@
       </form>
     </h3><span style="float:right;"><a href="{% url 'transient_summary' transient_cat.1 %}"><h3 class="box-title">Summary View</h3></a></span>
       <div class="btn-group">
-        <button style="margin-bottom:5px;" type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">
+        <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
           Change All Statuses For Query<span class="caret"></span>
         </button>
         <ul class="dropdown-menu">
           {% for status in all_transient_statuses %}
-          <li><a data-status_id="{{ status.id }}" data-status_name="{{status.name}}" data-n_transients="{{transient_cat.5}}" data-query_id="{{ transient_cat.4 }}" class="transientQueryStatusChange" href="#">{{ status.name }}</a></li>
+          <li><a data-status_id="{{ status.id }}" data-status_name="{{status.name}}" data-query_title="{{ transient_cat.1 }}" data-query_id="{{ transient_cat.4 }}" class="transientQueryStatusChange" href="#">{{ status.name }}</a></li>
           {% endfor %}
         </ul>
       </div>
@@ -96,9 +107,14 @@
       {% endif %}
     </div>
     <div class="box-body">
-
+      {% if transient_cat.0 %}
       {% render_table transient_cat.0 %}
-
+      {% elif personal_dashboard_defer %}
+      <div class="pdash-section-loading" id="pdash-section-{{ transient_cat.4 }}"
+           data-url="{% url 'personaldashboard_section' transient_cat.4 %}">
+        <p><i class="fa fa-spinner fa-spin"></i> Loading section…</p>
+      </div>
+      {% endif %}
     </div>
     <!-- /.box-body -->
     <div class="box-footer">
@@ -110,8 +126,8 @@
 
 {% if transient_categories %}
   <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_query_form.html" with form=add_dashboard_query_form %}
         </div>
@@ -141,8 +157,8 @@
       {% endfor %}  
 
     <div class="row">
-    <div class="col-xs-12">
-      <div class="col-xs-6">
+    <div class="col-12">
+      <div class="col-6">
         <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
           {% include "YSE_App/form_snippets/dashboard_followup_notice_form.html" with form=add_followup_notice_form %}
         </div>
@@ -150,11 +166,36 @@
   </div>
 {% endif %}
 
-
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script type='text/javascript'>
+// Deferred sections: the saved-query boxes when deferring is on, the favorites box always (#323).
+$(document).ready(function() {
+  function sectionUrl($slot) {
+    var url = $slot.data('url');
+    var search = window.location.search;
+    if (search && search.length > 1) {
+      url += (url.indexOf('?') >= 0 ? '&' : '?') + search.substring(1);
+    }
+    return url;
+  }
+
+  $('.pdash-section-loading').each(function() {
+    var $slot = $(this);
+    $.get(sectionUrl($slot), function(html) {
+      if (!html || !$.trim(html)) {
+        // An empty body (e.g. a 204) would otherwise remove the placeholder silently.
+        $slot.html('<p class="text-danger">Failed to load this section.</p>');
+        return;
+      }
+      $slot.replaceWith(html);
+    }).fail(function() {
+      $slot.html('<p class="text-danger">Failed to load this section.</p>');
+    });
+  });
+});
 {% if anchor %}
 $(document).ready(function(){
     window.location = '#{{ anchor }}'
@@ -224,49 +265,38 @@ $(document).ready(function(){
         event.preventDefault();
       });
 
+      // Bulk status change for one saved query (#398). The count is not known on the
+      // page (sections load lazily), so the dialogs name the query and the server
+      // reports how many transients it changed.
       $('.transientQueryStatusChange').on('click', function(event){
-        var status_name = $(this).attr('data-status_name')
-        var n_transients = $(this).attr('data-n_transients')
-        var r1 = confirm("Really change "+n_transients+" transient statuses to "+status_name+" ?");
-        if (r1 == true) {
-          var r2 = confirm("REALLY change "+n_transients+" transient statuses to "+status_name+" ???");
-          if (r2 == true) {
-            var status_id = $(this).attr('data-status_id')
-            var query_id = $(this).attr('data-query_id')
-            var url_target = "{% url 'change_status_for_query' -1 -2 %}".replace('-1', query_id).replace('-2', status_id);
-          
-            var base_url = window.location.protocol + "//" + window.location.hostname
-            var port = window.location.port
-            var api_url = base_url + url_target
+        event.preventDefault();
+        var $link = $(this);
+        var status_name = $link.attr('data-status_name');
+        var query_title = $link.attr('data-query_title');
+        if (!confirm('Change every transient in "' + query_title + '" to ' + status_name + '?')) return;
+        if (!confirm('REALLY change every transient in "' + query_title + '" to ' + status_name + '? This cannot be undone.')) return;
 
-            if (port != "") {
-              api_url = base_url + ":" + port + url_target
-            }
+        var url = "{% url 'change_status_for_query' -1 -2 %}"
+          .replace('-1', $link.attr('data-query_id')).replace('-2', $link.attr('data-status_id'));
+        var $btn = $link.closest('.btn-group').find('.dropdown-toggle');
+        var label = $btn.html();
+        $btn.prop('disabled', true).text('Changing statuses...');
 
-            var putData = {}
-
-            $.ajax({
-             type: "PATCH",
-              url: api_url,
-              csrfmiddlewaretoken: "{{ csrf_token }}",
-              data: putData,
-              success: function(data, textStatus, jqXHR) {
-                if (jqXHR.status == 200 && textStatus == "success") {
-
-                  location.reload();
-
-                } else {
-                  transientStatusChangeErr()
-                }
-              },
-              error: function(XMLHttpRequest, textStatus, errorThrown) {
-                transientStatusChangeErr()
-                {#alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));#}
-              }
-          });
-          event.preventDefault();
+        $.ajax({
+          type: "PATCH",
+          url: url,
+          success: function(json) {
+            alert(json.msg);
+            location.reload();
+          },
+          error: function(xhr) {
+            alert((xhr.responseJSON && xhr.responseJSON.msg) ||
+                  ('error: status change failed (HTTP ' + xhr.status + '); statuses may be unchanged'));
+          },
+          complete: function() {
+            $btn.prop('disabled', false).html(label);
           }
-        }
+        });
       });
 
       // This function gets cookie with a given name
@@ -324,7 +354,13 @@ $(document).ready(function(){
 
       function add_dashboard_query() {
         // Grab the form, and associate it with the current transient detail page
-        var data = $('#add_dashboard_query').serialize()
+        var $form = $('#add_dashboard_query')
+        var $submit = $form.find('button[type=submit]')
+        // The page stays interactive until the reload below finishes; a second
+        // click meanwhile would attach the same query again (issue #203).
+        if ($submit.prop('disabled')) { return; }
+        $submit.prop('disabled', true)
+        var data = $form.serialize()
 
         $.ajax({
           url : "{% url 'add_dashboard_query' %}", // the endpoint
@@ -338,6 +374,7 @@ $(document).ready(function(){
 
           // handle a non-successful response
           error : function(xhr,errmsg,err) {
+            $submit.prop('disabled', false)
             alert(xhr.status + ": " + xhr.responseText);
           }
         });
@@ -373,7 +410,11 @@ $(document).ready(function(){
 
       function remove_dashboard_query_{{ transient_cat.4 }}() {
         // Grab the form, and associate it with the current transient detail page
-        var data = $('#remove_dashboard_query_{{ transient_cat.4 }}').serialize()
+        var $form = $('#remove_dashboard_query_{{ transient_cat.4 }}')
+        var $submit = $form.find('button[type=submit]')
+        if ($submit.prop('disabled')) { return; }
+        $submit.prop('disabled', true)
+        var data = $form.serialize()
         var query_id = $('#query_{{ transient_cat.4 }}').val()
         //data = (data + "&query=" + query)
 
@@ -382,13 +423,15 @@ $(document).ready(function(){
           type : "POST", // http method
           data : data, // data sent with the post request
 
-          // handle a successful response
+          // handle a successful response (JSON; the view no longer redirects
+          // AJAX callers through a full dashboard render)
           success : function(json) {
             window.location.reload()
           },
 
           // handle a non-successful response
           error : function(xhr,errmsg,err) {
+            $submit.prop('disabled', false)
             alert(xhr.status + ": " + xhr.responseText);
           }
         });

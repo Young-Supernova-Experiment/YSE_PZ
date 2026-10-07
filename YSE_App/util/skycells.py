@@ -44,7 +44,7 @@ def getskycell(ra,dec):
 
 	session = requests.Session()
 	session.auth = ('ps1sc','skysurveys')
-	skycellurl = 'http://pstamp.ipp.ifa.hawaii.edu/findskycell.php'
+	skycellurl = 'https://pstamp.ipp.ifa.hawaii.edu/findskycell.php'
 	
 	# First login. Returns session cookie in response header. Even though status_code=401, it is ok
 	page = session.post(skycellurl)

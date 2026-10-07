@@ -225,8 +225,11 @@ def submit_to_tns(request,transient_name):
     else:
         do_sandbox=True
         
-    # send to TNS
-    response = tnsAPI.main(djangoSettings.TNSDECAMAPIKEY,djangoSettings.TNSDECAMID,djangoSettings.TNSDECAMUSER,json_tmpl,do_sandbox=do_sandbox)
+    # send to TNS; the bot credential comes from the 'decam' SharingService row (#325)
+    # when one exists, else from settings.ini as before
+    from YSE_App.sharing.tns import legacy_tns_credentials
+    api_key, bot_id, bot_name, _service_sandbox = legacy_tns_credentials('decam')
+    response = tnsAPI.main(api_key,bot_id,bot_name,json_tmpl,do_sandbox=do_sandbox)
 
     if 'id_code' in response.keys() and response['id_code'] == 200:
         success = True

@@ -1,0 +1,34 @@
+<h4>Spectra for {{ transient.name }}</h4>
+{% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows_spectrum %}
+{% if all_transient_spectra %}
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr>
+            <th>Date (UTC)</th>
+            <th>Instrument</th>
+            <th>Telescope</th>
+            <th>Redshift</th>
+            <th>Points</th>
+            <th>Plot</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for spec in all_transient_spectra %}
+        <tr>
+            <td>{{ spec.obs_date }}</td>
+            <td>{{ spec.instrument.name }}</td>
+            <td>{{ spec.instrument.telescope.name }}</td>
+            <td>{{ spec.redshift|default:"—" }}</td>
+            <td>{{ spec.n_points }}</td>
+            <td>{% if spec.n_points %}<a href="#" class="specPlotChange" spec_plot-id="{{ spec.id }}">Plot on Summary tab</a>{% else %}<span class="text-muted" title="This spectrum has a record but no wavelength/flux points in the database, so there is nothing to plot.">No data points to plot</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p>
+    <button type="button" class="btn btn-primary specPlotChange" spec_plot-id="all">Plot all on Summary tab</button>
+    <button type="button" class="btn btn-secondary" onclick="window.open('{% url 'download_spectra' transient.slug %}')">Download spectra</button>
+</p>
+{% else %}
+<p class="text-muted">No authorized spectra for this transient.</p>
+{% endif %}

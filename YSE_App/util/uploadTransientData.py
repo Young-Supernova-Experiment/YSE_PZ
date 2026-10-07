@@ -277,7 +277,6 @@ def runDBcommand(cmd):
 	try:
 		return(json.loads(os.popen(cmd).read()))
 	except:
-		import pdb; pdb.set_trace()
 		raise RuntimeError('Error : cmd %s failed!!'%cmd)
 	
 

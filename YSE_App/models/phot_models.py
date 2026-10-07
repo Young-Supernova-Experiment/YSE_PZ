@@ -90,6 +90,15 @@ class TransientPhotData(PhotData):
     # Optional
     discovery_point = models.BooleanField(null=True, blank=True)
 
+    class Meta:
+        # Recent-magnitude subqueries (WHERE photometry_id = ? ORDER BY obs_date
+        # DESC LIMIT 1) and the "points in the last N days" prefilters of the
+        # dashboard saved queries (#248). See docs/dashboard-performance.md.
+        indexes = [
+            models.Index(fields=['obs_date'], name='yse_photdata_obs_date_idx'),
+            models.Index(fields=['photometry', 'obs_date'], name='yse_photdata_phot_obs_idx'),
+        ]
+
     def __str__(self):
         return '%s - %s - %s' % (self.photometry.transient.name, self.band.name, self.obs_date.strftime('%m/%d/%Y'))
 

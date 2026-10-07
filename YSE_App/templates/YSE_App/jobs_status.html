@@ -1,0 +1,77 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Background jobs <small><a href="{% url 'jobs_status_json' %}">JSON</a> &middot; <a href="{% url 'admin:YSE_App_job_changelist' %}">admin</a></small></h1>
+</section>
+
+<section class="content">
+	<div class="row">
+		{% for status, n in count_rows %}
+		<div class="col-md-2 col-6">
+			<div class="small-box yse-job-count" data-status="{{ status }}">
+				<div class="inner p-2">
+					<h3 class="mb-0">{{ n }}</h3>
+					<p class="mb-0">{{ status }}</p>
+				</div>
+			</div>
+		</div>
+		{% endfor %}
+		<div class="col-md-2 col-6">
+			<div class="small-box yse-job-count" data-status="due">
+				<div class="inner p-2"><h3 class="mb-0">{{ counts.due }}</h3><p class="mb-0">due now</p></div>
+			</div>
+		</div>
+	</div>
+
+	<div class="row">
+		<div class="col-lg-4 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>By kind</strong></div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0">
+						<thead><tr><th>kind</th><th>counts</th></tr></thead>
+						<tbody>
+						{% for kind, per_status in kinds.items %}
+						<tr><td><code>{{ kind }}</code></td><td>{% for s, n in per_status.items %}<span class="badge badge-secondary mr-1">{{ s }} {{ n }}</span>{% endfor %}</td></tr>
+						{% empty %}
+						<tr><td colspan="2" class="text-muted">No jobs yet.</td></tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				<div class="box-footer small text-muted">
+					Registered handlers: {% for k in registered_kinds %}<code>{{ k }}</code>{% if not forloop.last %}, {% endif %}{% empty %}none{% endfor %}
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-8 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Recent jobs</strong></div>
+				<div class="box-body table-responsive p-0">
+					<table class="table table-sm table-hover mb-0 yse-jobs-table">
+						<thead><tr><th>#</th><th>kind</th><th>status</th><th>attempts</th><th>run after</th><th>worker</th><th>finished</th><th>error</th></tr></thead>
+						<tbody>
+						{% for j in recent %}
+						<tr data-status="{{ j.status }}">
+							<td><a href="{% url 'admin:YSE_App_job_change' j.id %}">{{ j.id }}</a></td>
+							<td><code>{{ j.kind }}</code></td>
+							<td><span class="badge {% if j.status == 'done' %}badge-success{% elif j.status == 'failed' %}badge-danger{% elif j.status == 'running' %}badge-info{% elif j.status == 'cancelled' %}badge-secondary{% else %}badge-warning{% endif %}">{{ j.status }}</span></td>
+							<td>{{ j.attempts }}/{{ j.max_attempts }}</td>
+							<td class="text-nowrap">{{ j.run_after|date:"Y-m-d H:i:s" }}</td>
+							<td>{{ j.locked_by }}</td>
+							<td class="text-nowrap">{{ j.finished_at|date:"Y-m-d H:i:s"|default:"" }}</td>
+							<td class="small text-danger">{% if j.error %}{{ j.error|truncatechars:120 }}{% endif %}</td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="8" class="text-muted">No jobs yet.</td></tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}

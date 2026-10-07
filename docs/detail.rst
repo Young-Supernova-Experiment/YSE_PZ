@@ -42,18 +42,41 @@ galaxy name, coordinates, and photometric redshift are also included
 though host galaxy matching could be improved.  External links on
 the right-hand side direct to the TNS page, Simbad, other archival results,
 and ZTF data through a `MARS <https://mars.lco.global/>`_ cone search.
+The **Observability** button under the coordinates opens
+``/observability/<id>/``: tonight's altitude and airmass curve, twilight
+bands and Moon at every telescope in the database, with a table of the
+hours each site can observe the transient and a date picker for other
+nights (see ``docs/observability.md``).
 
 .. image:: _static/yse_pz_detailsummary.png
 
 Interactive plots of photometry and spectra using Bokeh allow the
 user to view any data that exist.  For unclassified SNe or SNe Ia,
-the "Show SALT2 Fit" button uses sncosmo on the backend with very
-approximate filter curves to estimate the SALT2 parameters including
-shape, color, and time of maximum light.  Buttons allow downloading
+the "Show SALT3 Fit" button overlays the last stored SALT3 fit (an
+``sncosmo_fit`` analysis run, see ``docs/analysis-services.md``) with
+its shape, color, time of maximum light and phase; the "SALT3 fit:"
+line under the buttons shows the same numbers with a **Refit** button
+that queues a new fit, so the page never waits on sncosmo.  Under the
+spectrum plot the "NGSF classification:" line shows the last NGSF
+template match with a **Run NGSF** button when NGSF is installed on
+the server (``docs/ngsf.md``).  The "Archives" badges in the header
+say whether HST, JWST, Chandra and Spitzer are known to have data at
+the position (``has_hst`` / ``has_jwst`` / ``has_chandra`` /
+``has_spitzer``, searchable).  Buttons allow downloading
 photometry and a gzipped spectra file, with the "Download All Data"
 button providing a JSON dictionary with every associated piece of
 data in the database for a given transient.  Spectra can also be
 uploaded directly to YSE-PZ through the web form.
+
+The light-curve legend has one column per instrument, read top to
+bottom, in the order PS1/2, DECam, Swope, LSST, ZTF, ATLAS, Swift and
+then any other instrument alphabetically; within a column the bands run
+from bluest to reddest by effective wavelength, with bands of unknown
+wavelength last.  As many instrument columns sit side by side as the
+plot width allows, and further instruments continue on the rows below.
+Clicking a legend entry hides that series (points, error bars and upper
+limits).  The order lives in ``YSE_App/common/band_order.py`` and the
+column arithmetic in ``YSE_App/common/legend_layout.py``.
 
 On the bottom right, the "Tags" area allows users to apply tags
 that identify a transient with a certain label.  Querying on tags
@@ -88,18 +111,50 @@ on a given resource as a function of time.
 
 .. image:: _static/yse_pz_detailresources.png
 
-HST/Chandra Tabs
-----------------
+HST/JWST/Chandra Tabs
+---------------------
 
-For transients with archival HST or Chandra data at the transient
+For transients with archival HST, JWST or Chandra data at the transient
 location, YSE-PZ will display those data and allow FITS images to
-be downloaded.
+be downloaded.  Both tabs list images only, not spectra.  The JWST
+tab lists each MAST image (instrument, filter, date, program, target,
+exposure time, preview) with
+links to the MAST Portal and the data product.  A tab reading
+"(lookup failed)" means the archive did not answer; opening it retries.
+See ``docs/archive-tabs.md`` for the endpoints and the shared
+timeout/caching behaviour.
 
 .. image:: _static/yse_pz_detailarchival.png
 
-Comments Tab
-------------
+Annotations Tab
+---------------
 
-The comments tab allows conversations about each transient.  The UI
-is not very refined, but using the @username syntax will email a given
-user that their name has been mentioned in connection with this transient.
+Structured key/value annotations per origin (Gaia DR3, WISE and quasar
+catalogue checks, broker scores, ``user:<name>`` notes), each with an
+expandable JSON view, the verdict (``stellar`` / ``AGN-like`` / ``clean``)
+and Check / Rerun buttons for staff. ``stellar`` and ``AGN-like`` verdicts
+also appear as badges next to the status on the Summary tab. See
+``docs/annotations.md`` for the model, the API, the checks and the
+search filters.
+
+Summary card (Summary tab)
+--------------------------
+
+A short current summary of the transient (what it is, redshift,
+classification, what has been done, open questions) at the top of the
+Summary tab's right-hand column. Anyone who can see the transient may
+**Edit** it; users who ticked *Enable AI summaries for me* (and whom the
+``ai_summary`` service's groups allow) get **Generate / Regenerate**, which
+writes it from the transient's public comments, classes, spectra,
+follow-ups and photometry through the configured provider. Every version is
+kept in **History** with its provenance. **Search summaries** (also the
+*Ask the summaries* box in the header) ranks all transients by how well
+their summary matches a natural-language query. See ``docs/ai-summaries.md``.
+
+Comments (Summary tab)
+----------------------
+
+Transient comments appear on the **Summary** tab (not a separate tab).
+Use ``@username`` to email that user; ``@channel`` notifies all users.
+Optional Slack integration posts comments to a workspace channel when enabled
+(see ``SLACK_*`` settings).

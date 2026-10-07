@@ -9,7 +9,8 @@ import numpy as np
 from YSE_App.common.utilities import *
 from itertools import chain
 from django.db import connection,connections
-from django.db.models import FloatField,ExpressionWrapper
+from django.db.models import FloatField
+from YSE_App.queries.raw_sql import LAST_MAG_BY_BAND_SQL
 
 def makeRegistrar():
     registry = {}
@@ -27,21 +28,7 @@ def annotate_rising_transient_qs(qs):
     r_filters = "('r-ZTF', 'r', 'rp', 'r-Sloan')"
     i_filters = "('i-ZTF', 'i')"
 
-    last_mag_query = """
-SELECT %s
-   FROM YSE_App_transient t, YSE_App_transientphotdata pd, YSE_App_transientphotometry p, YSE_App_photometricband pb, YSE_App_instrument i
-   WHERE pd.photometry_id = p.id AND
-   YSE_App_transient.id = t.id AND
-   pb.instrument_id	= i.id AND
-   pd.band_id = pb.id AND
-   pd.id = (
-         SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2 , YSE_App_photometricband pb2, YSE_App_instrument i2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id AND pd2.band_id = pb2.id AND pb2.instrument_id = i2.id AND i2.name != 'Gaia-Photometric' AND
-         pb2.name IN %s
-         ORDER BY pd2.obs_date DESC
-         LIMIT 1 OFFSET %i
-     )
-"""	
+    last_mag_query = LAST_MAG_BY_BAND_SQL
 
     # g/V rise
     qs = qs.annotate(recent_g_mag=RawSQL(last_mag_query%('pd.mag',g_filters,0),())).\

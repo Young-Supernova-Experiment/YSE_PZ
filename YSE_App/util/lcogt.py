@@ -610,13 +610,16 @@ class lcogt(object):
                 # Use default constraint values
                 constraints = self.make_constraints()
 
+                # Calibration exposure times must not overwrite the science
+                # exposure time (the SPECTRUM element follows the first ARC).
+                obs_exptime = exptime
                 if obstype=='LAMP_FLAT':
-                    exptime = 50
+                    obs_exptime = 50
                 if obstype=='ARC':
-                    exptime = 60
+                    obs_exptime = 60
 
                 # Make acquisition and guiding config with strat
-                instrument_configs = self.make_instrument_configs('spec', exptime, strat)
+                instrument_configs = self.make_instrument_configs('spec', obs_exptime, strat)
                 if obstype=='SPECTRUM':
                     acquisition_config = self.make_acquisition_config(strat, mode='WCS')
                 else:
@@ -643,11 +646,12 @@ class lcogt(object):
                 # Use default constraint values
                 constraints = self.make_constraints()
 
+                obs_exptime = exptime
                 if obstype=='ARC':
-                    exptime = 0.5
+                    obs_exptime = 0.5
 
                 # Make acquisition and guiding config with strat
-                instrument_configs = self.make_instrument_configs('spec', exptime, strat)
+                instrument_configs = self.make_instrument_configs('spec', obs_exptime, strat)
                 if obstype=='SPECTRUM':
                     acquisition_config = self.make_acquisition_config(strat, mode='MANUAL')
                     guiding_config = self.make_guiding_config(strat,

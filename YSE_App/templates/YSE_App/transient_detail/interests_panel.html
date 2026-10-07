@@ -1,0 +1,81 @@
+{% comment %}
+"Working on this" box (#290): open interests on the transient plus the
+"Register interest" form. Context: transient, interests (visible rows),
+interest_groups (the user's groups), interest_roles, interest_statuses,
+interests_show_withdrawn. Withdrawn rows are hidden unless ?interests=all.
+{% endcomment %}
+<section id="yse-interests-section" class="yse-interests-panel" data-transient-id="{{ transient.id }}" data-count="{{ interests|length }}">
+    <div class="box box-default box-solid">
+        <div class="box-header with-border d-flex align-items-center">
+            <h3 class="box-title">Working on this
+                <small class="text-muted" title="Registered intentions to publish on this transient">{{ interests|length }} interest{{ interests|length|pluralize }}</small>
+            </h3>
+            <div class="ml-auto">
+                <a class="btn btn-xs btn-sm btn-outline-secondary" href="{% url 'my_interests' %}">My interests</a>
+                {% if interests_show_withdrawn %}
+                <a class="btn btn-xs btn-sm btn-outline-secondary" href="?#summary_tab">Hide withdrawn</a>
+                {% else %}
+                <a class="btn btn-xs btn-sm btn-outline-secondary" href="?interests=all#summary_tab">Show withdrawn</a>
+                {% endif %}
+                <button type="button" class="btn btn-xs btn-sm btn-primary" data-toggle="collapse" data-target="#yse-interest-form" aria-expanded="false" aria-controls="yse-interest-form" id="yse-interest-register-btn">Register interest</button>
+            </div>
+        </div>
+        <div class="box-body">
+            <ul class="list-unstyled yse-interest-list mb-2">
+                {% for i in interests %}
+                <li class="yse-interest-item{% if i.is_withdrawn %} text-muted{% endif %}" data-interest-id="{{ i.id }}" data-status="{{ i.status }}">
+                    <span class="badge {% if i.status == 'published' %}badge-success{% elif i.status == 'withdrawn' %}badge-light{% elif i.status == 'submitted' %}badge-info{% elif i.status == 'in_progress' %}badge-primary{% else %}badge-secondary{% endif %} yse-interest-status">{{ i.status_label }}</span>
+                    <strong class="yse-interest-title">{{ i.title }}</strong>
+                    <span class="text-muted small">&mdash; {{ i.user_display }}{% if i.group %} ({{ i.group.name }}){% endif %}, {{ i.role_label|lower }}, since {{ i.created_date|date:"Y-m-d" }}{% if i.doi %}, <a href="https://doi.org/{{ i.doi }}" target="_blank" rel="noopener">{{ i.doi }}</a>{% endif %}</span>
+                    {% if i.description %}<div class="small yse-interest-description">{{ i.description|linebreaksbr }}</div>{% endif %}
+                    {% if i.user_id == user.id or user.is_staff %}
+                    <form method="post" action="{% url 'interest_status' i.id %}" class="form-inline d-inline yse-interest-status-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{% url 'transient_detail' transient.slug %}#summary_tab">
+                        {% if i.is_withdrawn %}
+                        <button type="submit" name="status" value="planned" class="btn btn-link btn-sm p-0 ml-1">re-open</button>
+                        {% else %}
+                        {% if i.status != 'in_progress' and i.status != 'published' %}<button type="submit" name="status" value="in_progress" class="btn btn-link btn-sm p-0 ml-1">in progress</button>{% endif %}
+                        {% if i.status != 'submitted' and i.status != 'published' %}<button type="submit" name="status" value="submitted" class="btn btn-link btn-sm p-0 ml-1">submitted</button>{% endif %}
+                        {% if i.status != 'published' %}<button type="submit" name="status" value="published" class="btn btn-link btn-sm p-0 ml-1">published</button>{% endif %}
+                        <button type="submit" name="status" value="withdrawn" class="btn btn-link btn-sm p-0 ml-1 text-danger">withdraw</button>
+                        {% endif %}
+                    </form>
+                    {% endif %}
+                </li>
+                {% empty %}
+                <li class="text-muted yse-interest-empty">Nobody has registered an interest in publishing on this transient yet.</li>
+                {% endfor %}
+            </ul>
+            <form id="yse-interest-form" method="post" action="{% url 'interest_register' transient.id %}" class="collapse{% if interest_form_errors %} show{% endif %} yse-interest-form">
+                {% csrf_token %}
+                {% if interest_form_errors %}<div class="alert alert-danger py-1 px-2 small mb-2">{{ interest_form_errors }}</div>{% endif %}
+                <div class="form-row">
+                    <div class="form-group col-12 mb-1">
+                        <label for="yse-interest-title" class="small mb-0">Planned paper / project</label>
+                        <input type="text" class="form-control form-control-sm" id="yse-interest-title" name="title" maxlength="200" required placeholder="e.g. Late-time nebular spectroscopy" value="{{ interest_form_values.title|default:'' }}">
+                    </div>
+                    <div class="form-group col-6 mb-1">
+                        <label for="yse-interest-group" class="small mb-0">Collaboration</label>
+                        <select class="form-control form-control-sm" id="yse-interest-group" name="group">
+                            <option value="">(none)</option>
+                            {% for g in interest_groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group col-6 mb-1">
+                        <label for="yse-interest-role" class="small mb-0">Your role</label>
+                        <select class="form-control form-control-sm" id="yse-interest-role" name="role">
+                            {% for value, label in interest_roles %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group col-12 mb-1">
+                        <label for="yse-interest-description" class="small mb-0">Description <span class="text-muted">(optional)</span></label>
+                        <textarea class="form-control form-control-sm" id="yse-interest-description" name="description" rows="2" placeholder="Scope, data you need, timeline">{{ interest_form_values.description|default:'' }}</textarea>
+                    </div>
+                </div>
+                <p class="small text-muted mb-1">Registering posts a comment "&lt;you&gt; registered an interest: &lt;title&gt;" (visible to the chosen collaboration, or to your default comment audience) and notifies the other people working on this transient.</p>
+                <button type="submit" class="btn btn-sm btn-primary">Register</button>
+            </form>
+        </div>
+    </div>
+</section>

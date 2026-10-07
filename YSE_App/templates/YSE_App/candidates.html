@@ -1,0 +1,175 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="content-header">
+	<h1>
+		Broker candidates
+		<small>
+			{% for status, label, n in count_rows %}<span class="badge {% if status == 'new' %}badge-warning{% elif status == 'saved' %}badge-success{% else %}badge-secondary{% endif %} yse-candidate-count" data-status="{{ status }}">{{ label }} {{ n }}</span> {% endfor %}
+			&middot; <a href="{% url 'brokers_status_json' %}">brokers JSON</a>
+			{% if user.is_staff %}&middot; <a href="{% url 'admin:YSE_App_brokerfilter_changelist' %}">filters (admin)</a>{% endif %}
+		</small>
+	</h1>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+
+	<div class="row">
+		<div class="col-lg-3 col-12">
+			<div class="box box-default box-solid yse-candidate-filters">
+				<div class="box-header with-border"><strong>Filter</strong></div>
+				<div class="box-body">
+					<form method="get" action="{% url 'candidate_list' %}" class="yse-candidate-filter-form">
+						<div class="form-group">
+							<label for="cand-status">Status</label>
+							<select class="form-control form-control-sm" id="cand-status" name="status">
+								{% for status, label in statuses %}<option value="{{ status }}"{% if active.status == status %} selected{% endif %}>{{ label }}</option>{% endfor %}
+								<option value="all"{% if active.status == 'all' %} selected{% endif %}>All</option>
+							</select>
+						</div>
+						<div class="form-group">
+							<label for="cand-broker">Broker</label>
+							<select class="form-control form-control-sm" id="cand-broker" name="broker">
+								<option value="">Any</option>
+								{% for p in provider_list %}<option value="{{ p.slug }}"{% if active.broker == p.slug %} selected{% endif %}>{{ p.name }}{% if not p.available %} (unavailable){% endif %}</option>{% endfor %}
+							</select>
+						</div>
+						<div class="form-group">
+							<label for="cand-filter">Broker filter</label>
+							<select class="form-control form-control-sm" id="cand-filter" name="filter">
+								<option value="">Any</option>
+								{% for f in filters %}<option value="{{ f.pk }}"{% if active.filter == f.pk|stringformat:"s" %} selected{% endif %}>{{ f.name }} [{{ f.broker }}]{% if f.group %} &middot; {{ f.group.name }}{% endif %}{% if not f.enabled %} (off){% endif %}</option>{% endfor %}
+							</select>
+						</div>
+						<div class="form-row">
+							<div class="form-group col-6"><label for="cand-mag-min">Mag &ge;</label><input class="form-control form-control-sm" id="cand-mag-min" name="mag_min" type="number" step="0.1" value="{{ active.mag_min }}"></div>
+							<div class="form-group col-6"><label for="cand-mag-max">Mag &le;</label><input class="form-control form-control-sm" id="cand-mag-max" name="mag_max" type="number" step="0.1" value="{{ active.mag_max }}"></div>
+						</div>
+						<div class="form-group"><label for="cand-rb-min">Real/bogus &ge;</label><input class="form-control form-control-sm" id="cand-rb-min" name="rb_min" type="number" step="0.05" min="0" max="1" value="{{ active.rb_min }}"></div>
+						<div class="form-group"><label for="cand-q">Name / class</label><input class="form-control form-control-sm" id="cand-q" name="q" type="text" value="{{ active.q }}" placeholder="ZTF25..., SN candidate"></div>
+						<div class="form-group">
+							<label for="cand-sort">Sort by</label>
+							<select class="form-control form-control-sm" id="cand-sort" name="sort">
+								{% for s in sorts %}<option value="{{ s }}"{% if active.sort == s %} selected{% endif %}>{{ s }}</option>{% endfor %}
+							</select>
+						</div>
+						<button type="submit" class="btn btn-sm btn-primary">Apply</button>
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'candidate_list' %}">Reset</a>
+					</form>
+				</div>
+			</div>
+
+			<div class="box box-default box-solid yse-broker-list">
+				<div class="box-header with-border"><strong>Brokers</strong></div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0">
+						<tbody>
+						{% for p in provider_list %}
+						<tr data-broker="{{ p.slug }}" data-available="{{ p.available|yesno:'1,0' }}">
+							<td><strong>{{ p.name }}</strong><br><span class="small text-muted">{% if p.available %}{% for label in p.capability_labels %}<span class="badge badge-light border mr-1">{{ label }}</span>{% endfor %}{% else %}unavailable: {{ p.reason }}{% endif %}</span></td>
+						</tr>
+						{% empty %}
+						<tr><td class="text-muted">No broker enabled (BROKERS_ENABLED).</td></tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid yse-candidates">
+				<div class="box-header with-border d-flex align-items-center">
+					<strong>{{ page.paginator.count }} candidate{{ page.paginator.count|pluralize }}</strong>
+					<span class="ml-auto small text-muted">page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+				</div>
+				<div class="box-body table-responsive p-0">
+					<table class="table table-sm table-hover mb-0 yse-candidates-table">
+						<thead>
+							<tr><th>Object</th><th>Broker</th><th>Position</th><th>Last det.</th><th>Mag</th><th>RB</th><th>Class</th><th>Filters</th><th>Cutouts</th><th>Status</th><th></th></tr>
+						</thead>
+						<tbody>
+						{% for row in rows %}{% with c=row.c %}
+						<tr class="yse-candidate" data-candidate-id="{{ c.pk }}" data-status="{{ c.status }}" data-broker="{{ c.broker }}">
+							<td class="text-nowrap">
+								{% if c.url %}<a href="{{ c.url }}" target="_blank" rel="noopener noreferrer">{{ c.alert_id }}</a>{% else %}{{ c.alert_id }}{% endif %}
+								{% if c.n_alerts > 1 %}<span class="badge badge-light border" title="polls that saw this object">&times;{{ c.n_alerts }}</span>{% endif %}
+							</td>
+							<td>{{ row.broker_name }}</td>
+							<td class="text-nowrap small">{{ c.ra|floatformat:5 }} {{ c.dec|floatformat:5 }}{% if c.gal_b != None %}<br><span class="text-muted">b = {{ c.gal_b|floatformat:1 }}&deg;</span>{% endif %}</td>
+							<td class="text-nowrap small">{% if c.last_mjd %}MJD {{ c.last_mjd|floatformat:2 }}{% endif %}{% if c.discovery_mjd %}<br><span class="text-muted">first {{ c.discovery_mjd|floatformat:2 }}</span>{% endif %}</td>
+							<td>{% if c.last_mag != None %}{{ c.last_mag|floatformat:2 }} {{ c.last_band }}{% endif %}</td>
+							<td>{% if c.rb != None %}{{ c.rb|floatformat:2 }}{% endif %}</td>
+							<td class="small">{{ c.classification }}</td>
+							<td class="small">{% for f in row.filters %}<span class="badge badge-info mr-1" title="{{ f.broker }}">{{ f.name }}</span>{% endfor %}</td>
+							<td class="text-nowrap small">{% if row.cutouts %}{% for kind, url in row.cutouts.items %}<a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="mr-1">{{ kind|slice:":3" }}</a>{% endfor %}{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+							<td>
+								<span class="badge {% if c.status == 'saved' %}badge-success{% elif c.status == 'rejected' %}badge-secondary{% else %}badge-warning{% endif %}">{{ c.get_status_display }}</span>
+								{% if c.transient %}<br><a href="{% url 'transient_detail' c.transient.slug %}">{{ c.transient.name }}</a>{% endif %}
+								{% if c.note %}<br><span class="small text-muted">{{ c.note }}</span>{% endif %}
+								{% if row.rejected_groups %}<br><span class="small text-muted yse-rejected-by" title="groups that rejected this candidate">rejected by {{ row.rejected_groups|join:", " }}</span>{% endif %}
+							</td>
+							<td class="text-nowrap">
+								{% if row.can_save %}
+								<form method="post" action="{% url 'candidate_save' c.pk %}" class="d-inline yse-candidate-save-form">
+									{% csrf_token %}
+									<input type="hidden" name="next" value="{{ request.get_full_path }}">
+									<select name="status" class="form-control form-control-sm d-inline-block w-auto" title="status of the saved transient">
+										{% for s in transient_statuses %}<option value="{{ s }}"{% if s == 'New' %} selected{% endif %}>{{ s }}</option>{% endfor %}
+									</select>
+									<button type="submit" class="btn btn-sm btn-success" title="Create or link a YSE-PZ transient">Save</button>
+								</form>
+								{% endif %}
+								{% if c.status != 'rejected' %}
+								<form method="post" action="{% url 'candidate_reject' c.pk %}" class="d-inline">
+									{% csrf_token %}
+									<input type="hidden" name="next" value="{{ request.get_full_path }}">
+									<button type="submit" class="btn btn-sm btn-outline-secondary">Reject</button>
+								</form>
+								{% else %}
+								<form method="post" action="{% url 'candidate_reopen' c.pk %}" class="d-inline">
+									{% csrf_token %}
+									<input type="hidden" name="next" value="{{ request.get_full_path }}">
+									<button type="submit" class="btn btn-sm btn-outline-secondary">Re-open</button>
+								</form>
+								{% endif %}
+							</td>
+						</tr>
+						{% endwith %}{% empty %}
+						<tr><td colspan="11" class="text-muted p-3">No candidates match. Candidates appear when a broker filter passes an alert during a poll (<code>manage.py broker_poll</code>, or the <code>BrokerPoll</code> cron when <code>BROKER_INGEST_CRON_ENABLED</code> is on).</td></tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				{% if page.has_other_pages %}
+				<div class="box-footer">
+					<nav><ul class="pagination pagination-sm mb-0">
+						{% if page.has_previous %}<li class="page-item"><a class="page-link" href="?{{ query_string }}&page={{ page.previous_page_number }}">&laquo;</a></li>{% endif %}
+						<li class="page-item disabled"><span class="page-link">{{ page.number }} / {{ page.paginator.num_pages }}</span></li>
+						{% if page.has_next %}<li class="page-item"><a class="page-link" href="?{{ query_string }}&page={{ page.next_page_number }}">&raquo;</a></li>{% endif %}
+					</ul></nav>
+				</div>
+				{% endif %}
+			</div>
+
+			<div class="box box-default box-solid collapsed-box yse-criteria-help">
+				<div class="box-header with-border">
+					<strong>Filter criteria keys</strong>
+					<div class="box-tools pull-right"><button type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-plus"></i></button></div>
+				</div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0">
+						<tbody>{% for c in criteria %}<tr><td><code>{{ c.key }}</code></td><td class="small text-muted">{{ c.type }}</td><td class="small">{{ c.description }}</td></tr>{% endfor %}</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}

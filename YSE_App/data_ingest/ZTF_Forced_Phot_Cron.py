@@ -46,7 +46,7 @@ class ForcedPhot(CronJobBase):
     RUN_EVERY_MINS = 30
 
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
-    code = 'YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhot'
+    code = 'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot'
 
     def __init__(self): 
         pass

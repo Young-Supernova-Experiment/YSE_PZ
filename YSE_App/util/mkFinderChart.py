@@ -14,6 +14,20 @@ from photutils import CircularAperture,aperture_photometry
 import pylab as plt
 import time
 import urllib.request
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _remove_quietly(*paths):
+	"""Delete scratch files; a missing file is fine, anything else is logged."""
+	for path in paths:
+		try:
+			os.remove(path)
+		except FileNotFoundError:
+			pass
+		except OSError as exc:
+			logger.warning("could not remove %s: %s", path, exc)
 
 class finder():
 	def __init__(self):
@@ -75,7 +89,7 @@ class finder():
 
 		offdictlist = self.mkPlot(finderim,xpos,ypos,ra,dec,mag,raoff,
 								  decoff,outfile,PS1=PS1,ax=ax,saveImg=saveImg)
-		os.system('rm %s'%finderim)
+		_remove_quietly(finderim)
 
 		return(ax,offdictlist)
 		
@@ -244,7 +258,7 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 
 	try:
 		response = requests.get(
-			url="http://ps1images.stsci.edu/cgi-bin/ps1cutouts",
+			url="https://ps1images.stsci.edu/cgi-bin/ps1cutouts",
 			params={
 				"pos": pos,
 				"filter": filt,
@@ -272,7 +286,7 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 		imagetype = item.group("imagetype")
 		skycellid = item.group("skycellid")
 		ffilter = item.group("ffilter")
-		fiturl = 'http://ps1images.stsci.edu%s'%item.group("fiturl")
+		fiturl = 'https://ps1images.stsci.edu%s'%item.group("fiturl")
 		if fiturl[0:5] != "http:":
 			fiturl = "http:" + fiturl
 			mjd = item.group("mjd")
@@ -295,7 +309,7 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 	else: return(None)
 
 def getDSSImage(ra,dec,filt,size,outfile):
-	QueryUrl="http://archive.eso.org/dss/dss/image?ra=%s&dec=%s&x=%i&y=%i&units=arcmin&Sky-Survey=2r&mime-type=download-fits"%(ra,dec,size,size)
+	QueryUrl="https://archive.eso.org/dss/dss/image?ra=%s&dec=%s&x=%i&y=%i&units=arcmin&Sky-Survey=2r&mime-type=download-fits"%(ra,dec,size,size)
 	if not os.path.dirname(outfile):
 		outdlfile = '%.7f_%.7f_%s.DSS.fits'%(ra,dec,time.time())
 	else:

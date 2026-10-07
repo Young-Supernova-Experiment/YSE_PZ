@@ -5,7 +5,7 @@ from django.contrib import admin
 from rest_framework.urlpatterns import format_suffix_patterns
 from rest_framework.routers import DefaultRouter
 from rest_framework.schemas import get_schema_view
-from django.urls import path, re_path, include
+from django.urls import re_path, include
 
 from . import views, view_utils, data_utils, table_utils, yse_views
 from . import api_views
@@ -15,6 +15,12 @@ from . import surveypages
 from YSE_App.yse_utils import yse_pointings, yse_view_utils
 from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
+from YSE_App.integrations.slack.handlers import slack_events
+from YSE_App import service_run_views
+from YSE_App import (
+    allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
+    feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
+)
 
 schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
 
@@ -24,8 +30,23 @@ urlpatterns = [
     # ex: /yse/
     re_path(r'^$', views.index, name='index'),
     re_path(r'^dashboard/$', views.dashboard, name='dashboard'),
+    re_path(
+        r'^dashboard/section/(?P<status_key>[a-zA-Z]+)/$',
+        views.dashboard_section,
+        name='dashboard_section',
+    ),
     re_path(r'^yse_home/$', views.yse_home, name='yse_home'),
+    re_path(
+        r'^yse_home/section/(?P<section_key>[a-zA-Z_]+)/$',
+        views.yse_home_section,
+        name='yse_home_section',
+    ),
     re_path(r'^personaldashboard/$', views.personaldashboard, name='personaldashboard'),
+    re_path(
+        r'^personaldashboard/section/(?P<user_query_id>[0-9]+)/$',
+        views.personaldashboard_section,
+        name='personaldashboard_section',
+    ),
     re_path(r'^calendar/$', views.calendar, name='calendar'),
     re_path(r'^followup/$', views.followup, name='followup'),
     re_path(r'^transient_tags/$', views.transient_tags, name='transient_tags'),
@@ -41,6 +62,105 @@ urlpatterns = [
     re_path(r'^dashboard_example/$', views.dashboard_example, name='dashboard_example'),
     re_path(r'^transient_edit/$', views.transient_edit, name='transient_edit'),
     re_path(r'^transient_edit/(?P<transient_id>[0-9]+)/$', views.transient_edit, name='transient_edit'),
+    re_path(
+        r'^transient_detail/(?P<slug>[^/]+)/comments/$',
+        views.comments_fragment,
+        name='comments_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/followup_fragment/$',
+        views.transient_detail_followup_fragment,
+        name='transient_detail_followup_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/followup_classical_fragment/$',
+        views.transient_detail_followup_classical_fragment,
+        name='transient_detail_followup_classical_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/followup_rest_fragment/$',
+        views.transient_detail_followup_rest_fragment,
+        name='transient_detail_followup_rest_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/comments_fragment/$',
+        views.transient_detail_comments_fragment,
+        name='transient_detail_comments_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/gw_fragment/$',
+        views.transient_detail_gw_fragment,
+        name='transient_detail_gw_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/spectra_tab_fragment/$',
+        views.transient_detail_spectra_tab_fragment,
+        name='transient_detail_spectra_tab_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/summary_spectra_tools_fragment/$',
+        views.transient_detail_summary_spectra_tools_fragment,
+        name='transient_detail_summary_spectra_tools_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/resources_fragment/$',
+        views.transient_detail_resources_fragment,
+        name='transient_detail_resources_fragment',
+    ),
+    re_path(
+        r'^transient_detail/(?P<transient_id>[0-9]+)/photometry_fragment/$',
+        views.transient_detail_photometry_fragment,
+        name='transient_detail_photometry_fragment',
+    ),
+    # Facility requests on the follow-up tab (#300); before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_requests_fragment/$',
+            allocation_views.transient_facility_requests_fragment, name='transient_facility_requests_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/facility_submit/$',
+            allocation_views.transient_facility_submit, name='transient_facility_submit'),
+    # Interests (#290) and data access requests (#293): before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/interests/register/$',
+            collaboration_views.interest_register, name='interest_register'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/data_access/request/$',
+            collaboration_views.data_access_request_create, name='data_access_request_create'),
+    # Sharing services (#326): report dialog preview/submit for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/preview/$',
+            sharing_views.report_preview, name='sharing_report_preview'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/report/submit/$',
+            sharing_views.report_submit, name='sharing_report_submit'),
+    # Analysis tab (#314): fragment and run action for one transient; before the slug catch-all.
+    # Transient-detail Brokers tab (#275)
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/brokers_fragment/$',
+            candidate_views.transient_brokers_fragment, name='transient_detail_brokers_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/broker_import/$',
+            candidate_views.transient_broker_import, name='transient_broker_import'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_fragment/$',
+            analysis_views.transient_analysis_fragment, name='transient_detail_analysis_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/analysis_run/$',
+            analysis_views.transient_analysis_run, name='transient_analysis_run'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/salt_fit_fragment/$',
+            analysis_views.transient_salt_fit_fragment, name='transient_detail_salt_fit_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/ngsf_fragment/$',
+            analysis_views.transient_ngsf_fragment, name='transient_detail_ngsf_fragment'),
+    # Annotations tab (#317, #318): fragment, summary JSON and actions for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_fragment/$',
+            annotation_views.transient_annotations_fragment, name='transient_detail_annotations_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_summary\.json$',
+            annotation_views.transient_annotations_summary, name='transient_annotations_summary'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_run/$',
+            annotation_views.transient_annotation_run, name='transient_annotation_run'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotation_delete/$',
+            annotation_views.transient_annotation_delete, name='transient_annotation_delete'),
+    # AI summary card (#295, #296): fragment and actions for one transient; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_fragment/$',
+            summary_views.transient_summary_fragment, name='transient_detail_summary_fragment'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_generate/$',
+            summary_views.transient_summary_generate, name='transient_summary_generate'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_edit/$',
+            summary_views.transient_summary_edit, name='transient_summary_edit'),
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/summary_optin/$',
+            summary_views.transient_summary_optin, name='transient_summary_optin'),
+    # Natural-language search over the summaries (#297).
+    re_path(r'^summary_search/$', summary_views.summary_search, name='summary_search'),
     re_path(r'^transient_detail/(?P<slug>.*)/$', views.transient_detail, name='transient_detail'),
     re_path(r'^submit_to_tns/(?P<transient_name>.*)/$', submit_to_tns.submit_to_tns, name='submit_to_tns'),
     re_path(r'^transient_summary/(?P<status_or_query_name>.*)/$', views.transient_summary, name='transient_summary'),
@@ -57,6 +177,7 @@ urlpatterns = [
     re_path(r'^return_serialized_transients/$', yse_views.return_serialized_transients, name='return_serialized_transients'),
     re_path(r'^msb_detail/(?P<msb>.*)$', yse_views.msb_detail, name='msb_detail'),
     re_path(r'^delete_followup/(?P<followup_id>[0-9_-]+)/$', views.delete_followup, name='delete_followup'),
+    re_path(r'^delete_followup_request/(?P<request_id>[0-9]+)/$', views.delete_followup_request, name='delete_followup_request'),
 
     re_path(r'^toggleTargetField/$', yse_view_utils.toggle_field, name='toggle_field'),
     re_path(r'^toggleFieldSet/$', yse_view_utils.toggle_fieldset, name='toggle_fieldset'),
@@ -102,6 +223,7 @@ urlpatterns = [
         data_utils.box_search, name='box_search'),
     re_path(r'^search/$',
         SearchResultsView.as_view(), name='search'),
+    re_path(r'^search/save/$', views.save_search, name='save_search'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',
@@ -118,10 +240,14 @@ urlpatterns = [
     re_path(r'^logout/$', views.auth_logout, name='auth_logout'),
     re_path(r"^airmassplot/(?P<transient_id>[a-zA-Z0-9_-]+)/(?P<obs_id>[a-zA-Z0-9_-]+)/(?P<telescope_id>[a-zA-Z0-9_-]+)", 
         view_utils.airmassplot, name='airmassplot'),
+    # Observability page (#307): every telescope's altitude/airmass curve for one night.
+    re_path(r'^observability/(?P<transient_id>[0-9]+)/$', observability_views.observability_page, name='observability'),
+    re_path(r'^observability/(?P<transient_id>[0-9]+)/data/$', observability_views.observability_data, name='observability_data'),
     re_path(r'^lightcurveplot_detail/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_detail, name='lightcurveplot_detail'),
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),
     re_path(r'^salt2plot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2plot, name='salt2plot'),
+    re_path(r'^bazinplot/(?P<transient_id>[0-9]+)/(?P<bazinfit>[0-1]+)/$', view_utils.bazinplot, name='bazinplot'),
     re_path(r'^salt2fluxplot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2fluxplot, name='salt2fluxplot'),
     re_path(r'^spectrumplot/(?P<transient_id>[0-9]+)/$', view_utils.spectrumplot, name='spectrumplot'),
     re_path(r'^spectrumplot_summary/(?P<transient_id>[0-9]+)/$', view_utils.spectrumplot_summary, name='spectrumplot_summary'),
@@ -138,6 +264,50 @@ urlpatterns = [
     re_path(r'^add_survey_obs/', AddSurveyObsFormView.as_view(), name='add_survey_obs'),
     re_path(r'^add_oncall_observer/', AddOncallUserFormView.as_view(), name='add_oncall_observer'),
     re_path(r'^add_transient_comment/', AddTransientCommentFormView.as_view(), name='add_transient_comment'),
+    re_path(r'^slack/events/$', slack_events, name='slack_events'),
+    # External-service runs (#265): staff pages and the token-protected callback.
+    re_path(r'^service_runs/$', service_run_views.external_service_runs, name='external_service_runs'),
+    re_path(r'^service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/$',
+            service_run_views.external_service_run_detail, name='external_service_run_detail'),
+    re_path(r'^api/service_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/callback/$',
+            service_run_views.external_service_run_callback, name='external_service_run_callback'),
+    # Instrument logs (#310), telescope page and weather / SkyCam widget (#311)
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/$', instrument_views.instrument_logs, name='instrument_logs'),
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/add/$', instrument_views.instrument_log_add,
+            name='instrument_log_add'),
+    re_path(r'^instruments/(?P<instrument_id>[0-9]+)/logs/pull/$', instrument_views.instrument_log_pull,
+            name='instrument_log_pull'),
+    re_path(r'^telescopes/(?P<telescope_id>[0-9]+)/$', instrument_views.telescope_detail, name='telescope_detail'),
+    re_path(r'^telescopes/(?P<telescope_id>[0-9]+)/weather_fragment/$', instrument_views.telescope_weather_fragment,
+            name='telescope_weather_fragment'),
+    # Analysis runs (#314): status polling, result files, own-run actions.
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/status\.json$',
+            analysis_views.analysis_run_status, name='analysis_run_status'),
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/files/(?P<file_id>[0-9]+)/(?P<name>[^/]+)$',
+            analysis_views.analysis_run_file, name='analysis_run_file'),
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/delete/$',
+            analysis_views.analysis_run_delete, name='analysis_run_delete'),
+    re_path(r'^analysis_runs/(?P<run_uuid>[0-9a-fA-F-]{36})/cancel/$',
+            analysis_views.analysis_run_cancel, name='analysis_run_cancel'),
+    # Allocations page (#305) and facility requests (#300)
+    re_path(r'^allocations/$', allocation_views.allocations, name='allocations'),
+    re_path(r'^allocations/new/$', allocation_views.allocation_create, name='allocation_create'),
+    re_path(r'^allocations/(?P<allocation_id>[0-9]+)/edit/$', allocation_views.allocation_edit, name='allocation_edit'),
+    re_path(r'^facility_requests/$', allocation_views.facility_requests, name='facility_requests'),
+    re_path(r'^facility_requests/(?P<request_id>[0-9]+)/action/$',
+            allocation_views.facility_request_action, name='facility_request_action'),
+    re_path(r'^facility_requests/(?P<request_id>[0-9]+)/log/$',
+            allocation_views.facility_request_log, name='facility_request_log'),
+    # Sharing services (#324): submissions page, detail, retry and the services/rules page.
+    re_path(r'^sharing/$', sharing_views.sharing_submissions, name='sharing_submissions'),
+    re_path(r'^sharing/submissions/$', sharing_views.sharing_submissions, name='sharing_submissions_list'),
+    re_path(r'^sharing/submissions/(?P<submission_id>[0-9]+)/$', sharing_views.sharing_submission_detail,
+            name='sharing_submission_detail'),
+    re_path(r'^sharing/submissions/(?P<submission_id>[0-9]+)/retry/$', sharing_views.sharing_submission_retry,
+            name='sharing_submission_retry'),
+    re_path(r'^sharing/services/$', sharing_views.sharing_services, name='sharing_services'),
+    re_path(r'^sharing/services/(?P<service_id>[0-9]+)/rules/(?P<rule_id>[0-9]+)/dry_run\.json$',
+            sharing_views.autopublisher_dry_run, name='sharing_autopublisher_dry_run'),
     re_path(r'^add_dashboard_query/', AddDashboardQueryFormView.as_view(), name='add_dashboard_query'),
     re_path(r'^remove_dashboard_query/(?P<pk>[0-9_-]+)/', RemoveDashboardQueryFormView.as_view(), name='remove_dashboard_query'),
     re_path(r'^add_followup_notice/', AddFollowupNoticeFormView.as_view(), name='add_followup_notice'),
@@ -162,10 +332,63 @@ urlpatterns = [
         view_utils.get_ps1_image, name='get_ps1_image'),
     re_path(r'^get_hst_image/(?P<transient_id>[0-9]+)',
         view_utils.get_hst_image, name='get_hst_image'),
+    re_path(r'^get_hst_status/(?P<transient_id>[0-9]+)',
+        view_utils.get_hst_status, name='get_hst_status'),
+    re_path(r'^get_jwst_observations/(?P<transient_id>[0-9]+)',
+        view_utils.get_jwst_observations, name='get_jwst_observations'),
+    re_path(r'^get_jwst_status/(?P<transient_id>[0-9]+)',
+        view_utils.get_jwst_status, name='get_jwst_status'),
     re_path(r'^get_chandra_image/(?P<transient_id>[0-9]+)',
         view_utils.get_chandra_image, name='get_chandra_image'),
+    re_path(r'^get_chandra_status/(?P<transient_id>[0-9]+)',
+        view_utils.get_chandra_status, name='get_chandra_status'),
     re_path(r'^get_legacy_image/(?P<transient_id>[0-9]+)',
         view_utils.get_legacy_image, name='get_legacy_image'),
+
+    # Transient interests (#288) and data access requests (#291)
+    re_path(r'^interests/(?P<interest_id>[0-9]+)/status/$', collaboration_views.interest_status,
+            name='interest_status'),
+    re_path(r'^my/interests/$', collaboration_views.my_interests, name='my_interests'),
+    # Favorite transients (#323)
+    re_path(r'^my/favorites/$', favorite_views.my_favorites, name='my_favorites'),
+    re_path(r'^my/favorites/section/$', favorite_views.my_favorites_section, name='my_favorites_section'),
+    re_path(r'^my/favorites/ids\.json$', favorite_views.favorite_ids, name='favorite_ids'),
+    re_path(r'^favorites/toggle/(?P<transient_id>[0-9]+)/$', favorite_views.favorite_toggle, name='favorite_toggle'),
+    re_path(r'^data_access_requests/$', collaboration_views.data_access_requests, name='data_access_requests'),
+    re_path(r'^data_access_requests/pending_count\.json$', collaboration_views.data_access_pending_count,
+            name='data_access_pending_count'),
+    re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/decide/$', collaboration_views.data_access_decide,
+            name='data_access_decide'),
+    # Background job queue (#263) and notifications (#266)
+    re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
+    re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),
+    re_path(r'^notifications/$', notification_views.notification_list, name='notification_list'),
+    re_path(r'^notifications/unread_count\.json$', notification_views.notification_unread_count,
+            name='notification_unread_count'),
+    re_path(r'^notifications/(?P<notification_id>[0-9]+)/read/$', notification_views.notification_mark_read,
+            name='notification_mark_read'),
+    re_path(r'^notifications/read_all/$', notification_views.notification_mark_all_read,
+            name='notification_mark_all_read'),
+    re_path(r'^notifications/preferences/$', notification_views.notification_preferences,
+            name='notification_preferences'),
+    re_path(r'^notifications/preferences/slack_lookup/$', notification_views.notification_slack_lookup,
+            name='notification_slack_lookup'),
+    # Broker candidates (#276 / #279) and provider status (#272)
+    re_path(r'^candidates/$', candidate_views.candidate_list, name='candidate_list'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/save/$', candidate_views.candidate_save, name='candidate_save'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reject/$', candidate_views.candidate_reject, name='candidate_reject'),
+    re_path(r'^candidates/(?P<candidate_id>[0-9]+)/reopen/$', candidate_views.candidate_reopen, name='candidate_reopen'),
+    re_path(r'^brokers/status\.json$', candidate_views.brokers_status_json, name='brokers_status_json'),
+    # Broker cone search (#275)
+    re_path(r'^brokers/search/$', candidate_views.broker_search, name='broker_search'),
+    re_path(r'^brokers/search/save/$', candidate_views.broker_search_save, name='broker_search_save'),
+    # Other feeds (#280): Hermes / Einstein Probe / Scout sources and their poll status
+    re_path(r'^feeds/$', feed_views.feed_sources, name='feed_sources'),
+    re_path(r'^feeds/status\.json$', feed_views.feed_sources_json, name='feed_sources_json'),
+    re_path(r'^feeds/(?P<source_id>[0-9]+)/poll/$', feed_views.feed_source_poll, name='feed_source_poll'),
+    re_path(r'^feeds/screen/(?P<transient_id>[0-9]+)/$', feed_views.feed_screen_transient, name='feed_screen_transient'),
+    re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
+            name='mention_suggest'),
 
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),
@@ -212,6 +435,13 @@ router.register(r'surveyobservations', api_views.SurveyObservationViewSet)
 router.register(r'transientphotometry', api_views.TransientPhotometryViewSet, basename='transientphotometry')
 router.register(r'hostphotometry', api_views.HostPhotometryViewSet, basename='hostphotometry')
 router.register(r'transientphotdata', api_views.TransientPhotDataViewSet, basename='transientphotdata')
+router.register(r'transientphotstats', api_views.TransientPhotStatViewSet, basename='transientphotstat')
+router.register(r'brokerfilters', api_views.BrokerFilterViewSet, basename='brokerfilter')
+router.register(r'candidates', api_views.CandidateViewSet, basename='candidate')
+router.register(r'brokers', api_views.BrokerViewSet, basename='broker')
+router.register(r'brokerconnections', api_views.BrokerConnectionViewSet, basename='brokerconnection')
+router.register(r'sharingservices', api_views.SharingServiceViewSet, basename='sharingservice')
+router.register(r'sharingsubmissions', api_views.SharingSubmissionViewSet, basename='sharingsubmission')
 router.register(r'hostphotdata', api_views.HostPhotDataViewSet, basename='hostphotdata')
 
 router.register(r'transientimages', api_views.TransientImageViewSet)
@@ -229,6 +459,18 @@ router.register(r'tooresources', api_views.ToOResourceViewSet, basename='tooreso
 router.register(r'queuedresources', api_views.QueuedResourceViewSet, basename='queuedresource')
 router.register(r'classicalresources', api_views.ClassicalResourceViewSet, basename='classicalresource')
 router.register(r'classicalobservingdates', api_views.ClassicalObservingDateViewSet, basename='classicalobservingdate')
+router.register(r'allocations', api_views.AllocationViewSet, basename='allocation')
+router.register(r'facilityrequests', api_views.FacilityRequestViewSet, basename='facilityrequest')
+router.register(r'facilities', api_views.FacilityViewSet, basename='facility')
+router.register(r'transientinterests', api_views.TransientInterestViewSet, basename='transientinterest')
+router.register(r'favorites', api_views.FavoriteTransientViewSet, basename='favorite')
+router.register(r'notifications', api_views.NotificationViewSet, basename='notification')
+router.register(r'dataaccessrequests', api_views.DataAccessRequestViewSet, basename='dataaccessrequest')
+router.register(r'instrumentlogs', api_views.InstrumentLogViewSet, basename='instrumentlog')
+router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename='analysisservice')
+router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
+router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
+router.register(r'feedsources', api_views.FeedSourceViewSet, basename='feedsource')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)
@@ -241,8 +483,19 @@ router.register(r'gwcandidates', api_views.GWCandidateViewSet)
 router.register(r'gwcandidateimages', api_views.GWCandidateImageViewSet)
 
 # Login/Logout
-api_url_patterns = [re_path(r'^api/', include(router.urls)),
-                    re_path(r'^api/schema/$', schema_view),
-                    re_path(r'^api-auth/', include('rest_framework.urls', namespace='rest_framework')),]
+api_url_patterns = [
+    re_path(
+        r'^api/transients/(?P<transient_id>[0-9]+)/comments/$',
+        api_views.TransientCommentListCreate.as_view(),
+        name='api-transient-comments',
+    ),
+    re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
+    re_path(r'^api/', include(router.urls)),
+    re_path(r'^api/schema/$', schema_view),
+    re_path(
+        r'^api-auth/',
+        include('rest_framework.urls', namespace='rest_framework'),
+    ),
+]
 
 urlpatterns += api_url_patterns

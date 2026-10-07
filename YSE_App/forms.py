@@ -1,8 +1,8 @@
 from django.db import models
 from django.forms import ModelForm
 from django import forms
+from django.contrib.auth.models import Group
 from YSE_App.models import *
-from YSE_App import view_utils
 from django.utils import timezone
 from datetime import timedelta
 from YSE_App.queries.yse_python_queries import python_query_reg
@@ -35,24 +35,179 @@ class TransientForm(ModelForm):
             'postage_stamp_file']
 
 class TransientFollowupForm(ModelForm):
+    audience_groups = forms.ModelMultipleChoiceField(
+        queryset=Group.objects.none(),
+        required=False,
+        label="Collaboration groups",
+        widget=forms.CheckboxSelectMultiple,
+    )
+
     status = forms.ModelChoiceField(
         FollowupStatus.objects.all(),
-        initial=FollowupStatus.objects.filter(name='Requested')[0])
-    qs = ClassicalResource.objects.filter(end_date_valid__gt = timezone.now()-timedelta(days=1)).order_by('end_date_valid').select_related()
-    if len(qs):
-        classical_resource = forms.ModelChoiceField(
-            queryset=qs,
-            initial=qs[0],
-            required=False)
-        valid_start = forms.DateTimeField(initial=qs[0].begin_date_valid)
-        valid_stop = forms.DateTimeField(initial=qs[0].end_date_valid)
-    else:
-        classical_resource = forms.ModelChoiceField(
-            queryset=qs,
-            required=False)
-        valid_start = forms.DateTimeField()
-        valid_stop = forms.DateTimeField()
-    comment = forms.CharField(required=False)
+        initial=FollowupStatus.objects.filter(name='Requested').first())
+    # Use empty querysets at class definition time. Evaluating ClassicalResource
+    # here (e.g. ``if len(qs)``) runs during ``migrate`` URL checks before
+    # migrations like ``creator_only`` are applied and breaks CI/deploy.
+    classical_resource = forms.ModelChoiceField(
+        queryset=ClassicalResource.objects.none(),
+        required=False)
+    valid_start = forms.DateTimeField(required=False)
+    valid_stop = forms.DateTimeField(required=False)
+    comment = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'autocomplete': 'off'}),
+    )
+    # Optional: the view falls back to DEFAULT_PRIORITY (4.0) when omitted so
+    # legacy clients/tests that do not post a priority still succeed.
+    priority = forms.FloatField(
+        required=False,
+        initial=4.0,
+        min_value=1.0,
+        max_value=5.0,
+        widget=forms.NumberInput(attrs={'step': '0.1', 'min': '1.0', 'max': '5.0'}),
+    )
+
+    def __init__(self, *args, user=None, transient_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._user = user
+        self.fields["valid_start"].required = False
+        self.fields["valid_stop"].required = False
+        if transient_id is not None:
+            self.fields["transient"].initial = transient_id
+            self.fields["transient"].widget = forms.HiddenInput()
+        self.show_audience_picker = False
+        self.followup_audience_choices = []
+        self.resource_audience_map = {}
+
+        valid_after = timezone.now() - timedelta(days=1)
+        # Classical nights: chronological, soonest first (that first entry is
+        # the default), and a night drops out the morning after the run in
+        # the observatory's time zone. See services/classical_nights.py.
+        from YSE_App.services.classical_nights import upcoming_classical_resources
+
+        if user is not None:
+            from YSE_App import view_utils
+
+            self.fields["classical_resource"].queryset = upcoming_classical_resources(
+                view_utils.get_authorized_classical_resources(user)
+            )
+            self.fields["too_resource"].queryset = (
+                view_utils.get_authorized_too_resources(user)
+                .filter(end_date_valid__gt=valid_after)
+                .order_by("telescope__name")
+            )
+            self.fields["queued_resource"].queryset = (
+                view_utils.get_authorized_queued_resources(user)
+                .filter(end_date_valid__gt=valid_after)
+                .order_by("telescope__name")
+            )
+        else:
+            # Non-user forms (admin/tests): same night rule, every resource.
+            self.fields["classical_resource"].queryset = upcoming_classical_resources(
+                ClassicalResource.objects.all()
+            )
+
+        classical_qs = self.fields["classical_resource"].queryset
+        if classical_qs.exists():
+            initial_resource = classical_qs.first()
+            self.fields["classical_resource"].initial = initial_resource
+            self.fields["valid_start"].initial = initial_resource.begin_date_valid
+            self.fields["valid_stop"].initial = initial_resource.end_date_valid
+
+        if user is not None:
+            self.fields["audience_groups"].queryset = user.groups.order_by("name")
+            self.show_audience_picker = user.groups.exists()
+            from YSE_App.services.audience import (
+                build_followup_audience_choices,
+                build_followup_resource_audience_map,
+            )
+
+            linked_resource = self._linked_resource_from_bound_data()
+            self.followup_audience_choices = build_followup_audience_choices(
+                user, linked_resource
+            )
+            eligible_ids = [
+                choice["group"].pk
+                for choice in self.followup_audience_choices
+                if choice["enabled"]
+            ]
+            self.fields["audience_groups"].initial = eligible_ids
+            self.resource_audience_map = build_followup_resource_audience_map(self)
+            self.public_group_id = next(
+                (
+                    choice["group"].pk
+                    for choice in self.followup_audience_choices
+                    if choice["is_public_group"]
+                ),
+                None,
+            )
+
+    def _linked_resource_from_bound_data(self):
+        data = self.data if self.is_bound else None
+        for field_name in ("classical_resource", "too_resource", "queued_resource"):
+            if data is not None:
+                raw_pk = data.get(field_name)
+                if raw_pk:
+                    return self.fields[field_name].queryset.filter(pk=raw_pk).first()
+            initial = self.fields[field_name].initial
+            if initial is not None:
+                if hasattr(initial, "pk"):
+                    return initial
+                return self.fields[field_name].queryset.filter(pk=initial).first()
+        return None
+
+    def clean(self):
+        cleaned_data = super().clean()
+        classical = cleaned_data.get("classical_resource")
+        too = cleaned_data.get("too_resource")
+        queued = cleaned_data.get("queued_resource")
+        linked_resource = classical or too or queued
+        if classical:
+            cleaned_data["valid_start"] = classical.begin_date_valid
+            cleaned_data["valid_stop"] = classical.end_date_valid
+        elif not cleaned_data.get("valid_start") or not cleaned_data.get("valid_stop"):
+            if too or queued:
+                raise forms.ValidationError(
+                    "Provide a date range for ToO or queued follow-up requests."
+                )
+            raise forms.ValidationError(
+                "Select a classical, ToO, or queued resource for this follow-up."
+            )
+
+        if self._user is not None:
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+            from YSE_App.services.audience import (
+                resolve_followup_audience,
+                resource_is_creator_only,
+            )
+
+            if not linked_resource:
+                raise forms.ValidationError(
+                    "Select a classical, ToO, or queued resource for this follow-up."
+                )
+
+            selected = cleaned_data.get("audience_groups")
+            selected_list = list(selected) if selected is not None else []
+            if not selected_list and not resource_is_creator_only(linked_resource):
+                raise forms.ValidationError(
+                    {
+                        "audience_groups": "Select at least one collaboration group.",
+                    }
+                )
+
+            try:
+                resolve_followup_audience(
+                    self._user,
+                    cleaned_data.get("transient").pk
+                    if cleaned_data.get("transient") is not None
+                    else 0,
+                    audience_groups=selected_list,
+                    linked_resource=linked_resource,
+                    explicit_audience=True,
+                )
+            except DRFValidationError as exc:
+                raise forms.ValidationError(exc.detail) from exc
+        return cleaned_data
 
     class Meta:
         model = TransientFollowup
@@ -64,8 +219,7 @@ class TransientFollowupForm(ModelForm):
             'comment',
             'valid_start',
             'valid_stop',
-            'spec_priority',
-            'phot_priority',
+            'priority',
             'offset_star_ra',
             'offset_star_dec',
             'offset_north',
@@ -80,7 +234,9 @@ class ClassicalResourceForm(ModelForm):
         model = ClassicalResource
         fields = [
             'telescope',
-            'principal_investigator']
+            'principal_investigator',
+            'creator_only',
+        ]
 
 class ToOResourceForm(ModelForm):
 
@@ -99,19 +255,27 @@ class ToOResourceForm(ModelForm):
             'awarded_too_hours',
             'used_too_hours',
             'awarded_too_triggers',
-            'used_too_triggers']
+            'used_too_triggers',
+            'creator_only',
+        ]
 
 class SurveyFieldForm(ModelForm):
 
     valid_start = forms.DateTimeField()
     valid_stop = forms.DateTimeField()
     coord = forms.CharField()
-    qs = Instrument.objects.filter(name__startswith = 'GPC').select_related()
-    if len(qs):
-        instrument = forms.ModelChoiceField(
-            queryset=qs,
-            initial=qs[0],
-            required=False)
+    # The queryset is evaluated per request (not at import time), so a GPC
+    # instrument added after the process started is offered, and a fresh
+    # database does not silently fall back to the auto-generated model field.
+    instrument = forms.ModelChoiceField(
+        queryset=Instrument.objects.filter(name__startswith='GPC').order_by('name'),
+        required=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        first = self.fields['instrument'].queryset.first()
+        if first is not None:
+            self.fields['instrument'].initial = first
 
     class Meta:
         model = SurveyField
@@ -124,23 +288,33 @@ class SurveyObsForm(ModelForm):
 
     survey_obs_date = forms.DateTimeField()
 
-    qs = [(i['ztf_field_id'], i['ztf_field_id']) for i in SurveyField.objects.filter(~Q(obs_group__name='ZTF')).values('ztf_field_id').distinct().order_by('ztf_field_id')]
-
-    if len(qs):
-        ztf_field_id = forms.MultipleChoiceField(
-            choices=qs,
-            initial=qs[0],
-            required=True)
-    else:
-        ztf_field_id = forms.MultipleChoiceField(
-            choices=[],
-            required=True)
-
+    # Choices are filled in per request by __init__ (see ztf_field_choices);
+    # the view reads cleaned_data['ztf_field_id'] as a list of strings.
+    ztf_field_id = forms.MultipleChoiceField(
+        choices=[],
+        required=True)
 
     instrument = forms.MultipleChoiceField(
         choices=[['GPC1','GPC1'],['GPC2','GPC2']],
         initial=['GPC1','GPC1'],
         required=True)
+
+    @staticmethod
+    def ztf_field_choices():
+        """Distinct non-ZTF survey field ids, ordered, as (value, label) pairs."""
+        ids = (SurveyField.objects.filter(~Q(obs_group__name='ZTF'))
+               .exclude(ztf_field_id__isnull=True)
+               .exclude(ztf_field_id='')
+               .values_list('ztf_field_id', flat=True)
+               .distinct().order_by('ztf_field_id'))
+        return [(i, i) for i in ids]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = self.ztf_field_choices()
+        self.fields['ztf_field_id'].choices = choices
+        if choices:
+            self.fields['ztf_field_id'].initial = [choices[0][0]]
 
     class Meta:
         model = SurveyObservation
@@ -151,12 +325,20 @@ class OncallForm(ModelForm):
 
     valid_start = forms.DateTimeField()
     valid_stop = forms.DateTimeField()
-    qs = User.objects.all().filter(groups__name='YSE').filter(~Q(username='admin')).order_by('username')
-    if len(qs):
-        user = forms.ModelChoiceField(
-            queryset=qs,
-            initial=qs[0],
-            required=False)
+    # Evaluated per request: users added to the YSE group after start-up are
+    # offered, and on a fresh database the field still exists (the POST handler
+    # reads cleaned_data['user'], which used to raise KeyError there).
+    user = forms.ModelChoiceField(
+        queryset=(User.objects.filter(groups__name='YSE')
+                  .filter(~Q(username='admin'))
+                  .order_by('username')),
+        required=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        first = self.fields['user'].queryset.first()
+        if first is not None:
+            self.fields['user'].initial = first
 
     class Meta:
         model = YSEOnCallDate
@@ -168,6 +350,29 @@ class OncallForm(ModelForm):
 
 
 class TransientCommentForm(ModelForm):
+    is_public = forms.BooleanField(
+        required=False,
+        initial=False,
+        label="Public",
+    )
+    audience_groups = forms.ModelMultipleChoiceField(
+        queryset=Group.objects.none(),
+        required=False,
+        label="Collaboration groups",
+        widget=forms.CheckboxSelectMultiple,
+    )
+
+    def __init__(self, *args, user=None, transient_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.show_audience_picker = False
+        if user is not None and transient_id is not None:
+            from YSE_App.services.audience import selectable_audience_groups
+
+            qs = selectable_audience_groups(user, transient_id)
+            self.fields["audience_groups"].queryset = qs
+            self.fields["audience_groups"].initial = list(qs.values_list("pk", flat=True))
+            self.show_audience_picker = qs.exists()
+
     class Meta:
         model = Log
         fields = [
@@ -256,9 +461,8 @@ class SpectrumUploadForm(ModelForm):
         'OSIRIS','FLOYDS-N','FLOYDS-S','NIRC2',
         'NIRSPEC','NIRES','KCWI','ESI',
         'DEIMOS','OSIRIS','MOSFIRE','LRIS','LRS2',
-        'HIRES','GMOS','Goodman','KAST','WiFeS',
-        'WFCCD','DIS','Binospec','SpeX','UVES',
-        'GNIRS','FLAMINGOS-2','DOLORES','FAST']
+        'HIRES','GMOS','Goodman','KAST','WiFeS','WFCCD','DIS','Binospec','SpeX','UVES',
+        'GNIRS','FLAMINGOS-2','DOLORES']
     instrument = forms.ModelChoiceField(Instrument.objects.filter(Q(name__in=spec_instruments)))
     #import pdb; pdb.set_trace()
     class Meta:

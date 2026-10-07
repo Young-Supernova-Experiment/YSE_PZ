@@ -1,0 +1,34 @@
+{% comment %}Weather / SkyCam widget and last week's instrument logs for the telescope of an observing-night page (#309).
+Context: telescope_obj, weather_widget (services.weather.widget_context), recent_instrument_logs.{% endcomment %}
+{% if telescope_obj %}
+<div class="col-5 yse-obs-night-widgets">
+  {% if weather_widget %}{% include 'YSE_App/partials/weather_widget.html' with telescope=weather_widget.telescope weather=weather_widget.weather compact=False has_weather=weather_widget.has_weather has_skycam=weather_widget.has_skycam weather_link=weather_widget.weather_link stale=weather_widget.stale skycam_refresh_seconds=weather_widget.skycam_refresh_seconds weather_refresh_seconds=weather_widget.weather_refresh_seconds %}{% endif %}
+  <div class="card card-outline card-secondary mb-3 yse-instrument-logs-box" id="yse-instrument-logs-box">
+    <div class="card-header py-1 px-2">
+      <span class="card-title"><i class="fa fa-book"></i> Instrument logs, last 7 days</span>
+      <div class="card-tools">
+        <a class="btn btn-tool" href="{% url 'telescope_detail' telescope_obj.id %}" title="Telescope page"><i class="fa fa-external-link"></i></a>
+      </div>
+    </div>
+    <div class="card-body p-2">
+      {% if recent_instrument_logs %}
+      <table class="table table-sm table-borderless mb-0 yse-instrument-logs-recent">
+        <tbody>
+        {% for row in recent_instrument_logs %}
+          <tr data-source="{{ row.source }}">
+            <td class="text-nowrap text-muted small">{{ row.start|date:"Y-m-d H:i" }}</td>
+            <td class="small"><a href="{% url 'instrument_logs' row.instrument_id %}">{{ row.instrument.name }}</a></td>
+            <td class="small">{{ row.summary|truncatechars:120 }}{% if row.source == 'api' %} <span class="badge badge-info">api</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="text-muted small">No instrument logs in the last 7 days.
+        {% for instrument in telescope_obj.instrument_set.all %}{% if forloop.first %}Instruments: {% endif %}<a href="{% url 'instrument_logs' instrument.id %}">{{ instrument.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
