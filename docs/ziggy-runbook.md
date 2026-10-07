@@ -56,7 +56,7 @@ cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.p
 ```bash
 for f in /data/yse_pz/YSE_PZ/YSE_PZ/settings.ini /data/yse_pz/YSE_PZ_test/YSE_PZ/settings.ini; do echo "$f"; grep -E '^SMTP_LOGIN' "$f"; grep -E '^ztfforcedphotpass' "$f" | sha256sum; done
 ```
-**Expected:** the same `SMTP_LOGIN` line and the same hash for both files. `SMTP_LOGIN` + `@gmail.com` must be the address registered with the ZTF forced-photometry service, and `ztfforcedphotpass` its password. **If not:** copy production's two values into yse_test's `settings.ini` (no restart needed beyond the next deploy; or `sudo systemctl restart apache2`). **Check:** "Request ZTF Forced Phot" on `/yse_test/` alerts `success: ...` and adds a comment.
+**Expected:** the same `SMTP_LOGIN` line and the same hash for both files. `SMTP_LOGIN` + `@gmail.com` must be the address registered with the ZTF forced-photometry service, and `ztfforcedphotpass` its password. **If not:** copy production's two values into yse_test's `settings.ini`, then `sudo systemctl restart apache2` (settings are read when the web process starts). **Check:** "Request ZTF Forced Phot" on `/yse_test/` alerts `success: ...` and adds a comment.
 
 **YSE forced phot cron (2026-10-07):** fixed by [#419](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/419). It reaches yse_test with promotion [#428](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/428); then re-run `runcrons YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhot --force`. Runs since pstamp began redirecting http to https submitted nothing.
 
