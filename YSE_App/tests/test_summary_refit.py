@@ -405,7 +405,10 @@ class SaltFitFragmentTests(SummaryRefitBase):
         self.assertNotIn("data-status-url", html)
         self.assertIn(reverse("transient_analysis_run", args=[self.transient.id]), html)
         # the fragment URL and the run's t0 agree with the stored result
-        self.assertIn("%d" % round(run.result["t0"]), html.replace(",", ""))
+        # the page shows t0 through format_value(t0, t0_err); round(t0) is the next integer
+        # whenever the fit's fractional day is >= .5, which depends on today's date (#423)
+        shown = fit_status._fmt(run.result["t0"], run.result.get("t0_err"))
+        self.assertIn(shown.replace(",", ""), html.replace(",", ""))
 
     def test_refit_through_the_run_endpoint_then_polls_and_shows_failure(self):
         seed_sncosmo_lightcurve(self.staff, self.transient, t0_offset=10)
