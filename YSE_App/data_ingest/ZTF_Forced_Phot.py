@@ -55,6 +55,22 @@ def _wget_error_summary(stderr):
     return summary[:300]
 
 
+def _ztf_reply_error(path):
+    """The "Error: ..." line of a ZTF reply saved with --content-on-error; removes the file."""
+    try:
+        with open(path, errors='replace') as fh:
+            text = re.sub(r'<[^>]+>', ' ', fh.read())
+    except OSError:
+        return ''
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    match = re.search(r'Error:\s*([^\n]+)', text)
+    return re.sub(r'\s+', ' ', match.group(1)).strip()[:200] if match else ''
+
+
 def random_log_file_name(log_file_dir='/tmp'):
 
     log_file_name = None
@@ -312,7 +328,7 @@ class ZTF_Forced_Phot:
             if verbose:
                 print("Sending ZTF request for (R.A.,Decl)=(%s,%s)"%(ra,decl))
 
-            wget_command = "wget --http-user=%s --http-passwd=%s -O %s \"https://ztfweb.ipac.caltech.edu/cgi-bin/requestForcedPhotometry.cgi?"%(_ztfuser,_ztfinfo,log_file_name) + \
+            wget_command = "wget --content-on-error --http-user=%s --http-passwd=%s -O %s \"https://ztfweb.ipac.caltech.edu/cgi-bin/requestForcedPhotometry.cgi?"%(_ztfuser,_ztfinfo,log_file_name) + \
                            "ra=%s&"%ra_str + \
                            "dec=%s&"%decl_str + \
                            "jdstart=%s&"%jdstart_str +\
@@ -332,8 +348,12 @@ class ZTF_Forced_Phot:
                 #    print(stdout.decode('utf-8'))
 
                 if p.returncode != 0 or not os.path.exists(log_file_name):
+                    # ZTF explains a rejection in the reply body ("Error: e-mail address is
+                    # unknown."); --content-on-error keeps it so the user sees why (#411)
+                    reason = _ztf_reply_error(log_file_name)
                     raise ZTFForcedPhotSubmitError(
-                        'wget exited with status %s: %s' % (p.returncode, _wget_error_summary(stderr)))
+                        'wget exited with status %s: %s%s' % (
+                            p.returncode, _wget_error_summary(stderr), ' ZTF says: %s' % reason if reason else ''))
 
             os.chmod(log_file_name,0o0777)
 
