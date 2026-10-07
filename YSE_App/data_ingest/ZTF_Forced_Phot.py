@@ -40,6 +40,21 @@ warnings.filterwarnings("ignore") # We'll get warnings from log10 when there are
 _ztfuser = "ztffps"
 _ztfinfo = "dontgocrazy!"
 
+class ZTFForcedPhotSubmitError(RuntimeError):
+    """The request to ZTF could not be sent; the message is safe to show users (#411)."""
+
+
+def _wget_error_summary(stderr):
+    """wget's own error lines, without the request URL (it carries the ZTF credentials)."""
+    text = stderr.decode('utf-8', 'replace') if isinstance(stderr, bytes) else str(stderr or '')
+    lines = [l.strip() for l in text.splitlines()
+             if re.search(r'error|fail|denied|no such|not found|unable|cannot|refused|timed out', l, re.I)
+             and '://' not in l]
+    summary = '; '.join(lines[-3:]) or 'no error output'
+    summary = re.sub(r'(userpass|password|passwd)=\S*', r'\1=***', summary, flags=re.I)
+    return summary[:300]
+
+
 def random_log_file_name(log_file_dir='/tmp'):
 
     log_file_name = None
@@ -308,11 +323,17 @@ class ZTF_Forced_Phot:
 
             if send:
 
+                # wget -O cannot create the log file in a missing directory (#411)
+                os.makedirs(os.path.dirname(log_file_name), exist_ok=True)
                 p = subprocess.Popen(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
                 stdout, stderr = p.communicate()
 
                 #if verbose:
                 #    print(stdout.decode('utf-8'))
+
+                if p.returncode != 0 or not os.path.exists(log_file_name):
+                    raise ZTFForcedPhotSubmitError(
+                        'wget exited with status %s: %s' % (p.returncode, _wget_error_summary(stderr)))
 
             os.chmod(log_file_name,0o0777)
 
