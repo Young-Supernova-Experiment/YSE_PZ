@@ -747,7 +747,7 @@ class ForcedPhot(CronJobBase):
     
     def get_status(self,request_name):
         
-        status_link = 'http://pstamp.ipp.ifa.hawaii.edu/status.php'
+        status_link = 'https://pstamp.ipp.ifa.hawaii.edu/status.php'
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
 
@@ -895,7 +895,7 @@ class ForcedPhot(CronJobBase):
 
         session = requests.Session()
         session.auth = (self.options.ifauser,self.options.ifapass)
-        stampurl = 'http://pstamp.ipp.ifa.hawaii.edu/upload.php'
+        stampurl = 'https://pstamp.ipp.ifa.hawaii.edu/upload.php'
 
         # First login. Returns session cookie in response header. Even though status_code=401, it is ok
         page = session.post(stampurl)

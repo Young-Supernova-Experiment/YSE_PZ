@@ -81,7 +81,7 @@ def main():
 
     nowmjd = date_to_mjd((datetime.datetime.now()+datetime.timedelta(hours=10)).isoformat())
     
-    r = requests.get('http://ziggy.ucolick.org/yse/api/surveyobservations/?obs_mjd_gte=%i&limit=1000'%(nowmjd-7),
+    r = requests.get('https://ziggy.ucolick.org/yse/api/surveyobservations/?obs_mjd_gte=%i&limit=1000'%(nowmjd-7),
                      auth=HTTPBasicAuth())
     data = json.loads(r.text)
     data_results = data['results']
