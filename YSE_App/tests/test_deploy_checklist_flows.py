@@ -320,6 +320,25 @@ class DeployChecklistFlowTests(TestCase):
             self.assertIn("nothing was submitted", response.json()["msg"])
         self.assertFalse(Log.objects.filter(transient=transient).exists())
 
+    def test_forced_photometry_failure_names_the_cause(self):
+        """#411: the alert carries wget's message (submit error) but not arbitrary exception text."""
+        from YSE_App.data_ingest import ZTF_Forced_Phot as fp
+
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-cause")
+        url = reverse("ztf_forced_phot", kwargs={"slug": transient.slug})
+        cases = (
+            (fp.ZTFForcedPhotSubmitError("wget exited with status 3: x.txt: Permission denied"), "Permission denied"),
+            (ValueError("internal detail"), "(ValueError)"),
+        )
+        for exc, expected in cases:
+            fake = mock.MagicMock()
+            fake.return_value.run_ztf_fp.side_effect = exc
+            with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake), \
+                    mock.patch.object(views_module.logger, "exception"):
+                msg = self.client.get(url).json()["msg"]
+            self.assertIn(expected, msg)
+        self.assertNotIn("internal detail", msg)
+
     def test_flux_plot_with_photometry_returns_html(self):
         response = self.client.get(f"/lightcurveplot_flux/{self.transient.id}/")
         self.assertEqual(response.status_code, 200)
@@ -515,6 +534,34 @@ class DeployChecklistFlowTests(TestCase):
         self.assertIn("Swope", nights_table)
         self.assertNotIn("FarAwayTel", nights_table)
         self.assertNotIn("/delta_too_hours/", body)  # no per-row AJAX calls left
+
+    def test_resource_forms_save_on_a_plain_post_and_return_to_the_page(self):
+        """#396/#397: without the AJAX header the views redirected to /form-success/ unsaved."""
+        page = "http://testserver" + reverse("transient_detail", kwargs={"slug": self.transient.slug})
+        n_too, n_classical = ToOResource.objects.count(), ClassicalResource.objects.count()
+        too = self.client.post(reverse("add_too_resource"), {
+            "telescope": self.telescope.id, "principal_investigator": self.pi.id,
+            "begin_date_valid": fmt_dt(utc_days_from_now(0, hour=0)),
+            "end_date_valid": fmt_dt(utc_days_from_now(180, hour=0)),
+            "awarded_too_hours": 4, "used_too_hours": 0, "awarded_too_triggers": 0, "used_too_triggers": 0,
+        }, HTTP_REFERER=page)
+        classical = self.client.post(reverse("add_classical_resource"), {
+            "telescope": self.telescope.id, "principal_investigator": self.pi.id,
+            "observing_date": "11/02/2026",
+        }, HTTP_REFERER="https://elsewhere.example.com/")
+        self.assertEqual(ToOResource.objects.count(), n_too + 1)
+        self.assertEqual(ClassicalResource.objects.count(), n_classical + 1)
+        self.assertRedirects(too, page, fetch_redirect_response=False)
+        # a foreign referer is not followed
+        self.assertRedirects(classical, reverse("yse_home"), fetch_redirect_response=False)
+
+    def test_transient_detail_binds_resource_forms_through_the_document(self):
+        """#396/#397: the forms load with follow-up fragments, after the page script ran."""
+        response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        body = response.content.decode()
+        self.assertIn("$(document).on('submit', '#add_too_resource'", body)
+        self.assertIn("$(document).on('submit', '#add_classical_resource'", body)
+        self.assertNotIn("$('#add_too_resource').on('submit'", body)
 
     def test_add_too_resource_form_and_resources_table(self):
         n_res = ToOResource.objects.count()

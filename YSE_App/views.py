@@ -2653,8 +2653,14 @@ def ztf_forced_phot(request,slug):
             verbose=False)
     except Exception as exc:  # noqa: BLE001 - network, IMAP or config failure inside the legacy script
         logger.exception('ZTF forced phot request failed for %s', slug)
+        # A submit error (wget's own message, credentials scrubbed) or a filesystem error
+        # (it names the path) says what to fix; anything else shows only its type (#411).
+        if isinstance(exc, (ZTF_Forced_Phot.ZTFForcedPhotSubmitError, OSError)):
+            detail = '%s: %s' % (type(exc).__name__, exc)
+        else:
+            detail = type(exc).__name__
         return JsonResponse(
-            {'msg': 'error: ZTF forced photometry request failed (%s); nothing was submitted' % type(exc).__name__},
+            {'msg': 'error: ZTF forced photometry request failed (%s); nothing was submitted' % detail},
             status=502)
     if not log_file_name:
         return JsonResponse(

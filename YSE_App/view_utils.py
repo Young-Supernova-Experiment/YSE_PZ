@@ -10,7 +10,7 @@ from django.conf import settings as djangoSettings
 from django.core.cache import cache
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import models, connection, reset_queries
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -363,7 +363,10 @@ def _cached_plot_http_response(cache_key, html):
         
         
 
-Q = Queue()
+# Rise/set times come back from a child Process through this queue. It used to be
+# named Q, which shadowed django.db.models.Q for the whole module, so every Q(...)
+# filter here raised "'Queue' object is not callable" (view_yse_fields, #414).
+_RISE_SET_QUEUE = Queue()
 
 
 
@@ -2077,7 +2080,7 @@ def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
         settime = None
 
     print('set time took %s'%(time.time()-tstart))
-    Q.put(settime)
+    _RISE_SET_QUEUE.put(settime)
     #setdict['set_time'] = settime
     
 def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
@@ -2106,7 +2109,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
         risetime = None
 
     print('rise time took %s'%(time.time()-tstart))
-    Q.put(risetime)
+    _RISE_SET_QUEUE.put(risetime)
 
 def rise_time(request,transient_id,obs_id):
         
@@ -2121,7 +2124,7 @@ def rise_time(request,transient_id,obs_id):
     
     action = Process(target=rise_func,args=(coords,obs_date,longitude,latitude,elevation,risedict))
     action.start()
-    risedict['rise_time'] = Q.get()
+    risedict['rise_time'] = _RISE_SET_QUEUE.get()
     action.join(timeout=1)
     action.terminate()
 
@@ -2140,7 +2143,7 @@ def set_time(request,transient_id,obs_id):
     
     action = Process(target=set_func,args=(coords,obs_date,longitude,latitude,elevation,setdict))
     action.start()
-    setdict['set_time'] = Q.get()
+    setdict['set_time'] = _RISE_SET_QUEUE.get()
     action.join(timeout=1.0)
     action.terminate()
 
