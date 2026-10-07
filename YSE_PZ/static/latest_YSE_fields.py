@@ -1,3 +1,6 @@
+import configparser
+import os
+
 import requests
 from requests.auth import HTTPBasicAuth
 import datetime
@@ -6,6 +9,17 @@ import json
 import numpy as np
 from astropy.coordinates import SkyCoord
 import astropy.units as u
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def stack_settings():
+    """[main] of this checkout's YSE_PZ/settings.ini: API URL and login, as the crons use (#425)."""
+    config = configparser.ConfigParser()
+    config.read(os.path.join(os.path.dirname(HERE), 'settings.ini'))
+    main = config['main']
+    return main['dburl'].rstrip('/') + '/', HTTPBasicAuth(main['dblogin'], main['dbpassword'])
+
 
 def date_to_mjd(date):
     time = Time(date,scale='utc')
@@ -81,8 +95,10 @@ def main():
 
     nowmjd = date_to_mjd((datetime.datetime.now()+datetime.timedelta(hours=10)).isoformat())
     
-    r = requests.get('https://ziggy.ucolick.org/yse/api/surveyobservations/?obs_mjd_gte=%i&limit=1000'%(nowmjd-7),
-                     auth=HTTPBasicAuth())
+    api_url, auth = stack_settings()
+    r = requests.get('%ssurveyobservations/?obs_mjd_gte=%i&limit=1000'%(api_url,nowmjd-7),
+                     auth=auth)
+    r.raise_for_status()
     data = json.loads(r.text)
     data_results = data['results']
     #import pdb; pdb.set_trace()
@@ -94,13 +110,13 @@ def main():
 
         # save the foreign keys when possible
         if d['photometric_band'] not in results_dict.keys():
-            photo_results = requests.get(d['photometric_band'],auth=HTTPBasicAuth())
+            photo_results = requests.get(d['photometric_band'],auth=auth)
             p = json.loads(photo_results.text)
             results_dict[d['photometric_band']] = p
         else:
             p = results_dict[d['photometric_band']]
         if d['survey_field'] not in results_dict.keys():
-            field_results = requests.get(d['survey_field'],auth=HTTPBasicAuth())
+            field_results = requests.get(d['survey_field'],auth=auth)
             f = json.loads(field_results.text)
             results_dict[d['survey_field']] = f
         else:
@@ -129,7 +145,8 @@ def main():
     field,ra,dec,maglim,mjd,filters = \
         field[iSortMJD],ra[iSortMJD],dec[iSortMJD],maglim[iSortMJD],mjd[iSortMJD],filters[iSortMJD]
     
-    with open('/data/yse_pz/YSE_PZ/YSE_PZ/static/yse_latest_fields.html','w') as fout:
+    # next to this script: the stack's own static folder, not production's (#425)
+    with open(os.path.join(HERE, 'yse_latest_fields.html'),'w') as fout:
     #with open('yse_latest_fields.html','w') as fout:
         print(htmlheader,file=fout)
 
