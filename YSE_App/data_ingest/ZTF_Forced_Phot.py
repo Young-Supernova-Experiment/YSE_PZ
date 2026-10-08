@@ -40,6 +40,13 @@ warnings.filterwarnings("ignore") # We'll get warnings from log10 when there are
 _ztfuser = "ztffps"
 _ztfinfo = "dontgocrazy!"
 
+def ztf_account_address(login=None):
+    """The ZTF forced-photometry account address: SMTP_LOGIN as is when it is a full
+    address, else SMTP_LOGIN@gmail.com -- the rule settings.DEFAULT_FROM_EMAIL uses (#434)."""
+    login = (djangoSettings.SMTP_LOGIN if login is None else login).strip()
+    return login if '@' in login else '%s@gmail.com' % login
+
+
 class ZTFForcedPhotSubmitError(RuntimeError):
     """The request to ZTF could not be sent; the message is safe to show users (#411)."""
 

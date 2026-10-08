@@ -2652,8 +2652,8 @@ def ztf_forced_phot(request,slug):
     # run ZTF forced phot script; a failure is reported to the page instead of a bare 500 (#399)
     try:
         ztf = ZTF_Forced_Phot.ZTF_Forced_Phot(
-            ztf_email_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,ztf_email_password=djangoSettings.SMTP_PASSWORD,
-            ztf_email_imapserver='imap.gmail.com',ztf_user_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,
+            ztf_email_address=ZTF_Forced_Phot.ztf_account_address(),ztf_email_password=djangoSettings.SMTP_PASSWORD,
+            ztf_email_imapserver='imap.gmail.com',ztf_user_address=ZTF_Forced_Phot.ztf_account_address(),
             ztf_user_password=djangoSettings.ZTFPASS)
 
         log_file_name = ztf.run_ztf_fp(

@@ -87,3 +87,17 @@ class ZTFForcedPhotSubmitTests(SimpleTestCase):
         self.assertIn("ERROR 400: Bad Request.", message)
         self.assertIn("ZTF says: e-mail address is unknown.", message)
         self.assertEqual(os.listdir(os.path.join(self.tmpdir, "forced_phot_out")), [])
+
+
+class ZTFAccountAddressTests(SimpleTestCase):
+    """#434: same rule as settings.DEFAULT_FROM_EMAIL."""
+
+    def test_login_name_gets_gmail(self):
+        self.assertEqual(fp.ztf_account_address("ysepz"), "ysepz@gmail.com")
+
+    def test_full_address_is_used_as_is(self):
+        self.assertEqual(fp.ztf_account_address(" ysepz@ucsc.edu "), "ysepz@ucsc.edu")
+
+    @override_settings(SMTP_LOGIN="someone@example.org")
+    def test_defaults_to_settings(self):
+        self.assertEqual(fp.ztf_account_address(), "someone@example.org")
