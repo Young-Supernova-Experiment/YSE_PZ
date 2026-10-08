@@ -320,6 +320,18 @@ class DeployChecklistFlowTests(TestCase):
             self.assertIn("nothing was submitted", response.json()["msg"])
         self.assertFalse(Log.objects.filter(transient=transient).exists())
 
+    @override_settings(SMTP_LOGIN="ztf.user@example.org")
+    def test_forced_photometry_uses_a_full_smtp_login_as_is(self):
+        """#434: a full address in SMTP_LOGIN must not become ...@example.org@gmail.com."""
+        transient = create_minimal_transient(self.user, name="chk-ztf-fp-addr")
+        fake = mock.MagicMock()
+        fake.return_value.run_ztf_fp.return_value = "ztf_fp_ci.log"
+        with mock.patch("YSE_App.data_ingest.ZTF_Forced_Phot.ZTF_Forced_Phot", fake):
+            self.client.get(reverse("ztf_forced_phot", kwargs={"slug": transient.slug}))
+        kwargs = fake.call_args.kwargs
+        self.assertEqual(kwargs["ztf_user_address"], "ztf.user@example.org")
+        self.assertEqual(kwargs["ztf_email_address"], "ztf.user@example.org")
+
     def test_forced_photometry_failure_names_the_cause(self):
         """#411: the alert carries wget's message (submit error) but not arbitrary exception text."""
         from YSE_App.data_ingest import ZTF_Forced_Phot as fp
