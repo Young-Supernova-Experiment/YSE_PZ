@@ -1325,6 +1325,30 @@ gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u 
 
 <a id="data"></a>
 
+### API token authentication for scripts (optional, per stack) nothing required
+
+Issues [#457](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/457) (token auth) and [#458](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/458) (`request.user` set after Basic auth). `rest_framework.authtoken` was already installed and migrated, so there is no migration and nothing to run for the deploy. Basic and Session auth keep working. Scripts that call the DRF endpoints under `/api/` can move to a token, which skips the password hash that Basic auth runs on every request. The decorated data-upload views in `data_utils.py` (`add_transient` and similar) still use Basic auth only. Per-user API keys behind a flag are tracked separately in [#449](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/449).
+
+Check that the token table exists (run from the checkout of the stack, with that stack's Python):
+
+```
+cd <STACK_CHECKOUT> && <PROD_PYTHON> manage.py showmigrations authtoken
+```
+
+Expected: `[X] 0001_initial`, `[X] 0002_auto_20160226_1747` and `[X] 0003_tokenproxy` (the last only on newer DRF). Create a token for a script's account (placeholders; do not paste the token anywhere shared):
+
+```
+cd <STACK_CHECKOUT> && <PROD_PYTHON> manage.py drf_create_token <SCRIPT_USERNAME>
+```
+
+Expected: `Generated token <TOKEN> for user <SCRIPT_USERNAME>`. Use `drf_create_token -r <SCRIPT_USERNAME>` to rotate it. Check from the script's host:
+
+```
+curl -s -H "Authorization: Token <TOKEN>" "<SITE_URL>/api/transients/?limit=1"
+```
+
+Expected: HTTP 200 JSON with `count` and `results`. A wrong token returns 401 `Invalid token.`. In Python: `requests.get(url, headers={"Authorization": "Token <TOKEN>"})`.
+
 ## 4 · Data checks David
 
 Read-only queries against the production database. Post the output in the Slack thread.
@@ -1414,6 +1438,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-10 informational, nothing required. API token authentication for scripts ([#457](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/457)) and Basic auth now sets `request.user` ([#458](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/458)); optional token setup is in the "API token authentication" subsection.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
