@@ -48,6 +48,7 @@ class ApiListFixture(TestCase):
         audit = audit_fields(cls.user)
         cls.tag = TransientTag.objects.create(name="api-perf-tag", **audit)
         cls.group = Group.objects.create(name="api-perf-group")
+        cls.user.groups.add(cls.group)
         cls.dq = DataQuality.objects.create(name="api-perf-dq", **audit)
         cls.transients = []
         for i in range(6):
