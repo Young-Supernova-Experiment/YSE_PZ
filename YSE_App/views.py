@@ -269,6 +269,48 @@ def run_explorer_query_cached(query, timeout=None, refresh=False):
     return names
 
 
+def query_api_cache_seconds():
+    """TTL of ``/query_api/`` results ([site_settings] QUERY_API_CACHE_SECONDS; 0 = no cache)."""
+    try:
+        return max(0, int(getattr(djangoSettings, 'QUERY_API_CACHE_SECONDS', 300)))
+    except (TypeError, ValueError):
+        return 300
+
+
+def run_explorer_query_rows_cached(query, timeout=None):
+    """
+    ``(column_names, rows)`` of a saved Explorer query, cached per Query id and SQL.
+
+    The ``/query_api/`` variant of :func:`run_explorer_query_cached`: the API
+    returns every column, not just the names. Same explorer connection (and so
+    the same ``EXPLORER_QUERY_MAX_EXECUTION_MS`` cap) and the same
+    ``QueryTimeout`` on a capped run. The key includes a hash of the SQL, so an
+    edited query is never served from the old text's entry. ``timeout`` defaults
+    to :func:`query_api_cache_seconds`; 0 runs the query every time.
+    """
+    import hashlib
+
+    if timeout is None:
+        timeout = query_api_cache_seconds()
+    digest = hashlib.sha1(query.sql.encode('utf-8')).hexdigest()[:16]
+    cache_key = f'explorer_query_rows_{QUERY_CACHE_VERSION}_{query.id}_{digest}'
+    cached = cache.get(cache_key) if timeout else None
+    if cached is not None:
+        return cached
+    cursor = connections['explorer'].cursor()
+    try:
+        with translate_query_timeout(explorer_cap_ms()):
+            cursor.execute(query.sql.replace('%', '%%'), ())
+        field_names = [c[0] for c in cursor.description]
+        rows = [tuple(row) for row in cursor.fetchall()]
+    finally:
+        cursor.close()
+    result = (field_names, rows)
+    if timeout:
+        cache.set(cache_key, result, timeout=timeout)
+    return result
+
+
 def _personal_dashboard_defer_enabled():
     """Progressive first paint: shell HTML then per-section fragments (default on)."""
     return os.environ.get('YSE_PERSONAL_DASHBOARD_DEFER', '1') != '0'

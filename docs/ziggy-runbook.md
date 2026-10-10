@@ -1323,6 +1323,74 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+<a id="cron-locks"></a>
+
+### Cron locking and ingest HTTP timeouts (recommended, per stack) nothing required
+
+From the `perf/ingest-cron` PR ([#472](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/472), [#473](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/473), [#474](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/474)) onward, django_cron takes a per-job **file lock** (`DJANGO_CRON_LOCK_BACKEND = FileLock`). The old cache lock lived in each process's own memory, so two `runcrons` processes never saw each other and a slow job ran twice at once. The ingest crons' HTTP calls now time out (15 s to connect, 300 s per read, 900 s for their own POSTs to `/add_transient/`) and retry a connection error or a 502/503/504 on a GET up to 3 times. No migration, no pip step. With nothing changed, locks go to a per-checkout directory under `/tmp`, which is correct when one Unix user runs `runcrons` for that checkout. Repeat these steps for each stack: `<CHECKOUT>` is `/data/yse_pz/YSE_PZ_experimental`, `/data/yse_pz/YSE_PZ_test` or `/data/yse_pz/YSE_PZ`, and `<CRON_PYTHON>` is the interpreter on its crontab line.
+
+**Step 1: find the crontab lines and the user that runs them.**
+
+```bash
+crontab -l | grep -n runcrons
+whoami
+```
+**Expected:** one or more lines such as `* * * * * cd <CHECKOUT> && <CRON_PYTHON> manage.py runcrons >> <LOG> 2>&1`. Call the user `<CRON_USER>`. If `runcrons` lines for the same checkout are in two users' crontabs, do step 2. Otherwise step 2 is optional.
+
+**Step 2 (needed only when two users run `runcrons` for one checkout): give the locks a shared, writable directory.** It is simpler to move every `runcrons` line for a checkout into one user's crontab. If that is not possible, use a directory owned by a group that both users belong to (`<SHARED_GROUP>`):
+
+```bash
+mkdir -p <LOCK_DIR> && chgrp <SHARED_GROUP> <LOCK_DIR> && chmod 2775 <LOCK_DIR>
+test -w <LOCK_DIR> && echo writable
+```
+Then add this to `<CHECKOUT>/YSE_PZ/settings.ini`:
+```
+[site_settings]
+CRON_LOCKFILE_PATH: <LOCK_DIR>
+```
+Then start each of those crontab lines with `umask 002 &&`, so each lock file is group-writable.
+**Expected:** `writable`, run as each user that runs `runcrons`. django_cron treats a lock file it cannot open as "already running" and skips that job. A directory or lock file one user cannot write would stop that user's jobs from running at all.
+
+**Check (both cases):**
+
+```bash
+cd <CHECKOUT> && <CRON_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.DJANGO_CRON_LOCK_BACKEND); print(settings.DJANGO_CRON_LOCKFILE_PATH)"
+```
+**Expected:** `django_cron.backends.lock.file.FileLock`, then `<LOCK_DIR>` (or `/tmp/yse_pz_cron_locks_<hash>` with no `CRON_LOCKFILE_PATH`). During a pass, `ls <that directory>` shows one `<CronClass>.lock` file per running job.
+
+**Step 3 (recommended): wrap each `runcrons` line in `flock -n`, so a pass that is still running makes the next one exit at once instead of piling up.** Give each crontab line its own lock file, so the per-minute job-runner line is never held up by a slow ingest pass:
+
+```bash
+command -v flock
+```
+**Expected:** `/usr/bin/flock`. Then edit with `crontab -e`, changing each line from:
+```
+* * * * * cd <CHECKOUT> && <CRON_PYTHON> manage.py runcrons >> <LOG> 2>&1
+```
+to:
+```
+* * * * * flock -n <LOCK_DIR>/runcrons-<NAME>.flock -c 'cd <CHECKOUT> && <CRON_PYTHON> manage.py runcrons >> <LOG> 2>&1'
+```
+where `<NAME>` is different on each line (for example `all`, `jobs`, `lsst`).
+
+**Check:**
+
+```bash
+flock -n <LOCK_DIR>/runcrons-test.flock -c 'sleep 20' &
+sleep 1; flock -n <LOCK_DIR>/runcrons-test.flock -c 'echo ran'; echo "exit $?"
+```
+**Expected:** `exit 1` and no `ran`: the second command gave up because the lock was held. After the next minute, `<LOG>` grows as before, and the `django_cron_cronjoblog` rows keep appearing.
+
+**Optional settings** (`[site_settings]` in `<CHECKOUT>/YSE_PZ/settings.ini`; defaults shown; restart Apache after a change, and the crons pick it up on their next pass):
+```
+QUERY_API_CACHE_SECONDS: 300              # /query_api/ result reuse; 0 = run the saved SQL every call
+INGEST_HTTP_CONNECT_TIMEOUT_SECONDS: 15
+INGEST_HTTP_READ_TIMEOUT_SECONDS: 300
+INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS: 900    # the crons' own POSTs to /add_transient/
+INGEST_HTTP_RETRIES: 3
+```
+If a cron log starts showing `ReadTimeout` on `/add_transient/`, raise `INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS`. Before the PR those uploads had no timeout.
+
 <a id="data"></a>
 
 ## 4 · Data checks David
@@ -1414,6 +1482,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-10, optional. Ingest / cron performance ([#471](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/471)-[#476](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/476)): django_cron now uses a per-job file lock, and ingest HTTP calls have timeouts and retries. New subsection [Cron locking and ingest HTTP timeouts](#cron-locks): an optional shared `CRON_LOCKFILE_PATH`, recommended `flock -n` on each `runcrons` crontab line, and optional `QUERY_API_CACHE_SECONDS` / `INGEST_HTTP_*` keys. No migration, no pip step.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
