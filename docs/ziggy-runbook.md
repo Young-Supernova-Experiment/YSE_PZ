@@ -507,6 +507,27 @@ DETAIL_RADIUS_ARCSEC: 5
 
 <a id="merge"></a>
 
+### Login required on every page (#496): verify, rollback switch only if needed
+
+From this change every page needs a login except a public allowlist (`YSE_App/login_required.py`): the landing page and survey pages, login / logout, password reset, the Slack events endpoint, the external-service run callback, the Django admin, everything under `/api/` (DRF does its own Basic / token / session auth) and every view behind the Basic-auth decorator that crons and broker scripts call (`add_transient`, `add_transient_phot`, `add_transient_spec`, `upload_spectrum`, `query_api`, `box_search`, `get_host`, `add_yse_survey_*`, `add_survey_obs`, downloads). Logout is now POST-only (the menu item is a form; a GET of `/logout/` shows a confirmation button). It is on by default and needs nothing on Ziggy.
+
+Check after the experimental deploy (run each from any shell with network access):
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' https://ziggy.ucolick.org/yse_experimental/login/
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://ziggy.ucolick.org/yse_experimental/view_yse_fields/
+```
+
+**Expected** `200`, then `302 https://ziggy.ucolick.org/yse_experimental/login/?next=/yse_experimental/view_yse_fields/`. **Check** the next cron runs that post to YSE-PZ (DECam / QUB / ZTF uploads, `yse_fields_new.bash`) log no new 302 or 403 errors.
+
+**Rollback** only if a page or cron that should be public breaks: in that stack's `YSE_PZ/settings.ini` add, under `[site_settings]`,
+
+```
+LOGIN_REQUIRED_MIDDLEWARE = False
+```
+
+(or set `YSE_LOGIN_REQUIRED_MIDDLEWARE=0` in the Apache / WSGI environment; the env var wins), then `sudo systemctl restart apache2`. **Check** the second curl above now returns `302` from the view's own login decorator, or `200` for a view without one. Views keep their own login decorators either way. Report what broke so the allowlist can be fixed, then remove the line.
+
 ## 2 · Before merging #143 to master David
 
 [PR #143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) promotes `develop` (5da66de, 270 commits, 341 files) to `master` (dc70630). Only David merges it. Nothing deploys automatically from that merge: `deploy.yml` covers `experimental` and `develop` only.
@@ -1414,6 +1435,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v30, informational. Legacy views hardening (#495-#504): every page needs a login except a public allowlist, logout is POST-only, and the legacy TNS submit, follow-up notice, on-call, target-list, finder-chart and image/status views check login (and POST / ownership where they change data). **Nothing required on Ziggy.** Verify with the two curls in "Login required on every page"; rollback switch `LOGIN_REQUIRED_MIDDLEWARE = False` is documented there.
 * 2026-10-10 v28, informational. Deploy Stack now triggers on `push` to `experimental` / `develop` only (a merged PR is a push, so deploys still happen) and all workflows declare least-privilege `permissions`. **Nothing required on Ziggy.** After the first merge following this change, check on GitHub Actions that Deploy Stack fired once on the push.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
