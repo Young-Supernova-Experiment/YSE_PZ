@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action, api_view
 from rest_framework import generics
 from YSE_App.common import custom_viewsets
+from YSE_App.common.lookup_guard import positive_int_or_none
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from rest_framework.reverse import reverse
@@ -514,10 +515,19 @@ class FacilityRequestViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if not (user.is_staff or user.is_superuser):
             qs = qs.filter(Q(submitted_by=user) | Q(allocation__in=allocations_for_user(user, facility_only=False)))
-        for key in ("transient", "allocation", "state", "kind"):
-            value = self.request.query_params.get(key)
+        params = self.request.query_params
+        for key in ("transient", "allocation"):
+            raw = params.get(key)
+            if raw:
+                # an id from the query string: digits only, else no rows (#540)
+                pk = positive_int_or_none(raw)
+                if pk is None:
+                    return qs.none()
+                qs = qs.filter(**{key + "_id": pk})
+        for key in ("state", "kind"):
+            value = params.get(key)
             if value:
-                qs = qs.filter(**{key if key in ("state", "kind") else key + "_id": value})
+                qs = qs.filter(**{key: value})
         return qs.distinct()
 
 
