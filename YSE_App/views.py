@@ -81,8 +81,9 @@ from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 from django.template import RequestContext
+from YSE_App.login_required import login_exempt
 from urllib.parse import unquote
 
 from .common.utilities import date_to_mjd, mjd_to_date
@@ -102,10 +103,22 @@ def index(request):
 #def add_followup(request,obj):
 #        return '<a href="%s">Add followup for %s</a>' % (obj.firm_url,obj.firm_url)
 
+def _safe_next_url(request, next_page):
+    """``next_page`` if it is a URL on this host (#503), else None."""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    if next_page and url_has_allowed_host_and_scheme(
+        url=next_page, allowed_hosts={request.get_host()}, require_https=request.is_secure(),
+    ):
+        return next_page
+    return None
+
+
 # Create your views here.
+@login_exempt
 def auth_login(request):
     logout(request)
-    next_page = request.POST.get('next')
+    next_page = _safe_next_url(request, request.POST.get('next'))
 
     user = None
     if request.POST:
@@ -125,8 +138,15 @@ def auth_login(request):
     else:
         return render(request, 'YSE_App/login.html')
 
+@login_exempt
+@require_http_methods(['GET', 'POST'])
 def auth_logout(request):
-    logout(request)
+    """Log out on POST only (#504); a GET shows a confirmation form."""
+    if request.method == 'POST':
+        logout(request)
+        return render(request, 'YSE_App/index.html')
+    if request.user.is_authenticated:
+        return render(request, 'YSE_App/logout_confirm.html')
     return render(request, 'YSE_App/index.html')
 
 _DASHBOARD_STATUS_SECTIONS = (
@@ -268,6 +288,48 @@ def run_explorer_query_cached(query, timeout=None, refresh=False):
             cursor.close()
         cache.set(cache_key, names, timeout=timeout)
     return names
+
+
+def query_api_cache_seconds():
+    """TTL of ``/query_api/`` results ([site_settings] QUERY_API_CACHE_SECONDS; 0 = no cache)."""
+    try:
+        return max(0, int(getattr(djangoSettings, 'QUERY_API_CACHE_SECONDS', 300)))
+    except (TypeError, ValueError):
+        return 300
+
+
+def run_explorer_query_rows_cached(query, timeout=None):
+    """
+    ``(column_names, rows)`` of a saved Explorer query, cached per Query id and SQL.
+
+    The ``/query_api/`` variant of :func:`run_explorer_query_cached`: the API
+    returns every column, not just the names. Same explorer connection (and so
+    the same ``EXPLORER_QUERY_MAX_EXECUTION_MS`` cap) and the same
+    ``QueryTimeout`` on a capped run. The key includes a hash of the SQL, so an
+    edited query is never served from the old text's entry. ``timeout`` defaults
+    to :func:`query_api_cache_seconds`; 0 runs the query every time.
+    """
+    import hashlib
+
+    if timeout is None:
+        timeout = query_api_cache_seconds()
+    digest = hashlib.sha1(query.sql.encode('utf-8')).hexdigest()[:16]
+    cache_key = f'explorer_query_rows_{QUERY_CACHE_VERSION}_{query.id}_{digest}'
+    cached = cache.get(cache_key) if timeout else None
+    if cached is not None:
+        return cached
+    cursor = connections['explorer'].cursor()
+    try:
+        with translate_query_timeout(explorer_cap_ms()):
+            cursor.execute(query.sql.replace('%', '%%'), ())
+        field_names = [c[0] for c in cursor.description]
+        rows = [tuple(row) for row in cursor.fetchall()]
+    finally:
+        cursor.close()
+    result = (field_names, rows)
+    if timeout:
+        cache.set(cache_key, result, timeout=timeout)
+    return result
 
 
 def _personal_dashboard_defer_enabled():
@@ -1268,8 +1330,10 @@ def yse_observing_night(request, obs_date):
     return render(request, 'YSE_App/yse_observing_night.html', context)
 
 
+@login_required
 def download_target_list(request, telescope, obs_date):
     from YSE_App.services.followup_requests import format_comments, requests_prefetch
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1279,7 +1343,9 @@ def download_target_list(request, telescope, obs_date):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
+    # only the follow-ups this user may see (#499)
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related('transient').prefetch_related(requests_prefetch())
 
     location = EarthLocation.from_geodetic(
@@ -1319,7 +1385,9 @@ def download_target_list(request, telescope, obs_date):
 
     return response
 
+@login_required
 def download_targets_and_finders(request, telescope, obs_date):
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1329,7 +1397,9 @@ def download_targets_and_finders(request, telescope, obs_date):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
+    # only the follow-ups this user may see (#499)
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related('transient')
 
     location = EarthLocation.from_geodetic(
@@ -1870,7 +1940,9 @@ def transient_detail(request, slug):
             and '_cand' in transient_obj.name
             and 'DECAT' in [t.name for t in assigned_transient_tags]
         ):
-            submit_to_tns = True
+            from YSE_App.util.submit_to_tns import user_may_submit_legacy_tns
+
+            submit_to_tns = user_may_submit_legacy_tns(request.user)
         else:
             submit_to_tns = False
         context['submit_to_tns'] = submit_to_tns

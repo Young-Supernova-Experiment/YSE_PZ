@@ -6,6 +6,8 @@ from django.forms import ModelForm
 from django.views.generic import FormView, DeleteView
 from astropy.time import Time
 from django.http import JsonResponse
+from django.contrib.auth.decorators import login_required
+from django.utils.decorators import method_decorator
 
 # form for adjusting the FOV/pointing
 class CoordForm(forms.ModelForm):
@@ -26,6 +28,7 @@ class YSEMoveFieldsForm(ModelForm):
         fields = ['field_id',
                   'targeted_galaxies']
 
+@method_decorator(login_required, name='dispatch')
 class MoveYSEFormView(FormView):
     form_class = YSEMoveFieldsForm
     template_name = 'YSE_App/form_snippets/YSE_move_field_form.html'

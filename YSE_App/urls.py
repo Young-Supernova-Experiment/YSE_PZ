@@ -390,6 +390,10 @@ urlpatterns = [
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
+    # Logout is POST-only (#504): send the stock auth and DRF logout URLs to the
+    # same view, ahead of the includes that would otherwise log out on GET.
+    path('accounts/logout/', views.auth_logout),
+    path('api-auth/logout/', views.auth_logout),
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),
     #url(r'^silk/', include('silk.urls', namespace='silk')),

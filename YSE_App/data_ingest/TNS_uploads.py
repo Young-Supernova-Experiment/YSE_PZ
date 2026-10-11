@@ -29,6 +29,8 @@ from astropy.time import Time
 import coreapi
 from urllib.parse import quote,unquote
 from requests.auth import HTTPBasicAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 import struct
 import threading
 import queue
@@ -1245,8 +1247,9 @@ class processTNS:
 
         url = '%s'%self.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
-                              auth=HTTPBasicAuth(self.dblogin,self.dbpassword))
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
+                              auth=HTTPBasicAuth(self.dblogin,self.dbpassword),
+                              timeout=upload_timeout())
 
             if r.status_code >= 400:
                 print(self._format_add_transient_error(r))
@@ -1285,7 +1288,7 @@ def fetch(url):
     count = 0
     while not urlresponse and count < 3:
         try:
-            urlresponse = urllib.request.urlopen(url).read()
+            urlresponse = urllib.request.urlopen(url, timeout=default_timeout()[1]).read()
             return url, urlresponse
         except Exception as e:
             pass
@@ -1350,7 +1353,7 @@ def search(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # construct a dictionary of api key data and search obj data
     search_data={'api_key':api_key, 'data':json.dumps(json_file)}
     # search obj using request module
-    response=requests.post(search_url, headers=headers, data=search_data)
+    response=ingest_http.post(search_url, headers=headers, data=search_data)
     # return response
     return response
   except Exception as e:
@@ -1368,7 +1371,7 @@ def get(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # construct a dictionary of api key data and get obj data
     get_data={'api_key':api_key, 'data':json.dumps(json_file)}
     # get obj using request module
-    response=requests.post(get_url, headers=headers, data=get_data)
+    response=ingest_http.post(get_url, headers=headers, data=get_data)
     # return response
     return response
   except Exception as e:
@@ -1381,7 +1384,7 @@ def get_file(url,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # headers
     headers={'User-Agent': tns_marker_user_agent(tns_bot_id, tns_bot_name, marker_type)}
     # downloading file using request module
-    response=requests.post(url, headers=headers, data={'api_key':api_key}, stream=True)
+    response=ingest_http.post(url, headers=headers, data={'api_key':api_key}, stream=True)
     return response
   except Exception as e:
     print ('Error message : \n'+str(e))

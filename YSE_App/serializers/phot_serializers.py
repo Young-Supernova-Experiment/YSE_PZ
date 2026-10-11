@@ -1,15 +1,16 @@
 from rest_framework import serializers
 from YSE_App.models import *
+from .related_fields import IdHyperlinkedRelatedField
 from django.contrib.auth.models import User, Group
 from rest_framework.exceptions import PermissionDenied
 from .auth_helpers import NotAuthorizedToAccessParent
 
 class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
     transient = serializers.HyperlinkedRelatedField(queryset=Transient.objects.all(), view_name='transient-detail')
-    instrument = serializers.HyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
+    instrument = IdHyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
 
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
     followup = serializers.HyperlinkedRelatedField(queryset=TransientFollowup.objects.all(), allow_null=True, required=False, view_name='transientfollowup-detail')
 
     groups = serializers.HyperlinkedRelatedField(queryset=Group.objects.all(), many=True, view_name='group-detail')
@@ -100,8 +101,8 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class HostPhotometrySerializer(serializers.HyperlinkedModelSerializer):
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), view_name='host-detail', lookup_field="id")
-    instrument = serializers.HyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), view_name='host-detail', lookup_field="id")
+    instrument = IdHyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
 
     followup = serializers.HyperlinkedRelatedField(queryset=HostFollowup.objects.all(), allow_null=True, required=False, view_name='hostfollowup-detail')
@@ -193,8 +194,8 @@ class HostPhotometrySerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
-    photometry = serializers.HyperlinkedRelatedField(queryset=TransientPhotometry.objects.all(), view_name='transientphotometry-detail', lookup_field="id")
-    band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
+    photometry = IdHyperlinkedRelatedField(queryset=TransientPhotometry.objects.all(), view_name='transientphotometry-detail', lookup_field="id")
+    band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
 
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
     data_quality = serializers.HyperlinkedRelatedField(queryset=DataQuality.objects.all(), many=True, view_name='dataquality-detail')
@@ -271,8 +272,8 @@ class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class HostPhotDataSerializer(serializers.HyperlinkedModelSerializer):
-    photometry = serializers.HyperlinkedRelatedField(queryset=HostPhotometry.objects.all(), view_name='hostphotometry-detail', lookup_field="id")
-    band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
+    photometry = IdHyperlinkedRelatedField(queryset=HostPhotometry.objects.all(), view_name='hostphotometry-detail', lookup_field="id")
+    band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
 
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
     data_quality = serializers.HyperlinkedRelatedField(queryset=DataQuality.objects.all(), many=True, view_name='dataquality-detail')
