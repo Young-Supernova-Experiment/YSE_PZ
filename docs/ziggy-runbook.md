@@ -1364,6 +1364,19 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+### IERS table refresh (optional cron, per stack) nothing required
+
+Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
+
+Copy
+
+```
+# check: prints the newest predicted MJD in the table (expected: an MJD roughly 100+ days after today)
+<CRON_PYTHON> -c "from astropy.utils import iers; iers.conf.auto_download=True; t=iers.IERS_Auto.open(); print(t['MJD'].max())"
+# crontab (weekly, Sunday 04:15), as the Unix user that owns the astropy cache
+15 4 * * 0 <CRON_PYTHON> -c "from astropy.utils import iers; iers.conf.auto_download=True; iers.IERS_Auto.open()" >> <CRON_LOG_DIR>/iers_refresh.log 2>&1
+```
+
 <a id="cron-locks"></a>
 
 ### Cron locking and ingest HTTP timeouts (recommended, per stack) nothing required
@@ -1546,6 +1559,8 @@ Everything still waiting on David, with its source. Rows change status here as t
 <a id="changelog"></a>
 
 ## 6 · Changelog
+
+* 2026-10-11 v31, optional. IERS refresh cron ([#466](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/466)): web workers no longer download IERS tables; new "IERS table refresh" subsection (weekly cron plus a check). **Nothing required on Ziggy.**
 
 * 2026-10-11 v30, informational. Legacy views hardening (#495-#504): every page needs a login except a public allowlist, logout is POST-only, and the legacy TNS submit, follow-up notice, on-call, target-list, finder-chart and image/status views check login (and POST / ownership where they change data). **Nothing required on Ziggy.** Verify with the two curls in "Login required on every page"; rollback switch `LOGIN_REQUIRED_MIDDLEWARE = False` is documented there.
 * 2026-10-10 v29, informational. Docker compose hardening (localhost-only published ports, Redis password required when the optional Redis service starts, pinned MySQL / nginx / Redis image tags). The compose files are for local development and CI only; Ziggy does not use them: **nothing required on Ziggy**.

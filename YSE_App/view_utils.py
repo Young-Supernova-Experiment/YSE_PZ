@@ -1,10 +1,5 @@
 # utils for generating webpage views
 
-import multiprocessing as mp
-try: mp.set_start_method('fork')
-except (RuntimeError, ValueError): pass  # already set, or platform without fork
-from multiprocessing import Process, Queue
-
 import django
 from django.conf import settings as djangoSettings
 from django.core.cache import cache
@@ -19,6 +14,7 @@ from django.views.generic import TemplateView
 import calendar
 import datetime
 import logging
+import threading
 import time
 
 from .models import *
@@ -88,7 +84,8 @@ def _load_astropy_coords():
     from astropy.utils import iers
     import astropy.units as u
     from astroplan import Observer
-    iers.conf.auto_download = True
+    # Web workers never wait on an IERS download (#466); refresh by cron instead.
+    iers.conf.auto_download = False
     _ASTROPY_COORDS_LOADED = True
 
 
@@ -363,10 +360,6 @@ def _cached_plot_http_response(cache_key, html):
         
         
 
-# Rise/set times come back from a child Process through this queue. It used to be
-# named Q, which shadowed django.db.models.Q for the whole module, so every Q(...)
-# filter here raised "'Queue' object is not callable" (view_yse_fields, #414).
-_RISE_SET_QUEUE = Queue()
 
 
 
@@ -2092,104 +2085,32 @@ def spectrumplotsingle(request, transient_id, spec_id):
 
     return HttpResponse(g.replace('width: 90%','width: 100%'))
 
-def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
-    _load_astropy_coords()
-    tstart = time.time()
+def _classical_night_rise_set(request_transient_id, obs_id):
+    """(rise, set) strings for a transient on a classical night, solved inline (#463).
 
-    #transient = Transient.objects.filter(id=transient_id)[0]
-    #coords = transient.CoordString()
+    The old views forked a Process per request and read the answer from one
+    module-global Queue with no timeout, so concurrent requests could receive each
+    other's times. This is a plain function call, cached per (telescope, night,
+    coordinates), so there is nothing shared between requests.
+    """
+    from YSE_App.services.night_astro import target_rise_set
 
-    #obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
+    transient = Transient.objects.filter(id=request_transient_id)[0]
+    coords = transient.CoordString()
+    obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
+    return target_rise_set(obsnight.resource.telescope, obsnight.obs_date, coords)
 
-    tme = Time(str(obs_date).split()[0])
-    sc = SkyCoord('%s %s'%(coords[0],coords[1]),unit=(u.hourangle,u.deg))
-
-    location = EarthLocation.from_geodetic(
-        longitude*u.deg,latitude*u.deg,
-        elevation*u.m)
-    tel = Observer(location=location, timezone="UTC")
-
-    target_set_time = tel.target_set_time(tme,sc,horizon=18*u.deg,which="previous")
-
-    if target_set_time:
-        try: settime = target_set_time.isot.split('T')[-1]
-        except (AttributeError, ValueError): settime = None
-    else: 
-        settime = None
-
-    print('set time took %s'%(time.time()-tstart))
-    _RISE_SET_QUEUE.put(settime)
-    #setdict['set_time'] = settime
-    
-def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
-    _load_astropy_coords()
-    tstart = time.time()
-    #transient = Transient.objects.filter(id=transient_id)[0]
-    #coords = transient.CoordString()
-
-    #obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
-
-    tme = Time(str(obs_date).split()[0])
-    sc = SkyCoord('%s %s'%(coords[0],coords[1]),unit=(u.hourangle,u.deg))
-
-    location = EarthLocation.from_geodetic(
-        longitude*u.deg,latitude*u.deg,
-        elevation*u.m)
-    tel = Observer(location=location, timezone="UTC")
-
-    target_rise_time = tel.target_rise_time(
-        tme,sc,horizon=18*u.deg,which="previous")
-
-    if target_rise_time:
-        try: risetime = target_rise_time.isot.split('T')[-1]
-        except (AttributeError, ValueError): risetime = None
-    else: 
-        risetime = None
-
-    print('rise time took %s'%(time.time()-tstart))
-    _RISE_SET_QUEUE.put(risetime)
 
 @login_required
 def rise_time(request,transient_id,obs_id):
-        
-    risedict = {'rise_time':''}
-    transient = Transient.objects.filter(id=transient_id)[0]
-    coords = transient.CoordString()
-    obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
-    obs_date = obsnight.obs_date
-    longitude = obsnight.resource.telescope.longitude
-    latitude = obsnight.resource.telescope.latitude
-    elevation = obsnight.resource.telescope.elevation
-    
-    action = Process(target=rise_func,args=(coords,obs_date,longitude,latitude,elevation,risedict))
-    action.start()
-    risedict['rise_time'] = _RISE_SET_QUEUE.get()
-    action.join(timeout=1)
-    action.terminate()
+    return JsonResponse({'rise_time': _classical_night_rise_set(transient_id, obs_id)[0]})
 
-    return JsonResponse(risedict)
 
 @login_required
 def set_time(request,transient_id,obs_id):
+    return JsonResponse({'set_time': _classical_night_rise_set(transient_id, obs_id)[1]})
 
-    setdict = {'set_time':''}
-    transient = Transient.objects.filter(id=transient_id)[0]
-    coords = transient.CoordString()
-    obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
-    obs_date = obsnight.obs_date
-    longitude = obsnight.resource.telescope.longitude
-    latitude = obsnight.resource.telescope.latitude
-    elevation = obsnight.resource.telescope.elevation
-    
-    action = Process(target=set_func,args=(coords,obs_date,longitude,latitude,elevation,setdict))
-    action.start()
-    setdict['set_time'] = _RISE_SET_QUEUE.get()
-    action.join(timeout=1.0)
-    action.terminate()
 
-    return JsonResponse(setdict)
-
-        
 @login_required
 def moon_angle(request,transient_id,obs_id):
     _load_astropy_coords()
@@ -2300,27 +2221,44 @@ ARCHIVE_STATUS_CACHE_SECONDS = 3600
 ARCHIVE_STATUS_FAILURE_CACHE_SECONDS = 60
 
 
+# One bounded pool for every archive lookup. A lookup that outlives its timeout
+# keeps its worker until MAST answers, but the pool caps how many can pile up
+# (a fresh unbounded thread per request, shut down with wait=False, let them
+# accumulate when an archive was slow; #467).
+_ARCHIVE_STATUS_POOL = None
+_ARCHIVE_STATUS_POOL_LOCK = threading.Lock()
+ARCHIVE_STATUS_MAX_WORKERS = int(os.environ.get('YSE_ARCHIVE_STATUS_WORKERS', '8'))
+
+
+def _archive_status_pool():
+    global _ARCHIVE_STATUS_POOL
+    if _ARCHIVE_STATUS_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        with _ARCHIVE_STATUS_POOL_LOCK:
+            if _ARCHIVE_STATUS_POOL is None:
+                _ARCHIVE_STATUS_POOL = ThreadPoolExecutor(
+                    max_workers=ARCHIVE_STATUS_MAX_WORKERS, thread_name_prefix='archive-status')
+    return _ARCHIVE_STATUS_POOL
+
+
 def _archive_status_with_timeout(work, *, timeout_seconds=None):
     """Run a blocking archive lookup with a wall-clock timeout.
 
-    Returns ``None`` when the lookup does not finish in time. The worker
-    thread is left to finish on its own: ``ThreadPoolExecutor`` used as a
-    context manager would ``shutdown(wait=True)`` and block the response
-    until MAST answered, which made the timeout cosmetic.
+    Returns ``None`` when the lookup does not finish in time. The caller does not
+    wait for a lookup that is already running (a ``ThreadPoolExecutor`` used as a
+    context manager would ``shutdown(wait=True)`` and make the timeout cosmetic);
+    one still queued behind busy workers is cancelled.
     """
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    from concurrent.futures import TimeoutError as FuturesTimeout
 
     if timeout_seconds is None:
         timeout_seconds = ARCHIVE_STATUS_TIMEOUT_SECONDS
-    pool = ThreadPoolExecutor(max_workers=1)
+    future = _archive_status_pool().submit(work)
     try:
-        future = pool.submit(work)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except FuturesTimeout:
-            return None
-    finally:
-        pool.shutdown(wait=False)
+        return future.result(timeout=timeout_seconds)
+    except FuturesTimeout:
+        future.cancel()
+        return None
 
 
 def _record_archive_flag(transient_id, field, has_data):
