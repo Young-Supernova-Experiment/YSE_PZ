@@ -251,6 +251,23 @@ class LogViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         qs = Log.objects.all().prefetch_related("groups")
         return filter_transient_comments_for_user(qs, self.request.user)
 
+    def _owner_or_staff(self, instance):
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser or instance.created_by_id == user.id):
+            raise PermissionDenied({"message": "Only the author or staff may change this comment."})
+
+    def perform_update(self, serializer):
+        self._owner_or_staff(serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._owner_or_staff(serializer.instance)
+        super().perform_partial_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._owner_or_staff(instance)
+        instance.delete()
+
 ### `Observation Task` ViewSets ###
 class TransientObservationTaskViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = TransientObservationTask.objects.all()
@@ -355,15 +372,53 @@ class ProfileViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
 ### `UserQuery` ViewSets ###
 class UserQueryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Saved queries of the requesting user (staff see all); ``user`` is set from the request."""
     queryset = UserQuery.objects.all()
     serializer_class = UserQuerySerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = UserQuery.objects.all()
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(user=user)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(user=user, created_by=user, modified_by=user)
+
 ### `UserTelescopeToFollow` ViewSets ###
 class UserTelescopeToFollowViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Followed telescopes of the requesting user's profile (staff see all)."""
     queryset = UserTelescopeToFollow.objects.all()
     serializer_class = UserTelescopeToFollowSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = UserTelescopeToFollow.objects.all()
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(profile__user=user)
+
+    def _check_profile(self, serializer):
+        user = self.request.user
+        profile = serializer.validated_data.get('profile')
+        if profile is not None and profile.user_id != user.id and not (user.is_staff or user.is_superuser):
+            raise PermissionDenied({"message": "You may only change your own followed telescopes."})
+
+    def perform_create(self, serializer):
+        self._check_profile(serializer)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._check_profile(serializer)
+        super().perform_update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._check_profile(serializer)
+        super().perform_partial_update(serializer)
 
 
 ### `Spectra` ViewSets ###

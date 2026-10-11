@@ -1,6 +1,6 @@
 from django.db.models.query import EmptyQuerySet
 from django.shortcuts import render, get_object_or_404
-from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound
+from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound, HttpResponseForbidden
 from django.conf import settings as djangoSettings
 from django.template import loader
 from django.views import generic
@@ -80,6 +80,7 @@ from .services.night_astro import calendar_sun_times, twilight_times
 from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
+from YSE_App.services.visibility import filter_transients_by_user_access
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_http_methods
 from django.template import RequestContext
@@ -625,6 +626,7 @@ def transient_summary(request,status_or_query_name,
             query = query[0]
             transients = getattr(yse_python_queries,query.python_query)()
 
+    transients = filter_transients_by_user_access(request.user, transients)  # collaboration visibility (#547)
     if 'sort' in request.GET.keys():
         if request.GET['sort'] in ('last_obs_date', '-last_obs_date', 'last_mag', '-last_mag'):
             # Sort-only: indexed TransientPhotStat columns, not a subquery or a
@@ -2331,6 +2333,13 @@ def upload_spectrum(request):
                 filter(instrument=form.data['instrument']).\
                 filter(obs_group=form.data['obs_group']).\
                 filter(obs_date=form.data['obs_date'])
+
+            # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
+            from YSE_App.common.authz import upload_denial
+            denial = upload_denial(
+                request.user, form.cleaned_data.get('permissions') or [], list(tspec[:1]))
+            if denial:
+                return HttpResponseForbidden(denial)
 
             specdict = {'transient':transient,'ra':form.data['ra'],
                         'dec':form.data['dec'],'obs_date':form.data['obs_date'],

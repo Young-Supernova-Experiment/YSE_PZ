@@ -552,14 +552,64 @@ DASHBOARD_QUERY_BACKUP_DIR = config.get(
     fallback=os.path.join(BASE_DIR, 'backups', 'saved_queries'),
 )
 
+# Authorization hardening (#520-#527). Each flag defaults to the previous
+# behaviour; docs/ziggy-runbook.md has the steps to verify and turn them on.
+# Each reads an env var (1/0) first, then [site_settings] in settings.ini.
+def _authz_flag(env_name, ini_name):
+    raw = os.environ.get(env_name, '').strip()
+    if raw:
+        return raw == '1'
+    return config.getboolean('site_settings', ini_name, fallback=False)
+
+
+# Legacy REST viewsets: unsafe methods need staff, superuser or the model
+# permission (the API_WRITERS_GROUP group holds them; migration 0032).
+API_WRITE_PERMISSIONS_ENFORCED = _authz_flag('YSE_API_WRITE_PERMISSIONS_ENFORCED', 'API_WRITE_PERMISSIONS_ENFORCED')
+# add_transient / add_transient_phot / add_transient_spec / upload_spectrum:
+# group membership and ownership checks for non-service accounts.
+UPLOAD_GROUP_CHECKS_ENFORCED = _authz_flag('YSE_UPLOAD_GROUP_CHECKS_ENFORCED', 'UPLOAD_GROUP_CHECKS_ENFORCED')
+# Service group for crons and scripts that write through the API or the upload endpoints.
+API_WRITERS_GROUP = config.get('site_settings', 'API_WRITERS_GROUP', fallback='api_writers')
+# Accounts migration 0032 adds to API_WRITERS_GROUP when they exist: the
+# [main] dblogin account the ingest crons use (a username, not a secret).
+API_SERVICE_USERNAMES = [
+    name for name in (config.get('main', 'dblogin', fallback='').strip(),)
+    if name and not name.startswith('<')
+]
+# SQL Explorer: superusers plus EXPLORER_ACCESS_GROUP when restricted; all
+# staff otherwise (see issue #102). Dashboard SQL is post-filtered separately.
+EXPLORER_RESTRICTED_ACCESS = _authz_flag('YSE_EXPLORER_RESTRICTED_ACCESS', 'EXPLORER_RESTRICTED_ACCESS')
+EXPLORER_ACCESS_GROUP = config.get('site_settings', 'EXPLORER_ACCESS_GROUP', fallback='explorer_users')
+
 EXPLORER_CONNECTIONS = { 'Explorer': 'explorer' }
 EXPLORER_DEFAULT_CONNECTION = 'explorer'
-# SQL Explorer: staff only (see issue #102). Dashboard SQL is post-filtered separately.
-EXPLORER_PERMISSION_VIEW = lambda request: request.user.is_authenticated and (
-    request.user.is_staff or request.user.is_superuser
-)
-EXPLORER_PERMISSION_CHANGE = lambda request: request.user.is_authenticated and (
-    request.user.is_staff or request.user.is_superuser
+
+
+def _explorer_permission(request):
+    from YSE_App.common.authz import explorer_access_allowed
+    return explorer_access_allowed(request.user)
+
+
+EXPLORER_PERMISSION_VIEW = _explorer_permission
+EXPLORER_PERMISSION_CHANGE = _explorer_permission
+# Tables hidden from the Explorer schema browser (django-sql-explorer 2.3).
+# This only affects the schema listing; what queries can read is set by the
+# Explorer MySQL user's grants (runbook).
+EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
+    'auth_',
+    'authtoken_',
+    'axes_',
+    'auditlog_',
+    'django_session',
+    'django_admin_log',
+    'django_content_type',
+    'contenttypes_',
+    'sessions_',
+    'admin_',
+    'YSE_App_encryptedcredential',
+    'YSE_App_profile',
+    'YSE_App_principalinvestigator',
+    'YSE_App_externalservicerun',
 )
 
 REST_FRAMEWORK = {
