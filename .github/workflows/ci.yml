@@ -91,6 +91,8 @@ jobs:
           # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
           docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
           docker compose restart web
+          # axes' own tables in the CI database (the runbook's `migrate axes` step).
+          docker exec ysepz_web_container python3 manage.py migrate axes --noinput
           docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
 
       - name: Wait for MySQL
