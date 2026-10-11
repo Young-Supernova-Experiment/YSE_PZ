@@ -55,7 +55,7 @@ class YSE(CronJobBase):
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
     code = 'YSE_App.data_ingest.SDSS_Photo_Z.YSE'
 
-    def do(self,user='awe2',password='StandardPassword',search=1,path_to_model='YSE_DNN_photoZ_model_315.hdf5',debug=True):
+    def do(self,user=None,password=None,search=1,path_to_model='YSE_DNN_photoZ_model_315.hdf5',debug=True):
         """
         Predicts photometric redshifts from RA and DEC points in SDSS
 
@@ -107,6 +107,11 @@ class YSE(CronJobBase):
             DF_pre['RA'] = RA
             DF_pre['DEC'] = DEC
             
+            from django.conf import settings as _dj_settings
+            user = user or _dj_settings.SCISERVER_USER
+            password = password or _dj_settings.SCISERVER_PASSWORD
+            if not user or not password:
+                raise RuntimeError('SciServer credentials are not configured: set sciserveruser and sciserverpass under [main] in settings.ini (or SCISERVER_USER and SCISERVER_PASSWORD).')
             SciServer.Authentication.login(user,password)
             
             try:

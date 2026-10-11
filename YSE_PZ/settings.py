@@ -253,7 +253,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': config.get('database', 'DATABASE_NAME'),
         'USER': config.get('database', 'EXPLORER_USER'),
-        'PASSWORD': config.get('database', 'EXPLORER_PASSWORD'),
+        'PASSWORD': os.environ.get('YSE_EXPLORER_PASSWORD') or config.get('database', 'EXPLORER_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
         'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
@@ -262,7 +262,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': config.get('database', 'DATABASE_NAME'),
         'USER': config.get('database', 'DATABASE_USER'),
-        'PASSWORD': config.get('database', 'DATABASE_PASSWORD'),
+        'PASSWORD': os.environ.get('YSE_DATABASE_PASSWORD') or config.get('database', 'DATABASE_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
         'OPTIONS': {'ssl': {'ssl_disabled': _db_ssl_disabled}},
@@ -405,7 +405,13 @@ SMTP_HOST = config.get('SMTP_provider', 'SMTP_HOST')
 SMTP_PORT = config.get('SMTP_provider', 'SMTP_PORT')
 LCOGTUSER = config.get('main', 'lcogtuser')
 LCOGTPASS = config.get('main', 'lcogtpass')
-ZTFPASS = config.get('ztf','ztfforcedphotpass')
+# Required only where ZTF forced photometry runs (see below); a missing value does not stop the web stack.
+ZTFPASS = os.environ.get('ZTF_FORCED_PHOT_PASS') or config.get('ztf', 'ztfforcedphotpass', fallback='')
+# SciServer account for the photo-z crons; required only when those crons run.
+SCISERVER_USER = os.environ.get('SCISERVER_USER') or config.get('main', 'sciserveruser', fallback='')
+SCISERVER_PASSWORD = os.environ.get('SCISERVER_PASSWORD') or config.get('main', 'sciserverpass', fallback='')
+# Optional CA bundle path for the Gemini ODB; empty uses the system trust store.
+GEMINI_CA_BUNDLE = os.environ.get('GEMINI_CA_BUNDLE') or config.get('main', 'gemini_ca_bundle', fallback='')
 KEPLER_API_ENDPOINT = "http://api.keplerscience.org/is-k2-observing"
 TNSUSER = config.get('main','tns_bot_name')
 TNSID = config.get('main','tns_bot_id')

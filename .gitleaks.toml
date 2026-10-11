@@ -1,0 +1,15 @@
+# gitleaks configuration: the default rules plus an allowlist for known public values.
+title = "YSE_PZ gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known public values and placeholders"
+regexes = [
+  # The generic ZTF/IPAC web service login published in the ZTF forced-photometry documentation
+  '''dontgocrazy!''',
+  # Placeholders in template files
+  '''<[A-Za-z][A-Za-z0-9 _/.,:-]*(pwd|password|key|token|secret)[A-Za-z0-9 _/.,:-]*>''',
+  '''<(NEW|PROD|CRON)_[A-Z_]+>''',
+]

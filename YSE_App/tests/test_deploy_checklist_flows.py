@@ -333,7 +333,7 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(kwargs["ztf_email_address"], "ztf.user@example.org")
 
     def test_forced_photometry_failure_names_the_cause(self):
-        """#411: the alert carries wget's message (submit error) but not arbitrary exception text."""
+        """#411: the alert carries the ZTF submit error text but not arbitrary exception text."""
         from YSE_App.data_ingest import ZTF_Forced_Phot as fp
 
         transient = create_minimal_transient(self.user, name="chk-ztf-fp-cause")

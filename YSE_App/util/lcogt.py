@@ -2,6 +2,7 @@
 # v1.01 2019-09-20: updated to LCO API v3
 # v1.02 2021-02-02: Modified to run on command line with examples
 
+import subprocess
 import requests, warnings, os, stat, json, shutil, sys, copy
 from astropy.time import Time, TimeDelta
 from astropy.io import ascii, fits
@@ -393,8 +394,8 @@ class lcogt(object):
 
             # funpack - requires cfitsio
             if not os.path.exists(fullfilename.strip('.fz')) and funpack:
-                cmd = 'funpack {file}'
-                os.system(cmd.format(file=fullfilename))
+                # argument list, no shell
+                subprocess.run(['funpack', fullfilename], check=False)
             if os.path.exists(fullfilename) and funpack:
                 os.remove(fullfilename)
 
