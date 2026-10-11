@@ -55,31 +55,28 @@ class CronFileLockTests(SimpleTestCase):
         self.assertTrue(settings.DJANGO_CRON_LOCKFILE_PATH)
 
     def test_second_holder_is_refused_until_release(self):
-        # django's file lock may be a per-process (POSIX) lock on some versions, so the
-        # second holder is a separate interpreter, exactly like a second runcrons process.
-        import subprocess
-        import sys
+        # The second holder is a separate process, exactly like a second runcrons.
+        import multiprocessing
 
         from YSE_App.common.cron_lock import FileLock
 
-        probe = (
-            'import sys\n'
-            'from django.conf import settings\n'
-            'settings.configure(DJANGO_CRON_LOCKFILE_PATH=sys.argv[1])\n'
-            'from YSE_App.common.cron_lock import FileLock\n'
-            'class _FakeCron:\n'
-            "    code = 'ingest_cron_perf.fake'\n"
-            'lock = FileLock(_FakeCron, True)\n'
-            'got = lock.lock()\n'
-            "print('LOCKED' if got else 'REFUSED')\n"
-            'if got:\n'
-            '    lock.release()\n'
-        )
+        def _probe(lock_dir, queue):
+            with override_settings(DJANGO_CRON_LOCKFILE_PATH=lock_dir):
+                lock = FileLock(_FakeCron, True)
+                got = lock.lock()
+                queue.put('LOCKED' if got else 'REFUSED')
+                if got:
+                    lock.release()
 
         def second_holder(lock_dir):
-            out = subprocess.run([sys.executable, '-c', probe, lock_dir], capture_output=True,
-                                 text=True, timeout=60, cwd=str(settings.BASE_DIR))
-            return out.stdout.strip() or out.stderr.strip()[-500:]
+            ctx = multiprocessing.get_context('fork')
+            queue = ctx.Queue()
+            proc = ctx.Process(target=_probe, args=(lock_dir, queue))
+            proc.start()
+            try:
+                return queue.get(timeout=60)
+            finally:
+                proc.join(60)
 
         with tempfile.TemporaryDirectory() as tmp:
             lock_dir = os.path.join(tmp, 'locks')
