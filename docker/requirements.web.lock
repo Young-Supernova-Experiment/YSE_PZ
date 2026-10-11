@@ -2,6 +2,10 @@
 # Regenerate: docker exec ysepz_web_container pip3 freeze > docker/requirements.web.lock
 # Hand-edited for the Django 3.2 target (#133 is not scheduled): Django 4.0 -> 3.2.25 and
 # astrorapid dropped. Regenerate the freeze once the GHCR image is rebuilt on these pins.
+# Also hand-edited for #539 (same pins as requirements.txt): Pillow, cryptography, urllib3,
+# certifi, djangorestframework, sqlparse, lxml, Jinja2, MarkupSafe, tornado, Werkzeug,
+# gunicorn. CI installs these into the pulled image (ci.yml) until the image is rebuilt.
+# requests 2.25.1 / idna 2.6 stay as frozen (requests caps idna below 3).
 absl-py==2.1.0
 alerce==1.0.1
 antares-client==1.2.0
@@ -23,14 +27,14 @@ bs4==0.0.1
 bson==0.5.10
 cachetools==4.2.2
 casjobs==0.0.2
-certifi==2020.12.5
+certifi==2026.7.22
 cffi==1.14.5
 chardet==3.0.4
 click==8.0.0
 confluent-kafka==1.7.0
 coreapi==2.3.3
 coreschema==0.0.4
-cryptography==3.4.7
+cryptography==45.0.7
 cycler==0.10.0
 Cython==0.29.23
 DateTime==4.3
@@ -49,7 +53,7 @@ django-rest-framework==0.1.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
-djangorestframework==3.13.1
+djangorestframework==3.15.1
 dustmaps==1.0.8
 extinction==0.4.5
 flatbuffers==24.3.25
@@ -58,7 +62,7 @@ google-auth==2.30.0
 google-auth-oauthlib==1.0.0
 google-pasta==0.2.0
 grpcio==1.64.1
-gunicorn==20.1.0
+gunicorn==23.0.0
 h5py==3.1.0
 healpy==1.14.0
 html5lib==1.0.1
@@ -75,7 +79,7 @@ ipython-genutils==0.2.0
 itypes==1.1.0
 jedi==0.18.0
 jeepney==0.6.0
-Jinja2==2.10
+Jinja2==3.1.6
 joblib==1.0.1
 joypy==0.2.5
 jsonfield==3.1.0
@@ -87,9 +91,9 @@ keras-tcn==3.4.0
 keyring==11.0.0
 kiwisolver==1.3.1
 libclang==18.1.1
-lxml==4.6.3
+lxml==6.1.3
 Markdown==3.3.6
-MarkupSafe==1.0
+MarkupSafe==2.1.5
 marshmallow==3.12.1
 marshmallow-jsonapi==0.24.0
 mastcasjobs==0.0.6
@@ -110,7 +114,7 @@ pbr==5.9.0
 pexpect==4.8.0
 photutils==1.1.0
 pickleshare==0.7.5
-Pillow==8.2.0
+Pillow==10.4.0
 pluggy==0.13.1
 progressbar2==3.53.1
 prompt-toolkit==3.0.18
@@ -142,7 +146,7 @@ sfdmap==0.1.1
 six==1.15.0
 sklearn==0.0
 sncosmo==2.5.0
-sqlparse==0.4.2
+sqlparse==0.5.5
 tendo==0.2.15
 tensorboard==2.13.0
 tensorboard-data-server==0.7.2
@@ -154,16 +158,16 @@ tensorflow-io-gcs-filesystem==0.34.0
 termcolor==1.1.0
 threadpoolctl==2.1.0
 toml==0.10.2
-tornado==6.1
+tornado==6.4.2
 traitlets==5.0.5
 typeguard==2.12.1
 typing_extensions==4.0.1
 unicodecsv==0.14.1
 uritemplate==3.0.0
-urllib3==1.22
+urllib3==1.26.20
 wcwidth==0.2.5
 webencodings==0.5.1
-Werkzeug==2.0.1
+Werkzeug==3.0.6
 wget==3.2
 wrapt==1.12.1
 zipp==3.4.1
