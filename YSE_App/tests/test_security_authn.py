@@ -437,3 +437,8 @@ class LoginLockoutTests(TestCase):
 
     def test_authenticate_without_request_still_works(self):
         self.assertTrue(Client().login(username="lock_user", password=self.PASSWORD))
+
+    def test_force_login_session_resolves_the_user(self):
+        client = Client()
+        client.force_login(self.user)
+        self.assertEqual(client.get("/api/transientstatuses/").status_code, 200)

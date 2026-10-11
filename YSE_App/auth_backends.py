@@ -5,6 +5,7 @@ module only when django-axes is installed and the flag is on (YSE_PZ/settings.py
 """
 
 from axes.backends import AxesStandaloneBackend
+from django.contrib.auth.backends import ModelBackend
 
 
 class LoginLockoutBackend(AxesStandaloneBackend):
@@ -21,6 +22,12 @@ class LoginLockoutBackend(AxesStandaloneBackend):
         if request is None:
             return None
         return super().authenticate(request, username=username, password=password, **kwargs)
+
+    def get_user(self, user_id):
+        # This backend is first in AUTHENTICATION_BACKENDS, so a session created
+        # by Client.force_login() or django.contrib.auth.login() without an
+        # explicit backend records it; resolve those users like ModelBackend.
+        return ModelBackend().get_user(user_id)
 
 
 def client_ip_address(request):
