@@ -9,8 +9,10 @@ https://docs.djangoproject.com/en/1.11/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/1.11/ref/settings/
 """
+import hashlib
 import logging
 import os
+import tempfile
 from configparser import RawConfigParser
 
 import django
@@ -192,6 +194,25 @@ CRON_CLASSES = [
 # settings.ini overrides the 30-day default.
 DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RETENTION_DAYS', fallback=30)
 
+# django_cron's default CacheLock lives in the 'default' cache, which is the
+# per-process LocMemCache unless REDIS_URL is set, so two `runcrons` processes
+# never see each other's lock and a slow job overlaps the next pass (#472).
+# FileLock takes an OS lock on <DJANGO_CRON_LOCKFILE_PATH>/<job>.lock, which
+# the kernel releases if the process dies. The directory must be writable by
+# every user that runs `runcrons` for this checkout: django_cron treats a
+# permission error as "locked" and skips the job. The default is per checkout
+# (yse_experimental and yse_test share a host but must not share locks).
+# Override with YSE_CRON_LOCKFILE_PATH or [site_settings] CRON_LOCKFILE_PATH.
+DJANGO_CRON_LOCK_BACKEND = 'YSE_App.common.cron_lock.FileLock'
+DJANGO_CRON_LOCKFILE_PATH = (
+    os.environ.get('YSE_CRON_LOCKFILE_PATH', '').strip()
+    or config.get('site_settings', 'CRON_LOCKFILE_PATH', fallback='').strip()
+    or os.path.join(
+        tempfile.gettempdir(),
+        'yse_pz_cron_locks_' + hashlib.sha1(BASE_DIR.encode('utf-8')).hexdigest()[:10],
+    )
+)
+
 MIDDLEWARE = [
 	#'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -199,12 +220,24 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Deny-by-default login check with a public allowlist (#496); see
+    # YSE_App/login_required.py and LOGIN_REQUIRED_MIDDLEWARE below.
+    'YSE_App.login_required.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     #'django.middleware.cache.UpdateCacheMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
     #'django.middleware.cache.FetchFromCacheMiddleware'
 ]
+
+# LoginRequiredMiddleware (#496) is on by default. Rollback switch only: set
+# [site_settings] LOGIN_REQUIRED_MIDDLEWARE = False in settings.ini, or the
+# YSE_LOGIN_REQUIRED_MIDDLEWARE=0 env var (the env var wins), to turn it off.
+_login_required_env = os.environ.get('YSE_LOGIN_REQUIRED_MIDDLEWARE', '').strip().lower()
+if _login_required_env:
+    LOGIN_REQUIRED_MIDDLEWARE = _login_required_env not in ('0', 'false', 'no', 'off')
+else:
+    LOGIN_REQUIRED_MIDDLEWARE = config.getboolean('site_settings', 'LOGIN_REQUIRED_MIDDLEWARE', fallback=True)
 
 #CACHE_MIDDLEWARE_ALIAS = 'default'
 #CACHE_MIDDLEWARE_SECONDS = 600
@@ -337,6 +370,24 @@ EXPLORER_QUERY_CACHE_SECONDS = int(
     or config.getint('site_settings', 'EXPLORER_QUERY_CACHE_SECONDS', fallback=3600)
 )
 
+# How long /query_api/<title>/ (data_utils.query_api, polled by the ingest
+# crons) reuses a saved query's rows (#474). Shorter than the dashboard TTL
+# because the crons act on what it returns. 0 runs the query on every call.
+# YSE_QUERY_API_CACHE_SECONDS env var or [site_settings] QUERY_API_CACHE_SECONDS.
+QUERY_API_CACHE_SECONDS = int(
+    os.environ.get('YSE_QUERY_API_CACHE_SECONDS', '').strip()
+    or config.getint('site_settings', 'QUERY_API_CACHE_SECONDS', fallback=300)
+)
+
+# Ingest-cron HTTP (YSE_App.common.http.ingest_session, #473): connect and read
+# timeouts in seconds, a longer read timeout for the crons' own POSTs to
+# /add_transient/, and how many times a connection error or a 502/503/504 on
+# a GET is retried. [site_settings] INGEST_HTTP_* in settings.ini.
+INGEST_HTTP_CONNECT_TIMEOUT_SECONDS = config.getfloat('site_settings', 'INGEST_HTTP_CONNECT_TIMEOUT_SECONDS', fallback=15.0)
+INGEST_HTTP_READ_TIMEOUT_SECONDS = config.getfloat('site_settings', 'INGEST_HTTP_READ_TIMEOUT_SECONDS', fallback=300.0)
+INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS = config.getfloat('site_settings', 'INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS', fallback=900.0)
+INGEST_HTTP_RETRIES = config.getint('site_settings', 'INGEST_HTTP_RETRIES', fallback=3)
+
 # Cache warmer cron (YSE_App.data_ingest.Dashboard_Cache_Warm): re-run every
 # dashboard saved query on a schedule so no browser triggers a cold run.
 # Off unless [site_settings] DASHBOARD_CACHE_WARM_ENABLED is True (or the
@@ -372,6 +423,8 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+       # Cheap per-request auth for scripts (no PBKDF2); Basic is kept (#457).
+       'rest_framework.authentication.TokenAuthentication',
        'rest_framework.authentication.BasicAuthentication',
        'rest_framework.authentication.SessionAuthentication',
     ],

@@ -71,6 +71,13 @@ class Host(BaseModel):
 	transient_host_rank = models.IntegerField(null=True, blank=True)
 	panstarrs_objid = models.BigIntegerField(null=True, blank=True)
 
+	class Meta:
+		indexes = [
+			# Positional box prefilters (dec range AND ra range); Host had no
+			# positional index at all (#477, #475).
+			models.Index(fields=['dec', 'ra'], name='yse_host_dec_ra_idx'),
+		]
+
 	def HostString(self):
 		ra_str, dec_str = GetSexigesimalString(self.ra, self.dec)
 

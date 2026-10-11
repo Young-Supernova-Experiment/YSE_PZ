@@ -157,6 +157,10 @@ class Transient(BaseModel):
 			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
 			# Search |b| cuts and ORDER BY gal_b (#286).
 			models.Index(fields=['gal_b'], name='yse_transient_gal_b_idx'),
+			# Cone-search boxes (dec range AND ra range), dec first (#477).
+			models.Index(fields=['dec', 'ra'], name='yse_transient_dec_ra_idx'),
+			# created_date >= cutoff and ORDER BY created_date (#478).
+			models.Index(fields=['created_date'], name='yse_transient_created_idx'),
 		]
 
 	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
