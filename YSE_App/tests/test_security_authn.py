@@ -144,8 +144,14 @@ class DatabaseTlsTests(SimpleTestCase):
 
 
 class ApiThrottleSettingsTests(SimpleTestCase):
-    def test_default_rates(self):
+    def test_default_off(self):
         rf = _load_settings(debug="True").REST_FRAMEWORK
+        self.assertEqual(rf["DEFAULT_THROTTLE_RATES"], {})
+        self.assertEqual(rf["DEFAULT_THROTTLE_CLASSES"], [])
+
+    def test_rates_opt_in(self):
+        rf = _load_settings(debug="True", site_extra=_security(API_THROTTLE_ANON="300/min",
+                                                               API_THROTTLE_USER="1000/min")).REST_FRAMEWORK
         self.assertEqual(rf["DEFAULT_THROTTLE_RATES"], {"anon": "300/min", "user": "1000/min"})
         self.assertEqual(rf["DEFAULT_THROTTLE_CLASSES"], [
             "rest_framework.throttling.AnonRateThrottle", "rest_framework.throttling.UserRateThrottle"])
@@ -369,9 +375,9 @@ class ApiThrottleTests(TestCase):
         from rest_framework.throttling import UserRateThrottle
         from rest_framework.views import APIView
 
-        if UserRateThrottle not in APIView.throttle_classes:
-            self.skipTest("user throttle switched off in this environment")
-        with mock.patch.object(UserRateThrottle, "THROTTLE_RATES", {"user": "2/min", "anon": "2/min"}):
+        # Throttles are off by default; switch the user throttle on as the flag would.
+        with mock.patch.object(APIView, "throttle_classes", [UserRateThrottle]), \
+                mock.patch.object(UserRateThrottle, "THROTTLE_RATES", {"user": "2/min", "anon": "2/min"}):
             codes = [self.client.get("/api/transientstatuses/").status_code for _ in range(3)]
         self.assertEqual(codes[:2], [200, 200])
         self.assertEqual(codes[2], 429)

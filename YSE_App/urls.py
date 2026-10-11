@@ -391,6 +391,10 @@ urlpatterns = [
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
+    # Logout is POST-only (#504): send the stock auth and DRF logout URLs to the
+    # same view, ahead of the includes that would otherwise log out on GET.
+    path('accounts/logout/', views.auth_logout),
+    path('api-auth/logout/', views.auth_logout),
     # Before the auth.urls include so it takes precedence (PASSWORD_RESET_DOMAIN).
     path('accounts/password_reset/', yse_auth_views.PasswordResetView.as_view(), name='password_reset'),
     path('accounts/', include('django.contrib.auth.urls')),

@@ -1,12 +1,13 @@
 from rest_framework import serializers
 from YSE_App.models import *
+from .related_fields import IdHyperlinkedRelatedField
 from django.contrib.auth.models import User
 from rest_framework.exceptions import PermissionDenied
 from .auth_helpers import NotAuthorizedToAccessParent
 
 class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
     transient = serializers.HyperlinkedRelatedField(queryset=Transient.objects.all(), view_name='transient-detail')
-    instrument = serializers.HyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
+    instrument = IdHyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
     followup = serializers.HyperlinkedRelatedField(queryset=TransientFollowup.objects.all(), allow_null=True, required=False, view_name='transientfollowup-detail')
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
@@ -134,8 +135,8 @@ class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class HostSpectrumSerializer(serializers.HyperlinkedModelSerializer):
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), view_name='host-detail', lookup_field='id')
-    instrument = serializers.HyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), view_name='host-detail', lookup_field='id')
+    instrument = IdHyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
     followup = serializers.HyperlinkedRelatedField(queryset=HostFollowup.objects.all(), allow_null=True, required=False, view_name='hostfollowup-detail')
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
@@ -260,7 +261,7 @@ class HostSpectrumSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientSpecDataSerializer(serializers.HyperlinkedModelSerializer):
-    spectrum = serializers.HyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), view_name='transientspectrum-detail', lookup_field="id")
+    spectrum = IdHyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), view_name='transientspectrum-detail', lookup_field="id")
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
@@ -305,7 +306,7 @@ class TransientSpecDataSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class HostSpecDataSerializer(serializers.HyperlinkedModelSerializer):
-    spectrum = serializers.HyperlinkedRelatedField(queryset=HostSpectrum.objects.all(), view_name='hostspectrum-detail', lookup_field="id")
+    spectrum = IdHyperlinkedRelatedField(queryset=HostSpectrum.objects.all(), view_name='hostspectrum-detail', lookup_field="id")
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
