@@ -58,6 +58,8 @@ jobs:
             "DJANGO_SUPERUSER_USERNAME=ci_admin" \
             "DJANGO_SUPERUSER_PASSWORD=ci_password" \
             "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
+            "YSE_IS_DEBUG=1" \
+            "YSE_LOGIN_LOCKOUT=1" \
             > .env
           grep -q '^VOL=' .env
           ! grep -q '^[[:space:]]' .env
@@ -82,6 +84,9 @@ jobs:
         working-directory: docker
         run: |
           docker exec ysepz_web_container pip3 install --quiet "Django==3.2.25"
+          # Login lockout (django-axes; same pins as requirements.txt) is not in the
+          # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
           docker compose restart web
           docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
 
