@@ -1582,7 +1582,7 @@ mysql -N -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "
 SELECT CONCAT('GRANT SELECT ON \`', table_schema, '\`.\`', table_name, '\` TO ''<EXPLORER_DB_USER>''@''<EXPLORER_DB_HOST>'';')
 FROM information_schema.tables WHERE table_schema='<DB>'
 AND table_name NOT LIKE 'auth\_%' AND table_name NOT LIKE 'authtoken\_%' AND table_name NOT LIKE 'axes\_%'
-AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT IN ('django_session','django_admin_log',
+AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT LIKE 'otp\_%' AND table_name NOT IN ('django_session','django_admin_log',
 'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun');" > /tmp/explorer_grants.sql
 wc -l /tmp/explorer_grants.sql
 ```
@@ -1766,6 +1766,67 @@ API_THROTTLE_USER: 1000/min
 Before turning `API_THROTTLE_USER` on, ask Ryan which scripts read `/api/` in bulk, and give them a higher rate or leave the user throttle off. **Check:** normal pages and the transient-detail tabs still load; a script that exceeds the rate gets HTTP 429. Rollback: remove the keys and restart Apache.
 
 **Template change only:** `public_settings.ini` now has `IS_DEBUG: False`. Ziggy's stacks read only their own `settings.ini`, never the template, so nothing changes there; local docker and CI turn DEBUG on with `YSE_IS_DEBUG=1` in `docker/.env`.
+
+<a id="staff-mfa"></a>
+
+### Two-factor sign-in for staff (2026-10-11, #512) optional, off by default, per stack
+
+With `[security] STAFF_MFA_REQUIRED: True`, an account with **Staff status** or **Superuser status** signs in with its password and then a 6-digit code from an authenticator app: Duo Mobile (as a third-party account) or any other TOTP app. Staff without an authenticator are sent to a setup page: a QR code (issuer `YSE_PZ`), one confirmation code, then 10 single-use backup codes, shown once. This covers every page, including admin and SQL Explorer. It does not affect non-staff accounts or requests that authenticate with an API token or HTTP Basic auth (crons, brokers, scripts). Wrong codes are rate-limited: each failure doubles the wait before the next try. New dependencies: django-otp 1.5.4 and segno 1.6.6 (pure Python, used for the QR code). The two-factor tables come from django-otp's own migrations, not a YSE\_App migration. With the flag off nothing changes, and with the flag on but the package missing the site still starts and logs a warning.
+
+Do yse\_experimental first, then yse\_test, and production after #143. yse\_test and yse\_experimental share `YSE_test`, so step (c) runs once for both. `<STACK_DIR>` / `<STACK_PYTHON>` are from [section 0](#paths); `<VENV_OWNER>` is the venv directory's owner (`stat -c %U <venv dir>`).
+
+**(a) Server clock.** TOTP codes depend on the time:
+```bash
+timedatectl | grep -i synchronized
+```
+**Expected:** `System clock synchronized: yes`. If it says `no`, ask the sysadmin to enable NTP first.
+
+**(b) Install.** The yse\_experimental deploy installs `requirements.txt` into its own venv. For `yse_test_virtual` and production, run:
+```bash
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip install "django-otp==1.5.4" "segno==1.6.6"
+<STACK_PYTHON> -m pip show django-otp segno | grep -E '^(Name|Version)'
+```
+**Expected:** `Name: django-otp` / `Version: 1.5.4` and `Name: segno` / `Version: 1.6.6`.
+
+**(c) Turn it on in grace mode and create the tables.** In `[security]` of `<STACK_DIR>/YSE_PZ/settings.ini`, set the grace end date about two weeks out. Until then, staff without an authenticator are offered setup once per session and can click "Not now". Staff who have set one up always enter a code.
+```ini
+STAFF_MFA_REQUIRED: True
+STAFF_MFA_ENFORCE_AFTER: <YYYY-MM-DD>
+```
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py migrate
+<STACK_PYTHON> manage.py showmigrations otp_totp otp_static
+<STACK_PYTHON> manage.py check
+sudo systemctl restart apache2
+```
+**Expected:** `migrate` applies `otp_static.0001_initial` to `0003_add_timestamps` and `otp_totp.0001_initial` to `0003_add_timestamps`, or prints `No migrations to apply.` on the second stack of a shared database. `showmigrations` shows `[X]` on all six. `check` prints `System check identified no issues`. The env var `YSE_STAFF_MFA_REQUIRED=1` (or `0`) overrides the ini key, and `YSE_STAFF_MFA_ENFORCE_AFTER` overrides the date.
+
+**(d) Keep the two-factor tables out of Explorer's database user.** If you did [Step E](#authz-flags) (per-table grants), the new `otp_*` tables are not granted, and the generator there now leaves them out:
+```bash
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" | grep -c 'otp_'
+```
+**Expected:** `0`. If the Explorer user still has the database-wide `GRANT SELECT ON <DB>.*`, do Step E now. The schema browser already hides `otp_` tables.
+
+**(e) Check.**
+1. Sign in with your own staff account. **Expected:** the setup page with a QR code. In Duo Mobile, tap Add, then Use QR code, and scan it. Enter the 6-digit code. **Expected:** the backup-codes page. Store the codes, then Continue.
+2. Sign out and sign in again. **Expected:** the code page. A wrong code gives "That code was not accepted"; the right code opens the page you asked for. `/yse_experimental/admin/` and `/yse_experimental/explorer/` work only after the code.
+3. Sign in with a non-staff account. **Expected:** no code page.
+4. Scripts are unaffected. After the next `runcrons` run, its log shows no new 401 or 403 errors. Or, with a token you already have for a script account: `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Token <TOKEN>" "https://ziggy.ucolick.org/yse_experimental/api/transients/?limit=1"` **Expected:** `200`.
+
+**(f) Enforce.** After `STAFF_MFA_ENFORCE_AFTER` passes, setup is required automatically; no restart is needed. To enforce at once, delete the `STAFF_MFA_ENFORCE_AFTER` line and restart Apache. List staff who have not set up yet (prints a count only):
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User; from django.db.models import Q; from django_otp.plugins.otp_totp.models import TOTPDevice; s=User.objects.filter(Q(is_staff=True)|Q(is_superuser=True), is_active=True); print(s.exclude(id__in=TOTPDevice.objects.filter(confirmed=True).values('user_id')).count(), 'of', s.count(), 'staff not set up')"
+```
+
+**(g) Reset a user's authenticator (lost phone).** A superuser can do this in admin > Users: select the user, choose the action "Reset two-factor sign-in", then Go. Or from the shell, which also works when no superuser can sign in:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py reset_staff_mfa <USERNAME>
+```
+**Expected:** `Removed N two-factor device(s); the user sets up a new authenticator at the next sign-in.` Any session that user had verified must enter a code again. After entering a code, a staff user can replace their own authenticator, or get new backup codes, at `/mfa/setup/`.
+
+**(h) Service accounts.** Accounts that crons or scripts use should not be staff. If one must stay staff, use an API token for it (step (d) of [Login, session and transport settings](#authn)); token and Basic-auth requests do not need a code.
+
+**Rollback:** set `STAFF_MFA_REQUIRED: False` (or delete the line) and restart Apache. Sign-in is password-only again at once. Enrolled devices stay in the tables, so turning the flag back on keeps them. To remove the tables as well, while the flag is still on: `<STACK_PYTHON> manage.py migrate otp_totp zero && <STACK_PYTHON> manage.py migrate otp_static zero`. Then set the flag off and restart Apache.
 
 ### IERS table refresh (optional cron, per stack) nothing required
 
@@ -1989,6 +2050,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v39, optional (off by default). Two-factor sign-in for staff and superusers ([#512](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/512)): new section [Two-factor sign-in for staff](#staff-mfa). New dependencies django-otp 1.5.4 and segno 1.6.6; django-otp's own tables (`otp_totp`, `otp_static`) are created by `manage.py migrate` once the flag is on. New `[security]` keys `STAFF_MFA_REQUIRED` and `STAFF_MFA_ENFORCE_AFTER` (grace date), env `YSE_STAFF_MFA_REQUIRED` / `YSE_STAFF_MFA_ENFORCE_AFTER`, `manage.py reset_staff_mfa` and an admin action to reset a user's authenticator. The Explorer grant generator (Step E) now also leaves out `otp_*` tables. No YSE\_App migration; nothing changes until the flag is set.
 * 2026-10-11 v38, **required on venvs the deploy does not install** (yse\_test\_virtual, production). Low-risk dependency pin bumps ([#539](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/539)): new section [Dependency pin bumps](#dep-pins) (`pip install -r requirements.txt`, `pip check`, version check). The yse\_experimental venv is updated by Deploy Stack. Django stays on 3.2. No migration.
 * 2026-10-11 v37, informational. Transient tables show "Last Det." and "Last Obs." from TransientPhotStat ([#557](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/557)); personal-dashboard section counts are visible rows only ([#558](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/558)). Nothing to run on yse\_experimental / yse\_test (the shared database is backfilled). On production the two columns are empty for transients without a stat row until `rebuild_photstats` (step 3.10, already required for Peak Mag) has run. No migration.
 * 2026-10-11 v36, one check recommended. `/query_api/` saved-query allowlist and row visibility ([#524](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/524)): the crons' four titles are on the built-in allowlist and service accounts are exempt from the row filter; check that the `get_YSE_PAs.py` accounts are staff or in `api_writers` ([section](#query-api)). Optional `QUERY_API_ALLOWED_QUERIES` and rollback switch `QUERY_API_VISIBILITY_FILTER`. No migration.
