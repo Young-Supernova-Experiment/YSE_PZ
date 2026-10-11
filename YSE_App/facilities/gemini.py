@@ -95,8 +95,12 @@ class GeminiFacility(FacilityAPI):
         params = request.payload or {}
         url = ENDPOINTS[params.get("site") or "north"]
         payload = self.build_payload(request)
-        # the Gemini ODB serves a self-signed certificate
-        response = http_request("POST", url, data=payload, verify=False, what="the Gemini ODB")
+        # certificate verification stays on; a private CA bundle can be named with the
+        # GEMINI_CA_BUNDLE env var or gemini_ca_bundle under [main] in settings.ini
+        from django.conf import settings
+
+        verify = getattr(settings, "GEMINI_CA_BUNDLE", "") or True
+        response = http_request("POST", url, data=payload, verify=verify, what="the Gemini ODB")
         if response.status_code >= 300:
             raise FacilityError("Gemini answered %s: %s" % (response.status_code, short(response.text)))
         obs_id = (response.text or "").strip().splitlines()[-1].strip() if (response.text or "").strip() else ""

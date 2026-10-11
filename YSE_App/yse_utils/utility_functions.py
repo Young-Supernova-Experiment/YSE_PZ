@@ -94,6 +94,32 @@ def parse_healpix_file(healpixForm):
     return (1024,False)
 
 
+HEALPIX_INSERT_BATCH = 5000
+
+
+def insert_healpix_cells(rows, batch_size=HEALPIX_INSERT_BATCH):
+    """Insert (cellIndex, RA, Dec, prob, healpix file id) rows with parameterized batches.
+    Replaces LOAD DATA LOCAL INFILE, so no file is written and local_infile is not needed."""
+    from django.db import connection, transaction
+
+    sql = ('INSERT INTO gw_assessor_healpixcell '
+           '(cellIndex, cellRA_deg, cellDec_deg, cellProb, cellHPFileFK_id) '
+           'VALUES (%s, %s, %s, %s, %s)')
+    total = 0
+    batch = []
+    with transaction.atomic(), connection.cursor() as cur:
+        for row in rows:
+            batch.append(row)
+            if len(batch) >= batch_size:
+                cur.executemany(sql, batch)
+                total += len(batch)
+                batch = []
+        if batch:
+            cur.executemany(sql, batch)
+            total += len(batch)
+    return total
+
+
 def bulk_load_healpix(healPixFileID):
 
     try:
@@ -104,9 +130,6 @@ def bulk_load_healpix(healPixFileID):
         # temporary hack for dev/testing w/ text files
         if infile.split('.')[-1] == 'txt':
             return 0
-
-        # create the temporary dump csv for the mysql read
-        csvFile = '{}/healpixmaps/bulk_healpix.csv'.format(settings.FILE_DUMP_DIR)
 
         # try to fetch nside from the header
         hdu = fits.open(infile)
@@ -129,41 +152,9 @@ def bulk_load_healpix(healPixFileID):
         resampledMap = hp.ud_grade(hpMap,resampled_nside)
         pixRAArr,pixDecArr = hp.pix2ang(resampled_nside,range(len(resampledMap)),lonlat=True)
 
-        # create a CSV with all the healpix data in the dump location
-        outData = '# pixIndex pixRA pixDec pixProb mapFK'
-        nPix = len(pixRAArr)
-        with open(csvFile,'w') as fout:
-            for i in range(nPix):
-                outRow = '\n{}, {}, {}, {}, {}'.format(i,pixRAArr[i],pixDecArr[i],resampledMap[i],hpf.id)
-                fout.write(outRow)
-        # with open(csvFile, 'w') as fout:
-        #     fout.write(outData)
-
-        # connect to the database to run some SQL
-        db = MySQLdb.connect(host=settings.DATABASES['default']['HOST'],
-                             user=settings.DATABASES['default']['USER'],
-                             passwd=settings.DATABASES['default']['PASSWORD'],
-                             db=settings.DATABASES['default']['NAME'],
-                             local_infile=True)
-         
-        # create a Cursor object to execute queries.
-        cur = db.cursor()
-        # construct the query
-        # we can also drop/add indexes using this same process
-        execCmd = 'LOAD DATA LOCAL INFILE \'{}\' '.format(csvFile)
-        execCmd += 'INTO TABLE gw_assessor_healpixcell '
-        execCmd += 'FIELDS TERMINATED BY \',\' '
-        execCmd += 'LINES TERMINATED BY \'\n\' '
-        execCmd += 'IGNORE 1 LINES ' #ignore the header
-        execCmd += '(cellIndex,cellRA_deg,cellDec_deg,cellProb,cellHPFileFK_id);'
-        # execute the bulk upload
-        cur.execute(execCmd)
-        db.commit()
-
-        # close the cursor
-        cur.close()
-        # close the database connection
-        db.close()
+        rows = ((i, float(pixRAArr[i]), float(pixDecArr[i]), float(resampledMap[i]), hpf.id)
+                for i in range(len(pixRAArr)))
+        insert_healpix_cells(rows)
 
         return 0
 

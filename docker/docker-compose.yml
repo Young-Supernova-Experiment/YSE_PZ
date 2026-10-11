@@ -77,10 +77,12 @@ services:
         - ./db_init/YSE_followupstatus_insert.sql:/docker-entrypoint-initdb.d/3.sql
         - ./db_init/YSE_rest_of_tables_insert.sql:/docker-entrypoint-initdb.d/4.sql
         - ./db_init/YSE_django_migrations_insert.sql:/docker-entrypoint-initdb.d/5.sql
-        - ./db_init/YSE_create_users.sql:/docker-entrypoint-initdb.d/6.sql
+        - ./db_init/YSE_create_users.sh:/docker-entrypoint-initdb.d/6.sh
         - ${VOL_GHOST}:/app/ghost_logs
       environment:
         MYSQL_ROOT_PASSWORD: ${DB_PWD}
+        YSE_DATABASE_PASSWORD: ${YSE_DATABASE_PASSWORD:?set YSE_DATABASE_PASSWORD in docker/.env}
+        YSE_EXPLORER_PASSWORD: ${YSE_EXPLORER_PASSWORD:?set YSE_EXPLORER_PASSWORD in docker/.env}
       healthcheck:
         test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
         interval: 5s

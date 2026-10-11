@@ -1,12 +1,13 @@
-"""Legacy ZTF forced-phot submission reports why wget failed (#411).
+"""Legacy ZTF forced-phot submission and downloads use requests, not a shell (#411, #530).
 
-wget runs through subprocess and is mocked; nothing contacts ZTF.
+HTTP is mocked; nothing contacts ZTF.
 """
 
 import os
 import tempfile
 from unittest import mock
 
+import requests
 from django.test import SimpleTestCase, override_settings
 
 from YSE_App.data_ingest import ZTF_Forced_Phot as fp
@@ -18,18 +19,12 @@ def _client():
         ztf_user_address="a@example.com", ztf_user_password="SECRETPASS")
 
 
-def _popen(returncode, stderr=b"", create_file=False, content="ok"):
-    """A Popen stand-in; with create_file it writes the -O target like wget would."""
-    def factory(command, **kwargs):
-        if create_file:
-            target = command.split(" -O ")[1].split(" ")[0]
-            with open(target, "w") as fh:
-                fh.write(content)
-        proc = mock.MagicMock()
-        proc.communicate.return_value = (b"", stderr)
-        proc.returncode = returncode
-        return proc
-    return factory
+def _response(status=200, text="ok"):
+    resp = mock.MagicMock()
+    resp.status_code = status
+    resp.text = text
+    resp.content = text.encode()
+    return resp
 
 
 class ZTFForcedPhotSubmitTests(SimpleTestCase):
@@ -41,52 +36,87 @@ class ZTFForcedPhotSubmitTests(SimpleTestCase):
         override.enable()
         self.addCleanup(override.disable)
 
-    def test_missing_output_directory_is_created(self):
+    def test_missing_output_directory_is_created_and_request_is_authenticated(self):
         self.assertFalse(os.path.exists(os.path.join(self.tmpdir, "forced_phot_out")))
-        with mock.patch.object(fp.subprocess, "Popen", side_effect=_popen(0, create_file=True)):
+        with mock.patch.object(fp.requests, "get", return_value=_response()) as get:
             log_file = _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=False)
         self.assertTrue(os.path.exists(log_file))
         self.assertEqual(os.path.dirname(log_file), os.path.join(self.tmpdir, "forced_phot_out"))
+        self.assertEqual(get.call_args.args[0], fp.ZTF_REQUEST_URL)
+        self.assertEqual(get.call_args.kwargs["auth"], (fp._ztfuser, fp._ztfinfo))
+        self.assertTrue(get.call_args.kwargs["timeout"])
 
-    def test_wget_failure_raises_with_its_message_and_no_credentials(self):
-        stderr = (b"--2026-10-06 18:00:00--  https://ztfweb.ipac.caltech.edu/cgi-bin/requestForcedPhotometry.cgi"
-                  b"?ra=10&email=a@example.com&userpass=SECRETPASS\n"
-                  b"Connecting to ztfweb.ipac.caltech.edu... connected.\n"
-                  b"/data/x/forced_phot_out/ztffp_ABC.txt: Permission denied\n")
-        with mock.patch.object(fp.subprocess, "Popen", side_effect=_popen(3, stderr=stderr)):
+    def test_verbose_output_has_no_credentials(self):
+        with mock.patch.object(fp.requests, "get", return_value=_response()), \
+                mock.patch("builtins.print") as printed:
+            _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=True)
+        shown = " ".join(str(c) for c in printed.call_args_list)
+        self.assertNotIn("SECRETPASS", shown)
+        self.assertNotIn(fp._ztfinfo, shown)
+
+    def test_connection_error_hides_credentials(self):
+        err = requests.ConnectionError("Max retries with url: /x?userpass=SECRETPASS")
+        with mock.patch.object(fp.requests, "get", side_effect=err):
             with self.assertRaises(fp.ZTFForcedPhotSubmitError) as ctx:
                 _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=False)
-        message = str(ctx.exception)
-        self.assertIn("status 3", message)
-        self.assertIn("Permission denied", message)
-        self.assertNotIn("SECRETPASS", message)
-        self.assertNotIn("a@example.com", message)
-
-    def test_wget_missing_from_path(self):
-        with mock.patch.object(fp.subprocess, "Popen", side_effect=_popen(127, stderr=b"/bin/sh: 1: wget: not found\n")):
-            with self.assertRaises(fp.ZTFForcedPhotSubmitError) as ctx:
-                _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=False)
-        self.assertIn("wget: not found", str(ctx.exception))
-
-    def test_error_summary_redacts_password_fields(self):
-        summary = fp._wget_error_summary(b"ERROR: bad request userpass=SECRETPASS\n")
-        self.assertIn("userpass=***", summary)
-        self.assertNotIn("SECRETPASS", summary)
+        self.assertNotIn("SECRETPASS", str(ctx.exception))
+        self.assertIn("ConnectionError", str(ctx.exception))
 
     def test_ztf_rejection_reason_is_reported(self):
-        """ZTF's 400 page says why (#411); --content-on-error keeps it for the message."""
+        """ZTF's 400 page says why (#411)."""
         page = ("<html><body><h2>Forced-Photometry Service</h2>"
                 "<p>Error: e-mail address is unknown.</p></body></html>")
-        stderr = b"2026-10-07 23:26:35 ERROR 400: Bad Request.\n"
-        with mock.patch.object(fp.subprocess, "Popen",
-                               side_effect=_popen(8, stderr=stderr, create_file=True, content=page)) as popen:
+        with mock.patch.object(fp.requests, "get", return_value=_response(400, page)):
             with self.assertRaises(fp.ZTFForcedPhotSubmitError) as ctx:
                 _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=False)
-        self.assertIn("--content-on-error", popen.call_args.args[0])
         message = str(ctx.exception)
-        self.assertIn("ERROR 400: Bad Request.", message)
+        self.assertIn("HTTP status 400", message)
         self.assertIn("ZTF says: e-mail address is unknown.", message)
-        self.assertEqual(os.listdir(os.path.join(self.tmpdir, "forced_phot_out")), [])
+        self.assertNotIn("SECRETPASS", message)
+        self.assertNotIn("a@example.com", message)
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, "forced_phot_out", "x")))
+
+
+class ZTFDownloadTests(SimpleTestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cwd = os.getcwd()
+        os.chdir(tmp.name)
+        self.addCleanup(os.chdir, cwd)
+        self.tmpdir = tmp.name
+
+    def test_download_saves_file_with_auth(self):
+        url = "https://%s/data/FPwork/forcedphotometry_req00001_lc.txt" % fp.ZTF_HOST
+        with mock.patch.object(fp.requests, "get", return_value=_response(200, "data")) as get:
+            name = fp.download_ztf_url(url, verbose=False)
+        self.assertEqual(name, "forcedphotometry_req00001_lc.txt")
+        self.assertEqual(open(os.path.join(self.tmpdir, name)).read(), "data")
+        self.assertEqual(get.call_args.kwargs["auth"], (fp._ztfuser, fp._ztfinfo))
+        self.assertTrue(get.call_args.kwargs["timeout"])
+
+    def test_other_hosts_and_schemes_are_refused(self):
+        for url in ("https://evil.example.com/x_lc.txt", "http://%s/x_lc.txt" % fp.ZTF_HOST,
+                    "https://%s.evil.example.com/x_lc.txt" % fp.ZTF_HOST,
+                    "https://user@evil.example.com/%s/x_lc.txt" % fp.ZTF_HOST):
+            with mock.patch.object(fp.requests, "get") as get:
+                with self.assertRaises(fp.ZTFForcedPhotSubmitError):
+                    fp.download_ztf_url(url, verbose=False)
+            get.assert_not_called()
+
+    def test_file_name_cannot_escape_directory(self):
+        url = "https://%s/a/..%%2F..%%2Fx_lc.txt" % fp.ZTF_HOST
+        with mock.patch.object(fp.requests, "get", return_value=_response(200, "d")):
+            name = fp.download_ztf_url(url, verbose=False)
+        self.assertNotIn("/", name)
+        self.assertTrue(os.path.exists(os.path.join(self.tmpdir, name)))
+
+    def test_http_error_is_reported_without_url(self):
+        url = "https://%s/x_lc.txt" % fp.ZTF_HOST
+        with mock.patch.object(fp.requests, "get", return_value=_response(404)):
+            with self.assertRaises(fp.ZTFForcedPhotSubmitError) as ctx:
+                fp.download_ztf_url(url, verbose=False)
+        self.assertIn("404", str(ctx.exception))
 
 
 class ZTFAccountAddressTests(SimpleTestCase):

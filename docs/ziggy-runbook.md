@@ -51,7 +51,7 @@ cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.p
 ```
 **Check after a few minutes:** a new Refit on `/yse_test/` or `/yse_experimental/` changes from "queued" to the fit result within about two minutes, and `/yse_test/jobs/` lists recent `done` jobs.
 
-**REQUIRED (2026-10-07): ZTF forced phot on yse_test is rejected by ZTF** ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411)). The alert reads `wget exited with status 8: ... ERROR 400: Bad Request.`, so the directory and wget are fine and ZTF refused the request. ZTF's 400 page names the reason; for an address it does not know it says `Error: e-mail address is unknown.` ([#433](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/433) shows that text in the alert once it reaches yse_test). The view submits as `<SMTP_LOGIN>@gmail.com` with the `ztfforcedphotpass` password. Compare the yse_test values with production's, without printing the passwords:
+**REQUIRED (2026-10-07): ZTF forced phot on yse_test is rejected by ZTF** ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411)). Before #530 the alert read `wget exited with status 8: ... ERROR 400: Bad Request.`; it now reads `ZTF request failed with HTTP status 400. ZTF says: ...`. Either way the directory and wget are fine and ZTF refused the request. ZTF's 400 page names the reason; for an address it does not know it says `Error: e-mail address is unknown.` ([#433](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/433) shows that text in the alert once it reaches yse_test). The view submits as `<SMTP_LOGIN>@gmail.com` with the `ztfforcedphotpass` password. Compare the yse_test values with production's, without printing the passwords:
 
 ```bash
 for f in /data/yse_pz/YSE_PZ/YSE_PZ/settings.ini /data/yse_pz/YSE_PZ_test/YSE_PZ/settings.ini; do echo "$f"; grep -E '^SMTP_LOGIN' "$f"; grep -E '^ztfforcedphotpass' "$f" | sha256sum; done
@@ -75,12 +75,10 @@ ps -o user= -C apache2 | sort -u
 ```bash
 ls -ld <ZTFTMPDIR> <ZTFTMPDIR>/forced_phot_out
 sudo -u <APACHE_USER> test -w <ZTFTMPDIR>/forced_phot_out && echo writable
-sudo -u <APACHE_USER> sh -c 'command -v wget'
 ```
-**Expected:** both directories listed, `writable`, and a path such as `/usr/bin/wget`. **If not:**
+**Expected:** both directories listed and `writable`. (ZTF forced phot no longer needs `wget`: it uses Python `requests`, #530.) **If not:**
 - If `forced_phot_out` is missing, create it with `sudo mkdir -p <ZTFTMPDIR>/forced_phot_out`.
 - If it is not writable, give the Apache user write access without taking it from the cron user that reads it (`foley`): `sudo chgrp <APACHE_USER> <ZTFTMPDIR>/forced_phot_out && sudo chmod 2775 <ZTFTMPDIR>/forced_phot_out`.
-- If wget is missing, install it: `sudo apt-get install wget`.
 
 **Check:** "Request ZTF Forced Phot" on a transient on `/yse_test/` alerts `success: ZTF forced photometry requested...` and adds a comment.
 
@@ -1880,6 +1878,31 @@ grep -h python-home /etc/apache2/sites-enabled/yse-experimental.conf
 
 <a id="pending"></a>
 
+## Credential rotation (#528)
+
+Run on Ziggy as the checkout owner. Use placeholders only; never paste the real values into GitHub, chat or this file. Rotate when a value may have been exposed, or on the schedule you prefer. Each step ends with the same restart and check.
+
+**Django SECRET_KEY.** Generate a new key and set it as `SECRET_KEY` under `[site_settings]` in `YSE_PZ/settings.ini` (or the `DJANGO_SECRET_KEY` environment variable):
+
+```bash
+<PROD_PYTHON> -c "from django.core.management.utils import get_random_secret_key as g; print(g())"
+```
+**Effects:** every logged-in session is invalidated (users log in again) and password-reset links issued before the change stop working. The stored-credentials Fernet key (`EncryptedCredential`) is separate: with `IS_DEBUG` False it must be set on its own (`[secrets] credentials_key` or `YSE_CREDENTIALS_KEY`, from `<PROD_PYTHON> manage.py generate_credentials_key`) and rotating `SECRET_KEY` does not change it. Only a stack running with `IS_DEBUG` True and no credentials key derives it from `SECRET_KEY`; there, rotating `SECRET_KEY` makes stored credentials unreadable, so set a fixed credentials key first (keep the old key in the comma-separated list until credentials are re-saved).
+
+**ZTF forced-photometry account password.** Change it with the ZTF forced-photometry service for the registered account, then set `ztfforcedphotpass=<NEW_ZTF_PASSWORD>` under `[ztf]` in every `settings.ini` that uses it (production and test checkouts), or the `ZTF_FORCED_PHOT_PASS` environment variable.
+
+**Shared SMTP/IMAP mail account password.** Change the password of the shared mail account at the mail provider (use an app password where the provider requires one), then update `SMTP_PASSWORD` under `[SMTP_provider]` and the matching IMAP/mail password keys under `[main]` (`dbemailpassword` and any other key holding the same password) in every `settings.ini`.
+
+**Other keys.** `DATABASE_PASSWORD` / `EXPLORER_PASSWORD` (or `YSE_DATABASE_PASSWORD` / `YSE_EXPLORER_PASSWORD`) must be changed in MySQL first (`ALTER USER ... IDENTIFIED BY '<NEW_PASSWORD>'`) and then in settings.ini. SciServer (photo-z crons) reads `sciserveruser` / `sciserverpass` under `[main]` or `SCISERVER_USER` / `SCISERVER_PASSWORD`.
+
+```bash
+sudo systemctl restart apache2
+curl -s -o /dev/null -w '%{http_code}\n' https://<HOST>/<PATH_PREFIX>/login/
+```
+**Expected:** `200`. **Check:** log in, open a transient, and for the ZTF and mail steps request ZTF forced photometry once (alert `success: ...`). **If not:** restore the previous `settings.ini` value, restart Apache again and tell Ryan.
+
+**New CI job (#529):** a `gitleaks` job scans each PR's commits. It needs nothing on Ziggy. A new finding on a PR means a secret-like value was committed; remove it and rotate the value.
+
 ## 5 · Pending items
 
 Everything still waiting on David, with its source. Rows change status here as the thread reports progress.
@@ -1922,6 +1945,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v35, **required before relying on the new defaults**. Hard-coded credentials removed ([#528](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/528)): the template `public_settings.ini` now holds placeholders (it is not used on Ziggy, whose own `settings.ini` is unchanged), docker needs `YSE_DATABASE_PASSWORD` / `YSE_EXPLORER_PASSWORD` in `docker/.env`, and the SciServer photo-z crons read `sciserveruser` / `sciserverpass` from `[main]` of `settings.ini` (add them on each stack that runs those crons, else the crons stop with a clear error). New section "Credential rotation". ZTF forced phot and the legacy position-angle helpers no longer use a shell, so ZTF forced phot no longer needs `wget` ([#530](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/530), [#531](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/531)). Gemini now verifies the server certificate; if the ODB uses a private CA set `gemini_ca_bundle=<PATH_TO_CA_BUNDLE>` under `[main]` or `GEMINI_CA_BUNDLE` ([#532](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/532)). The healpix loader no longer uses `LOAD DATA LOCAL INFILE` ([#533](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/533)). gitleaks CI job added ([#529](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/529)).
 * 2026-10-11 v34, optional. Performance audit server settings ([#482](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/482)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490)): new section "Performance audit 2026-10-10: server settings" (mod_deflate, hashed static files + Cache-Control, `prune_finder_charts`, `prune_auditlog`, LOGGING / cached_db sessions, plot-stack preload, slow query log). Nothing required; no migration.
 * 2026-10-11 v33, informational. Write authorization and Explorer access ([#520](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/520)-[#527](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/527)): migration `0032_api_writer_groups` (data only: groups `api_writers` and `explorer_users`). Nothing is required; the three new `[site_settings]` flags are off by default. New optional section [Write authorization and Explorer access](#authz-flags): check the groups, add the cron and script accounts to `api_writers`, turn on `API_WRITE_PERMISSIONS_ENFORCED` / `UPLOAD_GROUP_CHECKS_ENFORCED` / `EXPLORER_RESTRICTED_ACCESS`, and limit the Explorer MySQL user's grants to science tables.
 * 2026-10-11 v32, **one required check** (Slack events: `SLACK_ENABLED` and `SLACK_SIGNING_SECRET` must both be set on a stack that receives Slack events), the rest optional: [login, session and transport settings](#authn) (sec/authn PR). New optional dependency django-axes 5.41.1 (+ django-ipware 5.0.2) with `migrate axes` once per database; new `[security]` keys (session length, lockout, API rate limits, ALLOWED\_HOSTS requirement, forwarded headers, password-reset domain, HTTPS cookies / redirect / HSTS, CSP report-only, inactive-account exemptions), optional `[database]` TLS keys, `manage.py deactivate_inactive_users`. Every default is today's behaviour.

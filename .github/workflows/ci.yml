@@ -50,20 +50,26 @@ jobs:
       - name: Write docker compose environment
         working-directory: docker
         run: |
+          # throwaway per-run test credentials; nothing here is a real secret
+          DB_PWD="$(openssl rand -hex 16)"
           printf '%s\n' \
             "VOL=${{ github.workspace }}" \
             "VOL_DB=${{ github.workspace }}/database" \
             "VOL_GHOST=${{ github.workspace }}/ghost_logs" \
             "STATIC_VOL=${{ github.workspace }}/YSE_PZ/static" \
-            "DB_PWD=password" \
+            "DB_PWD=$DB_PWD" \
+            "YSE_DATABASE_PASSWORD=$(openssl rand -hex 16)" \
+            "YSE_EXPLORER_PASSWORD=$(openssl rand -hex 16)" \
             "LOCAL_DB_PORT=53306" \
             "LOCAL_HTTP_PORT=8080" \
             "DJANGO_SUPERUSER_USERNAME=ci_admin" \
-            "DJANGO_SUPERUSER_PASSWORD=ci_password" \
+            "DJANGO_SUPERUSER_PASSWORD=$(openssl rand -hex 16)" \
             "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
             "YSE_IS_DEBUG=1" \
             "YSE_LOGIN_LOCKOUT=1" \
             > .env
+          echo "::add-mask::$DB_PWD"
+          echo "DB_PWD=$DB_PWD" >> "$GITHUB_ENV"
           grep -q '^VOL=' .env
           ! grep -q '^[[:space:]]' .env
           # compose env_file lists .env.secrets (gitignored locally); CI needs an empty stub
@@ -99,7 +105,7 @@ jobs:
         working-directory: docker
         run: |
           for i in $(seq 1 60); do
-            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -ppassword --silent; then
+            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -p"$DB_PWD" --silent; then
               echo "MySQL ready after attempt $i"
               exit 0
             fi

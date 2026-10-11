@@ -3,6 +3,7 @@
 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import os
 import smtplib
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -33,10 +34,10 @@ class TNSFakeEmails:
 			'--SMTP_PORT', default="587", type="string",
 			help="SMTP_PORT")
 		parser.add_option(
-			'--SMTP_LOGIN', default="ktwo.test.ucsctransients", type="string",
+			'--SMTP_LOGIN', default=os.environ.get("SMTP_LOGIN"), type="string",
 			help="SMTP_LOGIN")
 		parser.add_option(
-			'--SMTP_PASSWORD', default="LetsTestYoungSupernovae!", type="string",
+			'--SMTP_PASSWORD', default=os.environ.get("SMTP_PASSWORD"), type="string",
 			help="SMTP_PASSWORD")
 
 		return parser
@@ -95,6 +96,8 @@ if __name__ == "__main__":
 		emailtext += linetmpl
 	emailtext += """<br/><br/>Best Regards,<br/>The TNS team"""
 		
+	if not options.SMTP_LOGIN or not options.SMTP_PASSWORD:
+		parser.error("set --SMTP_LOGIN and --SMTP_PASSWORD (or the SMTP_LOGIN and SMTP_PASSWORD environment variables)")
 	smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
 	from_addr = "%s@gmail.com" % options.SMTP_LOGIN
 	subject = "TNS - New reports and classifications"
