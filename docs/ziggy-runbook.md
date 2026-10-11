@@ -1312,6 +1312,26 @@ DETAIL_RADIUS_ARCSEC: 5
 # LASAIR_API_URL: ...
 ```
 
+3.32
+
+### Spatial and time indexes, migration 0031 (optional EXPLAIN, budget time at 3.9) nothing required on yse\_test
+
+Migration `0031_spatial_time_indexes` (perf audit 2026-10-10, [#477](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/477), [#478](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/478)) adds seven indexes and changes no columns: `(dec, ra)` on `YSE_App_transient`, `YSE_App_host` and `YSE_App_candidate`; `(dec_cen, ra_cen)` on `YSE_App_surveyfield`; `created_date` on `YSE_App_transient`; `obs_mjd` and `mjd_requested` on `YSE_App_surveyobservation`. **yse\_test / yse\_experimental:** applied automatically by the `experimental` deploy on the shared `YSE_test` database; nothing to run. **Production:** it is applied by 3.9 with the other migrations. Build time is unknown: each `CREATE INDEX` on InnoDB (MySQL 8) is an online in-place build that allows reads and writes, but it scans the whole table, and the Transient and Host builds are the long ones. Check the row counts first and budget for them in the maintenance window.
+
+Copy
+
+```
+DB=<PROD_DB>; USER=<PROD_DB_USER>; HOST=<PROD_DB_HOST>
+# 1. before 3.9: sizes and current indexes (read-only)
+mysql -u $USER -p -h $HOST $DB -e "SELECT table_name, table_rows, ROUND(data_length/1024/1024) AS data_mb FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('YSE_App_transient','YSE_App_host','YSE_App_candidate','YSE_App_surveyfield','YSE_App_surveyobservation');" > idx0031_before.txt
+mysql -u $USER -p -h $HOST $DB -e "SHOW INDEX FROM YSE_App_transient; SHOW INDEX FROM YSE_App_host; SHOW INDEX FROM YSE_App_candidate; SHOW INDEX FROM YSE_App_surveyfield; SHOW INDEX FROM YSE_App_surveyobservation;" >> idx0031_before.txt
+# 2. a representative cone box and a night window (plan only, nothing executes; single quotes keep the shell off the `dec` backticks)
+mysql -u $USER -p -h $HOST $DB -e 'EXPLAIN SELECT id FROM YSE_App_transient WHERE `dec` >= 20.0 AND `dec` <= 20.003 AND ra >= 150.0 AND ra <= 150.003; EXPLAIN SELECT id FROM YSE_App_host WHERE `dec` >= 20.0 AND `dec` <= 20.003 AND ra >= 150.0 AND ra <= 150.003; EXPLAIN SELECT id FROM YSE_App_surveyobservation WHERE (mjd_requested >= 61000 OR obs_mjd >= 61000) AND (mjd_requested <= 61001 OR obs_mjd <= 61001);' >> idx0031_before.txt
+# 3. after 3.9: repeat 1 and 2 into idx0031_after.txt
+```
+
+**Expected** before: `SHOW INDEX` has no `yse_*_dec_ra_idx`, `yse_transient_created_idx` or `yse_surveyobs_*` rows; the host EXPLAIN shows `type: ALL` (full scan). After: the seven indexes are listed; the transient and host EXPLAINs show `key: yse_transient_dec_ra_idx` / `yse_host_dec_ra_idx` with `type: range`; the survey EXPLAIN shows `index_merge` on the two `yse_surveyobs_*` indexes, or a full scan if the table is small (that is fine). **Check** `cd /data/yse_pz/YSE_PZ && <PROD_PYTHON> manage.py showmigrations YSE_App | tail -1` reads `[X] 0031_spatial_time_indexes`. The older single-column `yse_transient_dec_idx` and `yse_candidate_dec_idx` become redundant prefixes of the new composites; they stay in place for now (a later migration may drop them). Rollback of the indexes alone: `cd /data/yse_pz/YSE_PZ && <PROD_PYTHON> manage.py migrate YSE_App 0030_shared_db_column_defaults` drops just these seven while 0031 is the latest migration.
+
 R
 
 Rollback (code first; the database restore is required once 3.9 has run).
@@ -1415,6 +1435,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 ## 6 · Changelog
 
 * 2026-10-10 v28, informational. Deploy Stack now triggers on `push` to `experimental` / `develop` only (a merged PR is a push, so deploys still happen) and all workflows declare least-privilege `permissions`. **Nothing required on Ziggy.** After the first merge following this change, check on GitHub Actions that Deploy Stack fired once on the push.
+* 2026-10-10, informational. Perf audit P16/P17 ([#477](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/477), [#478](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/478)): migration `0031_spatial_time_indexes` (seven indexes, no column changes) applies on the shared `YSE_test` database with the experimental deploy, nothing to run there. New optional production step 3.32: row counts, `SHOW INDEX` and EXPLAIN before and after 3.9, build time to budget.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
