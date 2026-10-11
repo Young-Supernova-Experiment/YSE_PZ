@@ -26,6 +26,7 @@ from .common import alert
 from .common.utilities import date_to_mjd, coordstr_to_decimal
 import numpy as np
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from .basicauth import *
 
 from YSE_App.util import lcogt
@@ -201,6 +202,7 @@ def _resource_form_redirect(request):
 	return HttpResponseRedirect(reverse('yse_home'))
 
 
+@method_decorator(login_required, name='dispatch')
 class AddClassicalResourceFormView(FormView):
 	form_class = ClassicalResourceForm
 	template_name = 'YSE_App/form_snippets/classical_resource_form.html'
@@ -243,6 +245,7 @@ class AddClassicalResourceFormView(FormView):
 		}
 		return JsonResponse(data)
 
+@method_decorator(login_required, name='dispatch')
 class AddToOResourceFormView(FormView):
 	form_class = ToOResourceForm
 	template_name = 'YSE_App/form_snippets/too_resource_form.html'
@@ -275,6 +278,7 @@ class AddToOResourceFormView(FormView):
 		return JsonResponse(data)
 		
 		
+@method_decorator(login_required, name='dispatch')
 class AddTransientObservationTaskFormView(FormView):
 	form_class = TransientObservationTaskForm
 	template_name = 'YSE_App/form_snippets/transient_observation_task_form.html'
@@ -332,6 +336,7 @@ class AddTransientObservationTaskFormView(FormView):
 		else:
 			return response
 
+@method_decorator(login_required, name='dispatch')
 class AddSurveyFieldFormView(FormView):
 	form_class = SurveyFieldForm
 	template_name = 'YSE_App/form_snippets/survey_field_form.html'
@@ -559,6 +564,8 @@ class AddSurveyObsFormView(FormView):
 			return response
 
 		
+@method_decorator(login_required, name='dispatch')
+@method_decorator(require_POST, name='dispatch')
 class AddOncallUserFormView(FormView):
 	form_class = OncallForm
 	template_name = 'YSE_App/form_snippets/oncall_form.html'
@@ -624,6 +631,7 @@ class AddOncallUserFormView(FormView):
 			return response
 
 		
+@method_decorator(login_required, name='dispatch')
 class AddTransientCommentFormView(FormView):
 	form_class = TransientCommentForm
 	template_name = 'simple.html'#YSE_App/form_snippets/transient_followup_form.html'
@@ -771,6 +779,7 @@ class RemoveDashboardQueryFormView(DeleteView):
 		else:
 			return response
 
+@method_decorator(login_required, name='dispatch')
 class AddFollowupNoticeFormView(FormView):
 	form_class = AddFollowupNoticeForm
 	template_name = 'YSE_App/form_snippets/dashboard_followup_notice_form.html'
@@ -810,12 +819,32 @@ Contact D. Jones or D. Coulter."""%self.request.user,
 		else:
 			return response
 
+@method_decorator(login_required, name='dispatch')
+@method_decorator(require_POST, name='dispatch')
 class RemoveFollowupNoticeFormView(DeleteView):
+	"""Remove one of the requesting user's follow-up notices (#497).
+
+	POST only; a notice that belongs to another user is a 404. An AJAX request
+	gets a JSON answer instead of the redirect to ``personaldashboard``.
+	"""
 	model = UserTelescopeToFollow
 	form_class = RemoveFollowupNoticeForm
 	template_name = 'YSE_App/personaldashboard.html'
 	success_url = reverse_lazy('personaldashboard')
-	
+
+	def get_queryset(self):
+		return UserTelescopeToFollow.objects.filter(profile__user=self.request.user)
+
+	def post(self, request, *args, **kwargs):
+		self.object = self.get_object()
+		self.object.delete()
+		if is_ajax(request):
+			return JsonResponse({'message': 'Removed follow-up notice.', 'removed': 1})
+		return HttpResponseRedirect(self.get_success_url())
+
+	# Django >= 4 routes DELETE through form_valid; keep it on the same path.
+	delete = post
+
 	def form_invalid(self, form):
 		response = super(RemoveFollowupNoticeFormView, self).form_invalid(form)
 
@@ -834,6 +863,7 @@ def facility_allocation_for(resource, user, slugs=('lco', 'soar')):
 	return allocations_for_user(user).filter(telescope=resource.telescope, facility__in=slugs).order_by('-end_date').first()
 
 
+@method_decorator(login_required, name='dispatch')
 class AddAutomatedSpectrumRequestFormView(FormView):
 	form_class = AutomatedSpectrumRequest
 	template_name = 'YSE_App/form_snippets/spectrum_request_form.html'
