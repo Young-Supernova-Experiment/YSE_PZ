@@ -304,7 +304,7 @@ class TransientPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser(self.request.user)
-        return allowed_phot
+        return allowed_phot.prefetch_related('groups')
 
 class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostPhotometrySerializer
@@ -313,7 +313,7 @@ class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedHostPhotometry_ByUser(self.request.user)
-        return allowed_phot
+        return allowed_phot.prefetch_related('groups')
 
 class TransientPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotDataSerializer
@@ -321,7 +321,7 @@ class TransientPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedTransientPhotData_ByUser(self.request.user)
-        return allowed_phot_data
+        return allowed_phot_data.prefetch_related('data_quality')
 
 
 class HostPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -330,7 +330,7 @@ class HostPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedHostPhotData_ByUser(self.request.user)
-        return allowed_phot_data
+        return allowed_phot_data.prefetch_related('data_quality')
 
 
 
@@ -429,7 +429,7 @@ class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
-        return allowed_spec
+        return allowed_spec.prefetch_related('groups', 'data_quality')
 
 class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpectrumSerializer
@@ -438,7 +438,7 @@ class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
-        return allowed_spec
+        return allowed_spec.prefetch_related('groups', 'data_quality')
 
 class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpecDataSerializer
@@ -811,7 +811,9 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         qs = Transient.objects.all()
-        return filter_transients_by_user_access(self.request.user, qs)
+        qs = filter_transients_by_user_access(self.request.user, qs)
+        # Prefetch tags so the list does not run a query per row (#456).
+        return qs.prefetch_related('tags')
 
     @action(detail=False, methods=['post'], url_path='save_search')
     def save_search(self, request):

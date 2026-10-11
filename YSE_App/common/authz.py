@@ -6,7 +6,7 @@ hardening", and ``docs/ziggy-runbook.md``):
 
 - ``API_WRITE_PERMISSIONS_ENFORCED``: unsafe methods on the legacy REST viewsets
   need staff, superuser or the Django model permission (granted to the
-  ``API_WRITERS_GROUP`` group by migration 0031).
+  ``API_WRITERS_GROUP`` group by migration 0032).
 - ``UPLOAD_GROUP_CHECKS_ENFORCED``: the upload endpoints (``add_transient``,
   ``add_transient_phot``, ``add_transient_spec``, ``upload_spectrum``) need a
   trusted uploader, or a collaboration-group member who shares only with their

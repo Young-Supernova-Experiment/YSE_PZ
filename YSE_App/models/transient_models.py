@@ -22,6 +22,55 @@ from auditlog.registry import auditlog
 
 logger = logging.getLogger(__name__)
 
+
+# Half-widths of the matching box, in degrees (RA is divided by |cos(dec)| of the transient).
+_NEAREST_FIELD_BOX = {'ztf': (6.9 / 2., 6.9 / 2.), 'yse': (15., 15.)}
+
+
+def batch_nearest_survey_fields(transients, kind):
+	"""
+	First matching SurveyField for each transient, with one query for the whole batch.
+
+	Same rule as the old per-row methods: the first field (lowest pk) whose centre lies in
+	the box around the transient (ZTF fields for kind 'ztf', all other groups for 'yse'),
+	and its separation in degrees to one decimal. Returns a list of
+	(field_id, '%.1f' separation) tuples, (None, None) where nothing matches.
+	"""
+	import numpy as np
+	transients = list(transients)
+	if not transients:
+		return []
+	fields = SurveyField.objects.order_by('pk')
+	if kind == 'ztf':
+		fields = fields.filter(obs_group__name='ZTF')
+	else:
+		fields = fields.exclude(obs_group__name='ZTF')
+	rows = list(fields.values_list('field_id', 'ra_cen', 'dec_cen'))
+	results = [(None, None)] * len(transients)
+	if not rows:
+		return results
+	f_id = [r[0] for r in rows]
+	f_ra = np.array([r[1] for r in rows], dtype=float)
+	f_dec = np.array([r[2] for r in rows], dtype=float)
+	t_ra = np.array([t.ra for t in transients], dtype=float)
+	t_dec = np.array([t.dec for t in transients], dtype=float)
+	ra_half, dec_half = _NEAREST_FIELD_BOX[kind]
+	with np.errstate(divide='ignore'):
+		ra_off = ra_half / np.abs(np.cos(t_dec * np.pi / 180))
+	match = ((f_ra[None, :] > (t_ra - ra_off)[:, None]) & (f_ra[None, :] < (t_ra + ra_off)[:, None]) &
+			 (f_dec[None, :] > (t_dec - dec_half)[:, None]) & (f_dec[None, :] < (t_dec + dec_half)[:, None]))
+	hit = match.any(axis=1)
+	if not hit.any():
+		return results
+	first = match.argmax(axis=1)  # first True per row = lowest pk
+	idx = np.nonzero(hit)[0]
+	sep = cd.SkyCoord(t_ra[idx], t_dec[idx], unit=u.deg).separation(
+		cd.SkyCoord(f_ra[first[idx]], f_dec[first[idx]], unit=u.deg)).degree
+	for i, s in zip(idx, sep):
+		results[i] = (f_id[first[i]], '%.1f' % s)
+	return results
+
+
 class Transient(BaseModel):
 
 	### Entity relationships ###
@@ -108,6 +157,10 @@ class Transient(BaseModel):
 			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
 			# Search |b| cuts and ORDER BY gal_b (#286).
 			models.Index(fields=['gal_b'], name='yse_transient_gal_b_idx'),
+			# Cone-search boxes (dec range AND ra range), dec first (#477).
+			models.Index(fields=['dec', 'ra'], name='yse_transient_dec_ra_idx'),
+			# created_date >= cutoff and ORDER BY created_date (#478).
+			models.Index(fields=['created_date'], name='yse_transient_created_idx'),
 		]
 
 	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
@@ -163,79 +216,30 @@ class Transient(BaseModel):
 			return sf[0].field_id, sf[0].ra_cen, sf[0].dec_cen, time_since_last_obs
 		else: return None,None,None,None
 
+	def _nearest_field_result(self, kind):
+		"""(field_id, sep string) for the first matching field of `kind` ('ztf' or 'yse').
+
+		Uses the per-page cache that the field tables fill (batch_nearest_survey_fields)
+		when present, otherwise computes it for this one transient."""
+		cache = self.__dict__.get('_nearest_field_cache')
+		if cache is None:
+			cache = self.__dict__['_nearest_field_cache'] = {}
+		if kind not in cache:
+			cache[kind] = batch_nearest_survey_fields([self], kind)[0]
+		return cache[kind]
+
 	def nearest_ztf_field(self):
-		d = self.dec*np.pi/180
-		width_corr = 6.9/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr/2., unit=u.deg)
-		dec_offset = cd.Angle(6.9/2., unit=u.deg)
-
-		sf = SurveyField.objects.filter(obs_group__name='ZTF').\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree)))
-
-		if len(sf): 
-			return sf[0].field_id
-		else: return None
+		return self._nearest_field_result('ztf')[0]
 
 	def nearest_ztf_field_sep(self):
-		d = self.dec*np.pi/180
-		width_corr = 6.9/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr/2., unit=u.deg)
-		dec_offset = cd.Angle(6.9/2., unit=u.deg)
-
-		sf = SurveyField.objects.filter(obs_group__name='ZTF').\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree))).select_related()
-
-		sc = cd.SkyCoord(self.ra,self.dec,unit=u.deg)
-		sc2 = cd.SkyCoord(sf[0].ra_cen,sf[0].dec_cen,unit=u.deg)
-		if len(sf): 
-			return '%.1f'%sc.separation(sc2).degree
-		else: return None
+		return self._nearest_field_result('ztf')[1]
 
 	def nearest_yse_field(self):
-		d = self.dec*np.pi/180
-		width_corr = 15/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr, unit=u.deg)
-		dec_offset = cd.Angle(15, unit=u.deg)
-
-		sf = SurveyField.objects.filter(~Q(obs_group__name='ZTF')).\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree)))
-
-		if len(sf): 
-			return sf[0].field_id
-		else: return None
+		return self._nearest_field_result('yse')[0]
 
 	def nearest_yse_field_sep(self):
-		d = self.dec*np.pi/180
-		width_corr = 15/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr, unit=u.deg)
-		dec_offset = cd.Angle(15, unit=u.deg)
+		return self._nearest_field_result('yse')[1]
 
-		sf = SurveyField.objects.filter(~Q(obs_group__name='ZTF')).\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree))).select_related()
-
-		sc = cd.SkyCoord(self.ra,self.dec,unit=u.deg)
-		sc2 = cd.SkyCoord(sf[0].ra_cen,sf[0].dec_cen,unit=u.deg)
-		if len(sf): 
-			return '%.1f'%sc.separation(sc2).degree
-		else: return None
-		
-		
 	def modified_date_pacific(self):
 		date_format = '%m/%d/%Y %H:%M:%S %Z'
 		mod_date = self.modified_date.astimezone(timezone('US/Pacific'))

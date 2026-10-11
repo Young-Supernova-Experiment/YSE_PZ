@@ -76,7 +76,7 @@ def forwards(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("YSE_App", "0030_shared_db_column_defaults"),
+        ("YSE_App", "0031_spatial_time_indexes"),
         ("auth", "0012_alter_user_first_name_max_length"),
         ("contenttypes", "0002_remove_content_type_name"),
     ]
