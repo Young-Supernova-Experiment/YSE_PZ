@@ -1623,6 +1623,31 @@ mysql -u <EXPLORER_DB_USER> -p -h <PROD_DB_HOST> <DB> -e "SELECT COUNT(*) FROM d
 
 `docker/db_init/YSE_create_users.sql` keeps the database-wide grant. It runs before the tables exist, and MySQL accepts table-level grants only on existing tables, so the local stacks and CI are unchanged.
 
+<a id="query-api"></a>
+
+### `/query_api/` saved-query allowlist and row visibility (2026-10-11, #524) one check recommended, per stack
+
+From this change `/query_api/<title>/` serves a saved query only when one of these holds: the title is on the allowlist, the caller created the query, the caller has SQL Explorer access, or the caller is a service account (staff, superuser, a member of `api_writers`, or the `[main] dblogin` account). Other titles return 404. The built-in allowlist holds the four titles the crons and scripts request (`QUB_data.py`, `DECam_upload.py`, `DECam_upload_clusters.py`, `util/` and `yse_utils/get_YSE_PAs.py`). For other callers, rows are limited to transients they may view. Staff, superusers and service accounts get every row, as before. No migration.
+
+**Check (recommended): the accounts that run `get_YSE_PAs.py` (`--yseuser`) are staff or in `api_writers`.** If they are not, they now get only the rows of transients they may view. Run this once per account; it prints to your terminal only.
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User; u=User.objects.get(username='<ACCOUNT>'); print(u.is_staff or u.is_superuser or u.groups.filter(name='api_writers').exists())"
+```
+
+**Expected:** `True`. If it prints `False`, add the account to `api_writers` (Step B of [Write authorization and Explorer access](#authz-flags)) and re-run.
+
+**Optional settings** (`[site_settings]` in `settings.ini`; restart Apache after a change):
+```
+# extra titles /query_api/ may serve to any signed-in account, one per line (continuation lines indented) or separated by |
+# QUERY_API_ALLOWED_QUERIES: <TITLE_1> | <TITLE_2>
+# rollback switch for the row filter; default True
+# QUERY_API_VISIBILITY_FILTER: True
+```
+Env equivalents: `YSE_QUERY_API_ALLOWED_QUERIES`, `YSE_QUERY_API_VISIBILITY_FILTER=0`.
+
+**Check after deploy:** the crons' logs show no new 404 from `/query_api/`.
+
 <a id="authn"></a>
 
 ### Login, session and transport settings (2026-10-11, sec/authn PR) one check required, the rest optional, per stack
@@ -1945,6 +1970,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v36, one check recommended. `/query_api/` saved-query allowlist and row visibility ([#524](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/524)): the crons' four titles are on the built-in allowlist and service accounts are exempt from the row filter; check that the `get_YSE_PAs.py` accounts are staff or in `api_writers` ([section](#query-api)). Optional `QUERY_API_ALLOWED_QUERIES` and rollback switch `QUERY_API_VISIBILITY_FILTER`. No migration.
 * 2026-10-11 v35, **required before relying on the new defaults**. Hard-coded credentials removed ([#528](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/528)): the template `public_settings.ini` now holds placeholders (it is not used on Ziggy, whose own `settings.ini` is unchanged), docker needs `YSE_DATABASE_PASSWORD` / `YSE_EXPLORER_PASSWORD` in `docker/.env`, and the SciServer photo-z crons read `sciserveruser` / `sciserverpass` from `[main]` of `settings.ini` (add them on each stack that runs those crons, else the crons stop with a clear error). New section "Credential rotation". ZTF forced phot and the legacy position-angle helpers no longer use a shell, so ZTF forced phot no longer needs `wget` ([#530](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/530), [#531](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/531)). Gemini now verifies the server certificate; if the ODB uses a private CA set `gemini_ca_bundle=<PATH_TO_CA_BUNDLE>` under `[main]` or `GEMINI_CA_BUNDLE` ([#532](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/532)). The healpix loader no longer uses `LOAD DATA LOCAL INFILE` ([#533](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/533)). gitleaks CI job added ([#529](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/529)).
 * 2026-10-11 v34, optional. Performance audit server settings ([#482](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/482)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490)): new section "Performance audit 2026-10-10: server settings" (mod_deflate, hashed static files + Cache-Control, `prune_finder_charts`, `prune_auditlog`, LOGGING / cached_db sessions, plot-stack preload, slow query log). Nothing required; no migration.
 * 2026-10-11 v33, informational. Write authorization and Explorer access ([#520](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/520)-[#527](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/527)): migration `0032_api_writer_groups` (data only: groups `api_writers` and `explorer_users`). Nothing is required; the three new `[site_settings]` flags are off by default. New optional section [Write authorization and Explorer access](#authz-flags): check the groups, add the cron and script accounts to `api_writers`, turn on `API_WRITE_PERMISSIONS_ENFORCED` / `UPLOAD_GROUP_CHECKS_ENFORCED` / `EXPLORER_RESTRICTED_ACCESS`, and limit the Explorer MySQL user's grants to science tables.

@@ -1439,13 +1439,79 @@ def get_all_transients_box(request, ra, dec, ra_width, dec_width):
     return JsonResponse(return_dict)
 
 
+def _query_api_service_account(user):
+    """Staff, superusers and the cron / script accounts (#524)."""
+    from YSE_App.common.authz import is_trusted_writer
+
+    if is_trusted_writer(user):
+        return True
+    return bool(user.is_authenticated and user.is_active
+                and user.username in getattr(djangoSettings, 'API_SERVICE_USERNAMES', ()))
+
+
+def _query_api_may_run(user, query):
+    """Whether ``user`` may call saved ``query`` through /query_api/ (#524).
+
+    Titles on ``QUERY_API_ALLOWED_QUERIES``, the caller's own queries, and any
+    query for SQL Explorer users and service accounts.
+    """
+    from YSE_App.common.authz import explorer_access_allowed
+
+    if query.title in getattr(djangoSettings, 'QUERY_API_ALLOWED_QUERIES', ()):
+        return True
+    if query.created_by_user_id is not None and query.created_by_user_id == user.id:
+        return True
+    return explorer_access_allowed(user) or _query_api_service_account(user)
+
+
+def _query_api_filter_visible_rows(user, field_names, rows):
+    """Keep the rows whose transient ``user`` may view (#524).
+
+    The transient is identified by a ``transient_id`` column, else a
+    ``transient_name`` or ``name`` column, else the first column as a name
+    (the personal-dashboard convention). Rows that do not resolve to a visible
+    transient are dropped.
+    """
+    from YSE_App.services.visibility import filter_transients_by_user_access
+
+    if not rows:
+        return rows
+    lowered = [str(f).lower() for f in field_names]
+    by_pk = 'transient_id' in lowered
+    for col in ('transient_id', 'transient_name', 'name'):
+        if col in lowered:
+            idx = lowered.index(col)
+            break
+    else:
+        idx = 0
+    keys = {row[idx] for row in rows if row[idx] is not None}
+    if by_pk:
+        keys = {k for k in keys if isinstance(k, int)}
+        base = Transient.objects.filter(pk__in=keys)
+        visible = set(filter_transients_by_user_access(user, base).values_list('pk', flat=True))
+    else:
+        keys = {k for k in keys if isinstance(k, str)}
+        base = Transient.objects.filter(name__in=keys)
+        visible = set(filter_transients_by_user_access(user, base).values_list('name', flat=True))
+    return [row for row in rows if row[idx] in visible]
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def query_api(request,query_name):
+    """Rows of a saved query (or a registered Python query) as JSON for the crons and scripts.
 
-    query = Query.objects.filter(title=unquote(query_name))
-    if len(query):
-        query = query[0]
+    Saved queries: only those :func:`_query_api_may_run` allows (#524); others
+    are a 404, like an unknown title. Rows are limited to transients the caller
+    may view unless the caller is staff or a service account
+    (``QUERY_API_VISIBILITY_FILTER``).
+    """
+    title = unquote(query_name)
+    filter_rows = (getattr(djangoSettings, 'QUERY_API_VISIBILITY_FILTER', True)
+                   and not _query_api_service_account(request.user))
+    query = Query.objects.filter(title=title).first()
+    if query is not None:
+        if not _query_api_may_run(request.user, query): raise Http404('Invalid Query')
         if not dashboard_sql_is_supported(query.sql): raise Http404('Invalid Query')
         # Cached for QUERY_API_CACHE_SECONDS on the capped explorer connection (#474).
         from YSE_App.common.db_time_cap import QueryTimeout
@@ -1454,27 +1520,20 @@ def query_api(request,query_name):
             field_names, field_vals = run_explorer_query_rows_cached(query)
         except QueryTimeout as exc:
             return JsonResponse({"message": "query %s: %s" % (query.title, exc)}, status=504)
+        if filter_rows:
+            field_vals = _query_api_filter_visible_rows(request.user, field_names, field_vals)
     else:
-        #query = UserQuery.objects.filter(python_query = unquote(query_name))
-        #if not len(query): return Http404('Invalid Query')
-        #query = query[0]
-        try: transients = yse_python_queries.run_python_query(unquote(query_name))
+        try: transients = yse_python_queries.run_python_query(title)
         except KeyError: raise Http404('Invalid Query')
+        if filter_rows:
+            from YSE_App.services.visibility import filter_transients_by_user_access
+            transients = filter_transients_by_user_access(request.user, transients)
+        field_names = ('transient_id', 'transient_name', 'transient_ra', 'transient_dec')
+        field_vals = [(t.id, t.name, t.ra, t.dec) for t in transients]
 
-    serialized_transients = []
-    for vals in field_vals:
-        #tdict = {"transient_ra":t.ra,"transient_dec":t.dec,
-        #        "transient_name":t.name,"transient_id":t.id}
-        tdict = {}
-        for f,v in zip(field_names,vals):
-            tdict[f] = v
-        serialized_transients.append(
-            tdict
-        )
+    serialized_transients = [dict(zip(field_names, vals)) for vals in field_vals]
 
-    return_dict = {"transients":serialized_transients }
-
-    return JsonResponse(return_dict)
+    return JsonResponse({"transients": serialized_transients})
 
 @csrf_exempt
 @login_or_basic_auth_required

@@ -549,6 +549,37 @@ QUERY_API_CACHE_SECONDS = int(
     or config.getint('site_settings', 'QUERY_API_CACHE_SECONDS', fallback=300)
 )
 
+# Saved Explorer queries /query_api/<title>/ serves to accounts without SQL
+# Explorer access (#524). The built-in titles are the ones the crons and
+# scripts in YSE_App/data_ingest, yse_utils and util request. Owners may always
+# call their own queries; Explorer users and service accounts may call any.
+# [site_settings] QUERY_API_ALLOWED_QUERIES (or env YSE_QUERY_API_ALLOWED_QUERIES)
+# adds titles: one per line, or separated by '|'.
+QUERY_API_DEFAULT_ALLOWED_QUERIES = (
+    'YSE forced photometry for non-YSE, non-Antares transients',  # data_ingest/QUB_data.py
+    'DECAT_transients_mags',  # data_ingest/DECam_upload.py, DECam_upload_clusters.py
+    'all_yse_transients',  # util/ and yse_utils/get_YSE_PAs.py
+    'yse_transients_goodcell',  # util/ and yse_utils/get_YSE_PAs.py
+)
+
+
+def _title_list(raw):
+    return [t.strip() for t in (raw or '').replace('|', '\n').split('\n') if t.strip()]
+
+
+QUERY_API_ALLOWED_QUERIES = list(QUERY_API_DEFAULT_ALLOWED_QUERIES) + _title_list(
+    os.environ.get('YSE_QUERY_API_ALLOWED_QUERIES', '')
+    or config.get('site_settings', 'QUERY_API_ALLOWED_QUERIES', fallback='')
+)
+# Rows of /query_api/ results are limited to transients the caller may view,
+# except for staff, superusers and service accounts (#524). Default True;
+# env YSE_QUERY_API_VISIBILITY_FILTER=0 (or [site_settings] False) turns it off.
+_qavf = os.environ.get('YSE_QUERY_API_VISIBILITY_FILTER', '').strip()
+QUERY_API_VISIBILITY_FILTER = (
+    _qavf != '0' if _qavf
+    else config.getboolean('site_settings', 'QUERY_API_VISIBILITY_FILTER', fallback=True)
+)
+
 # Ingest-cron HTTP (YSE_App.common.http.ingest_session, #473): connect and read
 # timeouts in seconds, a longer read timeout for the crons' own POSTs to
 # /add_transient/, and how many times a connection error or a 502/503/504 on
