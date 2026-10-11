@@ -58,17 +58,13 @@ def _recent_phot_subqueries(transient_ref):
     return Subquery(recent_mag_sq), Subquery(recent_magdate_sq)
 
 
-# Sort keys for the "Last Mag" and "Last Obs. Date" columns (#454, per #270):
+# Sort keys for the "Last Det." and "Last Obs." columns (#454, per #270):
 # indexed TransientPhotStat columns instead of a correlated subquery (or a
-# Max() over every photometry row) evaluated for the whole bucket. Sorting
-# only: the cells keep showing the queryset's recent_mag / recent_magdate.
-#  * last_obs_date is the latest unflagged point of any kind, the same rule
-#    as the displayed recent_magdate.
+# Max() over every photometry row) evaluated for the whole bucket. Since
+# #557 the cells (LastDetColumn / LastObsColumn) show the same stat columns.
+#  * last_obs_date is the latest unflagged point of any kind.
 #  * last_detected_mag is the latest unflagged *detection* (the light-curve
-#    plot's rule). The displayed recent_mag is the latest unflagged point with
-#    any magnitude, so a row whose newest magnitude is not a detection (no
-#    mag_err, or a forced point with mag_err above the plot's cut) sorts by
-#    its last detection instead.
+#    plot's rule).
 #  * A transient without a stat row sorts as NULL, like one without photometry
 #    (MySQL: first ascending, last descending).
 RECENT_PHOT_ORDER_FIELDS = {
@@ -94,28 +90,204 @@ class RecentPhotOrderMixin:
         return (order_by_recent_phot(queryset, 'recent_magdate', is_descending), True)
 
 
-def annotate_followup_recent_mag(qs):
-    """recent_mag for each TransientFollowup row, one subquery instead of a query per row."""
-    if 'recent_mag' in qs.query.annotations:
-        return qs
-    recent_mag, _ = _recent_phot_subqueries('transient_id')
-    return qs.annotate(recent_mag=recent_mag)
+# "Last Det." and "Last Obs." cells (#557). Both read TransientPhotStat, the
+# same columns RECENT_PHOT_ORDER_FIELDS sorts on, so display and sort agree:
+#  * Last Det.: last_detected_mag and its band (the light-curve plot's
+#    detection rule, services.phot_points).
+#  * Last Obs.: last_obs_date, the newest unflagged point of any kind. When
+#    that point is not a detection and the plot draws it as an upper limit,
+#    the cell adds the limit and its band, e.g. "10/09/2026 (>21.30 r)".
+#    The stat row does not store the newest point's limit (its limit fields
+#    are pre-detection only), so the limit is read from that point: one
+#    extra query per table page, only when a row on the page needs it.
+# A transient without a stat row shows the empty default and sorts as NULL.
+_LAST_PHOT_MJD_TOLERANCE = 1.0 / 86400.0  # last_obs_date round-trips through an MJD
+
+
+def _stat_row(transient_id, stat):
+    band = stat.last_detected_band if stat.last_detected_band_id is not None else None
+    return {
+        'transient_id': transient_id,
+        'lastphot_det_mag': stat.last_detected_mag,
+        'lastphot_det_band': band.name if band is not None else None,
+        'lastphot_obs_date': stat.last_obs_date,
+        'lastphot_obs_mjd': stat.last_obs_mjd,
+        'lastphot_det_mjd': stat.last_detected_mjd,
+    }
+
+
+def _stat_rows_from_records(records, transient_attr):
+    """Stat rows from the page's Transient records, or None to query them.
+
+    ``annotate_dashboard_transient_fields`` select_related()s the stat row and
+    its band, so dashboard pages need no stat query.
+    """
+    if transient_attr != 'pk':
+        return None
+    rows = []
+    for record in records:
+        descriptor = getattr(type(record), 'photstat', None)
+        related = getattr(descriptor, 'related', None)
+        if related is None or not related.is_cached(record):
+            return None
+        stat = related.get_cached_value(record)
+        if stat is None:
+            continue
+        if stat.last_detected_band_id is not None and \
+                not type(stat).last_detected_band.field.is_cached(stat):
+            return None
+        rows.append(_stat_row(record.pk, stat))
+    return rows
+
+
+def last_phot_summary(transient_ids, stat_rows=None):
+    """``{transient_id: dict}`` with the Last Det. / Last Obs. values (see above).
+
+    Keys of each dict: ``det_mag``, ``det_band``, ``obs_date``, ``limit``,
+    ``limit_band``. ``stat_rows`` (see :func:`_stat_row`) saves the stat query. At most two queries for any
+    number of transients.
+    """
+    import datetime
+
+    from YSE_App.models.phot_stat_models import TransientPhotStat, datetime_to_mjd
+    from YSE_App.services import phot_points
+
+    ids = {i for i in transient_ids if i is not None}
+    out = {}
+    if not ids:
+        return out
+    if stat_rows is None:
+        stat_rows = [
+            _stat_row(stat.transient_id, stat)
+            for stat in TransientPhotStat.objects.filter(transient_id__in=ids)
+            .select_related('last_detected_band')
+        ]
+    newest_not_det = {}
+    for row in stat_rows:
+        tid = row['transient_id']
+        if tid not in ids or row['lastphot_obs_date'] is None:
+            continue
+        out[tid] = {
+            'det_mag': row['lastphot_det_mag'],
+            'det_band': row['lastphot_det_band'],
+            'obs_date': row['lastphot_obs_date'],
+            'limit': None,
+            'limit_band': None,
+        }
+        obs_mjd, det_mjd = row['lastphot_obs_mjd'], row['lastphot_det_mjd']
+        if obs_mjd is not None and (det_mjd is None or obs_mjd - det_mjd > _LAST_PHOT_MJD_TOLERANCE):
+            newest_not_det[tid] = (obs_mjd, row['lastphot_obs_date'])
+    if not newest_not_det:
+        return out
+    window = Q()
+    for tid, (_, obs_date) in newest_not_det.items():
+        window |= Q(photometry__transient_id=tid,
+                    obs_date__gte=obs_date - datetime.timedelta(days=1))
+    points = (
+        TransientPhotData.objects.filter(window)
+        .exclude(data_quality__isnull=False)
+        .values_list('photometry__transient_id', 'obs_date', 'band__name',
+                     'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point')
+    )
+    for tid, obs_date, band, mag, mag_err, flux, flux_err, zp in points:
+        obs_mjd = newest_not_det[tid][0]
+        if abs(datetime_to_mjd(obs_date) - obs_mjd) > _LAST_PHOT_MJD_TOLERANCE:
+            continue
+        if phot_points.is_detection(mag, mag_err, flux, flux_err):
+            continue
+        lim = phot_points.limiting_mag(flux, flux_err, zp)
+        entry = out[tid]
+        if lim is not None and (entry['limit'] is None or lim > entry['limit']):
+            entry['limit'], entry['limit_band'] = lim, band
+    return out
+
+
+class _LastPhotColumn(tables.Column):
+    """Base for the Last Det. / Last Obs. columns: values for the whole page at once.
+
+    ``transient_attr`` names the record attribute holding the transient id
+    (``pk`` on Transient rows, ``transient_id`` on follow-up rows). The cells
+    ignore the queryset's ``recent_mag`` / ``recent_magdate`` annotations; the
+    table's ``order_recent_mag`` / ``order_recent_magdate`` sort on the same
+    stat columns.
+    """
+
+    stat_field = None
+
+    def __init__(self, *args, transient_attr='pk', **kwargs):
+        kwargs.setdefault('accessor', transient_attr)
+        kwargs.setdefault('orderable', True)
+        # Explicit, so a queryset ordered on pk is never read as "sorted by this column".
+        prefix = '' if transient_attr == 'pk' else 'transient__'
+        kwargs.setdefault('order_by', prefix + self.stat_field)
+        kwargs['empty_values'] = ()
+        super().__init__(*args, **kwargs)
+        self.transient_attr = transient_attr
+
+    def _info(self, record, table):
+        tid = getattr(record, self.transient_attr, None)
+        cache = table.__dict__.setdefault('_last_phot_cache', {})
+        if tid not in cache:
+            records = [record]
+            rows = table.page.object_list if getattr(table, 'page', None) is not None else table.rows
+            try:
+                records += [row.record for row in rows]
+            except Exception:
+                pass
+            ids = {getattr(r, self.transient_attr, None) for r in records}
+            ids.discard(None)
+            stat_rows = _stat_rows_from_records(records, self.transient_attr)
+            cache.update(dict.fromkeys(ids))
+            cache.update(last_phot_summary(ids, stat_rows))
+        return cache.get(tid)
+
+
+class LastDetColumn(_LastPhotColumn):
+    """"Last Det.": last detection magnitude and band, e.g. ``18.71 r``."""
+
+    stat_field = RECENT_PHOT_ORDER_FIELDS['recent_mag']
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('verbose_name', 'Last Det.')
+        super().__init__(*args, **kwargs)
+
+    def render(self, record, table, bound_column):
+        from .common.filter_display import display_filter_label
+
+        info = self._info(record, table)
+        if not info or info['det_mag'] is None:
+            return bound_column.default
+        return '%s %s' % (format_magnitude(info['det_mag']), display_filter_label(info['det_band']))
+
+
+class LastObsColumn(_LastPhotColumn):
+    """"Last Obs.": date of the newest point, plus its limit and band when it is a non-detection."""
+
+    DATE_FORMAT = '%m/%d/%Y'
+    stat_field = RECENT_PHOT_ORDER_FIELDS['recent_magdate']
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('verbose_name', 'Last Obs.')
+        super().__init__(*args, **kwargs)
+
+    def render(self, record, table, bound_column):
+        from .common.filter_display import display_filter_label
+
+        info = self._info(record, table)
+        if not info or info['obs_date'] is None:
+            return bound_column.default
+        text = info['obs_date'].strftime(self.DATE_FORMAT)
+        if info['limit'] is not None:
+            text += ' (>%s %s)' % (format_magnitude(info['limit']), display_filter_label(info['limit_band']))
+        return text
 
 
 class FollowupRecentMagMixin:
-    """Follow-up tables: recent_mag from the annotation, formatted like Transient.recent_mag()."""
-
-    def __init__(self, data, *args, **kwargs):
-        if isinstance(data, QuerySet):
-            data = annotate_followup_recent_mag(data)
-        super().__init__(data, *args, **kwargs)
-
-    def render_recent_mag(self, value):
-        return '%.2f' % value
+    """Follow-up tables: the "Last Det." column sorts on the transient's stat row (#557)."""
 
     def order_recent_mag(self, queryset, is_descending):
-        queryset = annotate_followup_recent_mag(queryset)
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
+        return (stable_order_by(queryset, 'transient__' + RECENT_PHOT_ORDER_FIELDS['recent_mag'],
+                                is_descending), True)
 
 
 class BazinMagMixin:
@@ -400,10 +572,8 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     peak_mag = PeakMagColumn(accessor='peak_mag',
                              verbose_name='Peak Mag',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
@@ -578,10 +748,8 @@ class FieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tables.Ta
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
     ztf_field = tables.Column(accessor='nearest_ztf_field',
@@ -673,10 +841,8 @@ class AdjustFieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tab
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
     yse_field = tables.Column(accessor='nearest_yse_field',
@@ -768,10 +934,8 @@ class YSETransientTable(RecentPhotOrderMixin, tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
     requested_followup_resources = tables.Column(accessor='pk',verbose_name='Req. Followup')
@@ -869,10 +1033,8 @@ class YSEFullTransientTable(RecentPhotOrderMixin, tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
     context_class = tables.Column(accessor='context_class',
@@ -964,10 +1126,8 @@ class YSERisingTransientTable(RecentPhotOrderMixin, tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
     context_class = tables.Column(accessor='context_class',
@@ -1070,10 +1230,8 @@ class NewTransientTable(RecentPhotOrderMixin, tables.Table):
                                verbose_name='DEC',orderable=True,order_by='dec')
     disc_date_string = tables.Column(accessor='disc_date_string',
                                      verbose_name='Disc. Date',orderable=True,order_by='disc_date')
-    recent_mag = MagnitudeColumn(accessor='recent_mag',
-                               verbose_name='Last Mag',orderable=True)
-    recent_magdate = LastObsDateColumn(accessor='recent_magdate',
-                               verbose_name='Last Obs. Date',orderable=True)
+    recent_mag = LastDetColumn()
+    recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
                                   verbose_name='Redshift',orderable=True,order_by='host__redshift')
     ps_score = tables.Column(accessor='point_source_probability',
@@ -1156,8 +1314,7 @@ class FollowupTable(FollowupRecentMagMixin, tables.Table):
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='recent_mag',
-                               verbose_name='Recent Mag',orderable=True)
+    recent_mag = LastDetColumn(transient_attr='transient_id')
 
 
     observation_window = tables.Column(accessor='observation_window',
@@ -1217,8 +1374,7 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibil
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='recent_mag',
-                               verbose_name='Recent Mag',orderable=True)
+    recent_mag = LastDetColumn(transient_attr='transient_id')
     # Bazin extrapolation to local midnight of the observing night (#225)
     bazin_mag = tables.Column(accessor='transient_id', verbose_name='Bazin Mag @ Night',
                               orderable=False, empty_values=(),
@@ -1318,8 +1474,7 @@ class ToOFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMi
                               verbose_name='RA',orderable=True,order_by='transient.ra')
     dec_string = tables.Column(accessor='transient.CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='transient.dec')
-    recent_mag = tables.Column(accessor='recent_mag',
-                               verbose_name='Recent Mag',orderable=True)
+    recent_mag = LastDetColumn(transient_attr='transient_id')
     # Bazin extrapolation to now: a ToO is triggered at request time (#225)
     bazin_mag = tables.Column(accessor='transient_id', verbose_name='Bazin Mag Now',
                               orderable=False, empty_values=(),
@@ -1540,7 +1695,10 @@ def annotate_dashboard_transient_fields(qs):
     """
     recent_mag, recent_magdate = _recent_phot_subqueries('pk')
     return PageFirstQuerySet.wrap(
-        qs.select_related('status', 'host', 'obs_group').annotate(
+        # photstat: the Last Det. / Last Obs. cells (#557) read it from the page
+        # rows; select_related is left out of the bare pk and count queries.
+        qs.select_related('status', 'host', 'obs_group',
+                          'photstat', 'photstat__last_detected_band').annotate(
             recent_mag=recent_mag,
             recent_magdate=recent_magdate,
         )

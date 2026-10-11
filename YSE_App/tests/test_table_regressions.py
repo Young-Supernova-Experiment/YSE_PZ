@@ -45,6 +45,9 @@ class LastObsDateColumnTests(TestCase):
         user = create_test_user(username='last_obs_date_user')
         transient = create_minimal_transient(user, name='last-obs-date-test')
         attach_synthetic_photometry(user, transient, n_points=3)
+        from YSE_App.services.photstat import recompute_many
+
+        recompute_many([transient.pk])  # the "Last Obs." cell reads the stat row (#557)
 
         table = TransientTable(
             annotate_dashboard_transient_fields(
