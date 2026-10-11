@@ -1706,7 +1706,7 @@
                 if (r1 == true){
                     var url = "{% url 'submit_to_tns' transient.name %}";
 
-                    $.get(url).done(function(json){
+                    $.post(url, {csrfmiddlewaretoken: "{{ csrf_token }}"}).done(function(json){
                         var message = json.msg;
                         alert(message);
                     reload();

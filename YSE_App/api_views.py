@@ -251,6 +251,23 @@ class LogViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         qs = Log.objects.all().prefetch_related("groups")
         return filter_transient_comments_for_user(qs, self.request.user)
 
+    def _owner_or_staff(self, instance):
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser or instance.created_by_id == user.id):
+            raise PermissionDenied({"message": "Only the author or staff may change this comment."})
+
+    def perform_update(self, serializer):
+        self._owner_or_staff(serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._owner_or_staff(serializer.instance)
+        super().perform_partial_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._owner_or_staff(instance)
+        instance.delete()
+
 ### `Observation Task` ViewSets ###
 class TransientObservationTaskViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = TransientObservationTask.objects.all()
@@ -287,7 +304,7 @@ class TransientPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser(self.request.user)
-        return allowed_phot
+        return allowed_phot.prefetch_related('groups')
 
 class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostPhotometrySerializer
@@ -296,7 +313,7 @@ class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedHostPhotometry_ByUser(self.request.user)
-        return allowed_phot
+        return allowed_phot.prefetch_related('groups')
 
 class TransientPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotDataSerializer
@@ -304,7 +321,7 @@ class TransientPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedTransientPhotData_ByUser(self.request.user)
-        return allowed_phot_data
+        return allowed_phot_data.prefetch_related('data_quality')
 
 
 class HostPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -313,7 +330,7 @@ class HostPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedHostPhotData_ByUser(self.request.user)
-        return allowed_phot_data
+        return allowed_phot_data.prefetch_related('data_quality')
 
 
 
@@ -355,15 +372,53 @@ class ProfileViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
 ### `UserQuery` ViewSets ###
 class UserQueryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Saved queries of the requesting user (staff see all); ``user`` is set from the request."""
     queryset = UserQuery.objects.all()
     serializer_class = UserQuerySerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = UserQuery.objects.all()
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(user=user)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(user=user, created_by=user, modified_by=user)
+
 ### `UserTelescopeToFollow` ViewSets ###
 class UserTelescopeToFollowViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Followed telescopes of the requesting user's profile (staff see all)."""
     queryset = UserTelescopeToFollow.objects.all()
     serializer_class = UserTelescopeToFollowSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = UserTelescopeToFollow.objects.all()
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(profile__user=user)
+
+    def _check_profile(self, serializer):
+        user = self.request.user
+        profile = serializer.validated_data.get('profile')
+        if profile is not None and profile.user_id != user.id and not (user.is_staff or user.is_superuser):
+            raise PermissionDenied({"message": "You may only change your own followed telescopes."})
+
+    def perform_create(self, serializer):
+        self._check_profile(serializer)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._check_profile(serializer)
+        super().perform_update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._check_profile(serializer)
+        super().perform_partial_update(serializer)
 
 
 ### `Spectra` ViewSets ###
@@ -374,7 +429,7 @@ class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
-        return allowed_spec
+        return allowed_spec.prefetch_related('groups', 'data_quality')
 
 class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpectrumSerializer
@@ -383,7 +438,7 @@ class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
-        return allowed_spec
+        return allowed_spec.prefetch_related('groups', 'data_quality')
 
 class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpecDataSerializer
@@ -756,7 +811,9 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         qs = Transient.objects.all()
-        return filter_transients_by_user_access(self.request.user, qs)
+        qs = filter_transients_by_user_access(self.request.user, qs)
+        # Prefetch tags so the list does not run a query per row (#456).
+        return qs.prefetch_related('tags')
 
     @action(detail=False, methods=['post'], url_path='save_search')
     def save_search(self, request):
