@@ -5,17 +5,13 @@ on:
     branches:
       - experimental
       - develop
-  pull_request:
-    branches:
-      - experimental
-      - develop
-    types:
-      - closed
+
+# Least privilege for the GITHUB_TOKEN; this workflow only needs to check out.
+permissions:
+  contents: read
 
 jobs:
   deploy:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
-
     # Self-hosted Ziggy runner
     runs-on: self-hosted
 
@@ -23,11 +19,7 @@ jobs:
       - name: Resolve deploy target
         id: target
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BRANCH="${{ github.event.pull_request.base.ref }}"
-          else
-            BRANCH="${{ github.ref_name }}"
-          fi
+          BRANCH="${{ github.ref_name }}"
           case "$BRANCH" in
             experimental)
               echo "dir=/data/yse_pz/YSE_PZ_experimental" >> "$GITHUB_OUTPUT"
