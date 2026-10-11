@@ -55,19 +55,41 @@ class CronFileLockTests(SimpleTestCase):
         self.assertTrue(settings.DJANGO_CRON_LOCKFILE_PATH)
 
     def test_second_holder_is_refused_until_release(self):
+        # django's file lock may be a per-process (POSIX) lock on some versions, so the
+        # second holder is a separate interpreter, exactly like a second runcrons process.
+        import subprocess
+        import sys
+
         from django_cron.backends.lock.file import FileLock
+
+        probe = (
+            'import sys\n'
+            'from django.conf import settings\n'
+            'settings.configure(DJANGO_CRON_LOCKFILE_PATH=sys.argv[1])\n'
+            'from django_cron.backends.lock.file import FileLock\n'
+            'class _FakeCron:\n'
+            "    code = 'ingest_cron_perf.fake'\n"
+            'lock = FileLock(_FakeCron, True)\n'
+            'got = lock.lock()\n'
+            "print('LOCKED' if got else 'REFUSED')\n"
+            'if got:\n'
+            '    lock.release()\n'
+        )
+
+        def second_holder(lock_dir):
+            out = subprocess.run([sys.executable, '-c', probe, lock_dir], capture_output=True,
+                                 text=True, timeout=60)
+            return out.stdout.strip()
 
         with tempfile.TemporaryDirectory() as tmp:
             lock_dir = os.path.join(tmp, 'locks')
             with override_settings(DJANGO_CRON_LOCKFILE_PATH=lock_dir):
                 first = FileLock(_FakeCron, True)
                 self.assertTrue(first.lock())
-                second = FileLock(_FakeCron, True)
-                self.assertFalse(second.lock(), 'a second runcrons process must not run the same job')
+                self.assertEqual(second_holder(lock_dir), 'REFUSED',
+                                 'a second runcrons process must not run the same job')
                 first.release()
-                third = FileLock(_FakeCron, True)
-                self.assertTrue(third.lock())
-                third.release()
+                self.assertEqual(second_holder(lock_dir), 'LOCKED')
 
 
 # ------------------------------------------------------------------ #473
