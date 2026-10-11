@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 from django_cron import CronJobBase, Schedule
 from django.conf import settings as djangoSettings
 from email.mime.multipart import MIMEMultipart
@@ -99,7 +101,7 @@ def get_clusters(date):
 
     # get DECAM clusters file
     url = '/'.join([_base_url, datestr, 'sniff', 'clusterslist.txt'])
-    r = requests.get(url)
+    r = ingest_http.get(url)
     if r.status_code==200:
         data = r.text
         files = r.text.split('\n')
@@ -123,7 +125,7 @@ def download_and_parse_cluster_file(clusterfile, date):
 
     print(f'Getting clusters file {url}')
 
-    r = requests.get(url)
+    r = ingest_http.get(url)
     if r.status_code==200:
         file_id = 0
 
@@ -169,7 +171,7 @@ def get_candidate_photometry(candnum, clusterfile, date):
 
     # get DECAM clusters file
     url = '/'.join([_base_url, datestr, 'sniff', path, forced_file])
-    r = requests.get(url)
+    r = ingest_http.get(url)
 
     if r.status_code==200:
         table = None
@@ -297,7 +299,7 @@ class DECam_clusters(CronJobBase):
         # let's grab the most recent phot. data for each transient
         # if the DECam data on the sniff pages doesn't have more recent
         # data, hopefully we can assume things are up to date
-        tr = requests.get(f"{self.options.dburl.replace('/api','')}query_api/DECAT_transients_mags/",
+        tr = ingest_http.get(f"{self.options.dburl.replace('/api','')}query_api/DECAT_transients_mags/",
                           auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword))
         etdata = tr.json()['transients']
         etdict = {}; ra = []; dec = []; dict_names = np.array([])
@@ -464,7 +466,7 @@ class DECam_clusters(CronJobBase):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
                               auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
                               timeout=60)
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
