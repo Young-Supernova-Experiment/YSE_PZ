@@ -2016,7 +2016,10 @@ def spectrumplot_summary(request, transient_id):
                 cache.set(cache_key, '', timeout=PLOT_HTML_CACHE_TIMEOUT)
             return django.http.HttpResponse('')
         # Same empty state as spectrumplot instead of an UnboundLocalError (#343).
-        return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
+        empty_html = _spectrum_plot_empty_message(n_without_points)
+        if cache_key:
+            cache.set(cache_key, empty_html, timeout=PLOT_HTML_CACHE_TIMEOUT)
+        return django.http.HttpResponse(empty_html)
 
     _load_heavy_plot_stack()
 
