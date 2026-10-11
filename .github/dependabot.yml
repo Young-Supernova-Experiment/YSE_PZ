@@ -1,15 +1,21 @@
-# Dependabot version updates (#538). Pull requests go to `experimental` (never
-# master), like every other change; see CONTRIBUTING.md for the promotion order.
-# Alerts and security updates are switched on in the repository settings, not here.
+# Dependabot version updates (#538, #571). Pull requests go to `develop` (never
+# master); after each merge there, `develop` is merged back into `experimental`
+# (see CONTRIBUTING.md and docs/branching.md). Dependabot reads this file only from
+# the default branch (master), so it takes effect when develop -> master (#143) merges.
+# Alerts and security updates are switched on in the repository settings, not here;
+# security-update PRs always target the default branch, whatever target-branch says.
 version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"            # requirements.txt, requirements-ingest.txt
-    target-branch: "experimental"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    # Archived image history (old pins such as Django 2.2); nothing builds from it.
+    exclude-paths:
+      - "docker/web_image_history/**"
     ignore:
       # Settled decision: stay on the Django 3.2 LTS line until #133 is scheduled.
       - dependency-name: "django"
@@ -34,7 +40,7 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "experimental"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"

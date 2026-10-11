@@ -9,10 +9,16 @@ longer part of the workflow; do not open pull requests against them.
 | Branch | Deployed to | Gets code from |
 | --- | --- | --- |
 | `experimental` | ziggy `/yse_experimental/` (automatic, Deploy Stack workflow) | feature/fix branches, by PR |
-| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR |
+| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR (plus Dependabot PRs, below) |
 | `master` | production (deployed by hand) | **only** `develop`, by the release PR |
 
 Details, the promotion guard, and dependency notes: [docs/branching.md](docs/branching.md).
+
+**Dependabot** PRs target `develop` and are merged there after CI (deploying to
+`/yse_test/`). Right after such a merge, merge `develop` back into `experimental`, the
+same as the hotfix backport rule in step 7. Dependabot reads its config only from
+`master`, so this applies once #143 merges; GitHub "security updates" PRs always target
+`master`, whatever the config says.
 
 ## Workflow
 
