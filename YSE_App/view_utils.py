@@ -5,7 +5,7 @@ from django.conf import settings as djangoSettings
 from django.core.cache import cache
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import models, connection, reset_queries
-from django.db.models import Prefetch, Q
+from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -1818,21 +1818,54 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
     return f'<p class="text-muted yse-plot-empty">{text}</p>'
 
 
+def _spec_points_by_spectrum(spectrum_ids):
+    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra, in one query.
+
+    Spectra are stored one TransientSpecData row per pixel, so building a model
+    instance per pixel dominated plot time for long spectra (#479). This reads
+    plain ``(spectrum_id, wavelength, flux)`` tuples, in the same (pk) order as
+    the old ``transientspecdata_set`` prefetch, straight into numpy.
+    """
+    spectrum_ids = list(spectrum_ids)
+    if not spectrum_ids:
+        return {}
+    rows = np.array(
+        list(
+            TransientSpecData.objects.filter(spectrum_id__in=spectrum_ids)
+            .order_by('spectrum_id', 'id')
+            .values_list('spectrum_id', 'wavelength', 'flux')
+        ),
+        dtype=float,
+    )
+    if rows.size == 0:
+        return {}
+    ids = rows[:, 0].astype(np.int64)
+    # Rows are ordered by spectrum_id, so each spectrum is one contiguous run.
+    starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]])
+    ends = np.r_[starts[1:], ids.size]
+    return {
+        int(ids[a]): (rows[a:b, 1], rows[a:b, 2])
+        for a, b in zip(starts, ends)
+    }
+
+
 def _spectra_for_plot(dbspectra):
     """Turn TransientSpectrum rows into plottable dicts, skipping empty ones.
 
-    Returns ``(spectra, n_without_points)``: spectra whose ``transientspecdata_set``
-    is empty are counted instead of plotted, so a transient whose spectra were
+    Returns ``(spectra, n_without_points)``: spectra without TransientSpecData
+    points are counted instead of plotted, so a transient whose spectra were
     registered without wavelength/flux rows gets the empty-state message rather
     than a traceback (#343). Each spectrum is resampled to at most
-    ``MAX_SPEC_DISPLAY_PIXELS`` points.
+    ``MAX_SPEC_DISPLAY_PIXELS`` points. Points are read with one ``values_list``
+    query for all spectra (#479), not one ORM object per pixel.
     """
     spectra = []
     n_without_points = 0
+    dbspectra = list(dbspectra)
+    points = _spec_points_by_spectrum(spectrum.id for spectrum in dbspectra)
+    empty = np.array([], dtype=float)
     for spectrum in dbspectra:
-        spec_data = list(spectrum.transientspecdata_set.all())
-        wave = np.array([s.wavelength for s in spec_data])
-        flux = np.array([s.flux for s in spec_data])
+        wave, flux = points.get(spectrum.id, (empty, empty))
         if wave.size == 0 or flux.size == 0:
             n_without_points += 1
             continue
@@ -1881,9 +1914,7 @@ def spectrumplot(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
-    ).select_related('instrument').prefetch_related(
-        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
-    )
+    ).select_related('instrument')
     
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
@@ -1930,9 +1961,7 @@ def spectrumplot_summary(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
-    ).select_related('instrument').prefetch_related(
-        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
-    )
+    ).select_related('instrument')
 
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
@@ -2023,15 +2052,11 @@ def spectrumplotsingle(request, transient_id, spec_id):
         )
     else:
         spectrum = spectrum[0]
-    spec = TransientSpecData.objects.filter(spectrum=spectrum)
-    
-    if not len(spec):
+    wave, flux = _spec_points_by_spectrum([spectrum.id]).get(spectrum.id, ([], []))
+
+    if not len(wave):
         return django.http.HttpResponse(_spectrum_plot_empty_message(1))
 
-    wave,flux = [],[]
-    for s in spec:
-        wave += [s.wavelength]
-        flux += [s.flux]
     bottom = np.percentile(flux,5)*0.5; top = np.percentile(flux,95)*1.3
     if np.percentile(flux,2) < 0:
         bottom = np.percentile(flux,2)*1.5
