@@ -47,11 +47,11 @@ class FinderChartPathTests(SimpleTestCase):
     def test_paths_are_inside_the_configured_directory_and_sanitised(self):
         with tempfile.TemporaryDirectory() as tmp:
             with override_settings(FINDER_CHART_DIR=tmp):
-                png, txt = view_utils.finder_chart_paths("2026abc")
+                _d, txt, png = view_utils.finder_chart_paths("2026abc")
                 self.assertEqual(os.path.dirname(os.path.dirname(png)), os.path.realpath(tmp))
                 self.assertTrue(os.path.isdir(os.path.dirname(png)))
                 self.assertTrue(txt.endswith("2026abc.offsetstars.txt"))
-                evil_png, _ = view_utils.finder_chart_paths("../../etc/passwd")
+                _d, _t, evil_png = view_utils.finder_chart_paths("../../etc/passwd")
                 self.assertEqual(os.path.dirname(os.path.dirname(evil_png)), os.path.realpath(tmp))
                 self.assertNotIn("..", os.path.relpath(evil_png, tmp))
 

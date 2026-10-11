@@ -507,6 +507,27 @@ DETAIL_RADIUS_ARCSEC: 5
 
 <a id="merge"></a>
 
+### Login required on every page (#496): verify, rollback switch only if needed
+
+From this change every page needs a login except a public allowlist (`YSE_App/login_required.py`): the landing page and survey pages, login / logout, password reset, the Slack events endpoint, the external-service run callback, the Django admin, everything under `/api/` (DRF does its own Basic / token / session auth) and every view behind the Basic-auth decorator that crons and broker scripts call (`add_transient`, `add_transient_phot`, `add_transient_spec`, `upload_spectrum`, `query_api`, `box_search`, `get_host`, `add_yse_survey_*`, `add_survey_obs`, downloads). Logout is now POST-only (the menu item is a form; a GET of `/logout/` shows a confirmation button). It is on by default and needs nothing on Ziggy.
+
+Check after the experimental deploy (run each from any shell with network access):
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' https://ziggy.ucolick.org/yse_experimental/login/
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://ziggy.ucolick.org/yse_experimental/view_yse_fields/
+```
+
+**Expected** `200`, then `302 https://ziggy.ucolick.org/yse_experimental/login/?next=/yse_experimental/view_yse_fields/`. **Check** the next cron runs that post to YSE-PZ (DECam / QUB / ZTF uploads, `yse_fields_new.bash`) log no new 302 or 403 errors.
+
+**Rollback** only if a page or cron that should be public breaks: in that stack's `YSE_PZ/settings.ini` add, under `[site_settings]`,
+
+```
+LOGIN_REQUIRED_MIDDLEWARE = False
+```
+
+(or set `YSE_LOGIN_REQUIRED_MIDDLEWARE=0` in the Apache / WSGI environment; the env var wins), then `sudo systemctl restart apache2`. **Check** the second curl above now returns `302` from the view's own login decorator, or `200` for a view without one. Views keep their own login decorators either way. Report what broke so the allowlist can be fixed, then remove the line.
+
 ## 2 · Before merging #143 to master David
 
 [PR #143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) promotes `develop` (5da66de, 270 commits, 341 files) to `master` (dc70630). Only David merges it. Nothing deploys automatically from that merge: `deploy.yml` covers `experimental` and `develop` only.
@@ -1312,6 +1333,26 @@ DETAIL_RADIUS_ARCSEC: 5
 # LASAIR_API_URL: ...
 ```
 
+3.32
+
+### Spatial and time indexes, migration 0031 (optional EXPLAIN, budget time at 3.9) nothing required on yse\_test
+
+Migration `0031_spatial_time_indexes` (perf audit 2026-10-10, [#477](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/477), [#478](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/478)) adds seven indexes and changes no columns: `(dec, ra)` on `YSE_App_transient`, `YSE_App_host` and `YSE_App_candidate`; `(dec_cen, ra_cen)` on `YSE_App_surveyfield`; `created_date` on `YSE_App_transient`; `obs_mjd` and `mjd_requested` on `YSE_App_surveyobservation`. **yse\_test / yse\_experimental:** applied automatically by the `experimental` deploy on the shared `YSE_test` database; nothing to run. **Production:** it is applied by 3.9 with the other migrations. Build time is unknown: each `CREATE INDEX` on InnoDB (MySQL 8) is an online in-place build that allows reads and writes, but it scans the whole table, and the Transient and Host builds are the long ones. Check the row counts first and budget for them in the maintenance window.
+
+Copy
+
+```
+DB=<PROD_DB>; USER=<PROD_DB_USER>; HOST=<PROD_DB_HOST>
+# 1. before 3.9: sizes and current indexes (read-only)
+mysql -u $USER -p -h $HOST $DB -e "SELECT table_name, table_rows, ROUND(data_length/1024/1024) AS data_mb FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('YSE_App_transient','YSE_App_host','YSE_App_candidate','YSE_App_surveyfield','YSE_App_surveyobservation');" > idx0031_before.txt
+mysql -u $USER -p -h $HOST $DB -e "SHOW INDEX FROM YSE_App_transient; SHOW INDEX FROM YSE_App_host; SHOW INDEX FROM YSE_App_candidate; SHOW INDEX FROM YSE_App_surveyfield; SHOW INDEX FROM YSE_App_surveyobservation;" >> idx0031_before.txt
+# 2. a representative cone box and a night window (plan only, nothing executes; single quotes keep the shell off the `dec` backticks)
+mysql -u $USER -p -h $HOST $DB -e 'EXPLAIN SELECT id FROM YSE_App_transient WHERE `dec` >= 20.0 AND `dec` <= 20.003 AND ra >= 150.0 AND ra <= 150.003; EXPLAIN SELECT id FROM YSE_App_host WHERE `dec` >= 20.0 AND `dec` <= 20.003 AND ra >= 150.0 AND ra <= 150.003; EXPLAIN SELECT id FROM YSE_App_surveyobservation WHERE (mjd_requested >= 61000 OR obs_mjd >= 61000) AND (mjd_requested <= 61001 OR obs_mjd <= 61001);' >> idx0031_before.txt
+# 3. after 3.9: repeat 1 and 2 into idx0031_after.txt
+```
+
+**Expected** before: `SHOW INDEX` has no `yse_*_dec_ra_idx`, `yse_transient_created_idx` or `yse_surveyobs_*` rows; the host EXPLAIN shows `type: ALL` (full scan). After: the seven indexes are listed; the transient and host EXPLAINs show `key: yse_transient_dec_ra_idx` / `yse_host_dec_ra_idx` with `type: range`; the survey EXPLAIN shows `index_merge` on the two `yse_surveyobs_*` indexes, or a full scan if the table is small (that is fine). **Check** `cd /data/yse_pz/YSE_PZ && <PROD_PYTHON> manage.py showmigrations YSE_App | tail -1` reads `[X] 0031_spatial_time_indexes`. The older single-column `yse_transient_dec_idx` and `yse_candidate_dec_idx` become redundant prefixes of the new composites; they stay in place for now (a later migration may drop them). Rollback of the indexes alone: `cd /data/yse_pz/YSE_PZ && <PROD_PYTHON> manage.py migrate YSE_App 0030_shared_db_column_defaults` drops just these seven while 0031 is the latest migration.
+
 R
 
 Rollback (code first; the database restore is required once 3.9 has run).
@@ -1447,7 +1488,349 @@ awk '{print $NF, $7}' ${APACHE_LOG_DIR}/<SITE>_timed.log | sort -rn | head -20
 
 **Expected** `<microseconds> <path>` pairs. For the cron overlap guard (`flock -n` on `runcrons`) see [PR #546](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/546); it is not repeated here.
 
+<a id="authz-flags"></a>
+
+### Write authorization and Explorer access (optional, per stack; #520-#527) nothing required
+
+Migration `0032_api_writer_groups` is data only. It creates two groups, `api_writers` and `explorer_users`. It gives `api_writers` the add and change permissions on the models the ingest crons and scripts write. It adds the `[main] dblogin` account to `api_writers` if that account exists. Three flags in `settings.ini` `[site_settings]` stay **off** by default, so behaviour is unchanged until you turn them on. Each flag can be turned on per stack. yse\_test and yse\_experimental share `YSE_test`, so group membership is shared, but each stack reads its own `settings.ini`.
+
+| Flag (`[site_settings]`, or the env var `=1`) | When on |
+| --- | --- |
+| `API_WRITE_PERMISSIONS_ENFORCED` (`YSE_API_WRITE_PERMISSIONS_ENFORCED`) | `POST`/`PUT`/`PATCH` on the older `/api/` resources needs one of: staff, superuser, or the model permission (members of `api_writers`). Status and tag buttons, follow-up status, survey scheduling and "new tag" stay open to every signed-in user. Reads are unchanged. |
+| `UPLOAD_GROUP_CHECKS_ENFORCED` (`YSE_UPLOAD_GROUP_CHECKS_ENFORCED`) | `add_transient` is limited to staff, superusers and `api_writers`. `add_transient_phot`, `add_transient_spec` and the spectrum upload form are open to those accounts as well as other collaboration-group members, with two limits: a member may share only with their own groups, and may replace or re-share only rows they created. |
+| `EXPLORER_RESTRICTED_ACCESS` (`YSE_EXPLORER_RESTRICTED_ACCESS`) | `/explorer/` is limited to superusers and members of `explorer_users`. While it is off, all staff have access, as today. Dashboards are not affected. |
+
+The group names can be changed with `API_WRITERS_GROUP` and `EXPLORER_ACCESS_GROUP` in `[site_settings]`. `<STACK>` is the checkout and `<STACK_PYTHON>` its interpreter, both from section 0.
+
+**Step A: check the groups (after the deploy that applies 0032).**
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import Group; g=Group.objects.get(name='api_writers'); print(g.permissions.count(), g.user_set.count()); print(Group.objects.filter(name='explorer_users').exists())"
+```
+
+**Expected:** `52 1` (or `52 0` if the `[main] dblogin` account does not exist on this database), then `True`.
+
+**Step B: add the accounts that write through the API or the upload endpoints.**
+
+Add each of these:
+
+- the `[main] dblogin` account the crons use;
+- any account passed to `YSE_App/yse_utils/add_yse_fields.py`, `add_decam_obs.py` (`--yseuser`), `YSE_App/util/uploadTransientData.py`, `YSE_App/util/TNS_Synopsis/*.py` or `getGWevents.py`;
+- people who upload with their own `add_transient` scripts.
+
+Staff and superusers do not need to be added.
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User, Group; User.objects.get(username='<ACCOUNT>').groups.add(Group.objects.get(name='api_writers')); print(User.objects.get(username='<ACCOUNT>').has_perm('YSE_App.change_transientphotdata'))"
+```
+
+**Expected:** `True`.
+
+To find non-staff accounts that wrote ingest data in the last 30 days and are not in the group, run the command below. It prints to your terminal only; do not paste the usernames into GitHub.
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "
+import datetime; from django.utils import timezone; from django.db.models import Count
+from YSE_App.models import Transient, TransientPhotData, TransientSpectrum, SurveyObservation, SurveyField
+since = timezone.now() - datetime.timedelta(days=30)
+for m in (Transient, TransientPhotData, TransientSpectrum, SurveyObservation, SurveyField):
+    rows = (m.objects.filter(created_date__gte=since, created_by__is_staff=False, created_by__is_superuser=False)
+            .exclude(created_by__groups__name='api_writers').values('created_by__username').annotate(n=Count('id')))
+    print(m.__name__, list(rows))
+"
+```
+
+**Expected:** each model prints `[]` once every cron or script account is in the group. Some rows are fine to leave: accounts listed there because of browser uploads (the photometry or spectrum form) need nothing. Accounts behind a script or cron should be added with the previous command.
+
+**Step C: turn the flags on, one at a time.** In `<STACK>/YSE_PZ/settings.ini`:
+
+```
+[site_settings]
+API_WRITE_PERMISSIONS_ENFORCED: True
+UPLOAD_GROUP_CHECKS_ENFORCED: True
+```
+
+Then `sudo systemctl restart apache2`. Do this for production; for yse\_test and yse\_experimental, use whatever restart those stacks use.
+
+**Check:**
+- `<STACK_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.API_WRITE_PERMISSIONS_ENFORCED, settings.UPLOAD_GROUP_CHECKS_ENFORCED)"` prints `True True`.
+- After the next TNS / QUB / forced-phot cron run, its log has no `403`, and no `Bulk transient ingest is limited` or `needs the matching model permission` message.
+- A status change on a transient page still works for a non-staff member.
+
+**Rollback:** set the flag to `False` and restart.
+
+**Step D (Explorer): give `explorer_users` to the staff who should keep `/explorer/`, then turn on the restriction.**
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User, Group; User.objects.get(username='<ACCOUNT>').groups.add(Group.objects.get(name='explorer_users'))"
+```
+
+Next, set `EXPLORER_RESTRICTED_ACCESS: True` in `[site_settings]` and restart.
+
+**Check:** `/explorer/` opens for a superuser and for a member of `explorer_users`. A staff account outside the group gets the Explorer login page. The dashboards still load.
+
+**Rollback:** set the flag to `False` and restart.
+
+**Step E (Explorer database user, #526): limit its grants to science tables.** The `explorer` connection (`[database] EXPLORER_USER`) is what Explorer and the dashboard SQL run as. Do this first on `YSE_test`, check it, then on production. `<EXPLORER_DB_USER>` is the `EXPLORER_USER` value; `<EXPLORER_DB_HOST>` is the host part shown by `SHOW GRANTS`.
+
+```
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SELECT user, host FROM mysql.user WHERE user='<EXPLORER_DB_USER>'; SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';"
+```
+
+**Expected:** the output includes a line like `GRANT SELECT ON <DB>.* TO ...` (database-wide). Generate per-table grants that leave out accounts, sessions, tokens, audit, credential and contact tables, and save the statements to a file you can review:
+
+```
+mysql -N -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "
+SELECT CONCAT('GRANT SELECT ON \`', table_schema, '\`.\`', table_name, '\` TO ''<EXPLORER_DB_USER>''@''<EXPLORER_DB_HOST>'';')
+FROM information_schema.tables WHERE table_schema='<DB>'
+AND table_name NOT LIKE 'auth\_%' AND table_name NOT LIKE 'authtoken\_%' AND table_name NOT LIKE 'axes\_%'
+AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT IN ('django_session','django_admin_log',
+'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun');" > /tmp/explorer_grants.sql
+wc -l /tmp/explorer_grants.sql
+```
+
+Saved queries often join `auth_user` for names. Keep that working with a column grant. Append it to the file, then swap the grants:
+
+```
+echo "GRANT SELECT (id, username, first_name, last_name) ON \`<DB>\`.\`auth_user\` TO '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" >> /tmp/explorer_grants.sql
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "REVOKE SELECT ON \`<DB>\`.* FROM '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';"
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> < /tmp/explorer_grants.sql
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" | head
+```
+
+**Check: every saved query still runs.** The first command below prints only failures and a count, so names of tables are not shown. The second shows the user lacks access to an excluded table:
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "
+from django.db import connections; from explorer.models import Query
+bad = 0
+for q in Query.objects.all():
+    try:
+        c = connections['explorer'].cursor(); c.execute('SELECT * FROM (' + q.sql.strip().rstrip(';').replace('%','%%') + ') AS t LIMIT 1'); c.close()
+    except Exception as e:
+        bad += 1; print(q.id, type(e).__name__, str(e)[:120])
+print('failed', bad, 'of', Query.objects.count())
+"
+mysql -u <EXPLORER_DB_USER> -p -h <PROD_DB_HOST> <DB> -e "SELECT COUNT(*) FROM django_session;"
+```
+
+**Expected:**
+- The first command prints `failed 0 of N`, or only failures that also happened before the change. A query using a table outside the list fails with `SELECT command denied`: grant that table and re-run.
+- The second command prints `ERROR 1142 ... SELECT command denied`.
+- The dashboards load.
+
+**After a later migration adds a table**, re-run the generator and apply only the new grants.
+
+**Rollback:** `GRANT SELECT ON \`<DB>\`.* TO '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';`
+
+`docker/db_init/YSE_create_users.sql` keeps the database-wide grant. It runs before the tables exist, and MySQL accepts table-level grants only on existing tables, so the local stacks and CI are unchanged.
+
+<a id="authn"></a>
+
+### Login, session and transport settings (2026-10-11, sec/authn PR) one check required, the rest optional, per stack
+
+Everything below is in `[security]` of that stack's `YSE_PZ/settings.ini` (template: `YSE_PZ/public_settings.ini`). Every key is optional and its default is today's behaviour. Below, `<STACK_DIR>` and `<STACK_PYTHON>` are a row of the table in [section 0](#paths); after any `settings.ini` edit run `sudo systemctl restart apache2`, then the **Check** of that step. Do one stack at a time: yse\_experimental first, then yse\_test, production last. Nothing here needs a migration, except `migrate axes` in (c).
+
+**(a) REQUIRED check: Slack events.** `/slack/events/` now answers only when `SLACK_ENABLED=1` **and** `SLACK_SIGNING_SECRET` are both in the web environment (it used to accept requests when no secret was set). Only a stack whose Slack app sends events (thread replies into comments) is affected.
+```bash
+sudo grep -lE 'SLACK_SIGNING_SECRET|SLACK_ENABLED' /etc/apache2/envvars <STACK_DIR>/YSE_PZ/wsgi.py 2>/dev/null
+```
+**Expected:** nothing on a stack without Slack (nothing to do), or the file(s) holding both names. **If** only `SLACK_ENABLED` is there, add the app's signing secret (api.slack.com > Your apps > Basic Information > Signing Secret) next to it and restart Apache. **Check:** in api.slack.com > Event Subscriptions the Request URL shows "Verified" after "Retry"; a reply in a transient's Slack thread appears as a comment.
+
+**(b) Session length.** Default two weeks; recommended 12-24 h:
+```ini
+SESSION_COOKIE_AGE: 86400
+```
+**Check:** after logging in, the browser's `sessionid` cookie expires about one day later. Existing sessions keep their old expiry.
+
+**(c) Failed-login lockout (django-axes 5.41.1, new dependency).** Counts failed logins (login page, admin, API Basic auth) per username and client address; after 10 failures that pair is refused for 60 minutes. Install first (yse\_experimental's deploy already runs `pip install -r requirements.txt`; yse\_test and production need it by hand):
+```bash
+<STACK_PYTHON> -m pip install "django-axes==5.41.1" "django-ipware==5.0.2"
+<STACK_PYTHON> -c "import axes; print(axes.__version__)"
+```
+**Expected:** `5.41.1`. Then add to `settings.ini` and create the tables (once per database; yse\_test and yse\_experimental share `YSE_test`, so once for both):
+```ini
+LOGIN_LOCKOUT_ENABLED: True
+# optional: LOGIN_LOCKOUT_FAILURE_LIMIT: 10   LOGIN_LOCKOUT_COOLOFF_MINUTES: 60
+# optional: LOGIN_LOCKOUT_MODE: user_and_ip (default) | user | ip
+# optional: LOGIN_LOCKOUT_NEVER_LOCK_IPS: <comma-separated addresses the crons connect from>
+```
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py migrate axes
+<STACK_PYTHON> manage.py check
+sudo systemctl restart apache2
+```
+**Expected:** `migrate` applies `axes.0001` to `axes.0008` (or `No migrations to apply.` on the second stack of a shared database); `check` prints `System check identified no issues`. **Check:** log in normally on that stack; then `<STACK_PYTHON> manage.py axes_list_attempts` prints no attempts for your login. To unlock everyone: `<STACK_PYTHON> manage.py axes_reset`. With the flag on but the package missing, the site still starts and logs a warning (lockout stays off). To undo: remove the key and restart.
+
+**(d) Service accounts for crons and scripts.** Crons should not use a personal or admin login. Once perf #457 (API tokens) is on the stack: create one user per integration (admin > Users > Add; not staff, not superuser), give it only the model permissions that integration writes (admin > Users > that user > User permissions), create its token and use it from the script:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py drf_create_token <SERVICE_USER>
+```
+**Expected:** `Generated token <40 hex characters> for user <SERVICE_USER>`. Store it where that cron reads its settings (not in this runbook) and send `Authorization: Token <token>` instead of Basic auth. Set `[brokers] AUTO_SAVE_USERNAME` (default `admin`) and `[sharing] SYSTEM_USERNAME` to such a service user. List every service username in `INACTIVE_USER_EXEMPT_USERNAMES` (step (h)).
+
+**(e) Host names and forwarded headers (password-reset links).** First find out whether anything proxies to Django or whether Apache runs it directly with mod\_wsgi:
+```bash
+grep -nE 'WSGIDaemonProcess|ProxyPass|RequestHeader|X-Forwarded' /etc/apache2/sites-enabled/*.conf
+grep -nE '^(ALLOWED_HOSTS|IS_DEBUG)' <STACK_DIR>/YSE_PZ/settings.ini
+```
+**Expected:** a `WSGIDaemonProcess` line per stack. If there is **no** `ProxyPass` to the Django process and no `RequestHeader set` for `X-Forwarded-Host` / `X-Forwarded-Proto`, Django is not behind a proxy and should not trust those headers. Then set, in `[site_settings]` and `[security]`:
+```ini
+# [site_settings]
+ALLOWED_HOSTS: ziggy.ucolick.org,localhost,127.0.0.1
+# [security]
+REQUIRE_ALLOWED_HOSTS: True
+USE_X_FORWARDED_HOST: False
+USE_X_FORWARDED_PORT: False
+PASSWORD_RESET_DOMAIN: ziggy.ucolick.org
+```
+If a proxy does set those headers itself (overwriting what the client sent), keep `USE_X_FORWARDED_HOST` / `PORT` at True and set only `ALLOWED_HOSTS`, `REQUIRE_ALLOWED_HOSTS` and `PASSWORD_RESET_DOMAIN`. `REQUIRE_ALLOWED_HOSTS` has an effect only with `IS_DEBUG: False` (production); yse\_test and yse\_experimental run `IS_DEBUG: 1`. **Check:** `manage.py check` passes; the login page loads; "Forgot password" for your own account sends an email whose link starts with `https://ziggy.ucolick.org/` and the right stack path.
+
+**(f) HTTPS proxy header.** With `IS_DEBUG: False` Django trusts `X-Forwarded-Proto: https` today (`TRUST_X_FORWARDED_PROTO` defaults to on there). Under mod\_wsgi with Apache terminating TLS, Django knows the scheme without that header. If (e) showed no proxy and no `RequestHeader set X-Forwarded-Proto`, set explicitly:
+```ini
+TRUST_X_FORWARDED_PROTO: False
+```
+If a proxy sets/overwrites `X-Forwarded-Proto`, set `TRUST_X_FORWARDED_PROTO: True` explicitly instead. **Check:** the login page loads over https and logging in works (the CSRF check compares the scheme).
+
+**(g) HTTPS-only cookies, redirect, HSTS.** First confirm the stack is served over https and plain http redirects or is closed:
+```bash
+curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | head -1
+curl -sI http://ziggy.ucolick.org/yse_experimental/login/ | head -3
+```
+**Expected:** `HTTP/1.1 200 OK` (or `HTTP/2 200`) for https; for http a `301`/`302` to https, or a connection error. Then:
+```ini
+SESSION_COOKIE_SECURE: True
+CSRF_COOKIE_SECURE: True
+SECURE_SSL_REDIRECT: True
+SECURE_HSTS_SECONDS: 3600
+# SECURE_HSTS_INCLUDE_SUBDOMAINS: False   (leave off: other services share ziggy.ucolick.org)
+```
+`SECURE_SSL_REDIRECT` needs Django to see https: under mod\_wsgi it does; behind a proxy it needs (f) set to True, otherwise every page redirects to itself. **Check:** `curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | grep -i strict-transport` prints `strict-transport-security: max-age=3600`; logging in still works. After a week without problems raise `SECURE_HSTS_SECONDS` to `31536000`.
+
+**(h) Deactivate long-unused accounts.** Dry run first; it prints counts only:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py deactivate_inactive_users --days 365
+```
+**Expected:** `skipped: ... superusers, ... exempt service accounts, ... token holders` and `dry run: N accounts ... would be deactivated`. Superusers, accounts holding an API token and the names in `[security] INACTIVE_USER_EXEMPT_USERNAMES` (comma-separated; add every account a cron or script logs in with, since Basic-auth logins do not update the last-login date) are never touched. Then `--apply`. **Check:** `deactivated N accounts`; re-activate one in admin > Users > Active if needed.
+
+**(i) Database TLS (optional).** Only if the MySQL server offers TLS: in `[database]` set `SSL_DISABLED: False` and, as needed, `SSL_CA`, `SSL_CERT`, `SSL_KEY` (file paths readable by the Apache user), `SSL_MODE: VERIFY_CA`, `DB_TLS_EXPLORER: True`. **Check:** `cd <STACK_DIR> && <STACK_PYTHON> manage.py shell -c "from django.db import connection; c=connection.cursor(); c.execute(\"SHOW SESSION STATUS LIKE 'Ssl_cipher'\"); print(c.fetchone())"` prints a non-empty cipher.
+
+**(j) Content-Security-Policy, report-only (optional).** `CSP_REPORT_ONLY_ENABLED: True` adds a `Content-Security-Policy-Report-Only` header; browsers report (in the developer console, or to `CSP_REPORT_URI` if set) what the policy would block, and block nothing. **Check:** `curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | grep -i content-security-policy-report-only`. Send Ryan the console reports from a few pages before anything is enforced.
+
+**(k) API rate limits (optional, off by default).** DRF throttles for `/api/` (not `add_transient` and the other data-upload views). Suggested:
+```ini
+API_THROTTLE_ANON: 300/min
+API_THROTTLE_USER: 1000/min
+```
+Before turning `API_THROTTLE_USER` on, ask Ryan which scripts read `/api/` in bulk, and give them a higher rate or leave the user throttle off. **Check:** normal pages and the transient-detail tabs still load; a script that exceeds the rate gets HTTP 429. Rollback: remove the keys and restart Apache.
+
+**Template change only:** `public_settings.ini` now has `IS_DEBUG: False`. Ziggy's stacks read only their own `settings.ini`, never the template, so nothing changes there; local docker and CI turn DEBUG on with `YSE_IS_DEBUG=1` in `docker/.env`.
+
+### IERS table refresh (optional cron, per stack) nothing required
+
+Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
+
+Copy
+
+```
+# check: prints the newest predicted MJD in the table (expected: an MJD roughly 100+ days after today)
+<CRON_PYTHON> -c "from astropy.utils import iers; iers.conf.auto_download=True; t=iers.IERS_Auto.open(); print(t['MJD'].max())"
+# crontab (weekly, Sunday 04:15), as the Unix user that owns the astropy cache
+15 4 * * 0 <CRON_PYTHON> -c "from astropy.utils import iers; iers.conf.auto_download=True; iers.IERS_Auto.open()" >> <CRON_LOG_DIR>/iers_refresh.log 2>&1
+```
+
+<a id="cron-locks"></a>
+
+### Cron locking and ingest HTTP timeouts (recommended, per stack) nothing required
+
+From the `perf/ingest-cron` PR ([#472](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/472), [#473](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/473), [#474](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/474)) onward, django_cron takes a per-job **file lock** (`DJANGO_CRON_LOCK_BACKEND = YSE_App.common.cron_lock.FileLock (a thin subclass; django_cron 0.5.1 FileLock never refuses on Django 3.x)`). The old cache lock lived in each process's own memory, so two `runcrons` processes never saw each other and a slow job ran twice at once. The ingest crons' HTTP calls now time out (15 s to connect, 300 s per read, 900 s for their own POSTs to `/add_transient/`) and retry a connection error or a 502/503/504 on a GET up to 3 times. No migration, no pip step. With nothing changed, locks go to a per-checkout directory under `/tmp`, which is correct when one Unix user runs `runcrons` for that checkout. Repeat these steps for each stack: `<CHECKOUT>` is `/data/yse_pz/YSE_PZ_experimental`, `/data/yse_pz/YSE_PZ_test` or `/data/yse_pz/YSE_PZ`, and `<CRON_PYTHON>` is the interpreter on its crontab line.
+
+**Step 1: find the crontab lines and the user that runs them.**
+
+```bash
+crontab -l | grep -n runcrons
+whoami
+```
+**Expected:** one or more lines such as `* * * * * cd <CHECKOUT> && <CRON_PYTHON> manage.py runcrons >> <LOG> 2>&1`. Call the user `<CRON_USER>`. If `runcrons` lines for the same checkout are in two users' crontabs, do step 2. Otherwise step 2 is optional.
+
+**Step 2 (needed only when two users run `runcrons` for one checkout): give the locks a shared, writable directory.** It is simpler to move every `runcrons` line for a checkout into one user's crontab. If that is not possible, use a directory owned by a group that both users belong to (`<SHARED_GROUP>`):
+
+```bash
+mkdir -p <LOCK_DIR> && chgrp <SHARED_GROUP> <LOCK_DIR> && chmod 2775 <LOCK_DIR>
+test -w <LOCK_DIR> && echo writable
+```
+Then add this to `<CHECKOUT>/YSE_PZ/settings.ini`:
+```
+[site_settings]
+CRON_LOCKFILE_PATH: <LOCK_DIR>
+```
+Then start each of those crontab lines with `umask 002 &&`, so each lock file is group-writable.
+**Expected:** `writable`, run as each user that runs `runcrons`. django_cron treats a lock file it cannot open as "already running" and skips that job. A directory or lock file one user cannot write would stop that user's jobs from running at all.
+
+**Check (both cases):**
+
+```bash
+cd <CHECKOUT> && <CRON_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.DJANGO_CRON_LOCK_BACKEND); print(settings.DJANGO_CRON_LOCKFILE_PATH)"
+```
+**Expected:** `YSE_App.common.cron_lock.FileLock`, then `<LOCK_DIR>` (or `/tmp/yse_pz_cron_locks_<hash>` with no `CRON_LOCKFILE_PATH`). During a pass, `ls <that directory>` shows one `<CronClass>.lock` file per running job.
+
+**Step 3 (recommended): wrap each `runcrons` line in `flock -n`, so a pass that is still running makes the next one exit at once instead of piling up.** Give each crontab line its own lock file, so the per-minute job-runner line is never held up by a slow ingest pass:
+
+```bash
+command -v flock
+```
+**Expected:** `/usr/bin/flock`. Then edit with `crontab -e`, changing each line from:
+```
+* * * * * cd <CHECKOUT> && <CRON_PYTHON> manage.py runcrons >> <LOG> 2>&1
+```
+to:
+```
+* * * * * flock -n <LOCK_DIR>/runcrons-<NAME>.flock -c 'cd <CHECKOUT> && <CRON_PYTHON> manage.py runcrons >> <LOG> 2>&1'
+```
+where `<NAME>` is different on each line (for example `all`, `jobs`, `lsst`).
+
+**Check:**
+
+```bash
+flock -n <LOCK_DIR>/runcrons-test.flock -c 'sleep 20' &
+sleep 1; flock -n <LOCK_DIR>/runcrons-test.flock -c 'echo ran'; echo "exit $?"
+```
+**Expected:** `exit 1` and no `ran`: the second command gave up because the lock was held. After the next minute, `<LOG>` grows as before, and the `django_cron_cronjoblog` rows keep appearing.
+
+**Optional settings** (`[site_settings]` in `<CHECKOUT>/YSE_PZ/settings.ini`; defaults shown; restart Apache after a change, and the crons pick it up on their next pass):
+```
+QUERY_API_CACHE_SECONDS: 300              # /query_api/ result reuse; 0 = run the saved SQL every call
+INGEST_HTTP_CONNECT_TIMEOUT_SECONDS: 15
+INGEST_HTTP_READ_TIMEOUT_SECONDS: 300
+INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS: 900    # the crons' own POSTs to /add_transient/
+INGEST_HTTP_RETRIES: 3
+```
+If a cron log starts showing `ReadTimeout` on `/add_transient/`, raise `INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS`. Before the PR those uploads had no timeout.
+
 <a id="data"></a>
+
+### API token authentication for scripts (optional, per stack) nothing required
+
+Issues [#457](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/457) (token auth) and [#458](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/458) (`request.user` set after Basic auth). `rest_framework.authtoken` was already installed and migrated, so there is no migration and nothing to run for the deploy. Basic and Session auth keep working. Scripts that call the DRF endpoints under `/api/` can move to a token, which skips the password hash that Basic auth runs on every request. The decorated data-upload views in `data_utils.py` (`add_transient` and similar) still use Basic auth only. Per-user API keys behind a flag are tracked separately in [#449](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/449).
+
+Check that the token table exists (run from the checkout of the stack, with that stack's Python):
+
+```
+cd <STACK_CHECKOUT> && <PROD_PYTHON> manage.py showmigrations authtoken
+```
+
+Expected: `[X] 0001_initial`, `[X] 0002_auto_20160226_1747` and `[X] 0003_tokenproxy` (the last only on newer DRF). Create a token for a script's account (placeholders; do not paste the token anywhere shared):
+
+```
+cd <STACK_CHECKOUT> && <PROD_PYTHON> manage.py drf_create_token <SCRIPT_USERNAME>
+```
+
+Expected: `Generated token <TOKEN> for user <SCRIPT_USERNAME>`. Use `drf_create_token -r <SCRIPT_USERNAME>` to rotate it. Check from the script's host:
+
+```
+curl -s -H "Authorization: Token <TOKEN>" "<SITE_URL>/api/transients/?limit=1"
+```
+
+Expected: HTTP 200 JSON with `count` and `results`. A wrong token returns 401 `Invalid token.`. In Python: `requests.get(url, headers={"Authorization": "Token <TOKEN>"})`.
 
 ## 4 · Data checks David
 
@@ -1531,6 +1914,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 | #384 galactic coordinates: `backfill_galactic_coords` check (expect 0), optional EXPLAIN of the acceptance search (after promotion) | The migration itself backfills every transient (~6 min on YSE\_test); save() keeps the columns current | [#384](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/384) · [docs/transient-search.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/transient-search.md) · [1.13](#now) / [3.29](#prod) | optional |
 | #385 NGSF classification: install NGSF + template bank on the job-runner host, `NGSF_COMMAND` / `NGSF_HOME`, `register_analysis_service --builtin ngsf` (after promotion) | Summary tab says "NGSF is not installed on this server" until then; the SALT3 Refit line needs only the already-registered sncosmo\_fit service | [#385](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/385) · [docs/ngsf.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/ngsf.md) · [1.14](#now) / [3.30](#prod) | optional |
 | #386 broker alert streams: fastavro / antares-client in the ingest venv, credential, Broker connection + filters, `broker_ingest --dry-run` smoke test, consumer under systemd (after promotion) | Off by default; nothing consumes until a connection is enabled and a consumer runs; stale-stream banner reads the heartbeats | [#386](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/386) · [docs/broker-streams.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/broker-streams.md) · [1.15](#now) / [3.31](#prod) | optional |
+| Slack events check, then optional login/session/transport keys per stack | `/slack/events/` needs both `SLACK_ENABLED` and `SLACK_SIGNING_SECRET`; lockout, session length, host/proxy, HTTPS cookies and HSTS are opt-in `[security]` keys | [login, session and transport settings](#authn) | pending |
 | Runbook Part A (yse\_test on develop, dedupe, chown) | Deploy green 07:34; dedupe run 07:37; Ryan confirmed 07:41 | [runbook](https://claude.ai/artifact/Epp8VK8jZm2VqNBDBLUj7c) | done |
 | Migration 0010 on the shared YSE\_test database | Applied by the experimental deploy of #333, 17:23-17:42 UTC | [run 36604581592](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36604581592) | done |
 
@@ -1538,8 +1922,17 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
-* 2026-10-11 v29, optional. Performance audit server settings ([#482](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/482)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490)): new section "Performance audit 2026-10-10: server settings" (mod_deflate, hashed static files + Cache-Control, `prune_finder_charts`, `prune_auditlog`, LOGGING / cached_db sessions, plot-stack preload, slow query log). Nothing required; no migration.
+* 2026-10-11 v34, optional. Performance audit server settings ([#482](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/482)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490)): new section "Performance audit 2026-10-10: server settings" (mod_deflate, hashed static files + Cache-Control, `prune_finder_charts`, `prune_auditlog`, LOGGING / cached_db sessions, plot-stack preload, slow query log). Nothing required; no migration.
+* 2026-10-11 v33, informational. Write authorization and Explorer access ([#520](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/520)-[#527](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/527)): migration `0032_api_writer_groups` (data only: groups `api_writers` and `explorer_users`). Nothing is required; the three new `[site_settings]` flags are off by default. New optional section [Write authorization and Explorer access](#authz-flags): check the groups, add the cron and script accounts to `api_writers`, turn on `API_WRITE_PERMISSIONS_ENFORCED` / `UPLOAD_GROUP_CHECKS_ENFORCED` / `EXPLORER_RESTRICTED_ACCESS`, and limit the Explorer MySQL user's grants to science tables.
+* 2026-10-11 v32, **one required check** (Slack events: `SLACK_ENABLED` and `SLACK_SIGNING_SECRET` must both be set on a stack that receives Slack events), the rest optional: [login, session and transport settings](#authn) (sec/authn PR). New optional dependency django-axes 5.41.1 (+ django-ipware 5.0.2) with `migrate axes` once per database; new `[security]` keys (session length, lockout, API rate limits, ALLOWED\_HOSTS requirement, forwarded headers, password-reset domain, HTTPS cookies / redirect / HSTS, CSP report-only, inactive-account exemptions), optional `[database]` TLS keys, `manage.py deactivate_inactive_users`. Every default is today's behaviour.
+* 2026-10-11 v31, optional. IERS refresh cron ([#466](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/466)): web workers no longer download IERS tables; new "IERS table refresh" subsection (weekly cron plus a check). **Nothing required on Ziggy.**
+
+* 2026-10-11 v30, informational. Legacy views hardening (#495-#504): every page needs a login except a public allowlist, logout is POST-only, and the legacy TNS submit, follow-up notice, on-call, target-list, finder-chart and image/status views check login (and POST / ownership where they change data). **Nothing required on Ziggy.** Verify with the two curls in "Login required on every page"; rollback switch `LOGIN_REQUIRED_MIDDLEWARE = False` is documented there.
+* 2026-10-10 v29, informational. Docker compose hardening (localhost-only published ports, Redis password required when the optional Redis service starts, pinned MySQL / nginx / Redis image tags). The compose files are for local development and CI only; Ziggy does not use them: **nothing required on Ziggy**.
 * 2026-10-10 v28, informational. Deploy Stack now triggers on `push` to `experimental` / `develop` only (a merged PR is a push, so deploys still happen) and all workflows declare least-privilege `permissions`. **Nothing required on Ziggy.** After the first merge following this change, check on GitHub Actions that Deploy Stack fired once on the push.
+* 2026-10-10, optional. Ingest / cron performance ([#471](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/471)-[#476](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/476)): django_cron now uses a per-job file lock, and ingest HTTP calls have timeouts and retries. New subsection [Cron locking and ingest HTTP timeouts](#cron-locks): an optional shared `CRON_LOCKFILE_PATH`, recommended `flock -n` on each `runcrons` crontab line, and optional `QUERY_API_CACHE_SECONDS` / `INGEST_HTTP_*` keys. No migration, no pip step.
+* 2026-10-10, informational. Perf audit P16/P17 ([#477](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/477), [#478](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/478)): migration `0031_spatial_time_indexes` (seven indexes, no column changes) applies on the shared `YSE_test` database with the experimental deploy, nothing to run there. New optional production step 3.32: row counts, `SHOW INDEX` and EXPLAIN before and after 3.9, build time to budget.
+* 2026-10-10 informational, nothing required. API token authentication for scripts ([#457](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/457)) and Basic auth now sets `request.user` ([#458](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/458)); optional token setup is in the "API token authentication" subsection.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.

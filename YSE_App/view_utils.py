@@ -1,16 +1,11 @@
 # utils for generating webpage views
 
-import multiprocessing as mp
-try: mp.set_start_method('fork')
-except (RuntimeError, ValueError): pass  # already set, or platform without fork
-from multiprocessing import Process, Queue
-
 import django
 from django.conf import settings as djangoSettings
 from django.core.cache import cache
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import models, connection, reset_queries
-from django.db.models import Prefetch, Q
+from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -19,6 +14,7 @@ from django.views.generic import TemplateView
 import calendar
 import datetime
 import logging
+import threading
 import time
 
 from .models import *
@@ -88,7 +84,8 @@ def _load_astropy_coords():
     from astropy.utils import iers
     import astropy.units as u
     from astroplan import Observer
-    iers.conf.auto_download = True
+    # Web workers never wait on an IERS download (#466); refresh by cron instead.
+    iers.conf.auto_download = False
     _ASTROPY_COORDS_LOADED = True
 
 
@@ -363,10 +360,6 @@ def _cached_plot_http_response(cache_key, html):
         
         
 
-# Rise/set times come back from a child Process through this queue. It used to be
-# named Q, which shadowed django.db.models.Q for the whole module, so every Q(...)
-# filter here raised "'Queue' object is not callable" (view_yse_fields, #414).
-_RISE_SET_QUEUE = Queue()
 
 
 
@@ -425,13 +418,16 @@ def get_recent_phot_for_transient(user, transient_id=None):
 
 def get_disc_mag_from_photdata(photdata_qs):
     """Discovery / first mag from an existing photdata queryset (avoids duplicate DB fetch)."""
-    firstphot = None
-    for ph in photdata_qs.order_by('obs_date'):
-        if ph.discovery_point:
-            return ph
-        if ph.mag:
-            firstphot = ph
-    return firstphot
+    # Same answer as walking every row in obs_date order (the earliest
+    # discovery point, else the latest point with a non-zero magnitude), but in
+    # at most two LIMIT 1 queries instead of loading all photometry.
+    discovery = photdata_qs.filter(discovery_point=True).order_by('obs_date').first()
+    if discovery is not None:
+        return discovery
+    return (
+        photdata_qs.filter(mag__isnull=False).exclude(mag=0)
+        .order_by('-obs_date').first()
+    )
 
 
 def get_disc_mag_for_transient(user, transient_id=None):
@@ -529,6 +525,8 @@ def getTimeUntilRiseSet(ra,dec,date,lat,lon,elev,utc_off):
 #   return(can_obs)
 
 
+from django.utils.decorators import method_decorator  # noqa: E402
+
 # Finder chart rendering resolution (#484). The charts are shown at 240px (transient
 # detail) and 600px (finderim) wide on a 6.4x4.8in figure, so 150 dpi (960x720 px)
 # is enough; the previous dpi=1000 wrote ~6400x4800 px PNGs for every transient.
@@ -536,11 +534,15 @@ FINDER_CHART_DPI = 150
 _FINDER_CHART_RELDIR = 'YSE_App/images/findercharts'
 
 
-def _safe_finder_name(transient_name):
-    """Transient name reduced to filename-safe characters (no path separators)."""
+def finder_chart_safe_name(transient_name):
+    """The transient name as one file-name component for finder charts (#500)."""
     import re
 
-    return re.sub(r'[^A-Za-z0-9._+-]', '_', str(transient_name)).lstrip('.') or '_'
+    name = re.sub(r'[^A-Za-z0-9_.+-]', '_', str(transient_name or '')).lstrip('.')
+    return name or 'unnamed'
+
+
+_safe_finder_name = finder_chart_safe_name
 
 
 def finder_chart_base_dir():
@@ -556,7 +558,7 @@ def finder_chart_base_dir():
 def finder_chart_paths(transient_name, create=True):
     """THE single place that decides where a finder chart is written.
 
-    Returns (finder_png_path, offset_txt_path) for a transient, and creates the
+    Returns (directory, offset_txt_path, finder_png_path) for a transient, and creates the
     per-transient directory when create is True. The name is sanitised and the
     result is checked to stay inside finder_chart_base_dir().
     """
@@ -567,8 +569,9 @@ def finder_chart_paths(transient_name, create=True):
         raise ValueError('finder chart path escapes the finder chart directory')
     if create:
         os.makedirs(outdir, exist_ok=True)
-    return (os.path.join(outdir, f"{safe}.finder.png"),
-            os.path.join(outdir, f"{safe}.offsetstars.txt"))
+    return (outdir,
+            os.path.join(outdir, f"{safe}.offsetstars.txt"),
+            os.path.join(outdir, f"{safe}.finder.png"))
 
 
 def finder_chart_static_relpath(transient_name):
@@ -588,10 +591,11 @@ def static_asset_available(relative_path):
 class Finder(TemplateView):
     template_name = 'YSE_App/finder.html'
 
+    @method_decorator(login_required)
     def finderchart(self, request, transient_id, clobber=False):
         _load_heavy_plot_stack()
-        transient = Transient.objects.get(pk=transient_id)
-        output_finder_file, output_offset_file = finder_chart_paths(transient.name)
+        transient = get_object_or_404(Transient, pk=transient_id)
+        _outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -633,9 +637,10 @@ class Finder(TemplateView):
 
         return render(request, 'YSE_App/finder.html', context)    
     
+    @method_decorator(login_required)
     def finderim(self, request, transient_id, clobber=False):
-        transient = Transient.objects.get(pk=transient_id)
-        output_finder_file, output_offset_file = finder_chart_paths(transient.name)
+        transient = get_object_or_404(Transient, pk=transient_id)
+        _outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -678,7 +683,7 @@ class Finder(TemplateView):
         from matplotlib.figure import Figure
     
         transient = Transient.objects.get(pk=transient_id)
-        outputFinderFileName, outputOffsetFileName = finder_chart_paths(transient.name)
+        _outdir, outputOffsetFileName, outputFinderFileName = finder_chart_paths(transient.name)
         #if os.path.exists(outputOffsetFileName) and\
         #   os.path.exists(outputFinderFileName):
         #   return HttpResponseRedirect(reverse('transient_detail',
@@ -796,6 +801,7 @@ def airmassplot(request, transient_id, obs_id, telescope_id):
     canvas.print_jpg(response)
     return response
 
+@login_required
 def view_yse_fields(request):
     _load_heavy_plot_stack()
 
@@ -1025,31 +1031,44 @@ def _add_legend_grid(ax, legend_items, plot_width):
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
 
+    # Same 900 s plot-HTML cache as the detail plots (#460): the summary page
+    # fires this request once per transient card on every load.
+    cache_key = None
+    if _plot_html_cache_enabled():
+        user_key = group_access_plot_cache_token(request.user)
+        cache_key = (
+            f'lc_summary_v1_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'_{user_key}_w{_requested_plot_width(request, 500)}' + ('_salt' if salt2 else '')
+        )
+        cached_html = cache.get(cache_key)
+        if cached_html is not None:
+            return HttpResponse(cached_html)
+
     transient = get_object_or_404(Transient, pk=transient_id)
 
-    # Fetch photometry data with necessary related fields
+    # Fetch photometry data with necessary related fields (no created_by /
+    # modified_by joins: the plot never reads them; mag_sys is read per row).
     photdata = (
         get_all_phot_for_transient(request.user, transient_id)
         .select_related(
             "band__instrument__telescope",
-            "created_by",
-            "modified_by",
+            "mag_sys",
         )
         .prefetch_related("data_quality")
         .order_by("-modified_date")
     )
 
-    if not photdata.exists():
+    phot_rows = _downsample_phot_rows_for_display(list(photdata))
+    if not phot_rows:
         return HttpResponse("")
 
     # Pre-fetch related band data to avoid repeated lookups
-    band_ids = photdata.values_list("band", flat=True).distinct()
+    band_ids = {p.band_id for p in phot_rows}
     band_data = PhotometricBand.objects.filter(pk__in=band_ids).select_related(
         "instrument", "instrument__telescope"
     )
     band_lookup = {b.pk: b for b in band_data}
 
-    phot_rows = list(photdata)
     phot_values = [
         {
             "id": p.id,
@@ -1294,7 +1313,10 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         except Exception as exc:
             _note_salt2_fit_failure(ax, exc, transient_id)
 
-    return _bokeh_ajax_response(ax, "my plot")
+    response = _bokeh_ajax_response(ax, "my plot")
+    if cache_key:
+        return _cached_plot_http_response(cache_key, response.content.decode('utf-8'))
+    return response
 
 
 def _limit_or_nan(limit):
@@ -1851,21 +1873,54 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
     return f'<p class="text-muted yse-plot-empty">{text}</p>'
 
 
+def _spec_points_by_spectrum(spectrum_ids):
+    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra, in one query.
+
+    Spectra are stored one TransientSpecData row per pixel, so building a model
+    instance per pixel dominated plot time for long spectra (#479). This reads
+    plain ``(spectrum_id, wavelength, flux)`` tuples, in the same (pk) order as
+    the old ``transientspecdata_set`` prefetch, straight into numpy.
+    """
+    spectrum_ids = list(spectrum_ids)
+    if not spectrum_ids:
+        return {}
+    rows = np.array(
+        list(
+            TransientSpecData.objects.filter(spectrum_id__in=spectrum_ids)
+            .order_by('spectrum_id', 'id')
+            .values_list('spectrum_id', 'wavelength', 'flux')
+        ),
+        dtype=float,
+    )
+    if rows.size == 0:
+        return {}
+    ids = rows[:, 0].astype(np.int64)
+    # Rows are ordered by spectrum_id, so each spectrum is one contiguous run.
+    starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]])
+    ends = np.r_[starts[1:], ids.size]
+    return {
+        int(ids[a]): (rows[a:b, 1], rows[a:b, 2])
+        for a, b in zip(starts, ends)
+    }
+
+
 def _spectra_for_plot(dbspectra):
     """Turn TransientSpectrum rows into plottable dicts, skipping empty ones.
 
-    Returns ``(spectra, n_without_points)``: spectra whose ``transientspecdata_set``
-    is empty are counted instead of plotted, so a transient whose spectra were
+    Returns ``(spectra, n_without_points)``: spectra without TransientSpecData
+    points are counted instead of plotted, so a transient whose spectra were
     registered without wavelength/flux rows gets the empty-state message rather
     than a traceback (#343). Each spectrum is resampled to at most
-    ``MAX_SPEC_DISPLAY_PIXELS`` points.
+    ``MAX_SPEC_DISPLAY_PIXELS`` points. Points are read with one ``values_list``
+    query for all spectra (#479), not one ORM object per pixel.
     """
     spectra = []
     n_without_points = 0
+    dbspectra = list(dbspectra)
+    points = _spec_points_by_spectrum(spectrum.id for spectrum in dbspectra)
+    empty = np.array([], dtype=float)
     for spectrum in dbspectra:
-        spec_data = list(spectrum.transientspecdata_set.all())
-        wave = np.array([s.wavelength for s in spec_data])
-        flux = np.array([s.flux for s in spec_data])
+        wave, flux = points.get(spectrum.id, (empty, empty))
         if wave.size == 0 or flux.size == 0:
             n_without_points += 1
             continue
@@ -1914,9 +1969,7 @@ def spectrumplot(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
-    ).select_related('instrument').prefetch_related(
-        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
-    )
+    ).select_related('instrument')
     
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
@@ -1960,20 +2013,36 @@ def spectrumplot(request, transient_id):
 
 @login_required
 def spectrumplot_summary(request, transient_id):
+    # Same 900 s plot-HTML cache as spectrumplot (#460); the summary page asks
+    # for one of these per transient card.
+    cache_key = None
+    if _plot_html_cache_enabled():
+        user_key = group_access_plot_cache_token(request.user)
+        cache_key = (
+            f'specsummary_v1_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+        )
+        cached_html = cache.get(cache_key)
+        if cached_html is not None:
+            return HttpResponse(cached_html)
+
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
-    ).select_related('instrument').prefetch_related(
-        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
-    )
+    ).select_related('instrument')
 
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
         if n_without_points == 0:
-            # The summary card stays blank for a transient without spectra.
+            # The summary card stays blank for a transient without spectra;
+            # the blank answer is cached too (the token changes with any spectrum).
+            if cache_key:
+                cache.set(cache_key, '', timeout=PLOT_HTML_CACHE_TIMEOUT)
             return django.http.HttpResponse('')
         # Same empty state as spectrumplot instead of an UnboundLocalError (#343).
-        return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
+        empty_html = _spectrum_plot_empty_message(n_without_points)
+        if cache_key:
+            cache.set(cache_key, empty_html, timeout=PLOT_HTML_CACHE_TIMEOUT)
+        return django.http.HttpResponse(empty_html)
 
     _load_heavy_plot_stack()
 
@@ -2001,8 +2070,10 @@ def spectrumplot_summary(request, transient_id):
 
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
-    g = file_html(ax, CDN, "spectrum plot")
-    return HttpResponse(g.replace('width: 90%', 'width: 100%'))
+    g = file_html(ax, CDN, "spectrum plot").replace('width: 90%', 'width: 100%')
+    if cache_key:
+        return _cached_plot_http_response(cache_key, g)
+    return HttpResponse(g)
 
 
 #def spectrumplot(request, transient_id):
@@ -2056,15 +2127,11 @@ def spectrumplotsingle(request, transient_id, spec_id):
         )
     else:
         spectrum = spectrum[0]
-    spec = TransientSpecData.objects.filter(spectrum=spectrum)
-    
-    if not len(spec):
+    wave, flux = _spec_points_by_spectrum([spectrum.id]).get(spectrum.id, ([], []))
+
+    if not len(wave):
         return django.http.HttpResponse(_spectrum_plot_empty_message(1))
 
-    wave,flux = [],[]
-    for s in spec:
-        wave += [s.wavelength]
-        flux += [s.flux]
     bottom = np.percentile(flux,5)*0.5; top = np.percentile(flux,95)*1.3
     if np.percentile(flux,2) < 0:
         bottom = np.percentile(flux,2)*1.5
@@ -2080,102 +2147,33 @@ def spectrumplotsingle(request, transient_id, spec_id):
 
     return HttpResponse(g.replace('width: 90%','width: 100%'))
 
-def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
-    _load_astropy_coords()
-    tstart = time.time()
+def _classical_night_rise_set(request_transient_id, obs_id):
+    """(rise, set) strings for a transient on a classical night, solved inline (#463).
 
-    #transient = Transient.objects.filter(id=transient_id)[0]
-    #coords = transient.CoordString()
+    The old views forked a Process per request and read the answer from one
+    module-global Queue with no timeout, so concurrent requests could receive each
+    other's times. This is a plain function call, cached per (telescope, night,
+    coordinates), so there is nothing shared between requests.
+    """
+    from YSE_App.services.night_astro import target_rise_set
 
-    #obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
+    transient = Transient.objects.filter(id=request_transient_id)[0]
+    coords = transient.CoordString()
+    obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
+    return target_rise_set(obsnight.resource.telescope, obsnight.obs_date, coords)
 
-    tme = Time(str(obs_date).split()[0])
-    sc = SkyCoord('%s %s'%(coords[0],coords[1]),unit=(u.hourangle,u.deg))
 
-    location = EarthLocation.from_geodetic(
-        longitude*u.deg,latitude*u.deg,
-        elevation*u.m)
-    tel = Observer(location=location, timezone="UTC")
-
-    target_set_time = tel.target_set_time(tme,sc,horizon=18*u.deg,which="previous")
-
-    if target_set_time:
-        try: settime = target_set_time.isot.split('T')[-1]
-        except (AttributeError, ValueError): settime = None
-    else: 
-        settime = None
-
-    logger.debug('set time took %s', time.time() - tstart)
-    _RISE_SET_QUEUE.put(settime)
-    #setdict['set_time'] = settime
-    
-def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
-    _load_astropy_coords()
-    tstart = time.time()
-    #transient = Transient.objects.filter(id=transient_id)[0]
-    #coords = transient.CoordString()
-
-    #obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
-
-    tme = Time(str(obs_date).split()[0])
-    sc = SkyCoord('%s %s'%(coords[0],coords[1]),unit=(u.hourangle,u.deg))
-
-    location = EarthLocation.from_geodetic(
-        longitude*u.deg,latitude*u.deg,
-        elevation*u.m)
-    tel = Observer(location=location, timezone="UTC")
-
-    target_rise_time = tel.target_rise_time(
-        tme,sc,horizon=18*u.deg,which="previous")
-
-    if target_rise_time:
-        try: risetime = target_rise_time.isot.split('T')[-1]
-        except (AttributeError, ValueError): risetime = None
-    else: 
-        risetime = None
-
-    logger.debug('rise time took %s', time.time() - tstart)
-    _RISE_SET_QUEUE.put(risetime)
-
+@login_required
 def rise_time(request,transient_id,obs_id):
-        
-    risedict = {'rise_time':''}
-    transient = Transient.objects.filter(id=transient_id)[0]
-    coords = transient.CoordString()
-    obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
-    obs_date = obsnight.obs_date
-    longitude = obsnight.resource.telescope.longitude
-    latitude = obsnight.resource.telescope.latitude
-    elevation = obsnight.resource.telescope.elevation
-    
-    action = Process(target=rise_func,args=(coords,obs_date,longitude,latitude,elevation,risedict))
-    action.start()
-    risedict['rise_time'] = _RISE_SET_QUEUE.get()
-    action.join(timeout=1)
-    action.terminate()
+    return JsonResponse({'rise_time': _classical_night_rise_set(transient_id, obs_id)[0]})
 
-    return JsonResponse(risedict)
 
+@login_required
 def set_time(request,transient_id,obs_id):
+    return JsonResponse({'set_time': _classical_night_rise_set(transient_id, obs_id)[1]})
 
-    setdict = {'set_time':''}
-    transient = Transient.objects.filter(id=transient_id)[0]
-    coords = transient.CoordString()
-    obsnight = ClassicalObservingDate.objects.get(pk=obs_id)
-    obs_date = obsnight.obs_date
-    longitude = obsnight.resource.telescope.longitude
-    latitude = obsnight.resource.telescope.latitude
-    elevation = obsnight.resource.telescope.elevation
-    
-    action = Process(target=set_func,args=(coords,obs_date,longitude,latitude,elevation,setdict))
-    action.start()
-    setdict['set_time'] = _RISE_SET_QUEUE.get()
-    action.join(timeout=1.0)
-    action.terminate()
 
-    return JsonResponse(setdict)
-
-        
+@login_required
 def moon_angle(request,transient_id,obs_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2190,6 +2188,7 @@ def moon_angle(request,transient_id,obs_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+@login_required
 def tonight_rise_time(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2215,6 +2214,7 @@ def tonight_rise_time(request,transient_id,too_id):
     risedict = {'rise_time':returnstarttime}
     return JsonResponse(risedict)
 
+@login_required
 def tonight_set_time(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2240,6 +2240,7 @@ def tonight_set_time(request,transient_id,too_id):
     setdict = {'set_time':returnstarttime}
     return JsonResponse(setdict)
     
+@login_required
 def tonight_moon_angle(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2251,27 +2252,48 @@ def tonight_moon_angle(request,transient_id,too_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+# The PS1 cutout page for a position never changes; a found URL is kept for a
+# month, a "no image" answer for a day, and a failed/timed-out scrape only
+# briefly so the next load retries it (#460).
+PS1_IMAGE_CACHE_SECONDS = 30 * 24 * 3600
+PS1_NO_IMAGE_CACHE_SECONDS = 24 * 3600
+PS1_FAILURE_CACHE_SECONDS = 60
+
+
+@login_required
 def get_ps1_image(request,transient_id):
-    
+
     try:
-        t = Transient.objects.get(pk=transient_id)
-    except t.DoesNotExist:
+        t = Transient.objects.only('ra', 'dec').get(pk=transient_id)
+    except Transient.DoesNotExist:
         raise Http404("Transient id does not exist")
+
+    cache_key = 'ps1_image_v1_%s_%.7f_%.7f' % (transient_id, t.ra, t.dec)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return JsonResponse(cached)
 
     ps1url = ("https://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
     try:
         response = requests.get(url=ps1url,timeout=5)
     except requests.RequestException as exc:
         logger.warning("PS1 cutout request failed for transient %s: %s", transient_id, exc)
-        return(JsonResponse({"jpegurl":"","msg":"timeout"}))
+        failure = {"jpegurl":"","msg":"timeout"}
+        cache.set(cache_key, failure, PS1_FAILURE_CACHE_SECONDS)
+        return(JsonResponse(failure))
     response_text = response.content.decode('utf-8')
-    if "<td><img src=" in response.content.decode('utf-8'):
-        jpegurl = response.content.decode('utf-8').split('<td><img src="')[1].split('" width="240" height="240" /></td>')[0]
+    if "<td><img src=" in response_text:
+        jpegurl = response_text.split('<td><img src="')[1].split('" width="240" height="240" /></td>')[0]
         jpegurl = "http:%s"%jpegurl
     else:
         jpegurl=""
 
     jpegurldict = {"jpegurl":jpegurl,"msg":"success"}
+    if response.status_code == 200:
+        cache.set(cache_key, jpegurldict,
+                  PS1_IMAGE_CACHE_SECONDS if jpegurl else PS1_NO_IMAGE_CACHE_SECONDS)
+    else:
+        cache.set(cache_key, jpegurldict, PS1_FAILURE_CACHE_SECONDS)
     return(JsonResponse(jpegurldict))
 
 ARCHIVE_STATUS_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_STATUS_TIMEOUT', '8'))
@@ -2281,27 +2303,44 @@ ARCHIVE_STATUS_CACHE_SECONDS = 3600
 ARCHIVE_STATUS_FAILURE_CACHE_SECONDS = 60
 
 
+# One bounded pool for every archive lookup. A lookup that outlives its timeout
+# keeps its worker until MAST answers, but the pool caps how many can pile up
+# (a fresh unbounded thread per request, shut down with wait=False, let them
+# accumulate when an archive was slow; #467).
+_ARCHIVE_STATUS_POOL = None
+_ARCHIVE_STATUS_POOL_LOCK = threading.Lock()
+ARCHIVE_STATUS_MAX_WORKERS = int(os.environ.get('YSE_ARCHIVE_STATUS_WORKERS', '8'))
+
+
+def _archive_status_pool():
+    global _ARCHIVE_STATUS_POOL
+    if _ARCHIVE_STATUS_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        with _ARCHIVE_STATUS_POOL_LOCK:
+            if _ARCHIVE_STATUS_POOL is None:
+                _ARCHIVE_STATUS_POOL = ThreadPoolExecutor(
+                    max_workers=ARCHIVE_STATUS_MAX_WORKERS, thread_name_prefix='archive-status')
+    return _ARCHIVE_STATUS_POOL
+
+
 def _archive_status_with_timeout(work, *, timeout_seconds=None):
     """Run a blocking archive lookup with a wall-clock timeout.
 
-    Returns ``None`` when the lookup does not finish in time. The worker
-    thread is left to finish on its own: ``ThreadPoolExecutor`` used as a
-    context manager would ``shutdown(wait=True)`` and block the response
-    until MAST answered, which made the timeout cosmetic.
+    Returns ``None`` when the lookup does not finish in time. The caller does not
+    wait for a lookup that is already running (a ``ThreadPoolExecutor`` used as a
+    context manager would ``shutdown(wait=True)`` and make the timeout cosmetic);
+    one still queued behind busy workers is cancelled.
     """
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    from concurrent.futures import TimeoutError as FuturesTimeout
 
     if timeout_seconds is None:
         timeout_seconds = ARCHIVE_STATUS_TIMEOUT_SECONDS
-    pool = ThreadPoolExecutor(max_workers=1)
+    future = _archive_status_pool().submit(work)
     try:
-        future = pool.submit(work)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except FuturesTimeout:
-            return None
-    finally:
-        pool.shutdown(wait=False)
+        return future.result(timeout=timeout_seconds)
+    except FuturesTimeout:
+        future.cancel()
+        return None
 
 
 def _record_archive_flag(transient_id, field, has_data):
@@ -2361,6 +2400,7 @@ def _archive_status_payload(cache_key, lookup, archive_name, transient_id=None, 
     return payload
 
 
+@login_required
 def get_hst_status(request, transient_id):
     """Lightweight HST availability for tab label (no JPG fetch)."""
     try:
@@ -2381,6 +2421,7 @@ def get_hst_status(request, transient_id):
                                                 transient_id=t.pk, flag_field='has_hst'))
 
 
+@login_required
 def get_chandra_status(request, transient_id):
     """Lightweight Chandra availability for tab label (no image fetch)."""
     try:
@@ -2472,6 +2513,7 @@ def _archive_table_response(transient_id, archive_name, lookup, empty_payload, c
 HST_IMAGE_EMPTY = {"jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []}
 
 
+@login_required
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
@@ -2538,6 +2580,7 @@ def get_jwst_observations(request, transient_id):
         cache_key=f'jwst_observations_v2_{transient_id}',
     )
 
+@login_required
 def get_chandra_image(request,transient_id):
     
     try:
@@ -2573,6 +2616,7 @@ def get_chandra_image(request,transient_id):
     return(JsonResponse(jpegurldict))
 
 
+@login_required
 def get_legacy_image(request,transient_id):
     
     try:
@@ -2593,6 +2637,7 @@ def get_legacy_image(request,transient_id):
 
     return(JsonResponse(jpegurldict))
 
+@login_required
 def delta_too_hours(request,too_id):
     too = ToOResource.objects.get(id=too_id)
     diff = (too.awarded_too_hours - too.used_too_hours)

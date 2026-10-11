@@ -438,6 +438,9 @@ class DashboardIndexTests(TestCase):
     # Added later for the search filters (#286, migration 0027), not part of the #248 list.
     LATER = {
         "yse_transient_gal_b_idx": ("transient", ["gal_b"]),
+        # Cone-search boxes and created_date ranges (#477, #478, migration 0031).
+        "yse_transient_dec_ra_idx": ("transient", ["dec", "ra"]),
+        "yse_transient_created_idx": ("transient", ["created_date"]),
     }
 
     def test_models_declare_exactly_the_recommended_indexes(self):

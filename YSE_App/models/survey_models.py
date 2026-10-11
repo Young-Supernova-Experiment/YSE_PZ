@@ -34,6 +34,13 @@ class SurveyField(BaseModel):
 	width_deg = models.FloatField()
 	height_deg = models.FloatField()
 
+	class Meta:
+		indexes = [
+			# Field-containment boxes on ra_cen/dec_cen (Transient.LikelyYSEField
+			# and friends), dec first (#478).
+			models.Index(fields=['dec_cen', 'ra_cen'], name='yse_surveyfield_dec_ra_idx'),
+		]
+
 	def __str__(self):
 		return self.field_id
 
@@ -82,6 +89,14 @@ class SurveyObservation(BaseModel):
 	quality = models.IntegerField(null=True, blank=True)
 	n_good_skycell = models.IntegerField(null=True, blank=True)
 	msb = models.ForeignKey(SurveyFieldMSB, on_delete=models.CASCADE, null=True, blank=True)
+
+	class Meta:
+		indexes = [
+			# Night-window ranges (mjd_requested OR obs_mjd in [lo, hi]; MySQL can
+			# index_merge the two), obs_mjd > recent cutoffs, ORDER BY obs_mjd (#478).
+			models.Index(fields=['obs_mjd'], name='yse_surveyobs_obs_mjd_idx'),
+			models.Index(fields=['mjd_requested'], name='yse_surveyobs_mjd_req_idx'),
+		]
 	
 	def __str__(self):
 		if self.obs_mjd:
