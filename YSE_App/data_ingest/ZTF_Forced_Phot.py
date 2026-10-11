@@ -87,8 +87,8 @@ def download_ztf_url(url, verbose=True):
     """Download a result file from the ZTF service into the working directory; returns its name.
     No shell is involved and the credentials are sent as HTTP auth, never logged."""
     parsed = _check_ztf_url(url)
-    file_name = re.sub(r'[^A-Za-z0-9._-]', '_', os.path.basename(parsed.path))
-    if not file_name or file_name.startswith('.'):
+    file_name = re.sub(r'[^A-Za-z0-9._-]', '_', os.path.basename(parsed.path)).lstrip('.')
+    if not file_name:
         raise ZTFForcedPhotSubmitError('The ZTF download URL has no usable file name.')
 
     if verbose:
