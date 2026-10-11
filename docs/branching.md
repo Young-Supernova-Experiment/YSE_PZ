@@ -6,7 +6,7 @@ Three long-lived branches, each deployed to its own stack on Ziggy by
 | Branch | Stack | How code gets there |
 | --- | --- | --- |
 | `experimental` | `/yse_experimental/` | Feature and fix branches open PRs here. CI (`lint`, `docker-test`) must pass; no review is required. |
-| `develop` | `/yse_test/` | **Only from `experimental`**, by a PR `experimental -> develop`. No review is required. |
+| `develop` | `/yse_test/` | **Only from `experimental`**, by a PR `experimental -> develop`; the one exception is Dependabot (below). No review is required. |
 | `master` | production | **Only from `develop`**, by a PR `develop -> master`. |
 
 Hotfixes are not merged straight into `develop` or `master`: land them on
@@ -20,8 +20,8 @@ in step. The full contributor workflow is in [CONTRIBUTING.md](../CONTRIBUTING.m
 
 `.github/workflows/promotion-guard.yml` runs on every pull request into `develop`
 or `master` and fails, with a message naming the allowed source branch, unless
-the PR is `experimental -> develop` or `develop -> master` from this repository
-(not a fork). It runs on `opened`, `synchronize`, `reopened` and `edited`, so
+the PR is `experimental -> develop`, `dependabot/* -> develop` or `develop -> master`
+from this repository (not a fork). A `dependabot/*` branch is never allowed into `master`. It runs on `opened`, `synchronize`, `reopened` and `edited`, so
 retargeting a PR re-evaluates it.
 
 A failing workflow only blocks the merge when it is a *required status check*,
@@ -57,5 +57,15 @@ the 3.2 LTS line until the Django 4 upgrade (#133) is scheduled.
   left for #186). When a package is upgraded past a fix, delete its lines; add a line
   only with a reason.
 - `.github/dependabot.yml` opens weekly pip and GitHub Actions update PRs into
-  `experimental` (at most three open per ecosystem). It never proposes Django 4+ or the
-  other versions that the stack cannot take yet (listed with reasons in the file).
+  `develop` (at most three open per ecosystem), skipping `experimental`. It never proposes
+  Django 4+ or the other versions that the stack cannot take yet (listed with reasons in
+  the file), and it excludes the archived `docker/web_image_history/**`.
+  - Merge Dependabot PRs into `develop` once CI is green. Merging deploys to ziggy
+    `/yse_test/`.
+  - Right after a Dependabot merge into `develop`, merge `develop` back into
+    `experimental` (same rule as a hotfix backport), so the next promotion does not
+    revert the bump.
+  - Dependabot reads its configuration only from the default branch (`master`), so the
+    `develop` target takes effect when `develop -> master` (#143) merges.
+  - GitHub "security updates" PRs always target the default branch (`master`), whatever
+    `target-branch` says; handle them as a hotfix (land on `experimental`, promote).
