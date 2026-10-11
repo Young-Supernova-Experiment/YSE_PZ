@@ -529,8 +529,32 @@ def getTimeUntilRiseSet(ra,dec,date,lat,lon,elev,utc_off):
 #   return(can_obs)
 
 
+from django.utils.decorators import method_decorator  # noqa: E402
+
+_FINDER_CHART_DIR = 'YSE_App/images/findercharts'
+
+
+def finder_chart_safe_name(transient_name):
+    """The transient name as one file-name component for finder charts (#500)."""
+    import re
+
+    name = re.sub(r'[^A-Za-z0-9_.+-]', '_', str(transient_name or '')).lstrip('.')
+    return name or 'unnamed'
+
+
+def finder_chart_paths(transient_name):
+    """``(directory, offset-star file, finder png)`` under STATIC_ROOT for a transient."""
+    safe = finder_chart_safe_name(transient_name)
+    basedir = os.path.realpath(os.path.join(djangoSettings.STATIC_ROOT, _FINDER_CHART_DIR))
+    outdir = os.path.realpath(os.path.join(basedir, safe))
+    if os.path.dirname(outdir) != basedir:
+        raise ValueError('finder chart directory is outside %s' % _FINDER_CHART_DIR)
+    return outdir, os.path.join(outdir, f"{safe}.offsetstars.txt"), os.path.join(outdir, f"{safe}.finder.png")
+
+
 def finder_chart_static_relpath(transient_name):
-    return f"YSE_App/images/findercharts/{transient_name}/{transient_name}.finder.png"
+    safe = finder_chart_safe_name(transient_name)
+    return f"{_FINDER_CHART_DIR}/{safe}/{safe}.finder.png"
 
 
 def static_asset_available(relative_path):
@@ -545,14 +569,12 @@ def static_asset_available(relative_path):
 class Finder(TemplateView):
     template_name = 'YSE_App/finder.html'
 
+    @method_decorator(login_required)
     def finderchart(self, request, transient_id, clobber=False):
         _load_heavy_plot_stack()
-        transient = Transient.objects.get(pk=transient_id)
-        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
-        os.makedirs(basedir, exist_ok=True)
-
-        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
-        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+        transient = get_object_or_404(Transient, pk=transient_id)
+        outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
+        os.makedirs(outdir, exist_ok=True)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -594,13 +616,11 @@ class Finder(TemplateView):
 
         return render(request, 'YSE_App/finder.html', context)    
     
+    @method_decorator(login_required)
     def finderim(self, request, transient_id, clobber=False):
-        transient = Transient.objects.get(pk=transient_id)
-        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
-        os.makedirs(basedir, exist_ok=True)
-
-        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
-        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+        transient = get_object_or_404(Transient, pk=transient_id)
+        outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
+        os.makedirs(outdir, exist_ok=True)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -608,8 +628,8 @@ class Finder(TemplateView):
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
-        options.outputOffsetFileName = outputOffsetFileName
-        options.outputFinderFileName = outputFinderFileName
+        options.outputOffsetFileName = output_offset_file
+        options.outputFinderFileName = output_finder_file
         find.options = options
 
         fig=Figure()
@@ -643,16 +663,8 @@ class Finder(TemplateView):
         from matplotlib.figure import Figure
     
         transient = Transient.objects.get(pk=transient_id)
-        basedir = "%sYSE_App/images/findercharts"%(djangoSettings.STATIC_ROOT)
-        if not os.path.exists(basedir):
-            os.makedirs(basedir)
-        
-        outputOffsetFileName = '%s/%s/%s.offsetstars.txt'%(
-            basedir,transient.name,transient.name)
-        outputFinderFileName = '%s/%s/%s.finder.png'%(
-            basedir,transient.name,transient.name)
-        if not os.path.exists(os.path.dirname(outputFinderFileName)):
-            os.makedirs(os.path.dirname(outputFinderFileName))
+        outdir, outputOffsetFileName, outputFinderFileName = finder_chart_paths(transient.name)
+        os.makedirs(outdir, exist_ok=True)
         #if os.path.exists(outputOffsetFileName) and\
         #   os.path.exists(outputFinderFileName):
         #   return HttpResponseRedirect(reverse('transient_detail',
@@ -770,6 +782,7 @@ def airmassplot(request, transient_id, obs_id, telescope_id):
     canvas.print_jpg(response)
     return response
 
+@login_required
 def view_yse_fields(request):
     _load_heavy_plot_stack()
 
@@ -2136,6 +2149,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
     print('rise time took %s'%(time.time()-tstart))
     _RISE_SET_QUEUE.put(risetime)
 
+@login_required
 def rise_time(request,transient_id,obs_id):
         
     risedict = {'rise_time':''}
@@ -2155,6 +2169,7 @@ def rise_time(request,transient_id,obs_id):
 
     return JsonResponse(risedict)
 
+@login_required
 def set_time(request,transient_id,obs_id):
 
     setdict = {'set_time':''}
@@ -2175,6 +2190,7 @@ def set_time(request,transient_id,obs_id):
     return JsonResponse(setdict)
 
         
+@login_required
 def moon_angle(request,transient_id,obs_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2189,6 +2205,7 @@ def moon_angle(request,transient_id,obs_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+@login_required
 def tonight_rise_time(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2214,6 +2231,7 @@ def tonight_rise_time(request,transient_id,too_id):
     risedict = {'rise_time':returnstarttime}
     return JsonResponse(risedict)
 
+@login_required
 def tonight_set_time(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2239,6 +2257,7 @@ def tonight_set_time(request,transient_id,too_id):
     setdict = {'set_time':returnstarttime}
     return JsonResponse(setdict)
     
+@login_required
 def tonight_moon_angle(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2250,6 +2269,7 @@ def tonight_moon_angle(request,transient_id,too_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+@login_required
 def get_ps1_image(request,transient_id):
     
     try:
@@ -2360,6 +2380,7 @@ def _archive_status_payload(cache_key, lookup, archive_name, transient_id=None, 
     return payload
 
 
+@login_required
 def get_hst_status(request, transient_id):
     """Lightweight HST availability for tab label (no JPG fetch)."""
     try:
@@ -2380,6 +2401,7 @@ def get_hst_status(request, transient_id):
                                                 transient_id=t.pk, flag_field='has_hst'))
 
 
+@login_required
 def get_chandra_status(request, transient_id):
     """Lightweight Chandra availability for tab label (no image fetch)."""
     try:
@@ -2471,6 +2493,7 @@ def _archive_table_response(transient_id, archive_name, lookup, empty_payload, c
 HST_IMAGE_EMPTY = {"jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []}
 
 
+@login_required
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
@@ -2537,6 +2560,7 @@ def get_jwst_observations(request, transient_id):
         cache_key=f'jwst_observations_v2_{transient_id}',
     )
 
+@login_required
 def get_chandra_image(request,transient_id):
     
     try:
@@ -2573,6 +2597,7 @@ def get_chandra_image(request,transient_id):
     return(JsonResponse(jpegurldict))
 
 
+@login_required
 def get_legacy_image(request,transient_id):
     
     try:
@@ -2593,6 +2618,7 @@ def get_legacy_image(request,transient_id):
 
     return(JsonResponse(jpegurldict))
 
+@login_required
 def delta_too_hours(request,too_id):
     too = ToOResource.objects.get(id=too_id)
     diff = (too.awarded_too_hours - too.used_too_hours)
