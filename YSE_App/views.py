@@ -393,9 +393,19 @@ def _personaldashboard_visible_pks_by_name(user, names):
     return by_name
 
 
+def _personaldashboard_section_pks(pks_by_name, names):
+    """Sorted pks of the visible transients among ``names``."""
+    return sorted({pk for name in names for pk in pks_by_name.get(name, ())})
+
+
+def _personaldashboard_section_count(pks_by_name, names):
+    """The section count: visible rows only, the rows the table shows (#558)."""
+    return len(_personaldashboard_section_pks(pks_by_name, names))
+
+
 def _personaldashboard_section_queryset(pks_by_name, names):
     """Annotated, ordered dashboard rows for the visible transients among ``names``."""
-    pks = sorted({pk for name in names for pk in pks_by_name.get(name, ())})
+    pks = _personaldashboard_section_pks(pks_by_name, names)
     return annotate_dashboard_transient_fields(
         # -pk breaks disc_date ties so LIMIT/OFFSET pages never overlap on MySQL
         Transient.objects.filter(pk__in=pks).order_by('-disc_date', '-pk')
@@ -425,15 +435,14 @@ def _personaldashboard_table_for_user_query(request, q):
                     request, prefix, empty_qs
                 )
                 return (table, q.query.title, prefix, transient_filter, q.id, 0)
-            section_qs = _personaldashboard_section_queryset(
-                _personaldashboard_visible_pks_by_name(request.user, cached_result),
-                cached_result,
-            )
+            pks_by_name = _personaldashboard_visible_pks_by_name(request.user, cached_result)
+            section_qs = _personaldashboard_section_queryset(pks_by_name, cached_result)
             prefix = _personaldashboard_sql_query_prefix(q.query.title)
             table, transient_filter = _personaldashboard_configure_table(
                 request, prefix, section_qs
             )
-            return (table, q.query.title, prefix, transient_filter, q.id, len(cached_result))
+            return (table, q.query.title, prefix, transient_filter, q.id,
+                    _personaldashboard_section_count(pks_by_name, cached_result))
         except Exception as e:
             cache.delete(explorer_query_cache_key(q.query.id))
             logger.error(f"Error processing query {q.id}: {e}")
@@ -494,7 +503,8 @@ def _personaldashboard_build_all_tables(request, queries):
             request, prefix, section_qs
         )
         tables.append(
-            (table, q.query.title, prefix, transient_filter, q.id, len(transient_names))
+            (table, q.query.title, prefix, transient_filter, q.id,
+             _personaldashboard_section_count(pks_by_name, transient_names))
         )
     return tables
 

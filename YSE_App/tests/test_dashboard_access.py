@@ -251,6 +251,28 @@ class PersonalDashboardAccessTests(TestCase):
                 self.assertNotIn(self.dataset.by_suffix["otherphot"].pk, deferred)
                 self.assertNotIn(self.dataset.by_suffix["nodata"].pk, deferred)
 
+    def test_section_count_is_visible_rows_on_both_paths(self):
+        # #558: the count is the number of rows the user can see, not the
+        # length of the saved-query result.
+        with mock.patch.dict(os.environ, {"YSE_PERSONAL_DASHBOARD_DEFER": "0"}):
+            response = self.client.get(reverse("personaldashboard"))
+        sync = {row[4]: row for row in response.context["transient_categories"]}
+        for uq in (self.sql_uq, self.py_uq):
+            with self.subTest(section=uq.python_query or "sql"):
+                deferred = self.client.get(reverse("personaldashboard_section", args=[uq.id]))
+                row = deferred.context["transient_cat"]
+                self.assertEqual(row[5], len(self._table_pks(row)))
+                self.assertEqual(row[5], len(self.expected))
+                self.assertEqual(sync[uq.id][5], len(self.expected))
+        self.assertLess(len(self.expected), len(self.names))
+
+    def test_staff_section_count_is_unchanged(self):
+        staff_uq = UserQuery.objects.create(user=self.owner, query=self.query, **audit_fields(self.owner))
+        client = Client()
+        client.force_login(self.owner)
+        row = client.get(reverse("personaldashboard_section", args=[staff_uq.id])).context["transient_cat"]
+        self.assertEqual(row[5], len(self.names))
+
     def test_section_filters_pks_not_names(self):
         with CaptureQueriesContext(connection) as ctx:
             self._deferred_pks(self.sql_uq)

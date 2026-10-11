@@ -159,7 +159,7 @@ class SearchFilterTests(TestCase):
 
 
 class FollowupTableRecentMagTests(TestCase):
-    """P2: recent_mag is one subquery on the follow-up queryset, not a query per row."""
+    """P2 / #557: the "Last Det." column reads the stat rows once per page, not a query per row."""
 
     @classmethod
     def setUpTestData(cls):
@@ -173,6 +173,9 @@ class FollowupTableRecentMagTests(TestCase):
             _request_followup(cls.user, t, resource=cls.night.resource,
                               classical_resource=cls.night.resource)
             cls.transients.append(t)
+        from YSE_App.services.photstat import recompute_many
+
+        recompute_many([t.pk for t in cls.transients])
 
     def _cells(self, table_cls, qs, **kwargs):
         table = table_cls(qs, **kwargs)
@@ -182,7 +185,8 @@ class FollowupTableRecentMagTests(TestCase):
         from YSE_App.table_utils import FollowupTable, ObsNightFollowupTable, ToOFollowupTable
 
         qs = self.night.resource.transientfollowup_set.select_related("transient")
-        expected = {t.name: t.recent_mag() for t in self.transients}
+        # The last detection with its band (#557); here it is also the newest point.
+        expected = {t.name: (t.recent_mag() and "%s r" % t.recent_mag()) for t in self.transients}
         for table_cls, kwargs in (
             (FollowupTable, {}),
             (ObsNightFollowupTable, {"classical_obs_date": self.night}),
@@ -211,7 +215,7 @@ class FollowupTableRecentMagTests(TestCase):
         self.assertEqual(count_for(2), count_for(6))
         self.assertLessEqual(count_for(6), 2)
 
-    def test_ordering_by_recent_mag_uses_the_annotation(self):
+    def test_ordering_by_recent_mag_uses_the_stat_row(self):
         from YSE_App.table_utils import FollowupTable
 
         qs = self.night.resource.transientfollowup_set.select_related("transient")
