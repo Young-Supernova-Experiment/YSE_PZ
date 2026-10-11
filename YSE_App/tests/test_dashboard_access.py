@@ -213,11 +213,10 @@ class PersonalDashboardAccessTests(TestCase):
         cache.set(views_module.explorer_query_cache_key(self.query.id), list(self.names), timeout=600)
         self.client = Client()
         self.client.force_login(self.member)
-        patcher = mock.patch.object(
-            views_module.yse_python_queries,
-            "dacc_access_python_query",
-            create=True,
-            new=lambda: Transient.objects.filter(name__startswith="daccpd"),
+        # Python queries are looked up in the registry (#505), not by attribute.
+        patcher = mock.patch.dict(
+            views_module.yse_python_queries.python_query_reg.all,
+            {"dacc_access_python_query": lambda: Transient.objects.filter(name__startswith="daccpd")},
         )
         patcher.start()
         self.addCleanup(patcher.stop)
