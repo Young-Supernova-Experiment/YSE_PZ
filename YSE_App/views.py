@@ -79,6 +79,7 @@ from .services.night_astro import calendar_sun_times, twilight_times
 from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
+from YSE_App.services.visibility import filter_transients_by_user_access
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.template import RequestContext
@@ -534,6 +535,7 @@ def transient_summary(request,status_or_query_name,
             query = query[0]
             transients = getattr(yse_python_queries,query.python_query)()
 
+    transients = filter_transients_by_user_access(request.user, transients)  # collaboration visibility (#547)
     if 'sort' in request.GET.keys():
         if request.GET['sort'] == 'last_obs_date' or request.GET['sort'] == '-last_obs_date':
             if request.GET['sort'] == '-last_obs_date':
