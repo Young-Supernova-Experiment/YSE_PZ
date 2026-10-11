@@ -152,6 +152,7 @@ def select_yse_fields(request):
                'all_yse_fields':all_yse_fields}
     return render(request, 'YSE_App/select_yse_fields.html', context)
 
+@login_required
 def return_serialized_transients(request):
 
     if len(request.META['QUERY_STRING'].replace('q=','')) >= 5:
