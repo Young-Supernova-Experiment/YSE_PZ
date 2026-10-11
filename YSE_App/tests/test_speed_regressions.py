@@ -1120,3 +1120,95 @@ class DownloadTargetListTests(TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertIn("ares0", response.content.decode())
+
+
+# ------------------------------------------------------------- #463 / #466
+
+
+class ClassicalRiseSetEndpointTests(TestCase):
+    """#463: rise_time / set_time compute inline; no forked Process or shared Queue."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("speed_riseset_user")
+        cls.obs_date = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        cls.night = _classical_night(cls.user, tag="riseset-night", obs_date=cls.obs_date)
+        tel = cls.night.resource.telescope
+        tel.latitude, tel.longitude, tel.elevation = 19.8, -155.5, 4200.0
+        tel.save()
+        cls.transients = [
+            create_minimal_transient(cls.user, name="riseset%d" % i, ra=ra, dec=dec)
+            for i, (ra, dec) in enumerate(((30.0, 10.0), (200.0, -20.0)))
+        ]
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _get(self, name, transient):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        with iers_offline():
+            response = self.client.get(reverse(name, kwargs={"transient_id": transient.id, "obs_id": self.night.id}))
+        self.assertEqual(response.status_code, 200)
+        return response.json()[name]
+
+    def _expected(self, transient):
+        import astropy.units as u
+        from astroplan import Observer
+        from astropy.coordinates import EarthLocation, SkyCoord
+        from astropy.time import Time
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        tel = self.night.resource.telescope
+        coords = transient.CoordString()
+        tme = Time(str(self.obs_date).split()[0])
+        sc = SkyCoord("%s %s" % (coords[0], coords[1]), unit=(u.hourangle, u.deg))
+        observer = Observer(
+            location=EarthLocation.from_geodetic(tel.longitude * u.deg, tel.latitude * u.deg, tel.elevation * u.m),
+            timezone="UTC",
+        )
+        with iers_offline():
+            rise = observer.target_rise_time(tme, sc, horizon=18 * u.deg, which="previous")
+            sett = observer.target_set_time(tme, sc, horizon=18 * u.deg, which="previous")
+        return rise.isot.split("T")[-1], sett.isot.split("T")[-1]
+
+    def test_values_match_the_inline_astroplan_expressions_and_stay_per_transient(self):
+        # interleaved requests for two transients each get their own times
+        got = [(self._get("rise_time", t), self._get("set_time", t)) for t in self.transients]
+        self.assertEqual(got, [self._expected(t) for t in self.transients])
+        self.assertNotEqual(got[0], got[1])
+        self.assertRegex(got[0][0], r"^\d\d:\d\d:\d\d\.\d+$")
+
+    def test_no_process_or_queue_and_repeat_is_cached(self):
+        from astroplan import Observer
+        from YSE_App import view_utils
+
+        self.assertFalse(hasattr(view_utils, "_RISE_SET_QUEUE"))
+        self.assertFalse(hasattr(view_utils, "Process"))
+        first = self._get("rise_time", self.transients[0])
+        with mock.patch.object(Observer, "target_rise_time") as rise, \
+             mock.patch.object(Observer, "target_set_time") as sett:
+            self.assertEqual(self._get("rise_time", self.transients[0]), first)
+            self._get("set_time", self.transients[0])  # the sibling endpoint reuses the same solve
+        self.assertEqual((rise.call_count, sett.call_count), (0, 0))
+
+
+class IersWebDownloadTests(TestCase):
+    """#466: web processes never download IERS tables."""
+
+    def test_views_and_lazy_astropy_loader_leave_auto_download_off(self):
+        from astropy.utils import iers
+        from YSE_App import view_utils, views  # noqa: F401
+
+        with iers.conf.set_temp("auto_download", True):
+            view_utils._ASTROPY_COORDS_LOADED = False
+            try:
+                view_utils._load_astropy_coords()
+                self.assertFalse(iers.conf.auto_download)
+            finally:
+                view_utils._ASTROPY_COORDS_LOADED = True

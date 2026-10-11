@@ -1,18 +1,19 @@
 from rest_framework import serializers
 from YSE_App.models import *
+from .related_fields import IdHyperlinkedRelatedField
 from django.contrib.auth.models import User
 
 class TransientSerializer(serializers.HyperlinkedModelSerializer):
     status = serializers.HyperlinkedRelatedField(queryset=TransientStatus.objects.all(), view_name='transientstatus-detail')
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
 
-    non_detect_band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
-    best_spec_class = serializers.HyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    photo_class = serializers.HyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    context_class = serializers.HyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    best_spectrum = serializers.HyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
-    abs_mag_peak_band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
+    non_detect_band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
+    best_spec_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
+    photo_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
+    context_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
+    best_spectrum = IdHyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
+    abs_mag_peak_band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
     antares_classification = serializers.HyperlinkedRelatedField(queryset=AntaresClassification.objects.all(), allow_null=True, required=False, view_name='antaresclassification-detail')
     internal_survey = serializers.HyperlinkedRelatedField(queryset=InternalSurvey.objects.all(), allow_null=True, required=False, view_name='internalsurvey-detail')
     tags = serializers.HyperlinkedRelatedField(queryset=TransientTag.objects.all(), many=True, view_name='transienttag-detail')

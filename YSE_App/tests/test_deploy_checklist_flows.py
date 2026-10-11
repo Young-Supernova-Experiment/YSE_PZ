@@ -951,6 +951,64 @@ class DeployChecklistFlowTests(TestCase):
             rows = self.client.get(reverse("yse_observing_calendar")).context["all_obs"]
         self.assertEqual([row[0] for row in rows], ["830: r,g; 831: i"])
 
+    def test_decam_observing_calendar_lists_decat_fields_with_one_window_query(self):
+        """#465: one windowed query + cached sun times; same rows the per-night view built."""
+        from django.core.cache import cache
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from YSE_App.common.utilities import date_to_mjd
+
+        _yse_group, _ps1, gpc1, bands = self._survey_stack()
+        decat = ensure_observation_group(self.user, "DECAT")
+        audit = audit_fields(self.user)
+
+        def field(name, group):
+            return SurveyField.objects.create(
+                obs_group=group, field_id=name, cadence=3, instrument=gpc1, ztf_field_id=None,
+                active=True, ra_cen=50.0, dec_cen=-5.0, width_deg=3.3, height_deg=3.3, **audit)
+
+        d1, d2 = field("DC1", decat), field("DC2", decat)
+        other = field("NOTDECAT", ensure_observation_group(self.user, "YSE"))
+        today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def mjd(days, hour):
+            return date_to_mjd(today + datetime.timedelta(days=days, hours=hour))
+
+        rows = [
+            # (field, band, mjd_requested, obs_mjd)
+            (d1, bands["g"], mjd(0, 8), mjd(0, 8.5)),    # observed tonight
+            (d1, bands["r"], mjd(0, 9), None),             # same field, scheduled band
+            (d2, bands["i"], mjd(0, 10), None),            # scheduled only
+            (other, bands["z"], mjd(0, 11), mjd(0, 11)),   # not DECAT
+            (d2, bands["g"], mjd(-12, 8), mjd(-12, 8)),    # an earlier night in the window
+            (d2, bands["g"], mjd(-40, 8), mjd(-40, 8)),    # before the window
+            (d2, bands["r"], None, None),                  # never matches
+        ]
+        for f, band, requested, observed in rows:
+            SurveyObservation.objects.create(
+                mjd_requested=requested, obs_mjd=observed, survey_field=f,
+                status=self.task_statuses["Requested"], exposure_time=27, photometric_band=band, **audit)
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        with iers_offline():
+            response = self.client.get(reverse("decam_observing_calendar"))
+            with CaptureQueriesContext(connection) as ctx:
+                again = self.client.get(reverse("decam_observing_calendar"))  # cached sun times
+        self.assertEqual(response.status_code, 200)
+        rows = response.context["all_obs"]
+        self.assertEqual(rows, again.context["all_obs"])
+        # chronological, one tuple of (observed, date, moon, colour, scheduled) per night with DECAT rows
+        self.assertEqual([r[0] for r in rows], ["DC2: g", "DC1: g,r"])
+        self.assertEqual([r[4] for r in rows], ["", "DC2: i"])
+        self.assertEqual([r[1] for r in rows], sorted(r[1] for r in rows))
+        for row in rows:
+            self.assertRegex(row[2], r"^\d+%$")
+        # the old view ran 6+ queries per night; now the page is flat in the number of nights
+        survey_queries = [q for q in ctx.captured_queries if SurveyObservation._meta.db_table in q["sql"]]
+        self.assertEqual(len(survey_queries), 1)
+
     def test_survey_obs_schedule_and_ingest_observation_record(self):
         yse_obs_group, _ps1, gpc1, bands = self._survey_stack()
         audit = audit_fields(self.user)

@@ -4,6 +4,7 @@ from django.contrib.auth import views as auth_views
 from django.contrib import admin
 from rest_framework.urlpatterns import format_suffix_patterns
 from rest_framework.routers import DefaultRouter
+from rest_framework import permissions as rf_permissions, routers as rf_routers
 from rest_framework.schemas import get_schema_view
 from django.urls import re_path, include
 
@@ -16,13 +17,23 @@ from YSE_App.yse_utils import yse_pointings, yse_view_utils
 from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
+from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
-schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
+# The API root listing and the schema need a signed-in user (or Basic/token auth).
+schema_view = get_schema_view(
+    title='Young Supernova Experiment (YSE) API',
+    permission_classes=[rf_permissions.IsAuthenticated],
+)
+
+
+class AuthenticatedAPIRootView(rf_routers.APIRootView):
+    permission_classes = (rf_permissions.IsAuthenticated,)
+
 
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
@@ -390,12 +401,19 @@ urlpatterns = [
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
+    # Logout is POST-only (#504): send the stock auth and DRF logout URLs to the
+    # same view, ahead of the includes that would otherwise log out on GET.
+    path('accounts/logout/', views.auth_logout),
+    path('api-auth/logout/', views.auth_logout),
+    # Before the auth.urls include so it takes precedence (PASSWORD_RESET_DOMAIN).
+    path('accounts/password_reset/', yse_auth_views.PasswordResetView.as_view(), name='password_reset'),
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),
     #url(r'^silk/', include('silk.urls', namespace='silk')),
 ]
 
 router = DefaultRouter()
+router.APIRootView = AuthenticatedAPIRootView
 router.register(r'transientwebresources', api_views.TransientWebResourceViewSet)
 router.register(r'hostwebresources', api_views.HostWebResourceViewSet)
 router.register(r'transientstatuses', api_views.TransientStatusViewSet)
