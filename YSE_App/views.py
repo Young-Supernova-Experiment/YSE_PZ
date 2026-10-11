@@ -339,7 +339,7 @@ def _personaldashboard_table_for_user_query(request, q):
     if q.python_query:
         try:
             transients = annotate_dashboard_transient_fields(
-                getattr(yse_python_queries, q.python_query)()
+                yse_python_queries.run_python_query(q.python_query)
             )
             transient_filter = TransientFilter(
                 request.GET, queryset=transients, prefix=q.python_query
@@ -487,6 +487,13 @@ def personaldashboard_section(request, user_query_id):
         },
     )
 
+# Columns the transient summary table sorts by (#506); a leading "-" reverses.
+_TRANSIENT_SUMMARY_SORT_FIELDS = frozenset({
+    'name', 'ra', 'dec', 'disc_date', 'redshift', 'mw_ebv', 'point_source_probability',
+    'status', 'obs_group__name', 'best_spec_class__name', 'last_obs_date', 'last_mag',
+})
+
+
 @login_required
 def transient_summary(request,status_or_query_name,
                       template='YSE_App/transient_summary_paginate.html',
@@ -519,10 +526,10 @@ def transient_summary(request,status_or_query_name,
     else:
         query = Query.objects.filter(title=unquote(status_or_query_name))
         if len(query):
-
+            query = query[0]
+            if not dashboard_sql_is_supported(query.sql):
+                raise Http404('Invalid Query')
             try:
-                query = query[0]
-                if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
                 transients = Transient.objects.filter(name__in=run_explorer_query_cached(query)).order_by('-disc_date')
             except:
                 # Query bombed
@@ -532,11 +539,17 @@ def transient_summary(request,status_or_query_name,
             if not len(query):
                 return HttpResponseNotFound("Invalid Query")
             query = query[0]
-            transients = getattr(yse_python_queries,query.python_query)()
+            try:
+                transients = yse_python_queries.run_python_query(query.python_query)
+            except KeyError:
+                raise Http404('Invalid Query')
 
-    if 'sort' in request.GET.keys():
-        if request.GET['sort'] == 'last_obs_date' or request.GET['sort'] == '-last_obs_date':
-            if request.GET['sort'] == '-last_obs_date':
+    sort = request.GET.get('sort', '')
+    if sort and (sort[1:] if sort.startswith('-') else sort) not in _TRANSIENT_SUMMARY_SORT_FIELDS:
+        sort = ''  # unknown sort field (#506): keep the default order
+    if sort:
+        if sort == 'last_obs_date' or sort == '-last_obs_date':
+            if sort == '-last_obs_date':
                 is_descending = True
             else:
                 is_descending = False
@@ -549,13 +562,13 @@ def transient_summary(request,status_or_query_name,
                 recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
             ).order_by(('-' if is_descending else '') + 'recent_magdate')
             
-        elif request.GET['sort'] == 'last_mag' or request.GET['sort'] == '-last_mag':
+        elif sort == 'last_mag' or sort == '-last_mag':
             raw_query = RECENT_MAG_SQL
-            if request.GET['sort'] == '-last_mag': is_descending = True
+            if sort == '-last_mag': is_descending = True
             else: is_descending = False
             transients = transients.annotate(last_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'last_mag')
         else:
-            transients = transients.order_by(request.GET['sort'])
+            transients = transients.order_by(sort)
             
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-')[0]
@@ -2097,11 +2110,13 @@ def download_bulk_photometry(request, query_title):
 
         transients = filter_transients_by_user_access(user, transients)
 
-    elif getattr(yse_python_queries,query_title):
+    elif query_title in yse_python_queries.python_query_reg.all:
         from YSE_App.services.visibility import filter_transients_by_user_access
 
-        transients = getattr(yse_python_queries,query_title)()
+        transients = yse_python_queries.run_python_query(query_title)
         transients = filter_transients_by_user_access(user, transients)
+    else:
+        raise Http404('Invalid Query')
 
     s = BytesIO()
     archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
@@ -2345,7 +2360,10 @@ def change_status_for_query(request, query_id, status_id):
             return JsonResponse({'msg': 'error: the saved query failed (%s); no status changed' % type(exc).__name__},
                                 status=502)
     elif q.python_query:
-        transients = getattr(yse_python_queries, q.python_query)()
+        try:
+            transients = yse_python_queries.run_python_query(q.python_query)
+        except KeyError:
+            raise Http404('Invalid Query')
     else:
         transients = Transient.objects.none()
 

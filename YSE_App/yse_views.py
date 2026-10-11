@@ -255,11 +255,11 @@ def yse_sky(request):
         query = Query.objects.filter(title=unquote(query_name))
         title = unquote(query_name)
         if query.exists():
+            query = query[0]
+            if 'yse_app_transient' not in query.sql.lower(): raise Http404('Invalid Query')
+            if 'name' not in query.sql.lower(): raise Http404('Invalid Query')
+            if not query.sql.lower().startswith('select'): raise Http404('Invalid Query')
             try:
-                query = query[0]
-                if 'yse_app_transient' not in query.sql.lower(): return Http404('Invalid Query')
-                if 'name' not in query.sql.lower(): return Http404('Invalid Query')
-                if not query.sql.lower().startswith('select'): return Http404('Invalid Query')
                 cursor = connections['explorer'].cursor()
                 cursor.execute(query.sql.replace('%','%%'), ())
                 transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
@@ -272,7 +272,10 @@ def yse_sky(request):
             if not query.exists():
                 return HttpResponseNotFound("Invalid Query")
             query = query[0]
-            transients = getattr(yse_python_queries, query.python_query)()
+            try:
+                transients = yse_python_queries.run_python_query(query.python_query)
+            except KeyError:
+                raise Http404('Invalid Query')
     else:
         transients = Transient.objects.filter(~Q(status__name = 'Ignore'))
         title = 'Transients with Any Status Except Ignore'
