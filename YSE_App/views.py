@@ -1331,7 +1331,7 @@ def download_targets_and_finders(request, telescope, obs_date):
     for f in follow_requests:
         content += "%s  %s %s 2000 mag = %.2f\n"%(
             f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()))
-        offdictlist, findername = view_utils.finder().finderchart_noview()
+        offdictlist, findername = view_utils.finder().finderchart_noview(f.transient.id)
         findernamelist += [findername]
         for offdict in offdictlist:
             content_offsets += "%s  %s %s 2000 mag = %.2f raoffset=%.2f decoffset=%.2f\n"%(

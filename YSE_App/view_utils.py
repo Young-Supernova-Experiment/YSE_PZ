@@ -397,9 +397,9 @@ def query_debugger(func):
         end = time.perf_counter()
         end_queries = len(connection.queries)
 
-        print("Function : {}".format(func.__name__))
-        print("Number of Queries : {}".format(end_queries - start_queries))
-        print("Finished in : {:.2f}s".format(end - start))
+        logger.info("Function : %s", func.__name__)
+        logger.info("Number of Queries : %s", end_queries - start_queries)
+        logger.info("Finished in : %.2fs", end - start)
         return result
 
     return inner_func
@@ -529,8 +529,51 @@ def getTimeUntilRiseSet(ra,dec,date,lat,lon,elev,utc_off):
 #   return(can_obs)
 
 
+# Finder chart rendering resolution (#484). The charts are shown at 240px (transient
+# detail) and 600px (finderim) wide on a 6.4x4.8in figure, so 150 dpi (960x720 px)
+# is enough; the previous dpi=1000 wrote ~6400x4800 px PNGs for every transient.
+FINDER_CHART_DPI = 150
+_FINDER_CHART_RELDIR = 'YSE_App/images/findercharts'
+
+
+def _safe_finder_name(transient_name):
+    """Transient name reduced to filename-safe characters (no path separators)."""
+    import re
+
+    return re.sub(r'[^A-Za-z0-9._+-]', '_', str(transient_name)).lstrip('.') or '_'
+
+
+def finder_chart_base_dir():
+    """Directory holding all finder charts (settings.FINDER_CHART_DIR).
+
+    Defaults to <STATIC_ROOT>/YSE_App/images/findercharts so the transient detail
+    page keeps serving the images as static files.
+    """
+    configured = getattr(djangoSettings, 'FINDER_CHART_DIR', None)
+    return configured or os.path.join(djangoSettings.STATIC_ROOT, _FINDER_CHART_RELDIR)
+
+
+def finder_chart_paths(transient_name, create=True):
+    """THE single place that decides where a finder chart is written.
+
+    Returns (finder_png_path, offset_txt_path) for a transient, and creates the
+    per-transient directory when create is True. The name is sanitised and the
+    result is checked to stay inside finder_chart_base_dir().
+    """
+    base = os.path.realpath(finder_chart_base_dir())
+    safe = _safe_finder_name(transient_name)
+    outdir = os.path.realpath(os.path.join(base, safe))
+    if os.path.dirname(outdir) != base:
+        raise ValueError('finder chart path escapes the finder chart directory')
+    if create:
+        os.makedirs(outdir, exist_ok=True)
+    return (os.path.join(outdir, f"{safe}.finder.png"),
+            os.path.join(outdir, f"{safe}.offsetstars.txt"))
+
+
 def finder_chart_static_relpath(transient_name):
-    return f"YSE_App/images/findercharts/{transient_name}/{transient_name}.finder.png"
+    safe = _safe_finder_name(transient_name)
+    return f"{_FINDER_CHART_RELDIR}/{safe}/{safe}.finder.png"
 
 
 def static_asset_available(relative_path):
@@ -548,11 +591,7 @@ class Finder(TemplateView):
     def finderchart(self, request, transient_id, clobber=False):
         _load_heavy_plot_stack()
         transient = Transient.objects.get(pk=transient_id)
-        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
-        os.makedirs(basedir, exist_ok=True)
-
-        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
-        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+        output_finder_file, output_offset_file = finder_chart_paths(transient.name)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -569,7 +608,7 @@ class Finder(TemplateView):
 
         if not (os.path.exists(options.outputFinderFileName) and os.path.exists(options.outputOffsetFileName)) or clobber:
             ax, offdictlist = find.mkChart(options.ra, options.dec, options.outputFinderFileName, ax=ax, saveImg=False, clobber=clobber)
-            fig.savefig(options.outputFinderFileName, dpi=1000)
+            fig.savefig(options.outputFinderFileName, dpi=FINDER_CHART_DPI)
         else:
             image = mpimg.imread(options.outputFinderFileName)
             ax.imshow(image)
@@ -596,11 +635,7 @@ class Finder(TemplateView):
     
     def finderim(self, request, transient_id, clobber=False):
         transient = Transient.objects.get(pk=transient_id)
-        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
-        os.makedirs(basedir, exist_ok=True)
-
-        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
-        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+        output_finder_file, output_offset_file = finder_chart_paths(transient.name)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -608,8 +643,8 @@ class Finder(TemplateView):
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
-        options.outputOffsetFileName = outputOffsetFileName
-        options.outputFinderFileName = outputFinderFileName
+        options.outputOffsetFileName = output_offset_file
+        options.outputFinderFileName = output_finder_file
         find.options = options
 
         fig=Figure()
@@ -643,16 +678,7 @@ class Finder(TemplateView):
         from matplotlib.figure import Figure
     
         transient = Transient.objects.get(pk=transient_id)
-        basedir = "%sYSE_App/images/findercharts"%(djangoSettings.STATIC_ROOT)
-        if not os.path.exists(basedir):
-            os.makedirs(basedir)
-        
-        outputOffsetFileName = '%s/%s/%s.offsetstars.txt'%(
-            basedir,transient.name,transient.name)
-        outputFinderFileName = '%s/%s/%s.finder.png'%(
-            basedir,transient.name,transient.name)
-        if not os.path.exists(os.path.dirname(outputFinderFileName)):
-            os.makedirs(os.path.dirname(outputFinderFileName))
+        outputFinderFileName, outputOffsetFileName = finder_chart_paths(transient.name)
         #if os.path.exists(outputOffsetFileName) and\
         #   os.path.exists(outputFinderFileName):
         #   return HttpResponseRedirect(reverse('transient_detail',
@@ -679,7 +705,7 @@ class Finder(TemplateView):
                                           options.outputFinderFileName,
                                           ax=ax,saveImg=False,
                                           clobber=clobber)
-            fig.savefig(options.outputFinderFileName,dpi=1000)
+            fig.savefig(options.outputFinderFileName,dpi=FINDER_CHART_DPI)
         else:
             image = mpimg.imread(options.outputFinderFileName)
             ax = fig.add_axes([0,0,1,1])
@@ -699,7 +725,7 @@ class Finder(TemplateView):
                            'mag':'%.3f'%float(mag[i])}
                 offdictlist += [offdict]
 
-        return offdict, outputFinderFileName
+        return offdictlist, outputFinderFileName
 
 def finder():
     return Finder()
@@ -2079,7 +2105,7 @@ def set_func(coords,obs_date,longitude,latitude,elevation,setdict):
     else: 
         settime = None
 
-    print('set time took %s'%(time.time()-tstart))
+    logger.debug('set time took %s', time.time() - tstart)
     _RISE_SET_QUEUE.put(settime)
     #setdict['set_time'] = settime
     
@@ -2108,7 +2134,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
     else: 
         risetime = None
 
-    print('rise time took %s'%(time.time()-tstart))
+    logger.debug('rise time took %s', time.time() - tstart)
     _RISE_SET_QUEUE.put(risetime)
 
 def rise_time(request,transient_id,obs_id):
@@ -2523,14 +2549,13 @@ def get_chandra_image(request,transient_id):
     from . import common
     chr=common.chandra_query.chandraImages(t.ra,t.dec,'Object')
     chr.search_chandra_database()
-    print("I found",chr.n_obsid,"Chandra images")
-    print("The cut out images have the following URLs:")
+    logger.info("Found %s Chandra images", chr.n_obsid)
 
     #fitsurllist = []
     #for jpg,i in zip(chr.jpglist,range(len(chr.jpglist))):
     #   print(jpg)
     #   fitsurllist += ["https://hla.stsci.edu/cgi-bin/getdata.cgi?config=ops&amp;dataset=%s"%str(chr.obstable["obs_id"][i]).lower()]
-    print("Run time was: ",(datetime.datetime.now() - startTime).total_seconds(),"seconds")
+    logger.info("Chandra query run time was %s seconds", (datetime.datetime.now() - startTime).total_seconds())
 
     if len(chr.jpegs):
         jpegurldict = {"jpegurl":list(chr.jpegs.data.astype(str)),
@@ -2562,7 +2587,7 @@ def get_legacy_image(request,transient_id):
     #   t.ra,t.dec)
     fitsurl = "https://www.legacysurvey.org/viewer?ra=%.7f&dec=%.7f"%(t.ra,t.dec)
     
-    print(jpegurl,fitsurl)
+    logger.debug("%s %s", jpegurl, fitsurl)
     jpegurldict = {"jpegurl":jpegurl,
                    "fitsurl":fitsurl}
 

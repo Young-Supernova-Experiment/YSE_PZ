@@ -1323,6 +1323,130 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+### Performance audit 2026-10-10: server settings (optional, per stack) nothing required
+
+Everything here is optional and off by default; code lands with the PR for [#481](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/481)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490). Placeholders: `<STACK_DIR>` (the checkout), `<STACK_PYTHON>` (that stack's interpreter), `<CRON_PYTHON>`, `<STATIC_DIR>` (that stack's `STATIC_ROOT`, the directory its Apache `Alias` points at), `<APACHE_SITE_CONF>`, `<MYSQL_ADMIN_USER>`.
+
+**A. Compression (`mod_deflate`, #482).**
+
+```
+sudo a2enmod deflate headers expires
+# in <APACHE_SITE_CONF>, inside the vhost:
+#   AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json image/svg+xml
+sudo apache2ctl configtest && sudo systemctl reload apache2
+# check:
+curl -s -H 'Accept-Encoding: gzip' -o /dev/null -D - <SITE_URL><STATIC_URL>YSE_App/yse-theme.css | grep -i content-encoding
+```
+
+**Expected** `content-encoding: gzip`.
+
+**B. Hashed static files and a long `Cache-Control` (#482).** The setting is OFF until `YSE_HASHED_STATIC=1` is in the environment of BOTH `collectstatic` and the web process. Order matters: collect first, then turn it on, or pages reference names that do not exist yet (files missing from the manifest fall back to the plain name, so a missed step degrades to today's behaviour rather than a 500).
+
+```
+# 1. collect with the setting on (writes name.<hash>.ext and staticfiles.json under <STATIC_DIR>)
+cd <STACK_DIR> && YSE_HASHED_STATIC=1 <STACK_PYTHON> manage.py collectstatic --noinput
+
+# 2. long cache ONLY for the hashed copies, in <APACHE_SITE_CONF> (the names change when content changes):
+#   <Directory <STATIC_DIR>>
+#       <FilesMatch "\.[0-9a-f]{12}\.(css|js|png|jpg|gif|svg|woff2?|ttf)$">
+#           Header set Cache-Control "public, max-age=31536000, immutable"
+#       </FilesMatch>
+#   </Directory>
+
+# 3. export YSE_HASHED_STATIC=1 where mod_wsgi sees it (/etc/apache2/envvars, or wsgi.py setdefault, as for REDIS_URL), then
+sudo apache2ctl configtest && sudo systemctl reload apache2
+
+# check: a page references hashed names, and they carry the header
+curl -s <SITE_URL>/ | grep -o 'yse-theme\.[0-9a-f]*\.css' | head -1
+curl -sI <SITE_URL><STATIC_URL>YSE_App/<hashed name from the line above> | grep -i cache-control
+```
+
+**Expected** a `yse-theme.<12 hex>.css` name and `cache-control: public, max-age=31536000, immutable`. Roll back: unset `YSE_HASHED_STATIC` and reload; the old plain files are still collected. Re-run step 1 after every deploy that changes static files.
+
+**C. Finder charts (#484).** Charts are now written at dpi 150 through one helper (`view_utils.finder_chart_paths`), by default under `<STATIC_DIR>/YSE_App/images/findercharts`; `YSE_FINDER_CHART_DIR` can relocate them (the transient detail page only shows them while they stay under STATIC_ROOT). Old dpi-1000 files are still read as they are until pruned.
+
+```
+cd <STACK_DIR> && <STACK_PYTHON> manage.py prune_finder_charts --older-than-days 90            # dry run
+cd <STACK_DIR> && <STACK_PYTHON> manage.py prune_finder_charts --older-than-days 90 --execute  # delete
+# weekly crontab line (crontab -e), after a dry run looks right:
+#   17 4 * * 0  cd <STACK_DIR> && <CRON_PYTHON> manage.py prune_finder_charts --older-than-days 90 --execute
+```
+
+**Expected** `would delete (dry run; add --execute) N finder chart directories, X MB`. Charts are regenerated on the next view.
+
+**D. auditlog retention (#486).** Ingest writes an auditlog row per Transient save. There is no default: the command refuses to run without `--older-than-days`.
+
+```
+cd <STACK_DIR> && <STACK_PYTHON> manage.py prune_auditlog --older-than-days 365 --dry-run
+cd <STACK_DIR> && <STACK_PYTHON> manage.py prune_auditlog --older-than-days 365 --batch-size 5000 --sleep 0.2
+# optional, one model only: --model YSE_App.Transient
+# monthly crontab line, once the retention period is agreed:
+#   23 3 1 * *  cd <STACK_DIR> && <CRON_PYTHON> manage.py prune_auditlog --older-than-days <N>
+```
+
+**Expected** `would delete N auditlog entries older than <date>` then `deleted N auditlog entries ...`. Take a DB backup before the first real run. The shared `YSE_test` database is common to yse\_test and yse\_experimental: run it once, not per stack.
+
+**E. Logging and sessions (#485, #488).** The app now has a console `LOGGING` config: `YSE_LOG_LEVEL` (default `INFO`; `DEBUG`, `WARNING`, ...) in the same environment as `REDIS_URL` sets the level; output goes to the Apache error log. `SESSION_ENGINE = cached_db` is selected automatically ONLY when `REDIS_URL` resolves to a Redis cache backend (never on LocMem). Set `REDIS_URL` on production only once [#339](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/339) is on master (see "Enable the shared cache" above). Check:
+
+```
+cd <STACK_DIR> && REDIS_URL=<REDIS_URL> <STACK_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.SESSION_ENGINE)"
+```
+
+**Expected** `django.contrib.sessions.backends.cached_db` with Redis, `django.contrib.sessions.backends.db` without.
+
+**F. Preload the plot stack at worker start (#489, optional).** Saves the multi-second first plot request per worker. Create `<STACK_DIR>/wsgi_preload.py` (not committed) containing:
+
+```
+import os
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "YSE_PZ.settings")
+from YSE_App.preload import preload
+preload()
+```
+
+then in `<APACHE_SITE_CONF>`, next to the existing `WSGIDaemonProcess` / `WSGIScriptAlias` lines for that stack (use that stack's process group and application group):
+
+```
+WSGIImportScript <STACK_DIR>/wsgi_preload.py process-group=<PROCESS_GROUP> application-group=%{GLOBAL}
+sudo apache2ctl configtest && sudo systemctl reload apache2
+```
+
+**Expected** `YSE plot stack preloaded` in the error log after the reload, and the first light-curve request no longer slower than later ones. Note that `application-group=%{GLOBAL}` must match the group the site runs in, or the preload warms a different interpreter. Roll back by removing the line.
+
+**G. Measure before tuning (#490).** MySQL slow query log on YSE\_test (shared by yse\_test and yse\_experimental; do not leave it on for production without agreement). Changing these needs a MySQL admin account (`<MYSQL_ADMIN_USER>`), not the app user.
+
+```
+mysql -u <MYSQL_ADMIN_USER> -p -e "SET GLOBAL slow_query_log_file='<SLOW_LOG_PATH>'; SET GLOBAL long_query_time=1; SET GLOBAL log_queries_not_using_indexes=OFF; SET GLOBAL slow_query_log='ON';"
+mysql -u <MYSQL_ADMIN_USER> -p -e "SHOW VARIABLES LIKE 'slow_query%'; SHOW VARIABLES LIKE 'long_query_time';"
+# ... reproduce the slow pages (dashboard, transient detail), then digest:
+pt-query-digest <SLOW_LOG_PATH> > <OUT_DIR>/slow_digest.txt        # percona-toolkit: sudo apt install percona-toolkit
+head -60 <OUT_DIR>/slow_digest.txt
+# turn it off again (these SET GLOBALs are lost at a MySQL restart anyway):
+mysql -u <MYSQL_ADMIN_USER> -p -e "SET GLOBAL slow_query_log='OFF'; SET GLOBAL long_query_time=10;"
+```
+
+**Expected** `slow_query_log ON` with the chosen file; the digest ranks fingerprints by total time. The log file is written by the mysqld user: pick a path it may write, and delete it when done (it can contain query literals).
+
+EXPLAIN a slow dashboard query that the digest names (paste it from the digest, with its literals; read-only):
+
+```
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB> -e "EXPLAIN FORMAT=TREE <paste the SELECT here>\G" > <OUT_DIR>/explain_tree.txt
+```
+
+**Expected** an operator tree with `actual time` absent (EXPLAIN does not run the query); look for `Table scan` on large tables and `Filter` above a large `Index lookup`. Use `EXPLAIN ANALYZE` only on yse\_test, since it runs the query.
+
+Apache request time: add `%D` (microseconds) to a copy of the LogFormat so existing parsers keep working.
+
+```
+# <APACHE_SITE_CONF> (or apache2.conf):
+#   LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\" %D" combined_timed
+#   CustomLog ${APACHE_LOG_DIR}/<SITE>_timed.log combined_timed
+sudo apache2ctl configtest && sudo systemctl reload apache2
+# slowest 20 requests (last field is %D, microseconds):
+awk '{print $NF, $7}' ${APACHE_LOG_DIR}/<SITE>_timed.log | sort -rn | head -20
+```
+
+**Expected** `<microseconds> <path>` pairs. For the cron overlap guard (`flock -n` on `runcrons`) see [PR #546](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/546); it is not repeated here.
+
 <a id="data"></a>
 
 ## 4 · Data checks David
@@ -1414,6 +1538,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v29, optional. Performance audit server settings ([#482](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/482)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490)): new section "Performance audit 2026-10-10: server settings" (mod_deflate, hashed static files + Cache-Control, `prune_finder_charts`, `prune_auditlog`, LOGGING / cached_db sessions, plot-stack preload, slow query log). Nothing required; no migration.
 * 2026-10-10 v28, informational. Deploy Stack now triggers on `push` to `experimental` / `develop` only (a merged PR is a push, so deploys still happen) and all workflows declare least-privilege `permissions`. **Nothing required on Ziggy.** After the first merge following this change, check on GitHub Actions that Deploy Stack fired once on the push.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.

@@ -313,6 +313,30 @@ if _redis_backend:
     CACHES = {'default': {'BACKEND': _redis_backend, 'LOCATION': _redis_url}}
 else:
     CACHES = {'default': dict(_LOCMEM_CACHE)}
+
+# Sessions (#488): cached_db reads sessions from the shared cache and falls back
+# to the DB, saving a query per request. Only with a real shared cache (Redis);
+# never on per-process LocMem, where it would log users out between workers.
+# Set REDIS_URL only once #339 is on master.
+if _redis_backend:
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+
+# Logging (#485): console handler; level from YSE_LOG_LEVEL (default INFO).
+_log_level = os.environ.get('YSE_LOG_LEVEL', 'INFO').strip().upper() or 'INFO'
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'yse': {'format': '%(asctime)s %(levelname)s %(name)s: %(message)s'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'yse'},
+    },
+    'loggers': {
+        'YSE_App': {'handlers': ['console'], 'level': _log_level, 'propagate': False},
+        'YSE_PZ': {'handlers': ['console'], 'level': _log_level, 'propagate': False},
+    },
+}
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
 
@@ -435,6 +459,18 @@ USE_TZ = True
 PROJECT_DIR=os.path.dirname(__file__)
 STATIC_ROOT= os.path.join(PROJECT_DIR,'static/')
 STATIC_URL = config.get('site_settings', 'STATIC')
+# Content-hashed static file names (#482). OFF by default: when
+# YSE_HASHED_STATIC=1, `collectstatic` writes name.<hash>.ext plus a manifest and
+# templates emit the hashed URLs, so Apache can serve them with a long
+# Cache-Control (docs/ziggy-runbook.md). Files missing from the manifest fall back
+# to their plain name (manifest_strict = False).
+if os.environ.get('YSE_HASHED_STATIC', '').strip() == '1':
+    STATICFILES_STORAGE = 'YSE_App.storage.LenientManifestStaticFilesStorage'
+# Finder charts (#484): one directory per transient, written only through
+# YSE_App.view_utils.finder_chart_paths(). Empty = <STATIC_ROOT>/YSE_App/images/findercharts
+# (where the transient detail page serves them from). Prune with
+# `manage.py prune_finder_charts --older-than-days N`.
+FINDER_CHART_DIR = os.environ.get('YSE_FINDER_CHART_DIR', '').strip() or None
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
