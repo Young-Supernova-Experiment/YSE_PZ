@@ -1,0 +1,41 @@
+# Dependabot version updates (#538). Pull requests go to `experimental` (never
+# master), like every other change; see CONTRIBUTING.md for the promotion order.
+# Alerts and security updates are switched on in the repository settings, not here.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"            # requirements.txt, requirements-ingest.txt
+    target-branch: "experimental"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    ignore:
+      # Settled decision: stay on the Django 3.2 LTS line until #133 is scheduled.
+      - dependency-name: "django"
+        versions: [">=4"]
+      # Last release that supports Django 3.2 is 3.15.1 (#539).
+      - dependency-name: "djangorestframework"
+        versions: [">=3.15.2"]
+      # TensorFlow 2.13.1 needs protobuf 3.x (#183) and typing-extensions < 4.6;
+      # cryptography 46+ needs typing-extensions >= 4.13.2. Revisit with #186.
+      - dependency-name: "protobuf"
+        versions: [">=4"]
+      - dependency-name: "typing-extensions"
+        versions: [">=4.6"]
+      - dependency-name: "cryptography"
+        versions: [">=46"]
+      # astro-ghost 2.0.16 requires requests < 2.29.
+      - dependency-name: "requests"
+        versions: [">=2.29"]
+      # urllib3 2 needs OpenSSL 1.1.1+ on the host; stay on 1.26.x.
+      - dependency-name: "urllib3"
+        versions: [">=2"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "experimental"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
