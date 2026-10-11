@@ -656,7 +656,7 @@ class BazinTableTests(TestCase):
         self.assertEqual(cells[self.transients[5].id], "")
         header = [str(col.header) for col in table.columns]
         self.assertIn("Bazin Mag @ Night", header)
-        self.assertEqual(header.index("Bazin Mag @ Night"), header.index("Recent Mag") + 1)
+        self.assertEqual(header.index("Bazin Mag @ Night"), header.index("Last Det.") + 1)
         self.assertFalse(table.columns["bazin_mag"].orderable)
 
     def test_too_table_extrapolates_to_now(self):

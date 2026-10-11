@@ -104,11 +104,37 @@ class RecentPhotOrderMixin:
 _LAST_PHOT_MJD_TOLERANCE = 1.0 / 86400.0  # last_obs_date round-trips through an MJD
 
 
-def last_phot_summary(transient_ids):
+# Stat-row values as annotations (annotate_dashboard_transient_fields adds them
+# with a LEFT JOIN on the page rows), so the cells need no stat query.
+LAST_PHOT_ANNOTATIONS = {
+    'lastphot_det_mag': 'photstat__last_detected_mag',
+    'lastphot_det_band': 'photstat__last_detected_band__name',
+    'lastphot_obs_date': 'photstat__last_obs_date',
+    'lastphot_obs_mjd': 'photstat__last_obs_mjd',
+    'lastphot_det_mjd': 'photstat__last_detected_mjd',
+}
+
+
+def _stat_rows_from_records(records, transient_attr):
+    """Stat rows from annotated records, or None when any record lacks the annotations."""
+    rows = []
+    for record in records:
+        values = getattr(record, '__dict__', {})
+        if any(key not in values for key in LAST_PHOT_ANNOTATIONS):
+            return None
+        row = {key: values[key] for key in LAST_PHOT_ANNOTATIONS}
+        row['transient_id'] = getattr(record, transient_attr, None)
+        rows.append(row)
+    return rows
+
+
+def last_phot_summary(transient_ids, stat_rows=None):
     """``{transient_id: dict}`` with the Last Det. / Last Obs. values (see above).
 
     Keys of each dict: ``det_mag``, ``det_band``, ``obs_date``, ``limit``,
-    ``limit_band``. At most two queries for any number of transients.
+    ``limit_band``. ``stat_rows`` (dicts keyed like ``LAST_PHOT_ANNOTATIONS``
+    plus ``transient_id``) saves the stat query. At most two queries for any
+    number of transients.
     """
     import datetime
 
@@ -119,24 +145,28 @@ def last_phot_summary(transient_ids):
     out = {}
     if not ids:
         return out
+    if stat_rows is None:
+        stat_rows = (
+            TransientPhotStat.objects.filter(transient_id__in=ids)
+            .annotate(**{key: F(field.replace('photstat__', '', 1))
+                         for key, field in LAST_PHOT_ANNOTATIONS.items()})
+            .values('transient_id', *LAST_PHOT_ANNOTATIONS)
+        )
     newest_not_det = {}
-    for row in TransientPhotStat.objects.filter(transient_id__in=ids).values(
-        'transient_id', 'last_detected_mag', 'last_detected_band__name',
-        'last_obs_date', 'last_obs_mjd', 'last_detected_mjd',
-    ):
+    for row in stat_rows:
         tid = row['transient_id']
+        if tid not in ids or row['lastphot_obs_date'] is None:
+            continue
         out[tid] = {
-            'det_mag': row['last_detected_mag'],
-            'det_band': row['last_detected_band__name'],
-            'obs_date': row['last_obs_date'],
+            'det_mag': row['lastphot_det_mag'],
+            'det_band': row['lastphot_det_band'],
+            'obs_date': row['lastphot_obs_date'],
             'limit': None,
             'limit_band': None,
         }
-        obs_mjd, det_mjd = row['last_obs_mjd'], row['last_detected_mjd']
-        if obs_mjd is not None and row['last_obs_date'] is not None and (
-            det_mjd is None or obs_mjd - det_mjd > _LAST_PHOT_MJD_TOLERANCE
-        ):
-            newest_not_det[tid] = (obs_mjd, row['last_obs_date'])
+        obs_mjd, det_mjd = row['lastphot_obs_mjd'], row['lastphot_det_mjd']
+        if obs_mjd is not None and (det_mjd is None or obs_mjd - det_mjd > _LAST_PHOT_MJD_TOLERANCE):
+            newest_not_det[tid] = (obs_mjd, row['lastphot_obs_date'])
     if not newest_not_det:
         return out
     window = Q()
@@ -172,9 +202,14 @@ class _LastPhotColumn(tables.Column):
     stat columns.
     """
 
+    stat_field = None
+
     def __init__(self, *args, transient_attr='pk', **kwargs):
         kwargs.setdefault('accessor', transient_attr)
         kwargs.setdefault('orderable', True)
+        # Explicit, so a queryset ordered on pk is never read as "sorted by this column".
+        prefix = '' if transient_attr == 'pk' else 'transient__'
+        kwargs.setdefault('order_by', prefix + self.stat_field)
         kwargs['empty_values'] = ()
         super().__init__(*args, **kwargs)
         self.transient_attr = transient_attr
@@ -183,32 +218,35 @@ class _LastPhotColumn(tables.Column):
         tid = getattr(record, self.transient_attr, None)
         cache = table.__dict__.setdefault('_last_phot_cache', {})
         if tid not in cache:
-            ids = {tid}
+            records = [record]
             rows = table.page.object_list if getattr(table, 'page', None) is not None else table.rows
             try:
-                for row in rows:
-                    ids.add(getattr(row.record, self.transient_attr, None))
+                records += [row.record for row in rows]
             except Exception:
                 pass
+            ids = {getattr(r, self.transient_attr, None) for r in records}
             ids.discard(None)
+            stat_rows = _stat_rows_from_records(records, self.transient_attr)
             cache.update(dict.fromkeys(ids))
-            cache.update(last_phot_summary(ids))
+            cache.update(last_phot_summary(ids, stat_rows))
         return cache.get(tid)
 
 
 class LastDetColumn(_LastPhotColumn):
     """"Last Det.": last detection magnitude and band, e.g. ``18.71 r``."""
 
+    stat_field = RECENT_PHOT_ORDER_FIELDS['recent_mag']
+
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('verbose_name', 'Last Det.')
         super().__init__(*args, **kwargs)
 
-    def render(self, record, table):
+    def render(self, record, table, bound_column):
         from .common.filter_display import display_filter_label
 
         info = self._info(record, table)
         if not info or info['det_mag'] is None:
-            return self.default
+            return bound_column.default
         return '%s %s' % (format_magnitude(info['det_mag']), display_filter_label(info['det_band']))
 
 
@@ -216,17 +254,18 @@ class LastObsColumn(_LastPhotColumn):
     """"Last Obs.": date of the newest point, plus its limit and band when it is a non-detection."""
 
     DATE_FORMAT = '%m/%d/%Y'
+    stat_field = RECENT_PHOT_ORDER_FIELDS['recent_magdate']
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('verbose_name', 'Last Obs.')
         super().__init__(*args, **kwargs)
 
-    def render(self, record, table):
+    def render(self, record, table, bound_column):
         from .common.filter_display import display_filter_label
 
         info = self._info(record, table)
         if not info or info['obs_date'] is None:
-            return self.default
+            return bound_column.default
         text = info['obs_date'].strftime(self.DATE_FORMAT)
         if info['limit'] is not None:
             text += ' (>%s %s)' % (format_magnitude(info['limit']), display_filter_label(info['limit_band']))
@@ -1649,6 +1688,8 @@ def annotate_dashboard_transient_fields(qs):
         qs.select_related('status', 'host', 'obs_group').annotate(
             recent_mag=recent_mag,
             recent_magdate=recent_magdate,
+            # Last Det. / Last Obs. cells (#557): the stat row on the same page query.
+            **{key: F(field) for key, field in LAST_PHOT_ANNOTATIONS.items()},
         )
     )
 
