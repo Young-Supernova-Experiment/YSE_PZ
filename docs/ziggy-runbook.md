@@ -1623,6 +1623,25 @@ mysql -u <EXPLORER_DB_USER> -p -h <PROD_DB_HOST> <DB> -e "SELECT COUNT(*) FROM d
 
 `docker/db_init/YSE_create_users.sql` keeps the database-wide grant. It runs before the tables exist, and MySQL accepts table-level grants only on existing tables, so the local stacks and CI are unchanged.
 
+<a id="dep-pins"></a>
+
+### Dependency pin bumps (2026-10-11, #539) required on any venv that the deploy does not install, per stack
+
+`requirements.txt` now pins newer releases of Pillow (10.4.0), cryptography (45.0.7), urllib3 (1.26.20), certifi (2026.7.22), idna (3.15), djangorestframework (3.15.1), sqlparse (0.5.5), lxml (6.1.3), Jinja2 (3.1.6), MarkupSafe (2.1.5), tornado (6.4.2) and Werkzeug (3.0.6). Every pin supports Python 3.8 and Django 3.2, and the file still resolves as a whole. The Deploy Stack job installs `requirements.txt` into the yse\_experimental venv by itself. It does NOT install into `yse_test_virtual` (yse\_test, and Apache for yse\_experimental per [#187](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/187)) or production. Run this there, once the stack's checkout has #539. No migration.
+
+```
+# <STACK_DIR> / <STACK_PYTHON> from section 0; production gets this from step 3.6 (pip install -r requirements.txt)
+# <VENV_OWNER>: owner of the venv directory, e.g. stat -c %U /data/yse_pz/yse_test_virtual
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip install -r <STACK_DIR>/requirements.txt
+<STACK_PYTHON> -m pip check
+<STACK_PYTHON> -c "import PIL, cryptography, rest_framework, sqlparse, lxml.etree, jinja2, markupsafe, tornado, werkzeug, urllib3, certifi, idna; print(PIL.__version__, cryptography.__version__, rest_framework.VERSION, sqlparse.__version__, jinja2.__version__, urllib3.__version__)"
+sudo systemctl restart apache2
+```
+
+**Expected:** `pip install` ends without a resolver error; `pip check` prints `No broken requirements found.` (any line it prints for a package not listed above was there before); the last command prints `10.4.0 45.0.7 3.15.1 0.5.5 3.1.6 1.26.20`. **Check:** log in on that stack and open a transient page and `/api/` (the DRF API root).
+
+**Rollback:** `<STACK_PYTHON> -m pip install -r requirements.txt` from the previous commit (`git show <PREVIOUS_COMMIT>:requirements.txt > /tmp/req-old.txt`), then restart Apache.
+
 <a id="query-api"></a>
 
 ### `/query_api/` saved-query allowlist and row visibility (2026-10-11, #524) one check recommended, per stack
@@ -1970,6 +1989,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v38, **required on venvs the deploy does not install** (yse\_test\_virtual, production). Low-risk dependency pin bumps ([#539](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/539)): new section [Dependency pin bumps](#dep-pins) (`pip install -r requirements.txt`, `pip check`, version check). The yse\_experimental venv is updated by Deploy Stack. Django stays on 3.2. No migration.
 * 2026-10-11 v37, informational. Transient tables show "Last Det." and "Last Obs." from TransientPhotStat ([#557](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/557)); personal-dashboard section counts are visible rows only ([#558](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/558)). Nothing to run on yse\_experimental / yse\_test (the shared database is backfilled). On production the two columns are empty for transients without a stat row until `rebuild_photstats` (step 3.10, already required for Peak Mag) has run. No migration.
 * 2026-10-11 v36, one check recommended. `/query_api/` saved-query allowlist and row visibility ([#524](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/524)): the crons' four titles are on the built-in allowlist and service accounts are exempt from the row filter; check that the `get_YSE_PAs.py` accounts are staff or in `api_writers` ([section](#query-api)). Optional `QUERY_API_ALLOWED_QUERIES` and rollback switch `QUERY_API_VISIBILITY_FILTER`. No migration.
 * 2026-10-11 v35, **required before relying on the new defaults**. Hard-coded credentials removed ([#528](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/528)): the template `public_settings.ini` now holds placeholders (it is not used on Ziggy, whose own `settings.ini` is unchanged), docker needs `YSE_DATABASE_PASSWORD` / `YSE_EXPLORER_PASSWORD` in `docker/.env`, and the SciServer photo-z crons read `sciserveruser` / `sciserverpass` from `[main]` of `settings.ini` (add them on each stack that runs those crons, else the crons stop with a clear error). New section "Credential rotation". ZTF forced phot and the legacy position-angle helpers no longer use a shell, so ZTF forced phot no longer needs `wget` ([#530](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/530), [#531](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/531)). Gemini now verifies the server certificate; if the ODB uses a private CA set `gemini_ca_bundle=<PATH_TO_CA_BUNDLE>` under `[main]` or `GEMINI_CA_BUNDLE` ([#532](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/532)). The healpix loader no longer uses `LOAD DATA LOCAL INFILE` ([#533](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/533)). gitleaks CI job added ([#529](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/529)).
