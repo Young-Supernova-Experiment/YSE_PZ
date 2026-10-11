@@ -7,6 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
+import logging
 import requests
 import sys
 from datetime import datetime
@@ -43,6 +44,7 @@ from YSE_App.services.followup_requests import (
 from django.conf import settings as djangoSettings
 
 # reddest filter for YSE is from settings.py
+logger = logging.getLogger(__name__)
 _reddest_yse_filter = djangoSettings.REDYSEFILTER
 
 def is_ajax(request):
@@ -299,7 +301,7 @@ class AddTransientObservationTaskFormView(FormView):
 			instance.modified_by =self.request.user
 			instance.save()
 
-			print(form.cleaned_data)
+			logger.debug('form data keys: %s', sorted(form.cleaned_data))
 
 			data_dict = {}
 			data_dict['id'] = instance.id
@@ -365,7 +367,7 @@ class AddSurveyFieldFormView(FormView):
 
 			instance.save() #update_fields=['created_by','modified_by']
 
-			print(form.cleaned_data)
+			logger.debug('form data keys: %s', sorted(form.cleaned_data))
 
 			# clear out the conflicting SurveyObservationTasks
 			# danger!
@@ -594,7 +596,7 @@ class AddOncallUserFormView(FormView):
 			
 			#instance.save() #update_fields=['created_by','modified_by']
 
-			#print(form.cleaned_data)
+			#logger.debug('form data keys: %s', sorted(form.cleaned_data))
 
 			# clear out the conflicting SurveyObservationTasks
 			# danger!
@@ -810,7 +812,7 @@ Contact D. Jones or D. Coulter."""%self.request.user,
 				
 			instance.save() #update_fields=['created_by','modified_by']
 
-			print(form.cleaned_data)
+			logger.debug('form data keys: %s', sorted(form.cleaned_data))
 
 			data = {
 				'message': "Successfully submitted form data.",

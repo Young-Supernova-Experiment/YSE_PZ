@@ -178,7 +178,7 @@ RA (to targ): %.3f E, Dec (to targ): %.3f N"""%(i,ra_str,dec_str,m,ro.arcsec,do.
 				self.options.snid,ra_str,dec_str))
 
 		if saveImg:
-			plt.savefig(outfile,dpi=1000)
+			plt.savefig(outfile,dpi=150)
 
 		return(offdictlist)
 
