@@ -104,27 +104,39 @@ class RecentPhotOrderMixin:
 _LAST_PHOT_MJD_TOLERANCE = 1.0 / 86400.0  # last_obs_date round-trips through an MJD
 
 
-# Stat-row values as annotations (annotate_dashboard_transient_fields adds them
-# with a LEFT JOIN on the page rows), so the cells need no stat query.
-LAST_PHOT_ANNOTATIONS = {
-    'lastphot_det_mag': 'photstat__last_detected_mag',
-    'lastphot_det_band': 'photstat__last_detected_band__name',
-    'lastphot_obs_date': 'photstat__last_obs_date',
-    'lastphot_obs_mjd': 'photstat__last_obs_mjd',
-    'lastphot_det_mjd': 'photstat__last_detected_mjd',
-}
+def _stat_row(transient_id, stat):
+    band = stat.last_detected_band if stat.last_detected_band_id is not None else None
+    return {
+        'transient_id': transient_id,
+        'lastphot_det_mag': stat.last_detected_mag,
+        'lastphot_det_band': band.name if band is not None else None,
+        'lastphot_obs_date': stat.last_obs_date,
+        'lastphot_obs_mjd': stat.last_obs_mjd,
+        'lastphot_det_mjd': stat.last_detected_mjd,
+    }
 
 
 def _stat_rows_from_records(records, transient_attr):
-    """Stat rows from annotated records, or None when any record lacks the annotations."""
+    """Stat rows from the page's Transient records, or None to query them.
+
+    ``annotate_dashboard_transient_fields`` select_related()s the stat row and
+    its band, so dashboard pages need no stat query.
+    """
+    if transient_attr != 'pk':
+        return None
     rows = []
     for record in records:
-        values = getattr(record, '__dict__', {})
-        if any(key not in values for key in LAST_PHOT_ANNOTATIONS):
+        descriptor = getattr(type(record), 'photstat', None)
+        related = getattr(descriptor, 'related', None)
+        if related is None or not related.is_cached(record):
             return None
-        row = {key: values[key] for key in LAST_PHOT_ANNOTATIONS}
-        row['transient_id'] = getattr(record, transient_attr, None)
-        rows.append(row)
+        stat = related.get_cached_value(record)
+        if stat is None:
+            continue
+        if stat.last_detected_band_id is not None and \
+                not type(stat).last_detected_band.field.is_cached(stat):
+            return None
+        rows.append(_stat_row(record.pk, stat))
     return rows
 
 
@@ -132,8 +144,7 @@ def last_phot_summary(transient_ids, stat_rows=None):
     """``{transient_id: dict}`` with the Last Det. / Last Obs. values (see above).
 
     Keys of each dict: ``det_mag``, ``det_band``, ``obs_date``, ``limit``,
-    ``limit_band``. ``stat_rows`` (dicts keyed like ``LAST_PHOT_ANNOTATIONS``
-    plus ``transient_id``) saves the stat query. At most two queries for any
+    ``limit_band``. ``stat_rows`` (see :func:`_stat_row`) saves the stat query. At most two queries for any
     number of transients.
     """
     import datetime
@@ -146,12 +157,11 @@ def last_phot_summary(transient_ids, stat_rows=None):
     if not ids:
         return out
     if stat_rows is None:
-        stat_rows = (
-            TransientPhotStat.objects.filter(transient_id__in=ids)
-            .annotate(**{key: F(field.replace('photstat__', '', 1))
-                         for key, field in LAST_PHOT_ANNOTATIONS.items()})
-            .values('transient_id', *LAST_PHOT_ANNOTATIONS)
-        )
+        stat_rows = [
+            _stat_row(stat.transient_id, stat)
+            for stat in TransientPhotStat.objects.filter(transient_id__in=ids)
+            .select_related('last_detected_band')
+        ]
     newest_not_det = {}
     for row in stat_rows:
         tid = row['transient_id']
@@ -1685,11 +1695,12 @@ def annotate_dashboard_transient_fields(qs):
     """
     recent_mag, recent_magdate = _recent_phot_subqueries('pk')
     return PageFirstQuerySet.wrap(
-        qs.select_related('status', 'host', 'obs_group').annotate(
+        # photstat: the Last Det. / Last Obs. cells (#557) read it from the page
+        # rows; select_related is left out of the bare pk and count queries.
+        qs.select_related('status', 'host', 'obs_group',
+                          'photstat', 'photstat__last_detected_band').annotate(
             recent_mag=recent_mag,
             recent_magdate=recent_magdate,
-            # Last Det. / Last Obs. cells (#557): the stat row on the same page query.
-            **{key: F(field) for key, field in LAST_PHOT_ANNOTATIONS.items()},
         )
     )
 
