@@ -359,6 +359,8 @@ if LOGIN_LOCKOUT_ENABLED:
     AXES_RESET_ON_SUCCESS = True
     # Successful logins are not recorded; only failed attempts are kept (until reset or cool-off).
     AXES_DISABLE_ACCESS_LOG = True
+    # No per-attempt log lines (they would carry usernames and addresses).
+    AXES_VERBOSE = False
     # The client address is REMOTE_ADDR, never a client-supplied forwarding header.
     AXES_CLIENT_IP_CALLABLE = 'YSE_App.auth_backends.client_ip_address'
     # Addresses that are never locked out (comma-separated), e.g. the host the crons run on.

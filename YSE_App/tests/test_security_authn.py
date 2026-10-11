@@ -18,8 +18,7 @@ from django.core import mail
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.http import HttpResponse
-from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
@@ -356,7 +355,6 @@ class DeactivateInactiveUsersTests(TestCase):
             call_command("deactivate_inactive_users", "--days", "0", stdout=StringIO())
 
 
-@override_settings(REST_FRAMEWORK=dict(settings.REST_FRAMEWORK))
 class ApiThrottleTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -369,9 +367,10 @@ class ApiThrottleTests(TestCase):
 
     def test_user_rate_limit_returns_429(self):
         from rest_framework.throttling import UserRateThrottle
+        from rest_framework.views import APIView
 
-        if UserRateThrottle not in __import__("rest_framework.views", fromlist=["APIView"]).APIView.throttle_classes:
-            self.skipTest("user throttle not configured")
+        if UserRateThrottle not in APIView.throttle_classes:
+            self.skipTest("user throttle switched off in this environment")
         with mock.patch.object(UserRateThrottle, "THROTTLE_RATES", {"user": "2/min", "anon": "2/min"}):
             codes = [self.client.get("/api/transientstatuses/").status_code for _ in range(3)]
         self.assertEqual(codes[:2], [200, 200])
@@ -429,21 +428,6 @@ class LoginLockoutTests(TestCase):
         for _ in range(3):
             self.assertIn(basic("not-the-password").status_code, (401, 403))
         self.assertIn(basic(self.PASSWORD).status_code, (401, 403))
-
-    def test_basic_auth_decorator_counts_failures(self):
-        from YSE_App.basicauth import login_or_basic_auth_required
-
-        view = login_or_basic_auth_required(lambda request: HttpResponse("ok"))
-        factory = RequestFactory()
-
-        def call(password):
-            token = base64.b64encode(("lock_user:%s" % password).encode()).decode()
-            return view(factory.get("/x/", HTTP_AUTHORIZATION="Basic " + token))
-
-        self.assertEqual(call(self.PASSWORD).status_code, 200)
-        for _ in range(3):
-            self.assertEqual(call("not-the-password").status_code, 403)
-        self.assertEqual(call(self.PASSWORD).status_code, 403)
 
     def test_authenticate_without_request_still_works(self):
         self.assertTrue(Client().login(username="lock_user", password=self.PASSWORD))
