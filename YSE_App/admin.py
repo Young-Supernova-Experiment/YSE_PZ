@@ -759,3 +759,12 @@ class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
 	list_filter = ("ai_enabled",)
 	search_fields = ("user__username",)
 	raw_id_fields = ("user",)
+
+
+# Two-factor sign-in (#512): superuser action on Users to reset a user's devices.
+from django.conf import settings as _settings  # noqa: E402
+
+if getattr(_settings, 'STAFF_MFA_REQUIRED', False):
+    from YSE_App.staff_mfa.admin import install_user_admin_action  # noqa: E402
+
+    install_user_admin_action()

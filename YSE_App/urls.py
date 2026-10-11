@@ -517,3 +517,8 @@ api_url_patterns = [
 ]
 
 urlpatterns += api_url_patterns
+
+# Two-factor sign-in pages for staff (#512); only when STAFF_MFA_REQUIRED is on,
+# which is also when django-otp is installed and in INSTALLED_APPS.
+if getattr(settings, 'STAFF_MFA_REQUIRED', False):
+    urlpatterns += [path('', include('YSE_App.staff_mfa.urls'))]

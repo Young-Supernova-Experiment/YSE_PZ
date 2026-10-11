@@ -1,0 +1,15 @@
+{% extends "YSE_App/staff_mfa/base.html" %}
+{% block title %}Backup codes{% endblock %}
+{% block content %}
+  <p>Two-factor sign-in is set up. These backup codes are shown only once. Each works one time,
+    in place of a code from the app, if you lose your phone. Keep them somewhere safe.</p>
+  <ul class="yse-mfa-codes my-3">
+    {% for code in codes %}<li>{{ code }}</li>{% endfor %}
+  </ul>
+  <a class="btn btn-primary btn-block" href="{{ next }}">Continue</a>
+  <form action="{% url 'staff_mfa_backup_codes' %}" method="post" class="mt-3">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}" />
+    <button type="submit" class="btn btn-link p-0 small">Replace these with new codes</button>
+  </form>
+{% endblock %}

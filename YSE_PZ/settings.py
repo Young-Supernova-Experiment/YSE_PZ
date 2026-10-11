@@ -400,6 +400,59 @@ if LOGIN_LOCKOUT_ENABLED:
     AXES_IP_WHITELIST = _list_setting('YSE_LOGIN_LOCKOUT_NEVER_LOCK_IPS', 'security', 'LOGIN_LOCKOUT_NEVER_LOCK_IPS')
     AXES_NEVER_LOCKOUT_WHITELIST = bool(AXES_IP_WHITELIST)
 
+# Two-factor sign-in for staff and superusers (django-otp TOTP, #512; [security]
+# in settings.ini, or YSE_STAFF_MFA_REQUIRED=1). Off by default. When on, a
+# browser session of an is_staff / is_superuser user must also enter a code from
+# an authenticator app (or a one-time backup code) before any page other than
+# sign-out and the two-factor pages; staff without a device are sent to set one
+# up. Other users, and API requests authenticated by token or HTTP Basic, are not
+# affected (YSE_App/staff_mfa/). Needs `pip install -r requirements.txt` and
+# `manage.py migrate` (django-otp's own tables) once per database
+# (docs/ziggy-runbook.md); if the package is missing the flag is ignored with a
+# warning, so turning it on before the pip step cannot stop the site.
+# STAFF_MFA_ENFORCE_AFTER (YYYY-MM-DD) is an enrollment grace period: before that
+# date staff without a device are offered setup once per session and may skip
+# it; staff who have set up a device always enter a code.
+STAFF_MFA_REQUIRED = _flag('YSE_STAFF_MFA_REQUIRED', 'security', 'STAFF_MFA_REQUIRED', False)
+if STAFF_MFA_REQUIRED:
+    try:
+        import django_otp  # noqa: F401
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            'STAFF_MFA_REQUIRED is set but django-otp is not installed '
+            '(pip install -r requirements.txt); two-factor sign-in stays off.'
+        )
+        STAFF_MFA_REQUIRED = False
+STAFF_MFA_ENFORCE_AFTER = None
+if STAFF_MFA_REQUIRED:
+    import datetime as _datetime
+
+    INSTALLED_APPS += [
+        'django_otp',
+        'django_otp.plugins.otp_totp',
+        'django_otp.plugins.otp_static',
+    ]
+    # OTPMiddleware sets request.user.otp_device from the session, so it goes
+    # right after AuthenticationMiddleware; the staff check runs after the login check.
+    MIDDLEWARE.insert(MIDDLEWARE.index('django.contrib.auth.middleware.AuthenticationMiddleware') + 1,
+                      'django_otp.middleware.OTPMiddleware')
+    MIDDLEWARE.insert(MIDDLEWARE.index('YSE_App.login_required.LoginRequiredMiddleware') + 1,
+                      'YSE_App.staff_mfa.middleware.StaffMFAMiddleware')
+    _mfa_after = _str_setting('YSE_STAFF_MFA_ENFORCE_AFTER', 'security', 'STAFF_MFA_ENFORCE_AFTER')
+    if _mfa_after:
+        try:
+            STAFF_MFA_ENFORCE_AFTER = _datetime.date.fromisoformat(_mfa_after)
+        except ValueError:
+            raise ImproperlyConfigured('[security] STAFF_MFA_ENFORCE_AFTER must be a date, YYYY-MM-DD.')
+    # Label shown in the authenticator app, and the otpauth:// issuer.
+    OTP_TOTP_ISSUER = 'YSE_PZ'
+    # Each wrong code doubles the wait before the next attempt on that device
+    # (1 s, 2 s, 4 s, ...); a correct code resets it.
+    OTP_TOTP_THROTTLE_FACTOR = 1
+    OTP_STATIC_THROTTLE_FACTOR = 1
+    # The admin's device pages do not show secrets or QR codes.
+    OTP_ADMIN_HIDE_SENSITIVE_DATA = True
+
 WSGI_APPLICATION = 'YSE_PZ.wsgi.application'
 
 # Database
@@ -654,6 +707,7 @@ EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
     'auth_',
     'authtoken_',
     'axes_',
+    'otp_',
     'auditlog_',
     'django_session',
     'django_admin_log',

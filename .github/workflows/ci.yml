@@ -96,6 +96,9 @@ jobs:
           # Login lockout (django-axes; same pins as requirements.txt) is not in the
           # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
           docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
+          # Two-factor sign-in for staff (#512; requirements.txt pins), tested in its own step below.
+          docker exec ysepz_web_container pip3 install --quiet --no-deps \
+            $(grep -E -m2 '^(django-otp|segno)==' ../requirements.txt)
           # Pins bumped in #539 that are newer than the image: install the exact
           # requirements.txt pins (gunicorn: docker/requirements.web.lock) so the
           # suite runs on them.
@@ -149,6 +152,14 @@ jobs:
 
       - name: Run tests
         run: docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
+
+      # The suite above runs with two-factor sign-in off (the default). Its flow
+      # tests need django-otp's tables in the test database, so run that module
+      # again with the flag on (YSE_App/tests/test_staff_mfa.py).
+      - name: Staff two-factor sign-in tests (flag on)
+        run: |
+          docker exec -e YSE_STAFF_MFA_REQUIRED=1 ysepz_web_container python3 manage.py check
+          docker exec -e YSE_STAFF_MFA_REQUIRED=1 ysepz_web_container python3 manage.py test YSE_App.tests.test_staff_mfa --verbosity=2
 
       - name: Page load regression and benchmark plots
         run: |
