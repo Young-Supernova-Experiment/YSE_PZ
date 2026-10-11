@@ -11,6 +11,7 @@ from django_tables2 import A
 from django.db import models
 from django.db.models.query import QuerySet
 from .data import PhotometryService
+from .models.transient_models import batch_nearest_survey_fields
 import time
 import django_filters
 from astropy.coordinates import SkyCoord
@@ -527,7 +528,28 @@ class FavoriteTransientTable(TransientTable):
         attrs['order'] = [[13, "desc"]]
 
 
-class FieldTransientTable(tables.Table):
+class NearestFieldPageMixin:
+    """
+    Fill the nearest-survey-field values for the current page in one query.
+
+    The columns read Transient.nearest_*_field / *_sep, which used to run four SurveyField
+    queries and a SkyCoord per row. After pagination, load the candidate fields once and
+    compute the separations vectorised (batch_nearest_survey_fields), caching the result on
+    each record. Unpaginated use falls back to the per-record path (still correct).
+    """
+    nearest_field_kind = 'ztf'
+
+    def paginate(self, *args, **kwargs):
+        super().paginate(*args, **kwargs)
+        records = [row.record for row in self.page.object_list]
+        results = batch_nearest_survey_fields(records, self.nearest_field_kind)
+        for record, result in zip(records, results):
+            cache = record.__dict__.setdefault('_nearest_field_cache', {})
+            cache[self.nearest_field_kind] = result
+
+
+class FieldTransientTable(NearestFieldPageMixin, tables.Table):
+    nearest_field_kind = 'ztf'
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -548,7 +570,7 @@ class FieldTransientTable(tables.Table):
     ztf_sep = tables.Column(accessor='nearest_ztf_field_sep',
                             verbose_name='ZTF Sep.',orderable=False)
     get_yse_pointings = tables.TemplateColumn(
-        "<a href=\"{% url 'yse_pointings' record.nearest_ztf_field record.name %}\" target='_blank'>Get Pointings</a>",
+        "{% if record.nearest_ztf_field %}<a href=\"{% url 'yse_pointings' record.nearest_ztf_field record.name %}\" target='_blank'>Get Pointings</a>{% endif %}",
         orderable=False)
 
 
@@ -638,7 +660,8 @@ class FieldTransientTable(tables.Table):
             "order": [[ 3, "desc" ]],
         }
 
-class AdjustFieldTransientTable(tables.Table):
+class AdjustFieldTransientTable(NearestFieldPageMixin, tables.Table):
+    nearest_field_kind = 'yse'
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -659,7 +682,7 @@ class AdjustFieldTransientTable(tables.Table):
     yse_sep = tables.Column(accessor='nearest_yse_field_sep',
                             verbose_name='YSE Sep.',orderable=False)
     get_yse_pointings = tables.TemplateColumn(
-        "<a href=\"{% url 'adjust_yse_pointings' record.nearest_yse_field record.name %}\" target='_blank'>Get Pointings</a>",
+        "{% if record.nearest_yse_field %}<a href=\"{% url 'adjust_yse_pointings' record.nearest_yse_field record.name %}\" target='_blank'>Get Pointings</a>{% endif %}",
         orderable=False,verbose_name='Get YSE Pointings')
 
 
