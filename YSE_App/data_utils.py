@@ -48,6 +48,7 @@ import sys
 from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
 from YSE_App.services import photstat
+from YSE_App.common.authz import bulk_ingest_denial, upload_denial
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -239,6 +240,10 @@ def add_transient(request):
     credentials = base64.b64decode(credentials.strip()).decode('utf-8')
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
+
+    denial = bulk_ingest_denial(user)
+    if denial:
+        return JsonResponse({"message": denial}, status=403)
 
     return add_transient_payload(transient_data, user)
 
@@ -989,6 +994,7 @@ def add_transient_phot(request):
         return JsonResponse(return_dict)
     status = status[0]
 
+    upload_groups = normalize_collaboration_group_names(ph['groups'])
     allgroups = []
     if ph['groups']:
         for photgroup in ph['groups'].split(','):
@@ -998,6 +1004,19 @@ def add_transient_phot(request):
                 return JsonResponse(return_dict)
             group = group[0]
             allgroups += [group]
+
+    # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
+    existing_transient = Transient.objects.filter(name=tr['name']).first()
+    existing_phot = None
+    if existing_transient is not None:
+        existing_phot = TransientPhotometry.objects.filter(
+            transient=existing_transient, instrument=instrument, obs_group=obs_group).first()
+    replaced = []
+    if existing_phot is not None and (hd['clobber'] or upload_groups):
+        replaced = [existing_phot]
+    denial = upload_denial(user, upload_groups, replaced)
+    if denial:
+        return JsonResponse({"message": denial}, status=403)
 
     # get or create transient
     transient = Transient.objects.filter(name=tr['name'])
@@ -1151,6 +1170,18 @@ def add_transient_spec(request):
             return_dict = {"message":"transient %s is not in DB"%tr['name']}
             return JsonResponse(return_dict)
         else: transient = transient[0]
+
+        # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
+        upload_groups = normalize_collaboration_group_names(hd['groups'])
+        existing_spec = TransientSpectrum.objects.filter(
+            transient=transient, instrument=instrument, obs_group=obs_group,
+            obs_date=hd['obs_date']).first()
+        replaced = []
+        if existing_spec is not None and (hd['clobber'] or upload_groups):
+            replaced = [existing_spec]
+        denial = upload_denial(user, upload_groups, replaced)
+        if denial:
+            return JsonResponse({"message": denial}, status=403)
 
         dq = None
         if hd['data_quality']:

@@ -1,6 +1,6 @@
 from django.db.models.query import EmptyQuerySet
 from django.shortcuts import render, get_object_or_404
-from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound
+from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound, HttpResponseForbidden
 from django.conf import settings as djangoSettings
 from django.template import loader
 from django.views import generic
@@ -2245,6 +2245,13 @@ def upload_spectrum(request):
                 filter(instrument=form.data['instrument']).\
                 filter(obs_group=form.data['obs_group']).\
                 filter(obs_date=form.data['obs_date'])
+
+            # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
+            from YSE_App.common.authz import upload_denial
+            denial = upload_denial(
+                request.user, form.cleaned_data.get('permissions') or [], list(tspec[:1]))
+            if denial:
+                return HttpResponseForbidden(denial)
 
             specdict = {'transient':transient,'ra':form.data['ra'],
                         'dec':form.data['dec'],'obs_date':form.data['obs_date'],

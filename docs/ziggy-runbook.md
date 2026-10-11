@@ -1323,6 +1323,143 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+<a id="authz-flags"></a>
+
+### Write authorization and Explorer access (optional, per stack; #520-#527) nothing required
+
+Migration `0031_api_writer_groups` is data only. It creates two groups, `api_writers` and `explorer_users`. It gives `api_writers` the add and change permissions on the models the ingest crons and scripts write. It adds the `[main] dblogin` account to `api_writers` if that account exists. Three flags in `settings.ini` `[site_settings]` stay **off** by default, so behaviour is unchanged until you turn them on. Each flag can be turned on per stack. yse\_test and yse\_experimental share `YSE_test`, so group membership is shared, but each stack reads its own `settings.ini`.
+
+| Flag (`[site_settings]`, or the env var `=1`) | When on |
+| --- | --- |
+| `API_WRITE_PERMISSIONS_ENFORCED` (`YSE_API_WRITE_PERMISSIONS_ENFORCED`) | `POST`/`PUT`/`PATCH` on the older `/api/` resources needs one of: staff, superuser, or the model permission (members of `api_writers`). Status and tag buttons, follow-up status, survey scheduling and "new tag" stay open to every signed-in user. Reads are unchanged. |
+| `UPLOAD_GROUP_CHECKS_ENFORCED` (`YSE_UPLOAD_GROUP_CHECKS_ENFORCED`) | `add_transient` is limited to staff, superusers and `api_writers`. `add_transient_phot`, `add_transient_spec` and the spectrum upload form are open to those accounts as well as other collaboration-group members, with two limits: a member may share only with their own groups, and may replace or re-share only rows they created. |
+| `EXPLORER_RESTRICTED_ACCESS` (`YSE_EXPLORER_RESTRICTED_ACCESS`) | `/explorer/` is limited to superusers and members of `explorer_users`. While it is off, all staff have access, as today. Dashboards are not affected. |
+
+The group names can be changed with `API_WRITERS_GROUP` and `EXPLORER_ACCESS_GROUP` in `[site_settings]`. `<STACK>` is the checkout and `<STACK_PYTHON>` its interpreter, both from section 0.
+
+**Step A: check the groups (after the deploy that applies 0031).**
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import Group; g=Group.objects.get(name='api_writers'); print(g.permissions.count(), g.user_set.count()); print(Group.objects.filter(name='explorer_users').exists())"
+```
+
+**Expected:** `52 1` (or `52 0` if the `[main] dblogin` account does not exist on this database), then `True`.
+
+**Step B: add the accounts that write through the API or the upload endpoints.**
+
+Add each of these:
+
+- the `[main] dblogin` account the crons use;
+- any account passed to `YSE_App/yse_utils/add_yse_fields.py`, `add_decam_obs.py` (`--yseuser`), `YSE_App/util/uploadTransientData.py`, `YSE_App/util/TNS_Synopsis/*.py` or `getGWevents.py`;
+- people who upload with their own `add_transient` scripts.
+
+Staff and superusers do not need to be added.
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User, Group; User.objects.get(username='<ACCOUNT>').groups.add(Group.objects.get(name='api_writers')); print(User.objects.get(username='<ACCOUNT>').has_perm('YSE_App.change_transientphotdata'))"
+```
+
+**Expected:** `True`.
+
+To find non-staff accounts that wrote ingest data in the last 30 days and are not in the group, run the command below. It prints to your terminal only; do not paste the usernames into GitHub.
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "
+import datetime; from django.utils import timezone; from django.db.models import Count
+from YSE_App.models import Transient, TransientPhotData, TransientSpectrum, SurveyObservation, SurveyField
+since = timezone.now() - datetime.timedelta(days=30)
+for m in (Transient, TransientPhotData, TransientSpectrum, SurveyObservation, SurveyField):
+    rows = (m.objects.filter(created_date__gte=since, created_by__is_staff=False, created_by__is_superuser=False)
+            .exclude(created_by__groups__name='api_writers').values('created_by__username').annotate(n=Count('id')))
+    print(m.__name__, list(rows))
+"
+```
+
+**Expected:** each model prints `[]` once every cron or script account is in the group. Some rows are fine to leave: accounts listed there because of browser uploads (the photometry or spectrum form) need nothing. Accounts behind a script or cron should be added with the previous command.
+
+**Step C: turn the flags on, one at a time.** In `<STACK>/YSE_PZ/settings.ini`:
+
+```
+[site_settings]
+API_WRITE_PERMISSIONS_ENFORCED: True
+UPLOAD_GROUP_CHECKS_ENFORCED: True
+```
+
+Then `sudo systemctl restart apache2`. Do this for production; for yse\_test and yse\_experimental, use whatever restart those stacks use.
+
+**Check:**
+- `<STACK_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.API_WRITE_PERMISSIONS_ENFORCED, settings.UPLOAD_GROUP_CHECKS_ENFORCED)"` prints `True True`.
+- After the next TNS / QUB / forced-phot cron run, its log has no `403`, and no `Bulk transient ingest is limited` or `needs the matching model permission` message.
+- A status change on a transient page still works for a non-staff member.
+
+**Rollback:** set the flag to `False` and restart.
+
+**Step D (Explorer): give `explorer_users` to the staff who should keep `/explorer/`, then turn on the restriction.**
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User, Group; User.objects.get(username='<ACCOUNT>').groups.add(Group.objects.get(name='explorer_users'))"
+```
+
+Next, set `EXPLORER_RESTRICTED_ACCESS: True` in `[site_settings]` and restart.
+
+**Check:** `/explorer/` opens for a superuser and for a member of `explorer_users`. A staff account outside the group gets the Explorer login page. The dashboards still load.
+
+**Rollback:** set the flag to `False` and restart.
+
+**Step E (Explorer database user, #526): limit its grants to science tables.** The `explorer` connection (`[database] EXPLORER_USER`) is what Explorer and the dashboard SQL run as. Do this first on `YSE_test`, check it, then on production. `<EXPLORER_DB_USER>` is the `EXPLORER_USER` value; `<EXPLORER_DB_HOST>` is the host part shown by `SHOW GRANTS`.
+
+```
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SELECT user, host FROM mysql.user WHERE user='<EXPLORER_DB_USER>'; SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';"
+```
+
+**Expected:** the output includes a line like `GRANT SELECT ON <DB>.* TO ...` (database-wide). Generate per-table grants that leave out accounts, sessions, tokens, audit, credential and contact tables, and save the statements to a file you can review:
+
+```
+mysql -N -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "
+SELECT CONCAT('GRANT SELECT ON \`', table_schema, '\`.\`', table_name, '\` TO ''<EXPLORER_DB_USER>''@''<EXPLORER_DB_HOST>'';')
+FROM information_schema.tables WHERE table_schema='<DB>'
+AND table_name NOT LIKE 'auth\_%' AND table_name NOT LIKE 'authtoken\_%' AND table_name NOT LIKE 'axes\_%'
+AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT IN ('django_session','django_admin_log',
+'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun');" > /tmp/explorer_grants.sql
+wc -l /tmp/explorer_grants.sql
+```
+
+Saved queries often join `auth_user` for names. Keep that working with a column grant. Append it to the file, then swap the grants:
+
+```
+echo "GRANT SELECT (id, username, first_name, last_name) ON \`<DB>\`.\`auth_user\` TO '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" >> /tmp/explorer_grants.sql
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "REVOKE SELECT ON \`<DB>\`.* FROM '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';"
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> < /tmp/explorer_grants.sql
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" | head
+```
+
+**Check: every saved query still runs.** The first command below prints only failures and a count, so names of tables are not shown. The second shows the user lacks access to an excluded table:
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "
+from django.db import connections; from explorer.models import Query
+bad = 0
+for q in Query.objects.all():
+    try:
+        c = connections['explorer'].cursor(); c.execute('SELECT * FROM (' + q.sql.strip().rstrip(';').replace('%','%%') + ') AS t LIMIT 1'); c.close()
+    except Exception as e:
+        bad += 1; print(q.id, type(e).__name__, str(e)[:120])
+print('failed', bad, 'of', Query.objects.count())
+"
+mysql -u <EXPLORER_DB_USER> -p -h <PROD_DB_HOST> <DB> -e "SELECT COUNT(*) FROM django_session;"
+```
+
+**Expected:**
+- The first command prints `failed 0 of N`, or only failures that also happened before the change. A query using a table outside the list fails with `SELECT command denied`: grant that table and re-run.
+- The second command prints `ERROR 1142 ... SELECT command denied`.
+- The dashboards load.
+
+**After a later migration adds a table**, re-run the generator and apply only the new grants.
+
+**Rollback:** `GRANT SELECT ON \`<DB>\`.* TO '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';`
+
+`docker/db_init/YSE_create_users.sql` keeps the database-wide grant. It runs before the tables exist, and MySQL accepts table-level grants only on existing tables, so the local stacks and CI are unchanged.
+
 <a id="data"></a>
 
 ## 4 · Data checks David
@@ -1414,6 +1551,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-10 v28, informational. Write authorization and Explorer access ([#520](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/520)-[#527](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/527)): migration `0031_api_writer_groups` (data only: groups `api_writers` and `explorer_users`). Nothing is required; the three new `[site_settings]` flags are off by default. New optional section [Write authorization and Explorer access](#authz-flags): check the groups, add the cron and script accounts to `api_writers`, turn on `API_WRITE_PERMISSIONS_ENFORCED` / `UPLOAD_GROUP_CHECKS_ENFORCED` / `EXPLORER_RESTRICTED_ACCESS`, and limit the Explorer MySQL user's grants to science tables.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
