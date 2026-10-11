@@ -1364,6 +1364,106 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+<a id="authn"></a>
+
+### Login, session and transport settings (2026-10-11, sec/authn PR) one check required, the rest optional, per stack
+
+Everything below is in `[security]` of that stack's `YSE_PZ/settings.ini` (template: `YSE_PZ/public_settings.ini`). Every key is optional and its default is today's behaviour. Below, `<STACK_DIR>` and `<STACK_PYTHON>` are a row of the table in [section 0](#paths); after any `settings.ini` edit run `sudo systemctl restart apache2`, then the **Check** of that step. Do one stack at a time: yse\_experimental first, then yse\_test, production last. Nothing here needs a migration, except `migrate axes` in (c).
+
+**(a) REQUIRED check: Slack events.** `/slack/events/` now answers only when `SLACK_ENABLED=1` **and** `SLACK_SIGNING_SECRET` are both in the web environment (it used to accept requests when no secret was set). Only a stack whose Slack app sends events (thread replies into comments) is affected.
+```bash
+sudo grep -lE 'SLACK_SIGNING_SECRET|SLACK_ENABLED' /etc/apache2/envvars <STACK_DIR>/YSE_PZ/wsgi.py 2>/dev/null
+```
+**Expected:** nothing on a stack without Slack (nothing to do), or the file(s) holding both names. **If** only `SLACK_ENABLED` is there, add the app's signing secret (api.slack.com > Your apps > Basic Information > Signing Secret) next to it and restart Apache. **Check:** in api.slack.com > Event Subscriptions the Request URL shows "Verified" after "Retry"; a reply in a transient's Slack thread appears as a comment.
+
+**(b) Session length.** Default two weeks; recommended 12-24 h:
+```ini
+SESSION_COOKIE_AGE: 86400
+```
+**Check:** after logging in, the browser's `sessionid` cookie expires about one day later. Existing sessions keep their old expiry.
+
+**(c) Failed-login lockout (django-axes 5.41.1, new dependency).** Counts failed logins (login page, admin, API Basic auth) per username and client address; after 10 failures that pair is refused for 60 minutes. Install first (yse\_experimental's deploy already runs `pip install -r requirements.txt`; yse\_test and production need it by hand):
+```bash
+<STACK_PYTHON> -m pip install "django-axes==5.41.1" "django-ipware==5.0.2"
+<STACK_PYTHON> -c "import axes; print(axes.__version__)"
+```
+**Expected:** `5.41.1`. Then add to `settings.ini` and create the tables (once per database; yse\_test and yse\_experimental share `YSE_test`, so once for both):
+```ini
+LOGIN_LOCKOUT_ENABLED: True
+# optional: LOGIN_LOCKOUT_FAILURE_LIMIT: 10   LOGIN_LOCKOUT_COOLOFF_MINUTES: 60
+# optional: LOGIN_LOCKOUT_MODE: user_and_ip (default) | user | ip
+# optional: LOGIN_LOCKOUT_NEVER_LOCK_IPS: <comma-separated addresses the crons connect from>
+```
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py migrate axes
+<STACK_PYTHON> manage.py check
+sudo systemctl restart apache2
+```
+**Expected:** `migrate` applies `axes.0001` to `axes.0008` (or `No migrations to apply.` on the second stack of a shared database); `check` prints `System check identified no issues`. **Check:** log in normally on that stack; then `<STACK_PYTHON> manage.py axes_list_attempts` prints no attempts for your login. To unlock everyone: `<STACK_PYTHON> manage.py axes_reset`. With the flag on but the package missing, the site still starts and logs a warning (lockout stays off). To undo: remove the key and restart.
+
+**(d) Service accounts for crons and scripts.** Crons should not use a personal or admin login. Once perf #457 (API tokens) is on the stack: create one user per integration (admin > Users > Add; not staff, not superuser), give it only the model permissions that integration writes (admin > Users > that user > User permissions), create its token and use it from the script:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py drf_create_token <SERVICE_USER>
+```
+**Expected:** `Generated token <40 hex characters> for user <SERVICE_USER>`. Store it where that cron reads its settings (not in this runbook) and send `Authorization: Token <token>` instead of Basic auth. Set `[brokers] AUTO_SAVE_USERNAME` (default `admin`) and `[sharing] SYSTEM_USERNAME` to such a service user. List every service username in `INACTIVE_USER_EXEMPT_USERNAMES` (step (h)).
+
+**(e) Host names and forwarded headers (password-reset links).** First find out whether anything proxies to Django or whether Apache runs it directly with mod\_wsgi:
+```bash
+grep -nE 'WSGIDaemonProcess|ProxyPass|RequestHeader|X-Forwarded' /etc/apache2/sites-enabled/*.conf
+grep -nE '^(ALLOWED_HOSTS|IS_DEBUG)' <STACK_DIR>/YSE_PZ/settings.ini
+```
+**Expected:** a `WSGIDaemonProcess` line per stack. If there is **no** `ProxyPass` to the Django process and no `RequestHeader set` for `X-Forwarded-Host` / `X-Forwarded-Proto`, Django is not behind a proxy and should not trust those headers. Then set, in `[site_settings]` and `[security]`:
+```ini
+# [site_settings]
+ALLOWED_HOSTS: ziggy.ucolick.org,localhost,127.0.0.1
+# [security]
+REQUIRE_ALLOWED_HOSTS: True
+USE_X_FORWARDED_HOST: False
+USE_X_FORWARDED_PORT: False
+PASSWORD_RESET_DOMAIN: ziggy.ucolick.org
+```
+If a proxy does set those headers itself (overwriting what the client sent), keep `USE_X_FORWARDED_HOST` / `PORT` at True and set only `ALLOWED_HOSTS`, `REQUIRE_ALLOWED_HOSTS` and `PASSWORD_RESET_DOMAIN`. `REQUIRE_ALLOWED_HOSTS` has an effect only with `IS_DEBUG: False` (production); yse\_test and yse\_experimental run `IS_DEBUG: 1`. **Check:** `manage.py check` passes; the login page loads; "Forgot password" for your own account sends an email whose link starts with `https://ziggy.ucolick.org/` and the right stack path.
+
+**(f) HTTPS proxy header.** With `IS_DEBUG: False` Django trusts `X-Forwarded-Proto: https` today (`TRUST_X_FORWARDED_PROTO` defaults to on there). Under mod\_wsgi with Apache terminating TLS, Django knows the scheme without that header. If (e) showed no proxy and no `RequestHeader set X-Forwarded-Proto`, set explicitly:
+```ini
+TRUST_X_FORWARDED_PROTO: False
+```
+If a proxy sets/overwrites `X-Forwarded-Proto`, set `TRUST_X_FORWARDED_PROTO: True` explicitly instead. **Check:** the login page loads over https and logging in works (the CSRF check compares the scheme).
+
+**(g) HTTPS-only cookies, redirect, HSTS.** First confirm the stack is served over https and plain http redirects or is closed:
+```bash
+curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | head -1
+curl -sI http://ziggy.ucolick.org/yse_experimental/login/ | head -3
+```
+**Expected:** `HTTP/1.1 200 OK` (or `HTTP/2 200`) for https; for http a `301`/`302` to https, or a connection error. Then:
+```ini
+SESSION_COOKIE_SECURE: True
+CSRF_COOKIE_SECURE: True
+SECURE_SSL_REDIRECT: True
+SECURE_HSTS_SECONDS: 3600
+# SECURE_HSTS_INCLUDE_SUBDOMAINS: False   (leave off: other services share ziggy.ucolick.org)
+```
+`SECURE_SSL_REDIRECT` needs Django to see https: under mod\_wsgi it does; behind a proxy it needs (f) set to True, otherwise every page redirects to itself. **Check:** `curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | grep -i strict-transport` prints `strict-transport-security: max-age=3600`; logging in still works. After a week without problems raise `SECURE_HSTS_SECONDS` to `31536000`.
+
+**(h) Deactivate long-unused accounts.** Dry run first; it prints counts only:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py deactivate_inactive_users --days 365
+```
+**Expected:** `skipped: ... superusers, ... exempt service accounts, ... token holders` and `dry run: N accounts ... would be deactivated`. Superusers, accounts holding an API token and the names in `[security] INACTIVE_USER_EXEMPT_USERNAMES` (comma-separated; add every account a cron or script logs in with, since Basic-auth logins do not update the last-login date) are never touched. Then `--apply`. **Check:** `deactivated N accounts`; re-activate one in admin > Users > Active if needed.
+
+**(i) Database TLS (optional).** Only if the MySQL server offers TLS: in `[database]` set `SSL_DISABLED: False` and, as needed, `SSL_CA`, `SSL_CERT`, `SSL_KEY` (file paths readable by the Apache user), `SSL_MODE: VERIFY_CA`, `DB_TLS_EXPLORER: True`. **Check:** `cd <STACK_DIR> && <STACK_PYTHON> manage.py shell -c "from django.db import connection; c=connection.cursor(); c.execute(\"SHOW SESSION STATUS LIKE 'Ssl_cipher'\"); print(c.fetchone())"` prints a non-empty cipher.
+
+**(j) Content-Security-Policy, report-only (optional).** `CSP_REPORT_ONLY_ENABLED: True` adds a `Content-Security-Policy-Report-Only` header; browsers report (in the developer console, or to `CSP_REPORT_URI` if set) what the policy would block, and block nothing. **Check:** `curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | grep -i content-security-policy-report-only`. Send Ryan the console reports from a few pages before anything is enforced.
+
+**(k) API rate limits (optional, off by default).** DRF throttles for `/api/` (not `add_transient` and the other data-upload views). Suggested:
+```ini
+API_THROTTLE_ANON: 300/min
+API_THROTTLE_USER: 1000/min
+```
+Before turning `API_THROTTLE_USER` on, ask Ryan which scripts read `/api/` in bulk, and give them a higher rate or leave the user throttle off. **Check:** normal pages and the transient-detail tabs still load; a script that exceeds the rate gets HTTP 429. Rollback: remove the keys and restart Apache.
+
+**Template change only:** `public_settings.ini` now has `IS_DEBUG: False`. Ziggy's stacks read only their own `settings.ini`, never the template, so nothing changes there; local docker and CI turn DEBUG on with `YSE_IS_DEBUG=1` in `docker/.env`.
+
 ### IERS table refresh (optional cron, per stack) nothing required
 
 Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
@@ -1553,6 +1653,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 | #384 galactic coordinates: `backfill_galactic_coords` check (expect 0), optional EXPLAIN of the acceptance search (after promotion) | The migration itself backfills every transient (~6 min on YSE\_test); save() keeps the columns current | [#384](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/384) · [docs/transient-search.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/transient-search.md) · [1.13](#now) / [3.29](#prod) | optional |
 | #385 NGSF classification: install NGSF + template bank on the job-runner host, `NGSF_COMMAND` / `NGSF_HOME`, `register_analysis_service --builtin ngsf` (after promotion) | Summary tab says "NGSF is not installed on this server" until then; the SALT3 Refit line needs only the already-registered sncosmo\_fit service | [#385](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/385) · [docs/ngsf.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/ngsf.md) · [1.14](#now) / [3.30](#prod) | optional |
 | #386 broker alert streams: fastavro / antares-client in the ingest venv, credential, Broker connection + filters, `broker_ingest --dry-run` smoke test, consumer under systemd (after promotion) | Off by default; nothing consumes until a connection is enabled and a consumer runs; stale-stream banner reads the heartbeats | [#386](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/386) · [docs/broker-streams.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/broker-streams.md) · [1.15](#now) / [3.31](#prod) | optional |
+| Slack events check, then optional login/session/transport keys per stack | `/slack/events/` needs both `SLACK_ENABLED` and `SLACK_SIGNING_SECRET`; lockout, session length, host/proxy, HTTPS cookies and HSTS are opt-in `[security]` keys | [login, session and transport settings](#authn) | pending |
 | Runbook Part A (yse\_test on develop, dedupe, chown) | Deploy green 07:34; dedupe run 07:37; Ryan confirmed 07:41 | [runbook](https://claude.ai/artifact/Epp8VK8jZm2VqNBDBLUj7c) | done |
 | Migration 0010 on the shared YSE\_test database | Applied by the experimental deploy of #333, 17:23-17:42 UTC | [run 36604581592](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36604581592) | done |
 
@@ -1560,6 +1661,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v32, **one required check** (Slack events: `SLACK_ENABLED` and `SLACK_SIGNING_SECRET` must both be set on a stack that receives Slack events), the rest optional: [login, session and transport settings](#authn) (sec/authn PR). New optional dependency django-axes 5.41.1 (+ django-ipware 5.0.2) with `migrate axes` once per database; new `[security]` keys (session length, lockout, API rate limits, ALLOWED\_HOSTS requirement, forwarded headers, password-reset domain, HTTPS cookies / redirect / HSTS, CSP report-only, inactive-account exemptions), optional `[database]` TLS keys, `manage.py deactivate_inactive_users`. Every default is today's behaviour.
 * 2026-10-11 v31, optional. IERS refresh cron ([#466](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/466)): web workers no longer download IERS tables; new "IERS table refresh" subsection (weekly cron plus a check). **Nothing required on Ziggy.**
 
 * 2026-10-11 v30, informational. Legacy views hardening (#495-#504): every page needs a login except a public allowlist, logout is POST-only, and the legacy TNS submit, follow-up notice, on-call, target-list, finder-chart and image/status views check login (and POST / ownership where they change data). **Nothing required on Ziggy.** Verify with the two curls in "Login required on every page"; rollback switch `LOGIN_REQUIRED_MIDDLEWARE = False` is documented there.

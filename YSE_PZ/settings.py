@@ -31,8 +31,49 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/1.11/howto/deployment/checklist/
 
+
+
+def _env_bool(name):
+    """True / False for an explicit 1/0 (true/false, yes/no, on/off) env value, else None."""
+    value = os.environ.get(name, '').strip().lower()
+    if value in ('1', 'true', 'yes', 'on'):
+        return True
+    if value in ('0', 'false', 'no', 'off'):
+        return False
+    return None
+
+
+def _flag(env_name, section, key, fallback):
+    """Boolean setting: env var (if set to an explicit value), then settings.ini, then fallback."""
+    value = _env_bool(env_name)
+    if value is not None:
+        return value
+    return config.getboolean(section, key, fallback=fallback)
+
+
+def _int_setting(env_name, section, key, fallback):
+    value = os.environ.get(env_name, '').strip()
+    if value:
+        return int(value)
+    return config.getint(section, key, fallback=fallback)
+
+
+def _str_setting(env_name, section, key, fallback=''):
+    value = os.environ.get(env_name, '').strip()
+    if value:
+        return value
+    value = (config.get(section, key, fallback=fallback) or '').strip()
+    return '' if (value.startswith('<') and value.endswith('>')) else value
+
+
+def _list_setting(env_name, section, key):
+    return [v.strip() for v in _str_setting(env_name, section, key).split(',') if v.strip()]
+
+
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config.getboolean('site_settings', 'IS_DEBUG', fallback=False)
+# [site_settings] IS_DEBUG in settings.ini; the YSE_IS_DEBUG env var (1/0)
+# overrides it (local docker and CI set YSE_IS_DEBUG=1 in docker/.env).
+DEBUG = _flag('YSE_IS_DEBUG', 'site_settings', 'IS_DEBUG', False)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # Prefer the DJANGO_SECRET_KEY env var; otherwise [site_settings] SECRET_KEY in
@@ -95,6 +136,22 @@ if not _allowed_hosts:
     _allowed_hosts = config.get('site_settings', 'ALLOWED_HOSTS', fallback='')
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()] or ['*']
 
+# ---------------------------------------------------------------------------
+# Transport and session hardening. Every key below is optional, under
+# [security] in settings.ini (or the named env var), and its default keeps the
+# behaviour from before these settings existed. docs/ziggy-runbook.md has the
+# check to run on each stack before turning one on.
+#
+# REQUIRE_ALLOWED_HOSTS: with DEBUG off, refuse to start unless ALLOWED_HOSTS
+# names this stack's hosts explicitly (no '*').
+REQUIRE_ALLOWED_HOSTS = _flag('YSE_REQUIRE_ALLOWED_HOSTS', 'security', 'REQUIRE_ALLOWED_HOSTS', False)
+if REQUIRE_ALLOWED_HOSTS and not DEBUG and (not _allowed_hosts.strip() or '*' in ALLOWED_HOSTS):
+    raise ImproperlyConfigured(
+        'REQUIRE_ALLOWED_HOSTS is on but ALLOWED_HOSTS is not set to explicit host names. '
+        'Set [site_settings] ALLOWED_HOSTS in YSE_PZ/settings.ini (or DJANGO_ALLOWED_HOSTS), '
+        'without "*".'
+    )
+
 if DEBUG:
     CSRF_TRUSTED_ORIGINS = [
         'http://localhost:8080',
@@ -102,8 +159,30 @@ if DEBUG:
         'http://localhost:8000',
         'http://127.0.0.1:8000',
     ]
-    CSRF_COOKIE_SECURE = False
-    SESSION_COOKIE_SECURE = False
+
+# Cookies only over HTTPS, HTTP->HTTPS redirect, HSTS. All off by default.
+SESSION_COOKIE_SECURE = _flag('YSE_SESSION_COOKIE_SECURE', 'security', 'SESSION_COOKIE_SECURE', False)
+CSRF_COOKIE_SECURE = _flag('YSE_CSRF_COOKIE_SECURE', 'security', 'CSRF_COOKIE_SECURE', False)
+SECURE_SSL_REDIRECT = _flag('YSE_SECURE_SSL_REDIRECT', 'security', 'SECURE_SSL_REDIRECT', False)
+SECURE_HSTS_SECONDS = _int_setting('YSE_SECURE_HSTS_SECONDS', 'security', 'SECURE_HSTS_SECONDS', 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _flag(
+    'YSE_SECURE_HSTS_INCLUDE_SUBDOMAINS', 'security', 'SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
+
+# Session lifetime in seconds; default 1209600 (two weeks, Django's default).
+SESSION_COOKIE_AGE = _int_setting('YSE_SESSION_COOKIE_AGE', 'security', 'SESSION_COOKIE_AGE', 1209600)
+
+# Password-reset emails: with PASSWORD_RESET_DOMAIN set (host name only, e.g.
+# ziggy.ucolick.org) the link in the email always uses that host, and https
+# unless PASSWORD_RESET_USE_HTTPS is False. Unset: the host of the request.
+PASSWORD_RESET_DOMAIN = _str_setting('YSE_PASSWORD_RESET_DOMAIN', 'security', 'PASSWORD_RESET_DOMAIN')
+PASSWORD_RESET_USE_HTTPS = _flag('YSE_PASSWORD_RESET_USE_HTTPS', 'security', 'PASSWORD_RESET_USE_HTTPS', True)
+
+# `manage.py deactivate_inactive_users` never deactivates superusers, these
+# usernames (comma-separated; list every service / cron account here), or the
+# configured service users (SLACK_SERVICE_USERNAME, BROKER_AUTO_SAVE_USERNAME,
+# SHARING_SYSTEM_USERNAME).
+INACTIVE_USER_EXEMPT_USERNAMES = _list_setting(
+    'YSE_INACTIVE_USER_EXEMPT_USERNAMES', 'security', 'INACTIVE_USER_EXEMPT_USERNAMES')
 
 
 # Application definitionEXPLORER_SQL_BLACKLIST
@@ -216,6 +295,8 @@ DJANGO_CRON_LOCKFILE_PATH = (
 MIDDLEWARE = [
 	#'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # No-op unless CSP_REPORT_ONLY_ENABLED (see [security] below).
+    'YSE_App.middleware_csp.ContentSecurityPolicyReportOnlyMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -273,6 +354,52 @@ AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend', # this is default
 )
 
+# Failed-login lockout (django-axes; [security] in settings.ini). Off by default.
+# When on, failed logins through the login form, the admin, DRF Basic auth and
+# the Basic-auth decorator are counted per username + client address and, past
+# LOGIN_LOCKOUT_FAILURE_LIMIT, refused for LOGIN_LOCKOUT_COOLOFF_MINUTES. Needs
+# `pip install -r requirements.txt` and `manage.py migrate axes` once per
+# database (docs/ziggy-runbook.md); if the package is missing the flag is
+# ignored with a warning, so turning it on before the pip step cannot stop the site.
+LOGIN_LOCKOUT_ENABLED = _flag('YSE_LOGIN_LOCKOUT', 'security', 'LOGIN_LOCKOUT_ENABLED', False)
+if LOGIN_LOCKOUT_ENABLED:
+    try:
+        import axes  # noqa: F401
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            'LOGIN_LOCKOUT_ENABLED is set but django-axes is not installed '
+            '(pip install -r requirements.txt); login lockout stays off.'
+        )
+        LOGIN_LOCKOUT_ENABLED = False
+if LOGIN_LOCKOUT_ENABLED:
+    import datetime as _datetime
+
+    INSTALLED_APPS.append('axes')
+    # Axes' backend must come first; it only checks and counts, ModelBackend authenticates.
+    AUTHENTICATION_BACKENDS = ('YSE_App.auth_backends.LoginLockoutBackend',) + tuple(AUTHENTICATION_BACKENDS)
+    MIDDLEWARE.append('axes.middleware.AxesMiddleware')
+    AXES_FAILURE_LIMIT = _int_setting('YSE_LOGIN_LOCKOUT_FAILURE_LIMIT', 'security', 'LOGIN_LOCKOUT_FAILURE_LIMIT', 10)
+    AXES_COOLOFF_TIME = _datetime.timedelta(minutes=_int_setting(
+        'YSE_LOGIN_LOCKOUT_COOLOFF_MINUTES', 'security', 'LOGIN_LOCKOUT_COOLOFF_MINUTES', 60))
+    # user_and_ip (default): one username from one address; user: the username
+    # from any address; ip: every login from one address.
+    _lockout_mode = (_str_setting('YSE_LOGIN_LOCKOUT_MODE', 'security', 'LOGIN_LOCKOUT_MODE', 'user_and_ip')
+                     or 'user_and_ip').lower()
+    if _lockout_mode not in ('user_and_ip', 'user', 'ip'):
+        raise ImproperlyConfigured('[security] LOGIN_LOCKOUT_MODE must be user_and_ip, user or ip.')
+    AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = _lockout_mode == 'user_and_ip'
+    AXES_ONLY_USER_FAILURES = _lockout_mode == 'user'
+    AXES_RESET_ON_SUCCESS = True
+    # Successful logins are not recorded; only failed attempts are kept (until reset or cool-off).
+    AXES_DISABLE_ACCESS_LOG = True
+    # No per-attempt log lines (they would carry usernames and addresses).
+    AXES_VERBOSE = False
+    # The client address is REMOTE_ADDR, never a client-supplied forwarding header.
+    AXES_CLIENT_IP_CALLABLE = 'YSE_App.auth_backends.client_ip_address'
+    # Addresses that are never locked out (comma-separated), e.g. the host the crons run on.
+    AXES_IP_WHITELIST = _list_setting('YSE_LOGIN_LOCKOUT_NEVER_LOCK_IPS', 'security', 'LOGIN_LOCKOUT_NEVER_LOCK_IPS')
+    AXES_NEVER_LOCKOUT_WHITELIST = bool(AXES_IP_WHITELIST)
+
 WSGI_APPLICATION = 'YSE_PZ.wsgi.application'
 
 # Database
@@ -281,6 +408,24 @@ WSGI_APPLICATION = 'YSE_PZ.wsgi.application'
 # MySQL TLS for the default connection. [database] SSL_DISABLED in settings.ini;
 # default True keeps the historical behaviour (plain TCP/socket to a local server).
 _db_ssl_disabled = config.getboolean('database', 'SSL_DISABLED', fallback=True)
+# Optional, only used when SSL_DISABLED is False (all under [database]):
+# SSL_CA / SSL_CERT / SSL_KEY file paths and SSL_MODE (mysqlclient ssl_mode,
+# e.g. REQUIRED, VERIFY_CA, VERIFY_IDENTITY). DB_TLS_EXPLORER (default False)
+# applies the same TLS options to the read-only explorer connection.
+_db_options = {'ssl': {'ssl_disabled': _db_ssl_disabled}}
+_explorer_db_options = {}
+if not _db_ssl_disabled:
+    _db_ssl = {}
+    for _ini_key, _ssl_key in (('SSL_CA', 'ca'), ('SSL_CERT', 'cert'), ('SSL_KEY', 'key')):
+        _path = _str_setting('', 'database', _ini_key)
+        if _path:
+            _db_ssl[_ssl_key] = _path
+    _db_options['ssl'].update(_db_ssl)
+    _db_ssl_mode = _str_setting('', 'database', 'SSL_MODE')
+    if _db_ssl_mode:
+        _db_options['ssl_mode'] = _db_ssl_mode.upper()
+    if config.getboolean('database', 'DB_TLS_EXPLORER', fallback=False):
+        _explorer_db_options = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _db_options.items()}
 DATABASES = {
     'explorer': {
         'ENGINE': 'django.db.backends.mysql',
@@ -290,6 +435,7 @@ DATABASES = {
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
         'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
+        **({'OPTIONS': _explorer_db_options} if _explorer_db_options else {}),
     },
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -298,7 +444,7 @@ DATABASES = {
         'PASSWORD': config.get('database', 'DATABASE_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
-        'OPTIONS': {'ssl': {'ssl_disabled': _db_ssl_disabled}},
+        'OPTIONS': _db_options,
         'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
     }
 }
@@ -432,6 +578,21 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 100
 }
 
+# API request rates per client ([security] in settings.ini, DRF rate strings
+# such as 1000/min; empty or "off" disables that throttle). Both are off by
+# default (today's behaviour), so no cron, broker or script can be throttled
+# on deploy; the runbook suggests 300/min anonymous and 1000/min per user.
+_API_THROTTLES = (
+    ('anon', 'rest_framework.throttling.AnonRateThrottle',
+     _str_setting('YSE_API_THROTTLE_ANON', 'security', 'API_THROTTLE_ANON', '')),
+    ('user', 'rest_framework.throttling.UserRateThrottle',
+     _str_setting('YSE_API_THROTTLE_USER', 'security', 'API_THROTTLE_USER', '')),
+)
+_api_throttles = [(scope, cls, rate) for scope, cls, rate in _API_THROTTLES
+                  if rate and rate.lower() not in ('off', 'none', '0')]
+REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = [cls for _scope, cls, _rate in _api_throttles]
+REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {scope: rate for scope, _cls, rate in _api_throttles}
+
 # Password validation
 # https://docs.djangoproject.com/en/1.11/ref/settings/#auth-password-validators
 
@@ -504,10 +665,23 @@ YSE_PUBLIC_BASE_URL = os.environ.get(
     'http://127.0.0.1:8000' if DEBUG else 'https://ziggy.ucolick.org/yse/',
 )
 
-if not DEBUG:
+# Proxy headers ([security] in settings.ini). TRUST_X_FORWARDED_PROTO sets
+# SECURE_PROXY_SSL_HEADER; its default (on when DEBUG is off) and the
+# forwarded host / port defaults (on) are the behaviour before these keys.
+# Turn a key off when no proxy in front of Django sets or overwrites that header.
+TRUST_X_FORWARDED_PROTO = _flag('YSE_TRUST_X_FORWARDED_PROTO', 'security', 'TRUST_X_FORWARDED_PROTO', not DEBUG)
+if TRUST_X_FORWARDED_PROTO:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-USE_X_FORWARDED_HOST = True
-USE_X_FORWARDED_PORT = True
+USE_X_FORWARDED_HOST = _flag('YSE_USE_X_FORWARDED_HOST', 'security', 'USE_X_FORWARDED_HOST', True)
+USE_X_FORWARDED_PORT = _flag('YSE_USE_X_FORWARDED_PORT', 'security', 'USE_X_FORWARDED_PORT', True)
+
+# Content-Security-Policy in report-only mode (YSE_App.middleware_csp): the
+# browser reports what the policy would block and blocks nothing. Off by
+# default. CSP_REPORT_ONLY_POLICY replaces the whole default policy;
+# CSP_REPORT_URI adds a report-uri directive.
+CSP_REPORT_ONLY_ENABLED = _flag('YSE_CSP_REPORT_ONLY', 'security', 'CSP_REPORT_ONLY_ENABLED', False)
+CSP_REPORT_ONLY_POLICY = _str_setting('YSE_CSP_REPORT_ONLY_POLICY', 'security', 'CSP_REPORT_ONLY_POLICY')
+CSP_REPORT_URI = _str_setting('YSE_CSP_REPORT_URI', 'security', 'CSP_REPORT_URI')
 
 # ---------------------------------------------------------------------------
 # Background job queue (YSE_App.jobs; issue #263) and notification queue

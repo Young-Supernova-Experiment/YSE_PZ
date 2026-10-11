@@ -16,6 +16,7 @@ from YSE_App.yse_utils import yse_pointings, yse_view_utils
 from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
+from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
@@ -394,6 +395,8 @@ urlpatterns = [
     # same view, ahead of the includes that would otherwise log out on GET.
     path('accounts/logout/', views.auth_logout),
     path('api-auth/logout/', views.auth_logout),
+    # Before the auth.urls include so it takes precedence (PASSWORD_RESET_DOMAIN).
+    path('accounts/password_reset/', yse_auth_views.PasswordResetView.as_view(), name='password_reset'),
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),
     #url(r'^silk/', include('silk.urls', namespace='silk')),
