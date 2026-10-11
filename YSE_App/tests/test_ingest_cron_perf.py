@@ -51,7 +51,7 @@ class _FakeCron:
 
 class CronFileLockTests(SimpleTestCase):
     def test_settings_select_the_file_lock(self):
-        self.assertEqual(settings.DJANGO_CRON_LOCK_BACKEND, 'django_cron.backends.lock.file.FileLock')
+        self.assertEqual(settings.DJANGO_CRON_LOCK_BACKEND, 'YSE_App.common.cron_lock.FileLock')
         self.assertTrue(settings.DJANGO_CRON_LOCKFILE_PATH)
 
     def test_second_holder_is_refused_until_release(self):
@@ -60,13 +60,13 @@ class CronFileLockTests(SimpleTestCase):
         import subprocess
         import sys
 
-        from django_cron.backends.lock.file import FileLock
+        from YSE_App.common.cron_lock import FileLock
 
         probe = (
             'import sys\n'
             'from django.conf import settings\n'
             'settings.configure(DJANGO_CRON_LOCKFILE_PATH=sys.argv[1])\n'
-            'from django_cron.backends.lock.file import FileLock\n'
+            'from YSE_App.common.cron_lock import FileLock\n'
             'class _FakeCron:\n'
             "    code = 'ingest_cron_perf.fake'\n"
             'lock = FileLock(_FakeCron, True)\n'
@@ -78,8 +78,8 @@ class CronFileLockTests(SimpleTestCase):
 
         def second_holder(lock_dir):
             out = subprocess.run([sys.executable, '-c', probe, lock_dir], capture_output=True,
-                                 text=True, timeout=60)
-            return out.stdout.strip()
+                                 text=True, timeout=60, cwd=str(settings.BASE_DIR))
+            return out.stdout.strip() or out.stderr.strip()[-500:]
 
         with tempfile.TemporaryDirectory() as tmp:
             lock_dir = os.path.join(tmp, 'locks')

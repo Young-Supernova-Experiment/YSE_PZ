@@ -203,7 +203,7 @@ DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RE
 # permission error as "locked" and skips the job. The default is per checkout
 # (yse_experimental and yse_test share a host but must not share locks).
 # Override with YSE_CRON_LOCKFILE_PATH or [site_settings] CRON_LOCKFILE_PATH.
-DJANGO_CRON_LOCK_BACKEND = 'django_cron.backends.lock.file.FileLock'
+DJANGO_CRON_LOCK_BACKEND = 'YSE_App.common.cron_lock.FileLock'
 DJANGO_CRON_LOCKFILE_PATH = (
     os.environ.get('YSE_CRON_LOCKFILE_PATH', '').strip()
     or config.get('site_settings', 'CRON_LOCKFILE_PATH', fallback='').strip()

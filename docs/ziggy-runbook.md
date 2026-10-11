@@ -1368,7 +1368,7 @@ gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u 
 
 ### Cron locking and ingest HTTP timeouts (recommended, per stack) nothing required
 
-From the `perf/ingest-cron` PR ([#472](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/472), [#473](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/473), [#474](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/474)) onward, django_cron takes a per-job **file lock** (`DJANGO_CRON_LOCK_BACKEND = FileLock`). The old cache lock lived in each process's own memory, so two `runcrons` processes never saw each other and a slow job ran twice at once. The ingest crons' HTTP calls now time out (15 s to connect, 300 s per read, 900 s for their own POSTs to `/add_transient/`) and retry a connection error or a 502/503/504 on a GET up to 3 times. No migration, no pip step. With nothing changed, locks go to a per-checkout directory under `/tmp`, which is correct when one Unix user runs `runcrons` for that checkout. Repeat these steps for each stack: `<CHECKOUT>` is `/data/yse_pz/YSE_PZ_experimental`, `/data/yse_pz/YSE_PZ_test` or `/data/yse_pz/YSE_PZ`, and `<CRON_PYTHON>` is the interpreter on its crontab line.
+From the `perf/ingest-cron` PR ([#472](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/472), [#473](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/473), [#474](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/474)) onward, django_cron takes a per-job **file lock** (`DJANGO_CRON_LOCK_BACKEND = YSE_App.common.cron_lock.FileLock (a thin subclass; django_cron 0.5.1 FileLock never refuses on Django 3.x)`). The old cache lock lived in each process's own memory, so two `runcrons` processes never saw each other and a slow job ran twice at once. The ingest crons' HTTP calls now time out (15 s to connect, 300 s per read, 900 s for their own POSTs to `/add_transient/`) and retry a connection error or a 502/503/504 on a GET up to 3 times. No migration, no pip step. With nothing changed, locks go to a per-checkout directory under `/tmp`, which is correct when one Unix user runs `runcrons` for that checkout. Repeat these steps for each stack: `<CHECKOUT>` is `/data/yse_pz/YSE_PZ_experimental`, `/data/yse_pz/YSE_PZ_test` or `/data/yse_pz/YSE_PZ`, and `<CRON_PYTHON>` is the interpreter on its crontab line.
 
 **Step 1: find the crontab lines and the user that runs them.**
 
@@ -1397,7 +1397,7 @@ Then start each of those crontab lines with `umask 002 &&`, so each lock file is
 ```bash
 cd <CHECKOUT> && <CRON_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.DJANGO_CRON_LOCK_BACKEND); print(settings.DJANGO_CRON_LOCKFILE_PATH)"
 ```
-**Expected:** `django_cron.backends.lock.file.FileLock`, then `<LOCK_DIR>` (or `/tmp/yse_pz_cron_locks_<hash>` with no `CRON_LOCKFILE_PATH`). During a pass, `ls <that directory>` shows one `<CronClass>.lock` file per running job.
+**Expected:** `YSE_App.common.cron_lock.FileLock`, then `<LOCK_DIR>` (or `/tmp/yse_pz_cron_locks_<hash>` with no `CRON_LOCKFILE_PATH`). During a pass, `ls <that directory>` shows one `<CronClass>.lock` file per running job.
 
 **Step 3 (recommended): wrap each `runcrons` line in `flock -n`, so a pass that is still running makes the next one exit at once instead of piling up.** Give each crontab line its own lock file, so the per-minute job-runner line is never held up by a slow ingest pass:
 
