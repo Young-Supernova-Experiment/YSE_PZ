@@ -2343,6 +2343,10 @@ def _archive_status_with_timeout(work, *, timeout_seconds=None):
         return None
 
 
+# Transient columns that the archive lookups may write (``_record_archive_flag``).
+ARCHIVE_FLAG_FIELDS = frozenset({'has_hst', 'has_jwst', 'has_chandra'})
+
+
 def _record_archive_flag(transient_id, field, has_data):
     """Store a fresh archive answer on ``Transient.<field>`` (``has_hst`` / ``has_jwst`` / ``has_chandra``).
 
@@ -2351,6 +2355,9 @@ def _record_archive_flag(transient_id, field, has_data):
     not an edit). A failed write never breaks the tab label.
     """
     if has_data is None or not field:
+        return False
+    if field not in ARCHIVE_FLAG_FIELDS:  # only the three archive columns (#540)
+        logger.warning('archive flag %r is not an archive column; not recorded', field)
         return False
     try:
         return bool(Transient.objects.filter(pk=transient_id).exclude(**{field: bool(has_data)})

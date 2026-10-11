@@ -60,6 +60,7 @@ from django.utils import timezone
 from django_filters import widgets as filter_widgets
 
 from YSE_App.common.galactic import NGP_DEC_DEG, NGP_RA_DEG, galactic_latitude_expression  # noqa: F401 (re-exported)
+from YSE_App.common.lookup_guard import checked_lookup, is_allowed_ordering
 from YSE_App.common.utilities import getRADecBox
 from YSE_App.models import (
     AlternateTransientNames,
@@ -376,7 +377,13 @@ class StableOrderingFilter(django_filters.OrderingFilter):
     def filter(self, qs, value):
         if not value or not any(v for v in value):
             return qs
+        # The form already limits ``value`` to the declared choices; this keeps
+        # order_by() to the declared field paths even if a caller bypasses it (#540).
+        allowed = set(self.param_map.values())
         ordering = [self.get_ordering_value(v) for v in value if v]
+        ordering = [o for o in ordering if is_allowed_ordering(o, allowed)]
+        if not ordering:
+            return qs
         tie = '-pk' if ordering and ordering[0].startswith('-') else 'pk'
         return qs.order_by(*ordering, tie)
 
@@ -420,11 +427,25 @@ def _when(field_name, lookup, label):
 
 def _by_pk(field_name):
     """``method`` for a ModelMultipleChoiceFilter: ``<fk>__in`` on the chosen rows' pks."""
+    key = checked_lookup(field_name + '__in', (field_name,), ('in',))
+
     def _filter(qs, name, value):
         if not value:
             return qs
-        return qs.filter(**{field_name + '__in': [obj.pk for obj in value]})
+        return qs.filter(**{key: [obj.pk for obj in value]})
     return _filter
+
+
+# Columns the archive-flag filters may use (``has_hst`` etc., #540).
+ARCHIVE_FLAG_FILTER_FIELDS = frozenset({'has_hst', 'has_jwst', 'has_chandra'})
+# Lookups the ``legacy.<key>`` annotation filter may add to its column.
+_LEGACY_LOOKUPS = ('isnull', 'gte', 'lte')
+
+
+def _legacy_filter_columns(legacy_columns):
+    """Field paths ``legacy.<key>`` filters may touch: the shim's columns, with the FK read by name."""
+    return {('antares_classification__name' if c == 'antares_classification' else c)
+            for c in legacy_columns.values()}
 
 
 def _names(model, label, **kwargs):
@@ -732,21 +753,22 @@ class TransientSearchFilterSet(django_filters.FilterSet):
             return qs.none()
         if column == 'antares_classification':
             column = 'antares_classification__name'
-        q = Q(**{column + '__isnull': False})
+        allowed = _legacy_filter_columns(LEGACY_COLUMNS)
+        q = Q(**{checked_lookup(column + '__isnull', allowed, _LEGACY_LOOKUPS): False})
         if eq:
             if key in LEGACY_BOOLEAN_KEYS:
-                q &= Q(**{column: eq.lower() in ('1', 'true', 'yes')})
+                q &= Q(**{checked_lookup(column, allowed): eq.lower() in ('1', 'true', 'yes')})
             elif key in LEGACY_NUMERIC_KEYS:
                 try:
-                    q &= Q(**{column: float(eq)})
+                    q &= Q(**{checked_lookup(column, allowed): float(eq)})
                 except ValueError:
                     return qs.none()
             else:
-                q &= Q(**{column: eq})
+                q &= Q(**{checked_lookup(column, allowed): eq})
         if vmin is not None:
-            q &= Q(**{column + '__gte': vmin})
+            q &= Q(**{checked_lookup(column + '__gte', allowed, _LEGACY_LOOKUPS): vmin})
         if vmax is not None:
-            q &= Q(**{column + '__lte': vmax})
+            q &= Q(**{checked_lookup(column + '__lte', allowed, _LEGACY_LOOKUPS): vmax})
         return qs.filter(q)
 
     # --- names ---------------------------------------------------------
@@ -861,7 +883,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     def _filter_archive_flag(self, qs, field, value):
         if value is None:
             return qs
-        return qs.filter(**{field: bool(value)})
+        return qs.filter(**{checked_lookup(field, ARCHIVE_FLAG_FILTER_FIELDS): bool(value)})
 
     def filter_has_hst(self, qs, name, value):
         return self._filter_archive_flag(qs, 'has_hst', value)
