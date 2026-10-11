@@ -138,7 +138,7 @@ class Transient(BaseModel):
 	def Separation(self):
 		if not self.host_id:
 			return None
-		host = Host.objects.get(pk=self.host_id)
+		host = self.host  # select_related on the detail/summary views; one query otherwise
 		return '%.2f'%getSeparation(self.ra,self.dec,host.ra,host.dec)
 
 	def LikelyYSEField(self):
@@ -154,13 +154,18 @@ class Transient(BaseModel):
 						Q(dec_cen__gt = self.dec-dec_offset.degree) &
 						Q(dec_cen__lt = self.dec+dec_offset.degree)))
 
-		if len(sf): 
-			so = SurveyObservation.objects.filter(survey_field__field_id=sf[0].field_id).filter(obs_mjd__isnull=False).order_by('-obs_mjd')
-			if len(so):
-				time_since_last_obs = date_to_mjd(datetime.datetime.utcnow())-so[0].obs_mjd
+		# LIMIT 1 on the field and on the newest observation time: the old
+		# len()/[0] pattern loaded every matching field and every observation.
+		field = sf.first()
+		if field is not None:
+			last_obs_mjd = SurveyObservation.objects.filter(survey_field__field_id=field.field_id).\
+				filter(obs_mjd__isnull=False).order_by('-obs_mjd').\
+				values_list('obs_mjd', flat=True).first()
+			if last_obs_mjd is not None:
+				time_since_last_obs = date_to_mjd(datetime.datetime.utcnow())-last_obs_mjd
 			else:
 				time_since_last_obs = None
-			return sf[0].field_id, sf[0].ra_cen, sf[0].dec_cen, time_since_last_obs
+			return field.field_id, field.ra_cen, field.dec_cen, time_since_last_obs
 		else: return None,None,None,None
 
 	def nearest_ztf_field(self):

@@ -425,13 +425,16 @@ def get_recent_phot_for_transient(user, transient_id=None):
 
 def get_disc_mag_from_photdata(photdata_qs):
     """Discovery / first mag from an existing photdata queryset (avoids duplicate DB fetch)."""
-    firstphot = None
-    for ph in photdata_qs.order_by('obs_date'):
-        if ph.discovery_point:
-            return ph
-        if ph.mag:
-            firstphot = ph
-    return firstphot
+    # Same answer as walking every row in obs_date order (the earliest
+    # discovery point, else the latest point with a non-zero magnitude), but in
+    # at most two LIMIT 1 queries instead of loading all photometry.
+    discovery = photdata_qs.filter(discovery_point=True).order_by('obs_date').first()
+    if discovery is not None:
+        return discovery
+    return (
+        photdata_qs.filter(mag__isnull=False).exclude(mag=0)
+        .order_by('-obs_date').first()
+    )
 
 
 def get_disc_mag_for_transient(user, transient_id=None):
@@ -999,31 +1002,44 @@ def _add_legend_grid(ax, legend_items, plot_width):
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
 
+    # Same 900 s plot-HTML cache as the detail plots (#460): the summary page
+    # fires this request once per transient card on every load.
+    cache_key = None
+    if _plot_html_cache_enabled():
+        user_key = group_access_plot_cache_token(request.user)
+        cache_key = (
+            f'lc_summary_v1_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'_{user_key}_w{_requested_plot_width(request, 500)}' + ('_salt' if salt2 else '')
+        )
+        cached_html = cache.get(cache_key)
+        if cached_html is not None:
+            return HttpResponse(cached_html)
+
     transient = get_object_or_404(Transient, pk=transient_id)
 
-    # Fetch photometry data with necessary related fields
+    # Fetch photometry data with necessary related fields (no created_by /
+    # modified_by joins: the plot never reads them; mag_sys is read per row).
     photdata = (
         get_all_phot_for_transient(request.user, transient_id)
         .select_related(
             "band__instrument__telescope",
-            "created_by",
-            "modified_by",
+            "mag_sys",
         )
         .prefetch_related("data_quality")
         .order_by("-modified_date")
     )
 
-    if not photdata.exists():
+    phot_rows = _downsample_phot_rows_for_display(list(photdata))
+    if not phot_rows:
         return HttpResponse("")
 
     # Pre-fetch related band data to avoid repeated lookups
-    band_ids = photdata.values_list("band", flat=True).distinct()
+    band_ids = {p.band_id for p in phot_rows}
     band_data = PhotometricBand.objects.filter(pk__in=band_ids).select_related(
         "instrument", "instrument__telescope"
     )
     band_lookup = {b.pk: b for b in band_data}
 
-    phot_rows = list(photdata)
     phot_values = [
         {
             "id": p.id,
@@ -1268,7 +1284,10 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         except Exception as exc:
             _note_salt2_fit_failure(ax, exc, transient_id)
 
-    return _bokeh_ajax_response(ax, "my plot")
+    response = _bokeh_ajax_response(ax, "my plot")
+    if cache_key:
+        return _cached_plot_http_response(cache_key, response.content.decode('utf-8'))
+    return response
 
 
 def _limit_or_nan(limit):
@@ -1934,6 +1953,18 @@ def spectrumplot(request, transient_id):
 
 @login_required
 def spectrumplot_summary(request, transient_id):
+    # Same 900 s plot-HTML cache as spectrumplot (#460); the summary page asks
+    # for one of these per transient card.
+    cache_key = None
+    if _plot_html_cache_enabled():
+        user_key = group_access_plot_cache_token(request.user)
+        cache_key = (
+            f'specsummary_v1_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+        )
+        cached_html = cache.get(cache_key)
+        if cached_html is not None:
+            return HttpResponse(cached_html)
+
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
@@ -1975,8 +2006,10 @@ def spectrumplot_summary(request, transient_id):
 
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
-    g = file_html(ax, CDN, "spectrum plot")
-    return HttpResponse(g.replace('width: 90%', 'width: 100%'))
+    g = file_html(ax, CDN, "spectrum plot").replace('width: 90%', 'width: 100%')
+    if cache_key:
+        return _cached_plot_http_response(cache_key, g)
+    return HttpResponse(g)
 
 
 #def spectrumplot(request, transient_id):
@@ -2225,27 +2258,47 @@ def tonight_moon_angle(request,transient_id,too_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+# The PS1 cutout page for a position never changes; a found URL is kept for a
+# month, a "no image" answer for a day, and a failed/timed-out scrape only
+# briefly so the next load retries it (#460).
+PS1_IMAGE_CACHE_SECONDS = 30 * 24 * 3600
+PS1_NO_IMAGE_CACHE_SECONDS = 24 * 3600
+PS1_FAILURE_CACHE_SECONDS = 60
+
+
 def get_ps1_image(request,transient_id):
-    
+
     try:
-        t = Transient.objects.get(pk=transient_id)
-    except t.DoesNotExist:
+        t = Transient.objects.only('ra', 'dec').get(pk=transient_id)
+    except Transient.DoesNotExist:
         raise Http404("Transient id does not exist")
+
+    cache_key = 'ps1_image_v1_%s_%.7f_%.7f' % (transient_id, t.ra, t.dec)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return JsonResponse(cached)
 
     ps1url = ("https://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
     try:
         response = requests.get(url=ps1url,timeout=5)
     except requests.RequestException as exc:
         logger.warning("PS1 cutout request failed for transient %s: %s", transient_id, exc)
-        return(JsonResponse({"jpegurl":"","msg":"timeout"}))
+        failure = {"jpegurl":"","msg":"timeout"}
+        cache.set(cache_key, failure, PS1_FAILURE_CACHE_SECONDS)
+        return(JsonResponse(failure))
     response_text = response.content.decode('utf-8')
-    if "<td><img src=" in response.content.decode('utf-8'):
-        jpegurl = response.content.decode('utf-8').split('<td><img src="')[1].split('" width="240" height="240" /></td>')[0]
+    if "<td><img src=" in response_text:
+        jpegurl = response_text.split('<td><img src="')[1].split('" width="240" height="240" /></td>')[0]
         jpegurl = "http:%s"%jpegurl
     else:
         jpegurl=""
 
     jpegurldict = {"jpegurl":jpegurl,"msg":"success"}
+    if response.status_code == 200:
+        cache.set(cache_key, jpegurldict,
+                  PS1_IMAGE_CACHE_SECONDS if jpegurl else PS1_NO_IMAGE_CACHE_SECONDS)
+    else:
+        cache.set(cache_key, jpegurldict, PS1_FAILURE_CACHE_SECONDS)
     return(JsonResponse(jpegurldict))
 
 ARCHIVE_STATUS_TIMEOUT_SECONDS = int(os.environ.get('YSE_ARCHIVE_STATUS_TIMEOUT', '8'))

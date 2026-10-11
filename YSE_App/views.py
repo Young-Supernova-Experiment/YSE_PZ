@@ -557,6 +557,11 @@ def transient_summary(request,status_or_query_name,
         else:
             transients = transients.order_by(request.GET['sort'])
             
+    # The card template reads status, host and tags of every transient on the
+    # page: join/prefetch them instead of one query each (#460).
+    if hasattr(transients, 'select_related') and not transients.query.is_sliced:
+        transients = transients.select_related('status', 'host').prefetch_related('tags')
+
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-')[0]
     else: anchor = ''
