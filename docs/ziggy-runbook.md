@@ -1323,6 +1323,19 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+### IERS table refresh (optional cron, per stack) nothing required
+
+Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
+
+Copy
+
+```
+# check: prints the newest predicted MJD in the table (expected: an MJD roughly 100+ days after today)
+<CRON_PYTHON> -c "from astropy.utils import iers; iers.conf.auto_download=True; t=iers.IERS_Auto.open(); print(t['MJD'].max())"
+# crontab (weekly, Sunday 04:15), as the Unix user that owns the astropy cache
+15 4 * * 0 <CRON_PYTHON> -c "from astropy.utils import iers; iers.conf.auto_download=True; iers.IERS_Auto.open()" >> <CRON_LOG_DIR>/iers_refresh.log 2>&1
+```
+
 <a id="data"></a>
 
 ## 4 · Data checks David
@@ -1414,6 +1427,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-11 v29, optional. IERS refresh cron ([#466](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/466)): web workers no longer download IERS tables; new "IERS table refresh" subsection (weekly cron plus a check). **Nothing required on Ziggy.**
 * 2026-10-10 v28, informational. Deploy Stack now triggers on `push` to `experimental` / `develop` only (a merged PR is a push, so deploys still happen) and all workflows declare least-privilege `permissions`. **Nothing required on Ziggy.** After the first merge following this change, check on GitHub Actions that Deploy Stack fired once on the push.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.

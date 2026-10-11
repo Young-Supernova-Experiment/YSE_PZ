@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 QUERY_CACHE_VERSION = os.environ.get('YSE_QUERY_CACHE_VERSION', '2')
 # yse_home "Next Telescope Nights": classical runs starting within this many days (#397).
 YSE_HOME_CLASSICAL_DAYS_AHEAD = 30
-iers.conf.auto_download = True
+# Web workers never wait on an IERS download (#466); the refresh cron in the runbook does it.
+iers.conf.auto_download = False
 from astropy.utils.iers import conf
 conf.auto_max_age = None
 
@@ -826,18 +827,14 @@ def too_requests(request, telescope, pi_name):
     RequestConfig(request, paginate={'per_page': 20}).configure(followup_table)
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
-    location = EarthLocation.from_geodetic(
-        too_resource.telescope.longitude*u.deg,too_resource.telescope.latitude*u.deg,
-        too_resource.telescope.elevation*u.m)
-    time = Time(str(nowdate).split('+')[0], format='iso')
-    tel = Observer(location=location, timezone="UTC")
-
-    sunset = tel.sun_set_time(time,which="previous").isot.split('T')[-1][:-7]
-    night_start_12 = tel.twilight_evening_nautical(time,which="previous").isot.split('T')[-1][:-7]
-    night_start_18 = tel.twilight_evening_astronomical(time,which="previous").isot.split('T')[-1][:-7]
-    night_end_18 = tel.twilight_morning_astronomical(time,which="previous").isot.split('T')[-1][:-7]
-    night_end_12 = tel.twilight_morning_nautical(time,which="previous").isot.split('T')[-1][:-7]
-    sunrise = tel.sun_rise_time(time,which="previous").isot.split('T')[-1][:-7]
+    # six twilight root-finds, cached per (telescope, minute); the "previous" night only
+    # changes at an event, so a minute-old answer is the same
+    night = twilight_times(
+        too_resource.telescope, nowdate.strftime('%Y-%m-%d %H:%M:00'), which="previous", timeout=3600
+    )
+    sunset, sunrise = night['sunset'], night['sunrise']
+    night_start_12, night_start_18 = night['night_start_12'], night['night_start_18']
+    night_end_18, night_end_12 = night['night_end_18'], night['night_end_12']
 
     if request.META['QUERY_STRING']:
         anchor = request.META['QUERY_STRING'].split('-ex')[0]
@@ -1091,53 +1088,52 @@ def yse_observing_calendar(request):
 
 @login_required
 def decam_observing_calendar(request):
+    """DECam (DECAT) fields per night, thirty nights back to ten ahead.
 
-    all_obs = SurveyObservation.objects.all().select_related()
-    all_dates,all_decam_ids,all_filters = np.array([]),np.array([]),np.array([])
-
+    Ported from the #420 ``yse_observing_calendar`` rewrite (#465): one query fetches every
+    DECAT observation in the 40-night window, each night applies the old per-night filter in
+    Python (a NULL MJD never matches, as in SQL), and the sun times are cached per night. The
+    old view ran two astroplan solves, a moon-illumination solve and six-plus queries per night.
+    """
     telescope = Telescope.objects.get(name='Pan-STARRS1')
-    location = EarthLocation.from_geodetic(
-        telescope.longitude*u.deg,telescope.latitude*u.deg,
-        telescope.elevation*u.m)
-    tel = Observer(location=location, timezone="UTC")
 
     todaydate = dateutil.parser.parse(datetime.datetime.today().strftime('%Y-%m-%d 00:00:00'))
     base = todaydate-datetime.timedelta(30)
     date_list = [base + datetime.timedelta(days=x) for x in range(40)]
+    nights = [(date, calendar_sun_times(telescope, date)) for date in date_list]
     obstuple = ()
     colors = ['#dd4b39', 
               '#f39c12', 
               '#00c0ef']
-    for i,date in enumerate(date_list):
 
-        time = Time(date_to_mjd(date.strftime('%Y-%m-%d 00:00:00')),format='mjd')
-        
-        sunset_forobs = tel.sun_set_time(time,which="next")
-        sunrise_forobs = tel.sun_rise_time(time,which="next")
-        survey_obs = SurveyObservation.objects.filter(
-            Q(mjd_requested__gte = date_to_mjd(sunset_forobs)-0.1) | Q(obs_mjd__gte = date_to_mjd(sunset_forobs)-0.1)).\
-            filter(Q(mjd_requested__lte = date_to_mjd(sunrise_forobs)+0.1) | Q(obs_mjd__lte = date_to_mjd(sunrise_forobs)+0.1)).\
-            filter(survey_field__obs_group__name='DECAT')
-        if not len(survey_obs): continue
-        decam_obs_ids = survey_obs.filter(obs_mjd__isnull=False).values_list('survey_field__field_id',flat=True).distinct()
-        decam_sched_ids = survey_obs.filter(obs_mjd__isnull=True).values_list('survey_field__field_id',flat=True).distinct()
-        
-        decam_obs_str = ''
-        for z in decam_obs_ids:
-            filters = survey_obs.filter(survey_field__field_id=z).filter(survey_field__obs_group__name='DECAT').\
-                values_list('photometric_band__name',flat=True).distinct()
-            decam_obs_str += '%s: %s; '%(z.__str__(),','.join([f.__str__() for f in filters]))
-        decam_sched_str = ''
-        for z in decam_sched_ids:
-            if z in decam_obs_ids: continue
-            filters = survey_obs.filter(survey_field__decam_field_id=z).filter(survey_field__obs_group__name='DECAT').\
-                values_list('photometric_band__name',flat=True).distinct()
-            decam_sched_str += '%s: %s; '%(z.__str__(),','.join([f.__str__() for f in filters]))
+    lo = min(sun['sunset_mjd'] for _, sun in nights) - 0.1
+    hi = max(sun['sunrise_mjd'] for _, sun in nights) + 0.1
+    window_rows = list(
+        SurveyObservation.objects.filter(survey_field__obs_group__name='DECAT')
+        .filter(Q(mjd_requested__gte=lo) | Q(obs_mjd__gte=lo))
+        .filter(Q(mjd_requested__lte=hi) | Q(obs_mjd__lte=hi))
+        .order_by('survey_field_id', 'pk')
+        .values_list('mjd_requested', 'obs_mjd', 'survey_field__field_id', 'photometric_band__name')
+    )
 
-            
-        if len(survey_obs):
-            obstuple += ((decam_obs_str[:-2],date,
-                          '%i%%'%(moon_illumination(time)*100),colors[i%len(colors)],decam_sched_str[:-2]),)
+    def _ge(value, edge):
+        return value is not None and value >= edge
+
+    def _le(value, edge):
+        return value is not None and value <= edge
+
+    for i, (date, sun) in enumerate(nights):
+        start, end = sun['sunset_mjd'] - 0.1, sun['sunrise_mjd'] + 0.1
+        night_rows = [
+            (field_id, band, obs_mjd is not None)
+            for mjd_requested, obs_mjd, field_id, band in window_rows
+            if (_ge(mjd_requested, start) or _ge(obs_mjd, start))
+            and (_le(mjd_requested, end) or _le(obs_mjd, end))
+        ]
+        if not night_rows: continue
+        decam_obs_str, decam_sched_str = _calendar_field_strings(night_rows)
+        obstuple += ((decam_obs_str[:-2],date,
+                      sun['moon_illum'],colors[i%len(colors)],decam_sched_str[:-2]),)
 
     context = {
         'all_obs': obstuple,
