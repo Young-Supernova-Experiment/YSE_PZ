@@ -1438,20 +1438,23 @@ def download_targets_and_finders(request, telescope, obs_date):
     tel = Observer(location=location, timezone="UTC")
 
     
+    # Same star-list format as download_target_list. Each target is followed
+    # directly by its offset stars (raoffset/decoffset), so a single file
+    # loaded at the telescope carries the offsets with their targets (#560).
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
-    content_offsets = "\n"
     findernamelist = []
     for f in follow_requests:
-        content += "%s  %s %s 2000 mag = %.2f\n"%(
-            f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()))
+        recent_mag = f.transient.recent_mag()
+        mag_str = "mag = %.2f" % float(recent_mag) if recent_mag else ""
+        content += "%s  %s %s 2000 %s\n"%(
+            f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '),mag_str)
         offdictlist, findername = view_utils.finder().finderchart_noview(f.transient.id)
         findernamelist += [findername]
         for offdict in offdictlist:
-            content_offsets += "%s  %s %s 2000 mag = %.2f raoffset=%.2f decoffset=%.2f\n"%(
-                offdict['id'].ljust(20),offdict['ra'],offdict['dec'],
+            content += "%s  %s %s 2000 mag = %.2f raoffset=%.2f decoffset=%.2f\n"%(
+                offdict['id'].ljust(20),offdict['ra'].replace(':',' '),offdict['dec'].replace(':',' '),
                 float(offdict['mag']),float(offdict['ra_off']),float(offdict['dec_off']))
-        
-            
+
     response = HttpResponse(content, content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_%s.txt'%(telescope,obs_date)
 

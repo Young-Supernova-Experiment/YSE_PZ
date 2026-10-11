@@ -1123,7 +1123,14 @@ class DownloadTargetListTests(TestCase):
                 self._url("download_targets_and_finders", self.obs_date.strftime("%Y-%m-%d"))
             )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("ares0", response.content.decode())
+        lines = response.content.decode().splitlines()
+        target_idx = [i for i, l in enumerate(lines) if l.startswith("ares0")]
+        self.assertEqual(len(target_idx), 1)
+        # #560: the offset star follows its target, same star-list format.
+        offset_line = lines[target_idx[0] + 1]
+        self.assertTrue(offset_line.startswith("star1"), offset_line)
+        self.assertIn("03 20 00.0 +01 00 00.0 2000", offset_line)
+        self.assertIn("mag = 15.00 raoffset=1.50 decoffset=-2.00", offset_line)
 
 
 # ------------------------------------------------------------- #463 / #466
