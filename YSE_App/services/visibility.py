@@ -47,9 +47,13 @@ def group_access_plot_cache_token(user: User) -> str:
 user_plot_cache_token = group_access_plot_cache_token
 
 
-def get_user_group_query(user: User):
-    """Same semantics as PhotometryService: ungrouped OR intersects user groups."""
-    names = user_group_names(user)
+def get_user_group_query(user: User, names: Optional[Iterable[str]] = None):
+    """Same semantics as PhotometryService: ungrouped OR intersects user groups.
+
+    ``names`` is the user's group names when the caller already has them, so
+    one membership query serves several group filters.
+    """
+    names = user_group_names(user) if names is None else list(names)
     no_group = Q(groups__isnull=True)
     contains_group = Q(groups__name__in=names)
     return no_group, contains_group
@@ -148,23 +152,57 @@ def log_visible_to_user(user: User, log) -> bool:
     return bool(names.intersection(obj_names))
 
 
+def transient_access_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """Condition on ``Transient`` rows: the user may see some of its photometry or spectra.
+
+    The set-based form of :func:`user_can_view_transient` for an authenticated,
+    non-staff user: a photometry set or spectrum on the transient that has no
+    collaboration groups, or shares one with the user (the
+    ``GetAuthorizedTransientPhotometry_ByUser_ByTransient`` and
+    ``GetAuthorizedTransientSpectrum_ByUser_ByTransient`` rule, flagged spectra
+    included). A transient with neither is not visible. Two correlated EXISTS
+    subqueries; the group names are read once (#451).
+    """
+    from YSE_App.models import TransientPhotometry, TransientSpectrum
+
+    no_group, contains_group = get_user_group_query(user, names=names)
+    visible_phot = TransientPhotometry.objects.filter(
+        no_group | contains_group, transient_id=OuterRef("pk"),
+    )
+    visible_spec = TransientSpectrum.objects.filter(
+        no_group | contains_group, transient_id=OuterRef("pk"),
+    )
+    return Q(Exists(visible_phot)) | Q(Exists(visible_spec))
+
+
 def filter_transients_by_user_access(
     user: User, transients: Union[QuerySet, Iterable],
 ):
-    """Post-filter transients (e.g. after SQL Explorer) by photometry/spectrum access."""
+    """Post-filter transients (e.g. after SQL Explorer) by photometry/spectrum access.
+
+    Same rows as calling :func:`user_can_view_transient` per transient, in a
+    fixed number of queries: a QuerySet gets the :func:`transient_access_q`
+    condition (no query until it is evaluated) and an iterable of transients
+    is checked with one query for all of them. Staff and superusers see
+    everything; anonymous users see nothing.
+    """
     if user.is_staff or user.is_superuser:
         return transients
+    if isinstance(transients, QuerySet):
+        if not user.is_authenticated:
+            return transients.none()
+        return transients.filter(transient_access_q(user))
+    transients = list(transients)
+    if not user.is_authenticated or not transients:
+        return []
     from YSE_App.models import Transient
 
-    if isinstance(transients, QuerySet):
-        ids = list(transients.values_list("id", flat=True))
-        allowed = [
-            pk
-            for pk in ids
-            if user_can_view_transient(user, pk)
-        ]
-        return transients.filter(id__in=allowed)
-    return [t for t in transients if user_can_view_transient(user, t.id)]
+    visible = set(
+        Transient.objects.filter(pk__in={t.id for t in transients})
+        .filter(transient_access_q(user))
+        .values_list("pk", flat=True)
+    )
+    return [t for t in transients if t.id in visible]
 
 
 # Transient detail shell allows broad metadata; export zip headers must stay narrow.

@@ -80,8 +80,9 @@ from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 from django.template import RequestContext
+from YSE_App.login_required import login_exempt
 from urllib.parse import unquote
 
 from .common.utilities import date_to_mjd, mjd_to_date
@@ -101,10 +102,22 @@ def index(request):
 #def add_followup(request,obj):
 #        return '<a href="%s">Add followup for %s</a>' % (obj.firm_url,obj.firm_url)
 
+def _safe_next_url(request, next_page):
+    """``next_page`` if it is a URL on this host (#503), else None."""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    if next_page and url_has_allowed_host_and_scheme(
+        url=next_page, allowed_hosts={request.get_host()}, require_https=request.is_secure(),
+    ):
+        return next_page
+    return None
+
+
 # Create your views here.
+@login_exempt
 def auth_login(request):
     logout(request)
-    next_page = request.POST.get('next')
+    next_page = _safe_next_url(request, request.POST.get('next'))
 
     user = None
     if request.POST:
@@ -124,8 +137,15 @@ def auth_login(request):
     else:
         return render(request, 'YSE_App/login.html')
 
+@login_exempt
+@require_http_methods(['GET', 'POST'])
 def auth_logout(request):
-    logout(request)
+    """Log out on POST only (#504); a GET shows a confirmation form."""
+    if request.method == 'POST':
+        logout(request)
+        return render(request, 'YSE_App/index.html')
+    if request.user.is_authenticated:
+        return render(request, 'YSE_App/logout_confirm.html')
     return render(request, 'YSE_App/index.html')
 
 _DASHBOARD_STATUS_SECTIONS = (
@@ -350,6 +370,45 @@ def _personaldashboard_configure_table(request, prefix, queryset):
         request.GET = saved_get
 
 
+def _personaldashboard_visible_pks_by_name(user, names):
+    """``{name: [pk, ...]}`` for the transients in ``names`` that ``user`` may see.
+
+    One query for every SQL section of a dashboard (#455): the sections then
+    filter ``pk__in`` on their own pks instead of repeating a multi-thousand
+    ``name IN (...)`` list, and the visibility rule is applied here for both the
+    deferred and the synchronous paths (#452).
+    """
+    from YSE_App.services.visibility import filter_transients_by_user_access
+
+    by_name = {}
+    if not names:
+        return by_name
+    visible = filter_transients_by_user_access(
+        user, Transient.objects.filter(name__in=set(names))
+    )
+    for name, pk in visible.values_list('name', 'pk'):
+        by_name.setdefault(name, []).append(pk)
+    return by_name
+
+
+def _personaldashboard_section_queryset(pks_by_name, names):
+    """Annotated, ordered dashboard rows for the visible transients among ``names``."""
+    pks = sorted({pk for name in names for pk in pks_by_name.get(name, ())})
+    return annotate_dashboard_transient_fields(
+        # -pk breaks disc_date ties so LIMIT/OFFSET pages never overlap on MySQL
+        Transient.objects.filter(pk__in=pks).order_by('-disc_date', '-pk')
+    )
+
+
+def _personaldashboard_python_query_transients(request, python_query):
+    """Rows of a saved Python query that the user may see (same rule as SQL sections)."""
+    from YSE_App.services.visibility import filter_transients_by_user_access
+
+    return filter_transients_by_user_access(
+        request.user, getattr(yse_python_queries, python_query)()
+    )
+
+
 def _personaldashboard_table_for_user_query(request, q):
     """Build one dashboard section tuple for a single UserQuery."""
     if q.query:
@@ -364,12 +423,11 @@ def _personaldashboard_table_for_user_query(request, q):
                     request, prefix, empty_qs
                 )
                 return (table, q.query.title, prefix, transient_filter, q.id, 0)
-            base_transients = annotate_dashboard_transient_fields(
-                # -pk breaks disc_date ties so LIMIT/OFFSET pages never overlap on MySQL
-                Transient.objects.filter(name__in=cached_result).order_by('-disc_date', '-pk')
+            section_qs = _personaldashboard_section_queryset(
+                _personaldashboard_visible_pks_by_name(request.user, cached_result),
+                cached_result,
             )
             prefix = _personaldashboard_sql_query_prefix(q.query.title)
-            section_qs = base_transients.filter(name__in=cached_result)
             table, transient_filter = _personaldashboard_configure_table(
                 request, prefix, section_qs
             )
@@ -381,7 +439,7 @@ def _personaldashboard_table_for_user_query(request, q):
     if q.python_query:
         try:
             transients = annotate_dashboard_transient_fields(
-                getattr(yse_python_queries, q.python_query)()
+                _personaldashboard_python_query_transients(request, q.python_query)
             )
             transient_filter = TransientFilter(
                 request.GET, queryset=transients, prefix=q.python_query
@@ -425,21 +483,11 @@ def _personaldashboard_build_all_tables(request, queries):
             if row:
                 tables.append(row)
 
-    if all_transient_names:
-        from YSE_App.services.visibility import filter_transients_by_user_access
-
-        base_transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(name__in=all_transient_names).order_by('-disc_date', '-pk')
-        )
-        base_transients = filter_transients_by_user_access(
-            request.user, base_transients
-        )
-    else:
-        base_transients = Transient.objects.none()
+    pks_by_name = _personaldashboard_visible_pks_by_name(request.user, all_transient_names)
 
     for q, transient_names in sql_dashboard_sections:
         prefix = _personaldashboard_sql_query_prefix(q.query.title)
-        section_qs = base_transients.filter(name__in=transient_names)
+        section_qs = _personaldashboard_section_queryset(pks_by_name, transient_names)
         table, transient_filter = _personaldashboard_configure_table(
             request, prefix, section_qs
         )
@@ -577,25 +625,15 @@ def transient_summary(request,status_or_query_name,
             transients = getattr(yse_python_queries,query.python_query)()
 
     if 'sort' in request.GET.keys():
-        if request.GET['sort'] == 'last_obs_date' or request.GET['sort'] == '-last_obs_date':
-            if request.GET['sort'] == '-last_obs_date':
-                is_descending = True
-            else:
-                is_descending = False
-            
-            all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = transients)
-            phot_ids = all_phot.values('id')
-        
-            phot_data_query = Q(transientphotometry__id__in=phot_ids)
-            transients = transients.annotate(
-                recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-            ).order_by(('-' if is_descending else '') + 'recent_magdate')
-            
-        elif request.GET['sort'] == 'last_mag' or request.GET['sort'] == '-last_mag':
-            raw_query = RECENT_MAG_SQL
-            if request.GET['sort'] == '-last_mag': is_descending = True
-            else: is_descending = False
-            transients = transients.annotate(last_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'last_mag')
+        if request.GET['sort'] in ('last_obs_date', '-last_obs_date', 'last_mag', '-last_mag'):
+            # Sort-only: indexed TransientPhotStat columns, not a subquery or a
+            # Max() over all photometry per transient (#454).
+            from YSE_App.table_utils import order_by_recent_phot
+
+            sort_key = request.GET['sort']
+            transients = order_by_recent_phot(
+                transients, sort_key.lstrip('-'), sort_key.startswith('-')
+            )
         else:
             transients = transients.order_by(request.GET['sort'])
             
@@ -1296,8 +1334,10 @@ def yse_observing_night(request, obs_date):
     return render(request, 'YSE_App/yse_observing_night.html', context)
 
 
+@login_required
 def download_target_list(request, telescope, obs_date):
     from YSE_App.services.followup_requests import format_comments, requests_prefetch
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1307,7 +1347,9 @@ def download_target_list(request, telescope, obs_date):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
+    # only the follow-ups this user may see (#499)
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related('transient').prefetch_related(requests_prefetch())
 
     location = EarthLocation.from_geodetic(
@@ -1347,7 +1389,9 @@ def download_target_list(request, telescope, obs_date):
 
     return response
 
+@login_required
 def download_targets_and_finders(request, telescope, obs_date):
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1357,7 +1401,9 @@ def download_targets_and_finders(request, telescope, obs_date):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
+    # only the follow-ups this user may see (#499)
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related('transient')
 
     location = EarthLocation.from_geodetic(
@@ -1898,7 +1944,9 @@ def transient_detail(request, slug):
             and '_cand' in transient_obj.name
             and 'DECAT' in [t.name for t in assigned_transient_tags]
         ):
-            submit_to_tns = True
+            from YSE_App.util.submit_to_tns import user_may_submit_legacy_tns
+
+            submit_to_tns = user_may_submit_legacy_tns(request.user)
         else:
             submit_to_tns = False
         context['submit_to_tns'] = submit_to_tns

@@ -10,7 +10,7 @@ from django.conf import settings as djangoSettings
 from django.core.cache import cache
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import models, connection, reset_queries
-from django.db.models import Prefetch, Q
+from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -529,8 +529,32 @@ def getTimeUntilRiseSet(ra,dec,date,lat,lon,elev,utc_off):
 #   return(can_obs)
 
 
+from django.utils.decorators import method_decorator  # noqa: E402
+
+_FINDER_CHART_DIR = 'YSE_App/images/findercharts'
+
+
+def finder_chart_safe_name(transient_name):
+    """The transient name as one file-name component for finder charts (#500)."""
+    import re
+
+    name = re.sub(r'[^A-Za-z0-9_.+-]', '_', str(transient_name or '')).lstrip('.')
+    return name or 'unnamed'
+
+
+def finder_chart_paths(transient_name):
+    """``(directory, offset-star file, finder png)`` under STATIC_ROOT for a transient."""
+    safe = finder_chart_safe_name(transient_name)
+    basedir = os.path.realpath(os.path.join(djangoSettings.STATIC_ROOT, _FINDER_CHART_DIR))
+    outdir = os.path.realpath(os.path.join(basedir, safe))
+    if os.path.dirname(outdir) != basedir:
+        raise ValueError('finder chart directory is outside %s' % _FINDER_CHART_DIR)
+    return outdir, os.path.join(outdir, f"{safe}.offsetstars.txt"), os.path.join(outdir, f"{safe}.finder.png")
+
+
 def finder_chart_static_relpath(transient_name):
-    return f"YSE_App/images/findercharts/{transient_name}/{transient_name}.finder.png"
+    safe = finder_chart_safe_name(transient_name)
+    return f"{_FINDER_CHART_DIR}/{safe}/{safe}.finder.png"
 
 
 def static_asset_available(relative_path):
@@ -545,14 +569,12 @@ def static_asset_available(relative_path):
 class Finder(TemplateView):
     template_name = 'YSE_App/finder.html'
 
+    @method_decorator(login_required)
     def finderchart(self, request, transient_id, clobber=False):
         _load_heavy_plot_stack()
-        transient = Transient.objects.get(pk=transient_id)
-        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
-        os.makedirs(basedir, exist_ok=True)
-
-        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
-        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+        transient = get_object_or_404(Transient, pk=transient_id)
+        outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
+        os.makedirs(outdir, exist_ok=True)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -594,13 +616,11 @@ class Finder(TemplateView):
 
         return render(request, 'YSE_App/finder.html', context)    
     
+    @method_decorator(login_required)
     def finderim(self, request, transient_id, clobber=False):
-        transient = Transient.objects.get(pk=transient_id)
-        basedir = os.path.join(djangoSettings.STATIC_ROOT, 'YSE_App/images/findercharts')
-        os.makedirs(basedir, exist_ok=True)
-
-        output_offset_file = os.path.join(basedir, transient.name, f"{transient.name}.offsetstars.txt")
-        output_finder_file = os.path.join(basedir, transient.name, f"{transient.name}.finder.png")
+        transient = get_object_or_404(Transient, pk=transient_id)
+        outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
+        os.makedirs(outdir, exist_ok=True)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
@@ -608,8 +628,8 @@ class Finder(TemplateView):
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
-        options.outputOffsetFileName = outputOffsetFileName
-        options.outputFinderFileName = outputFinderFileName
+        options.outputOffsetFileName = output_offset_file
+        options.outputFinderFileName = output_finder_file
         find.options = options
 
         fig=Figure()
@@ -643,16 +663,8 @@ class Finder(TemplateView):
         from matplotlib.figure import Figure
     
         transient = Transient.objects.get(pk=transient_id)
-        basedir = "%sYSE_App/images/findercharts"%(djangoSettings.STATIC_ROOT)
-        if not os.path.exists(basedir):
-            os.makedirs(basedir)
-        
-        outputOffsetFileName = '%s/%s/%s.offsetstars.txt'%(
-            basedir,transient.name,transient.name)
-        outputFinderFileName = '%s/%s/%s.finder.png'%(
-            basedir,transient.name,transient.name)
-        if not os.path.exists(os.path.dirname(outputFinderFileName)):
-            os.makedirs(os.path.dirname(outputFinderFileName))
+        outdir, outputOffsetFileName, outputFinderFileName = finder_chart_paths(transient.name)
+        os.makedirs(outdir, exist_ok=True)
         #if os.path.exists(outputOffsetFileName) and\
         #   os.path.exists(outputFinderFileName):
         #   return HttpResponseRedirect(reverse('transient_detail',
@@ -770,6 +782,7 @@ def airmassplot(request, transient_id, obs_id, telescope_id):
     canvas.print_jpg(response)
     return response
 
+@login_required
 def view_yse_fields(request):
     _load_heavy_plot_stack()
 
@@ -1825,21 +1838,54 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
     return f'<p class="text-muted yse-plot-empty">{text}</p>'
 
 
+def _spec_points_by_spectrum(spectrum_ids):
+    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra, in one query.
+
+    Spectra are stored one TransientSpecData row per pixel, so building a model
+    instance per pixel dominated plot time for long spectra (#479). This reads
+    plain ``(spectrum_id, wavelength, flux)`` tuples, in the same (pk) order as
+    the old ``transientspecdata_set`` prefetch, straight into numpy.
+    """
+    spectrum_ids = list(spectrum_ids)
+    if not spectrum_ids:
+        return {}
+    rows = np.array(
+        list(
+            TransientSpecData.objects.filter(spectrum_id__in=spectrum_ids)
+            .order_by('spectrum_id', 'id')
+            .values_list('spectrum_id', 'wavelength', 'flux')
+        ),
+        dtype=float,
+    )
+    if rows.size == 0:
+        return {}
+    ids = rows[:, 0].astype(np.int64)
+    # Rows are ordered by spectrum_id, so each spectrum is one contiguous run.
+    starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]])
+    ends = np.r_[starts[1:], ids.size]
+    return {
+        int(ids[a]): (rows[a:b, 1], rows[a:b, 2])
+        for a, b in zip(starts, ends)
+    }
+
+
 def _spectra_for_plot(dbspectra):
     """Turn TransientSpectrum rows into plottable dicts, skipping empty ones.
 
-    Returns ``(spectra, n_without_points)``: spectra whose ``transientspecdata_set``
-    is empty are counted instead of plotted, so a transient whose spectra were
+    Returns ``(spectra, n_without_points)``: spectra without TransientSpecData
+    points are counted instead of plotted, so a transient whose spectra were
     registered without wavelength/flux rows gets the empty-state message rather
     than a traceback (#343). Each spectrum is resampled to at most
-    ``MAX_SPEC_DISPLAY_PIXELS`` points.
+    ``MAX_SPEC_DISPLAY_PIXELS`` points. Points are read with one ``values_list``
+    query for all spectra (#479), not one ORM object per pixel.
     """
     spectra = []
     n_without_points = 0
+    dbspectra = list(dbspectra)
+    points = _spec_points_by_spectrum(spectrum.id for spectrum in dbspectra)
+    empty = np.array([], dtype=float)
     for spectrum in dbspectra:
-        spec_data = list(spectrum.transientspecdata_set.all())
-        wave = np.array([s.wavelength for s in spec_data])
-        flux = np.array([s.flux for s in spec_data])
+        wave, flux = points.get(spectrum.id, (empty, empty))
         if wave.size == 0 or flux.size == 0:
             n_without_points += 1
             continue
@@ -1888,9 +1934,7 @@ def spectrumplot(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
-    ).select_related('instrument').prefetch_related(
-        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
-    )
+    ).select_related('instrument')
     
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
@@ -1937,9 +1981,7 @@ def spectrumplot_summary(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
     dbspectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
-    ).select_related('instrument').prefetch_related(
-        Prefetch('transientspecdata_set', queryset=TransientSpecData.objects.all())
-    )
+    ).select_related('instrument')
 
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
@@ -2030,15 +2072,11 @@ def spectrumplotsingle(request, transient_id, spec_id):
         )
     else:
         spectrum = spectrum[0]
-    spec = TransientSpecData.objects.filter(spectrum=spectrum)
-    
-    if not len(spec):
+    wave, flux = _spec_points_by_spectrum([spectrum.id]).get(spectrum.id, ([], []))
+
+    if not len(wave):
         return django.http.HttpResponse(_spectrum_plot_empty_message(1))
 
-    wave,flux = [],[]
-    for s in spec:
-        wave += [s.wavelength]
-        flux += [s.flux]
     bottom = np.percentile(flux,5)*0.5; top = np.percentile(flux,95)*1.3
     if np.percentile(flux,2) < 0:
         bottom = np.percentile(flux,2)*1.5
@@ -2111,6 +2149,7 @@ def rise_func(coords,obs_date,longitude,latitude,elevation,risedict):
     print('rise time took %s'%(time.time()-tstart))
     _RISE_SET_QUEUE.put(risetime)
 
+@login_required
 def rise_time(request,transient_id,obs_id):
         
     risedict = {'rise_time':''}
@@ -2130,6 +2169,7 @@ def rise_time(request,transient_id,obs_id):
 
     return JsonResponse(risedict)
 
+@login_required
 def set_time(request,transient_id,obs_id):
 
     setdict = {'set_time':''}
@@ -2150,6 +2190,7 @@ def set_time(request,transient_id,obs_id):
     return JsonResponse(setdict)
 
         
+@login_required
 def moon_angle(request,transient_id,obs_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2164,6 +2205,7 @@ def moon_angle(request,transient_id,obs_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+@login_required
 def tonight_rise_time(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2189,6 +2231,7 @@ def tonight_rise_time(request,transient_id,too_id):
     risedict = {'rise_time':returnstarttime}
     return JsonResponse(risedict)
 
+@login_required
 def tonight_set_time(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2214,6 +2257,7 @@ def tonight_set_time(request,transient_id,too_id):
     setdict = {'set_time':returnstarttime}
     return JsonResponse(setdict)
     
+@login_required
 def tonight_moon_angle(request,transient_id,too_id):
     _load_astropy_coords()
     transient = Transient.objects.filter(id=transient_id)[0]
@@ -2225,6 +2269,7 @@ def tonight_moon_angle(request,transient_id,too_id):
     moondict = {'moon_angle':'%.1f deg'%cs.separation(mooncoord).deg}
     return JsonResponse(moondict)
 
+@login_required
 def get_ps1_image(request,transient_id):
     
     try:
@@ -2335,6 +2380,7 @@ def _archive_status_payload(cache_key, lookup, archive_name, transient_id=None, 
     return payload
 
 
+@login_required
 def get_hst_status(request, transient_id):
     """Lightweight HST availability for tab label (no JPG fetch)."""
     try:
@@ -2355,6 +2401,7 @@ def get_hst_status(request, transient_id):
                                                 transient_id=t.pk, flag_field='has_hst'))
 
 
+@login_required
 def get_chandra_status(request, transient_id):
     """Lightweight Chandra availability for tab label (no image fetch)."""
     try:
@@ -2446,6 +2493,7 @@ def _archive_table_response(transient_id, archive_name, lookup, empty_payload, c
 HST_IMAGE_EMPTY = {"jpegurl": [], "fitsurl": [], "obsdate": [], "filters": [], "inst": []}
 
 
+@login_required
 def get_hst_image(request,transient_id):
     try:
         t = Transient.objects.get(pk=transient_id)
@@ -2512,6 +2560,7 @@ def get_jwst_observations(request, transient_id):
         cache_key=f'jwst_observations_v2_{transient_id}',
     )
 
+@login_required
 def get_chandra_image(request,transient_id):
     
     try:
@@ -2548,6 +2597,7 @@ def get_chandra_image(request,transient_id):
     return(JsonResponse(jpegurldict))
 
 
+@login_required
 def get_legacy_image(request,transient_id):
     
     try:
@@ -2568,6 +2618,7 @@ def get_legacy_image(request,transient_id):
 
     return(JsonResponse(jpegurldict))
 
+@login_required
 def delta_too_hours(request,too_id):
     too = ToOResource.objects.get(id=too_id)
     diff = (too.awarded_too_hours - too.used_too_hours)
