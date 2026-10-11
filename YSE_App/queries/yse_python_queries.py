@@ -22,6 +22,18 @@ def makeRegistrar():
     return registrar
 python_query_reg = makeRegistrar()
 
+
+def get_python_query(name):
+    """The registered python query called ``name`` (#505); KeyError when there is none."""
+    func = python_query_reg.all.get(name) if isinstance(name, str) else None
+    if func is None:
+        raise KeyError(name)
+    return func
+
+
+def run_python_query(name):
+    return get_python_query(name)()
+
 def annotate_rising_transient_qs(qs):
 
     g_filters = "('g-ZTF', 'g', 'V', 'gp', 'g-Sloan')"

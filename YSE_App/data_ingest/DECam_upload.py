@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 from django_cron import CronJobBase, Schedule
 from django.conf import settings as djangoSettings
 from email.mime.multipart import MIMEMultipart
@@ -206,13 +208,13 @@ class DECam(CronJobBase):
     
     def main(self):
         # get all the DECam links
-        good_transient_data = requests.get(_google_doc_url).text
+        good_transient_data = ingest_http.get(_google_doc_url).text
         urls = re.findall(_google_doc_regex,good_transient_data)
 
         # let's grab the most recent phot. data for each transient
         # if the DECam data on the sniff pages doesn't have more recent
         # data, hopefully we can assume things are up to date
-        tr = requests.get(f"{self.options.dburl.replace('/api','')}query_api/DECAT_transients_mags/",
+        tr = ingest_http.get(f"{self.options.dburl.replace('/api','')}query_api/DECAT_transients_mags/",
                           auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword))
         etdata = tr.json()['transients']
         etdict = {}; ra = []; dec = []; dict_names = np.array([])
@@ -238,7 +240,7 @@ class DECam(CronJobBase):
             print(count)
             url_single = f"https://stsci{str2}{str3}"
             candid_toupload = str3.split('#')[-1]
-            r = requests.get(url_single)
+            r = ingest_http.get(url_single)
 
             soup = BeautifulSoup(r.text)
             tables = soup.find_all("table", attrs={"cols":"6","border":"1"})
@@ -278,16 +280,16 @@ class DECam(CronJobBase):
 
                 lcurlbase = '/'.join(url_single.split('/')[:-1])
                 lcurldatebase = '/'.join(url_single.split('/')[:-2])
-                rdatetext = requests.get(lcurldatebase).text
+                rdatetext = ingest_http.get(lcurldatebase).text
                 rdate = rdatetext.split('Last updated :')[-1].split('\n')[0]
                 date_updated = dateutil.parser.parse(rdate)
                 if (nowdate-date_updated).days > self.options.max_decam_days: continue
 
 
                 # get the lightcurve file
-                lcr = requests.get(f"{lcurlbase}/{field}_cand{candid}.difflc.txt")
+                lcr = ingest_http.get(f"{lcurlbase}/{field}_cand{candid}.difflc.txt")
                 if lcr.status_code != 200:
-                    lcr = requests.get(f"{lcurlbase}/{field}_cand{candid}.forced.difflc.txt")
+                    lcr = ingest_http.get(f"{lcurlbase}/{field}_cand{candid}.forced.difflc.txt")
                 lcdata = at.Table.read(lcr.text,format='ascii')
 
                 # is the most recent photometry greater than what exists on YSE-PZ?
@@ -395,7 +397,7 @@ class DECam(CronJobBase):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
                               auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
                               timeout=60)
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])

@@ -67,6 +67,9 @@ cp YSE_PZ/public_settings.ini YSE_PZ/settings.ini
 cp docker/public.env docker/.env
 ```
 
+`docker/public.env` sets `YSE_IS_DEBUG=1`, which turns DEBUG on for local docker; the
+template `settings.ini` itself defaults to `IS_DEBUG: False`.
+
 Edit `docker/.env` so paths are **absolute** (required for Docker Desktop on macOS):
 
 - `VOL` — repo root
