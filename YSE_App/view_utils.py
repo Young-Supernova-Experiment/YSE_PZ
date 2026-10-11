@@ -2010,7 +2010,10 @@ def spectrumplot_summary(request, transient_id):
     spectra, n_without_points = _spectra_for_plot(dbspectra)
     if not spectra:
         if n_without_points == 0:
-            # The summary card stays blank for a transient without spectra.
+            # The summary card stays blank for a transient without spectra;
+            # the blank answer is cached too (the token changes with any spectrum).
+            if cache_key:
+                cache.set(cache_key, '', timeout=PLOT_HTML_CACHE_TIMEOUT)
             return django.http.HttpResponse('')
         # Same empty state as spectrumplot instead of an UnboundLocalError (#343).
         return django.http.HttpResponse(_spectrum_plot_empty_message(n_without_points))
