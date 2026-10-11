@@ -199,12 +199,24 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Deny-by-default login check with a public allowlist (#496); see
+    # YSE_App/login_required.py and LOGIN_REQUIRED_MIDDLEWARE below.
+    'YSE_App.login_required.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     #'django.middleware.cache.UpdateCacheMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
     #'django.middleware.cache.FetchFromCacheMiddleware'
 ]
+
+# LoginRequiredMiddleware (#496) is on by default. Rollback switch only: set
+# [site_settings] LOGIN_REQUIRED_MIDDLEWARE = False in settings.ini, or the
+# YSE_LOGIN_REQUIRED_MIDDLEWARE=0 env var (the env var wins), to turn it off.
+_login_required_env = os.environ.get('YSE_LOGIN_REQUIRED_MIDDLEWARE', '').strip().lower()
+if _login_required_env:
+    LOGIN_REQUIRED_MIDDLEWARE = _login_required_env not in ('0', 'false', 'no', 'off')
+else:
+    LOGIN_REQUIRED_MIDDLEWARE = config.getboolean('site_settings', 'LOGIN_REQUIRED_MIDDLEWARE', fallback=True)
 
 #CACHE_MIDDLEWARE_ALIAS = 'default'
 #CACHE_MIDDLEWARE_SECONDS = 600
