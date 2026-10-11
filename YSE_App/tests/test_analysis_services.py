@@ -737,7 +737,9 @@ class AnalysisTabTests(AnalysisBase):
         self.assertIn('id="analysis_run_form"', html)
         self.assertIn('<option value="bazin_fit"', html)
         self.assertIn('<option value="sncosmo_fit"', html)
-        services = json.loads(html.split('id="yse_analysis_services_json">')[1].split("</script>")[0])
+        services = json.loads(
+            html.split('id="yse_analysis_services_json" type="application/json">')[1].split("</script>")[0]
+        )
         self.assertEqual({s["slug"] for s in services}, {"bazin_fit", "sncosmo_fit"})
         self.assertEqual(services[0]["cap"]["limit"], None)
 

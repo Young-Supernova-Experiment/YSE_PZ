@@ -326,6 +326,7 @@ class TransientSummaryVisibilityTests(TestCase):
 
         UserQuery.objects.create(user=self.staff, python_query="sumvis_python_query",
                                  created_by=self.staff, modified_by=self.staff)
-        with mock.patch.object(views.yse_python_queries, "sumvis_python_query", create=True,
-                               side_effect=lambda: Transient.objects.filter(name="sumvis-sn")):
+        # Python queries are looked up in the registry (#505), not by attribute.
+        with mock.patch.dict(views.yse_python_queries.python_query_reg.all,
+                             {"sumvis_python_query": lambda: Transient.objects.filter(name="sumvis-sn")}):
             self.check_branch("sumvis_python_query")

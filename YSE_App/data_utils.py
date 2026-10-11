@@ -1,5 +1,5 @@
 import django
-from django.http import HttpResponse,JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render, get_object_or_404
 from .models import *
 from django.db import models
@@ -1446,7 +1446,7 @@ def query_api(request,query_name):
     query = Query.objects.filter(title=unquote(query_name))
     if len(query):
         query = query[0]
-        if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
+        if not dashboard_sql_is_supported(query.sql): raise Http404('Invalid Query')
         # Cached for QUERY_API_CACHE_SECONDS on the capped explorer connection (#474).
         from YSE_App.common.db_time_cap import QueryTimeout
         from YSE_App.views import run_explorer_query_rows_cached
@@ -1458,8 +1458,8 @@ def query_api(request,query_name):
         #query = UserQuery.objects.filter(python_query = unquote(query_name))
         #if not len(query): return Http404('Invalid Query')
         #query = query[0]
-        try: transients = getattr(yse_python_queries,unquote(query_name))() #.python_query)()
-        except: return Http404('Invalid Query')
+        try: transients = yse_python_queries.run_python_query(unquote(query_name))
+        except KeyError: raise Http404('Invalid Query')
 
     serialized_transients = []
     for vals in field_vals:
