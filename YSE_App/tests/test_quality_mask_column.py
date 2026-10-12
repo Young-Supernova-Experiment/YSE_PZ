@@ -7,7 +7,8 @@
 * WAVELENGTH_MEDIUM_UNKNOWN follows ``wavelength_medium`` on save;
 * ``backfill_quality_mask`` reports in a dry run, writes only with --apply;
 * the readers switched from ``exclude(data_quality__isnull=False)`` to
-  ``quality_mask < USABLE`` return exactly the same rows.
+  ``quality_mask & LEGACY_EXCLUDE == 0`` (spec v7) return exactly the same rows;
+  NOT_PUBLISHED and WAVELENGTH_MEDIUM_UNKNOWN never exclude a row.
 """
 
 import datetime
@@ -22,14 +23,16 @@ from django.utils import timezone
 
 from YSE_App.common import quality_mask_sync
 from YSE_App.common.quality_mask import (
-    USABLE,
+    PHOT_LEGACY_EXCLUDE,
+    SPEC_LEGACY_EXCLUDE,
     HostSpecFlag,
     PhotFlag,
     SpecFlag,
     data_quality_bit,
     data_quality_mask,
     merge_data_quality,
-    quality_lt,
+    is_legacy_flagged,
+    legacy_good,
 )
 from YSE_App.data import PhotometryService, SpectraService
 from YSE_App.models import (
@@ -151,7 +154,7 @@ class ColumnDefaultTests(Fixture):
         spec = TransientSpectrum.objects.get(pk=spec_id)
         self.assertEqual((spec.quality_mask, spec.wavelength_medium, spec.host_subtraction), (0, None, None))
         # good data by both definitions
-        self.assertTrue(TransientPhotData.objects.filter(quality_lt(USABLE), pk=phot_id).exists())
+        self.assertTrue(TransientPhotData.objects.filter(legacy_good('TransientPhotData'), pk=phot_id).exists())
 
 
 class DualWriteTests(Fixture):
@@ -164,9 +167,9 @@ class DualWriteTests(Fixture):
         p.data_quality.add(self.dqs['Quicklook'], self.dqs['Saturation'])
         self.assertEqual(_mask(p), REJECTED | int(PhotFlag.QUICKLOOK) | int(PhotFlag.SATURATED))
         p.data_quality.remove(self.dqs['Bad'], self.dqs['Saturation'])
-        self.assertEqual(_mask(p), REJECTED | int(PhotFlag.QUICKLOOK))
+        self.assertEqual(_mask(p), int(PhotFlag.QUICKLOOK))  # only "Bad" sets REJECTED
         p.data_quality.set([self.dqs['Crowding']])
-        self.assertEqual(_mask(p), REJECTED | int(PhotFlag.BLENDED))
+        self.assertEqual(_mask(p), int(PhotFlag.BLENDED))
         p.data_quality.clear()
         self.assertEqual(_mask(p), 0)
         self.assertEqual(p.quality_mask, 0)
@@ -174,7 +177,7 @@ class DualWriteTests(Fixture):
     def test_unmapped_name_is_other(self):
         p = self.points[1]
         p.data_quality.add(self.dqs['Suspect'])
-        self.assertEqual(_mask(p), REJECTED | OTHER)
+        self.assertEqual(_mask(p), OTHER)
 
     def test_save_after_flagging_keeps_the_mask(self):
         """The clobber path in data_utils flags a row and then saves it."""
@@ -195,27 +198,27 @@ class DualWriteTests(Fixture):
         bad.transientphotdata_set.clear()
         self.assertEqual([_mask(a), _mask(b), _mask(c)], [0, 0, 0])
         self.dqs['Quicklook'].transientspectrum_set.add(self.spectrum)
-        self.assertEqual(_mask(self.spectrum) & ~MEDIUM, REJECTED | int(SpecFlag.QUICKLOOK))
+        self.assertEqual(_mask(self.spectrum) & ~MEDIUM, int(SpecFlag.QUICKLOOK))
 
     def test_other_bits_are_kept(self):
         p = self.points[6]
         TransientPhotData.objects.filter(pk=p.pk).update(quality_mask=int(PhotFlag.NOT_PUBLISHED))
         p.data_quality.add(self.dqs['Masking'])
-        self.assertEqual(_mask(p), int(PhotFlag.NOT_PUBLISHED) | REJECTED | int(PhotFlag.BAD_PIXEL))
+        self.assertEqual(_mask(p), int(PhotFlag.NOT_PUBLISHED) | int(PhotFlag.MASKED))
         p.data_quality.clear()
         self.assertEqual(_mask(p), int(PhotFlag.NOT_PUBLISHED))
 
     def test_host_photometry_and_spectra(self):
         hp = self.host_points[0]
-        hp.data_quality.add(self.dqs['Bad Subtraction'])  # TEMPLATE_SUSPECT is transient-only
-        self.assertEqual(_mask(hp), REJECTED | OTHER)
+        hp.data_quality.add(self.dqs['Bad Subtraction'])
+        self.assertEqual(_mask(hp), int(PhotFlag.BAD_SUBTRACTION))
         hp.data_quality.set([self.dqs['Crowding']])
-        self.assertEqual(_mask(hp), REJECTED | int(PhotFlag.BLENDED))
+        self.assertEqual(_mask(hp), int(PhotFlag.BLENDED))
         hs = self.host_spectra[0]
         hs.data_quality.add(self.dqs['Bad Calibration'])
-        self.assertEqual(_mask(hs) & ~MEDIUM, REJECTED | int(HostSpecFlag.NOT_FLUX_CALIBRATED))
+        self.assertEqual(_mask(hs) & ~MEDIUM, int(HostSpecFlag.NOT_FLUX_CALIBRATED))
         self.spectrum2.data_quality.add(self.dqs['Saturation'])  # no spectrum bit: OTHER
-        self.assertEqual(_mask(self.spectrum2) & ~MEDIUM, REJECTED | OTHER)
+        self.assertEqual(_mask(self.spectrum2) & ~MEDIUM, OTHER)
 
     def test_photstat_sees_the_new_mask(self):
         p = self.points[7]
@@ -248,7 +251,12 @@ class WavelengthMediumTests(Fixture):
         self.assertFalse(_mask(s) & MEDIUM)
 
     def test_unknown_medium_is_still_good_data(self):
-        self.assertTrue(TransientSpectrum.objects.filter(quality_lt(USABLE), pk=self.spectrum.pk).exists())
+        self.assertTrue(TransientSpectrum.objects.filter(legacy_good('TransientSpectrum'), pk=self.spectrum.pk).exists())
+
+    def test_not_published_does_not_exclude(self):
+        p = self.points[0]
+        TransientPhotData.objects.filter(pk=p.pk).update(quality_mask=int(PhotFlag.NOT_PUBLISHED))
+        self.assertTrue(TransientPhotData.objects.filter(legacy_good('TransientPhotData'), pk=p.pk).exists())
 
     def test_flagging_keeps_the_medium_bit(self):
         self.spectrum.data_quality.add(self.dqs['Bad'])
@@ -293,7 +301,7 @@ class BackfillTests(Fixture):
         out = self._run()
         self.assertIn('dry run', out)
         self.assertIn("DataQuality 'Quicklook'", out)
-        self.assertIn("DataQuality 'Suspect' on 1 row(s) -> REJECTED|OTHER", out)
+        self.assertIn("DataQuality 'Suspect' on 1 row(s) -> OTHER", out)
         self.assertEqual(self._snapshot(), stale)  # nothing written
 
         out = self._run('--apply', '--batch-size', '2')
@@ -327,25 +335,37 @@ class MappingTests(TestCase):
     def test_seed_names(self):
         phot = {name: data_quality_bit(name, 'TransientPhotData') for name in SEED_NAMES}
         self.assertEqual(phot, {
-            'Bad': 0,
-            'Masking': int(PhotFlag.BAD_PIXEL),
-            'Bad Subtraction': int(PhotFlag.TEMPLATE_SUSPECT),
+            'Bad': REJECTED,
+            'Masking': int(PhotFlag.MASKED),
+            'Bad Subtraction': int(PhotFlag.BAD_SUBTRACTION),
             'Saturation': int(PhotFlag.SATURATED),
             'Crowding': int(PhotFlag.BLENDED),
             'Bad Calibration': int(PhotFlag.NOT_CALIBRATED),
             'Quicklook': int(PhotFlag.QUICKLOOK),
         })
-        self.assertEqual(data_quality_bit('Bad Subtraction', 'HostPhotData'), OTHER)
+        self.assertEqual(data_quality_bit('Bad Subtraction', 'HostPhotData'), int(PhotFlag.BAD_SUBTRACTION))
         self.assertEqual(data_quality_bit('Quicklook', 'TransientSpectrum'), int(SpecFlag.QUICKLOOK))
         self.assertEqual(data_quality_bit('Masking', 'TransientSpectrum'), OTHER)
-        self.assertEqual(data_quality_bit(' bad ', 'HostSpectrum'), 0)
+        self.assertEqual(data_quality_bit('Bad Calibration', 'HostSpectrum'), int(HostSpecFlag.NOT_FLUX_CALIBRATED))
+        self.assertEqual(data_quality_bit(' bad ', 'HostSpectrum'), REJECTED)
         self.assertEqual(data_quality_bit(None, 'HostSpectrum'), OTHER)
 
-    def test_any_data_quality_is_rejected(self):
+    def test_only_bad_is_rejected_but_every_name_is_legacy_flagged(self):
         for model in ('TransientPhotData', 'HostPhotData', 'TransientSpectrum', 'HostSpectrum'):
             for name in SEED_NAMES + ('anything else',):
-                self.assertGreaterEqual(data_quality_mask([name], model), USABLE)
+                mask = data_quality_mask([name], model)
+                self.assertEqual(bool(mask & REJECTED), name == 'Bad', (model, name))
+                self.assertTrue(is_legacy_flagged(mask, model), (model, name))
             self.assertEqual(merge_data_quality(REJECTED | 1, [], model), 1)
+
+    def test_legacy_exclude_leaves_non_legacy_bits_alone(self):
+        self.assertEqual(PHOT_LEGACY_EXCLUDE, int(
+            PhotFlag.REJECTED | PhotFlag.OTHER | PhotFlag.QUICKLOOK | PhotFlag.MASKED | PhotFlag.BAD_SUBTRACTION
+            | PhotFlag.SATURATED | PhotFlag.BLENDED | PhotFlag.NOT_CALIBRATED))
+        self.assertEqual(SPEC_LEGACY_EXCLUDE, int(
+            SpecFlag.REJECTED | SpecFlag.OTHER | SpecFlag.QUICKLOOK | SpecFlag.NOT_FLUX_CALIBRATED))
+        self.assertFalse(PHOT_LEGACY_EXCLUDE & int(PhotFlag.NOT_PUBLISHED))
+        self.assertFalse(SPEC_LEGACY_EXCLUDE & (int(SpecFlag.NOT_PUBLISHED) | MEDIUM))
 
 
 class ReaderEquivalenceTests(Fixture):
@@ -371,7 +391,7 @@ class ReaderEquivalenceTests(Fixture):
     def test_querysets_match_the_anti_join(self):
         for model in (TransientPhotData, HostPhotData, TransientSpectrum, HostSpectrum):
             old = self._ids(model.objects.exclude(data_quality__isnull=False))
-            new = self._ids(model.objects.filter(quality_lt(USABLE)))
+            new = self._ids(model.objects.filter(legacy_good(model.__name__)))
             self.assertEqual(old, new, model.__name__)
             flagged = self._ids(model.objects.filter(data_quality__isnull=False).distinct())
             self.assertTrue(flagged, model.__name__)

@@ -36,7 +36,7 @@ import math
 from typing import Dict, List, Optional
 
 from YSE_App.common.bandpassdict import bandpassdict
-from YSE_App.common.quality_mask import USABLE
+from YSE_App.common.quality_mask import is_legacy_flagged
 from YSE_App.services import bazin
 
 FLUX_ZERO_POINT = bazin.FLUX_ZERO_POINT
@@ -133,7 +133,7 @@ def photometry_rows(user, transient) -> List[Dict]:
             if mag_err is not None:
                 flux_err = float(bazin.flux_err_from_mag_err(flux, max(mag_err, bazin.MAG_ERR_FLOOR)))
         upper_limit = mag is None and flux is not None and flux_err not in (None, 0) and flux / flux_err < UPPER_LIMIT_SNR
-        flagged = p.quality_mask >= USABLE
+        flagged = is_legacy_flagged(p.quality_mask, 'TransientPhotData')
         sncosmo_band = sncosmo_band_name(instrument, band.name)
         out.append({
             "id": p.pk,

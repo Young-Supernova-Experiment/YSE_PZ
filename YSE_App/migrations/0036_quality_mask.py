@@ -83,7 +83,7 @@ def _mysql_alter(schema_editor, table, clauses):
         # also "Maximum row versions reached ... cannot be added or dropped instantly" (8.0.29+)
         if code not in _INSTANT_REFUSED and 'INSTANT' not in str(exc).upper():
             raise
-        logger.warning('0035: MySQL refused ALGORITHM=INSTANT on %s (%s); retrying with the default algorithm',
+        logger.warning('0036: MySQL refused ALGORITHM=INSTANT on %s (%s); retrying with the default algorithm',
                        table, exc)
         schema_editor.execute(sql)
 
@@ -124,11 +124,11 @@ def backfill(apps, schema_editor):
     for name in ('TransientPhotData', 'HostPhotData', 'TransientSpectrum', 'HostSpectrum'):
         model = apps.get_model('YSE_App', name)
         n = quality_mask_sync.backfill_flagged(model)
-        logger.info('0035: quality_mask set on %d flagged %s row(s)', n, name)
+        logger.info('0036: quality_mask set on %d flagged %s row(s)', n, name)
     for name in ('TransientSpectrum', 'HostSpectrum'):
         model = apps.get_model('YSE_App', name)
         n = quality_mask_sync.backfill_wavelength_medium(model)
-        logger.info('0035: WAVELENGTH_MEDIUM_UNKNOWN set on %d %s row(s)', n, name)
+        logger.info('0036: WAVELENGTH_MEDIUM_UNKNOWN set on %d %s row(s)', n, name)
 
 
 def _mask_field():
@@ -140,7 +140,7 @@ class Migration(migrations.Migration):
     atomic = False
 
     dependencies = [
-        ('YSE_App', '0034_transient_photstat_view'),
+        ('YSE_App', '0035_feedback'),
     ]
 
     operations = [

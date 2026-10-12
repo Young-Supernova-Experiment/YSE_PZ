@@ -1400,9 +1400,9 @@ cd <STACK> && <STACK_PYTHON> manage.py run_jobs --status
 
 <a id="quality-mask"></a>
 
-### Data-quality mask columns, migration 0035 (2026-10-12, #80-#82, #480): one check recommended, per database
+### Data-quality mask columns, migration 0036 (2026-10-12, #80-#82, #480): one check recommended, per database
 
-Migration `0035_quality_mask` adds these columns:
+Migration `0036_quality_mask` adds these columns:
 
 - `quality_mask` (`BIGINT UNSIGNED NOT NULL DEFAULT 0`) to `YSE_App_transientphotdata`, `YSE_App_hostphotdata`, `YSE_App_transientspectrum` and `YSE_App_hostspectrum`;
 - `pixel_mask` (`SMALLINT UNSIGNED NOT NULL DEFAULT 0`) to `YSE_App_transientspecdata` and `YSE_App_hostspecdata`;
@@ -1410,7 +1410,7 @@ Migration `0035_quality_mask` adds these columns:
 
 The defaults are real MySQL column defaults, so `develop`'s INSERTs on the shared `YSE_test` database keep working (#395).
 
-Each `ALTER TABLE` asks for `ALGORITHM=INSTANT` (MySQL 8.0.12+). That is a metadata-only change, so it takes seconds however large the table is, including the very large `YSE_App_transientspecdata`. If MySQL refuses INSTANT for a table, `migrate` logs `0035: MySQL refused ALGORITHM=INSTANT on <table>` and repeats the ALTER without the clause. That fallback may copy the table, which takes minutes to hours for the spec-data table.
+Each `ALTER TABLE` asks for `ALGORITHM=INSTANT` (MySQL 8.0.12+). That is a metadata-only change, so it takes seconds however large the table is, including the very large `YSE_App_transientspecdata`. If MySQL refuses INSTANT for a table, `migrate` logs `0036: MySQL refused ALGORITHM=INSTANT on <table>` and repeats the ALTER without the clause. That fallback may copy the table, which takes minutes to hours for the spec-data table.
 
 The migration sets `lock_wait_timeout` to 60 s. If a long-running query holds a table, the ALTER fails with `Lock wait timeout exceeded` instead of making the site wait behind it. Re-run `migrate`: columns that already exist are skipped.
 
@@ -1429,13 +1429,13 @@ mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT VERSION(); SELECT id, time, L
 2. **After migrating.** Check the migration, the columns and that the ALTERs were instant:
 
 ```
-cd <STACK> && <STACK_PYTHON> manage.py showmigrations YSE_App | grep 0035
+cd <STACK> && <STACK_PYTHON> manage.py showmigrations YSE_App | grep 0036
 mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT table_name, column_name, column_type, column_default, is_nullable FROM information_schema.columns WHERE table_schema = DATABASE() AND column_name IN ('quality_mask','pixel_mask','wavelength_medium','host_subtraction','phot_type') ORDER BY table_name, column_name;"
 mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT name, instant_cols, total_row_versions FROM information_schema.innodb_tables WHERE name LIKE CONCAT(DATABASE(), '/yse_app_%spec%') OR name LIKE CONCAT(DATABASE(), '/yse_app_%photdata');"
 ```
 
 **Expected:**
-- `[X] 0035_quality_mask`.
+- `[X] 0036_quality_mask`.
 - Ten rows. The mask columns are `bigint unsigned` or `smallint unsigned`, with default `0` and nullable `NO`. The other three are `varchar(16)`, default `NULL`, nullable `YES`.
 - In the last query, `total_row_versions` (MySQL 8.0.29+) or `instant_cols` (older 8.0) is greater than 0 for each table. That shows the ALTER was instant. If that column is missing on your MySQL version, the `migrate` log saying nothing about `refused ALGORITHM=INSTANT` is the check.
 
@@ -1447,7 +1447,7 @@ cd <STACK> && <STACK_PYTHON> manage.py backfill_quality_mask
 
 **Expected:**
 - One line per model: `TransientPhotData: N row(s) scanned, M with DataQuality, 0 to update (...)`, and the same for the others.
-- `DataQuality '<name>' on K row(s) -> REJECTED|...` lines listing the flag names in use and the bits they map to.
+- `DataQuality '<name>' on K row(s) -> <FLAG>` lines listing the flag names in use and the bit each maps to (only `Bad` maps to REJECTED).
 - At the end, `dry run: 0 row(s) would change`.
 
 The scan reads every row in 5000-row primary-key batches. Allow about a minute per few million photometry rows.
@@ -1466,7 +1466,7 @@ cd <STACK> && <STACK_PYTHON> manage.py backfill_quality_mask
 5. **Verify that good data is unchanged.** Count photometry by the old rule and by the new one:
 
 ```
-mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT (SELECT COUNT(*) FROM YSE_App_transientphotdata p WHERE NOT EXISTS (SELECT 1 FROM YSE_App_transientphotdata_data_quality d WHERE d.transientphotdata_id = p.id)) AS good_old, (SELECT COUNT(*) FROM YSE_App_transientphotdata WHERE quality_mask < POW(2,51)) AS good_new;"
+mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT (SELECT COUNT(*) FROM YSE_App_transientphotdata p WHERE NOT EXISTS (SELECT 1 FROM YSE_App_transientphotdata_data_quality d WHERE d.transientphotdata_id = p.id)) AS good_old, (SELECT COUNT(*) FROM YSE_App_transientphotdata WHERE (quality_mask & 3384314062438400) = 0) AS good_new;"
 ```
 
 **Expected:** `good_old` equals `good_new`.
@@ -1474,7 +1474,7 @@ mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT (SELECT COUNT(*) FROM YSE_App
 **Rollback:**
 
 ```
-cd <STACK> && <STACK_PYTHON> manage.py migrate YSE_App 0034_transient_photstat_view
+cd <STACK> && <STACK_PYTHON> manage.py migrate YSE_App 0035_feedback
 ```
 
 Run this from this code's checkout, then roll the code back. The older code works with the columns still present, because they have defaults, so you can also roll back only the code. The migration drops the ten columns, using an instant DROP COLUMN where MySQL supports it (8.0.29+); otherwise it rebuilds the table. The DataQuality M2M is untouched, so the masks can be rebuilt from it. What is lost is any `wavelength_medium`, `host_subtraction`, `phot_type` or `pixel_mask` value that someone set by hand.
@@ -1700,7 +1700,7 @@ SELECT CONCAT('GRANT SELECT ON \`', table_schema, '\`.\`', table_name, '\` TO ''
 FROM information_schema.tables WHERE table_schema='<DB>'
 AND table_name NOT LIKE 'auth\_%' AND table_name NOT LIKE 'authtoken\_%' AND table_name NOT LIKE 'axes\_%'
 AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT LIKE 'otp\_%' AND table_name NOT IN ('django_session','django_admin_log',
-'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun');" > /tmp/explorer_grants.sql
+'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun','YSE_App_feedback');" > /tmp/explorer_grants.sql
 wc -l /tmp/explorer_grants.sql
 ```
 
@@ -1996,6 +1996,92 @@ cd <STACK_DIR> && <STACK_PYTHON> manage.py reset_staff_mfa <USERNAME>
 
 **Rollback:** set `STAFF_MFA_REQUIRED: False` (or delete the line) and restart Apache. Sign-in is password-only again at once. Enrolled devices stay in the tables, so turning the flag back on keeps them. To remove the tables as well, while the flag is still on: `<STACK_PYTHON> manage.py migrate otp_totp zero && <STACK_PYTHON> manage.py migrate otp_static zero`. Then set the flag off and restart Apache.
 
+<a id="feedback"></a>
+
+### Feedback button (2026-10-12, #443) optional, off by default, per stack
+
+A "Feedback" button in the navbar lets a signed-in user send a bug report, idea or question. Feedback is **only stored** in the new table `YSE_App_feedback` (migration `0035_feedback`). Staff read it at `/feedback/review/` (or admin > Feedback), edit a draft, and press "Create GitHub issue" to post it to the public repository. Nothing is ever posted automatically, and the sender's name or email is never put in the issue. Until the flag is on, nothing changes: no button, and `POST /feedback/` returns 404. `<STACK_DIR>` / `<STACK_PYTHON>` are from [section 0](#paths).
+
+**(a) Migration.** On yse\_experimental the deploy applies it; yse\_test shares `YSE_test`, so it is already there. On production it runs with the normal `migrate` in [section 3](#prod).
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py showmigrations YSE_App | grep 0035
+```
+**Expected:** `[X] 0035_feedback`. It creates one new table and changes no existing one.
+
+**(b) GitHub token (Ryan, as repository owner).** On GitHub: Settings > Developer settings > Fine-grained tokens > Generate new token. Resource owner `Young-Supernova-Experiment`, repository access "Only select repositories" > `YSE_PZ`, permission **Issues: Read and write** (nothing else), an expiry date. Create the label `feedback` on the repository if it does not exist (Issues > Labels). Keep the token value out of email, chat, notes and `settings.ini`.
+
+**(c) Store the token as an encrypted credential.** Production needs `[secrets] credentials_key` first (step 3.2). Sign in as a superuser, open admin > Encrypted credentials > Add, and enter:
+- Name: `GitHub feedback issues`
+- Service: `github_feedback` (exactly this)
+- Kind: Generic; Owner group and Owner user: blank (staff only); Is active: checked
+- New secret (JSON object): `{"token": "<GITHUB_TOKEN>"}`
+
+Save. **Expected:** the list shows the row with secret `token=••••`. Check without printing the token:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py shell -c "from YSE_App.services.feedback import github_token; print(bool(github_token()))"
+```
+**Expected:** `True`.
+
+**(d) Turn the button on.** In `[site_settings]` of `<STACK_DIR>/YSE_PZ/settings.ini` (or env `YSE_FEEDBACK_ENABLED=1`):
+```ini
+FEEDBACK_ENABLED: True
+```
+Optional keys, with their defaults: `FEEDBACK_MAX_PER_HOUR: 5` (submissions per user per hour), `FEEDBACK_GITHUB_REPO: Young-Supernova-Experiment/YSE_PZ`, `FEEDBACK_GITHUB_LABEL: feedback`. Then:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py check && sudo systemctl restart apache2
+```
+**Expected:** `System check identified no issues (0 silenced).`
+
+**(e) Check.**
+1. Sign in as any user. **Expected:** a "Feedback" button left of "Light mode". Send a test message. **Expected:** "Thank you. Your feedback was saved for the YSE-PZ team to review."
+2. Sign in as staff and open the user menu > "Feedback review". **Expected:** the test item with status New. Open it, then press "Dismiss" (do not post a test issue unless you want one on GitHub). **Expected:** status Dismissed.
+3. Optional, posts a real public issue: on a second test item, edit the draft and press "Create GitHub issue". **Expected:** "GitHub issue created." and a link to the issue, labelled `feedback`, with no sender name. Close that issue on GitHub afterwards.
+
+**(f) Explorer.** The schema browser already hides `YSE_App_feedback`. If you did [Step E](#authz-flags) (per-table grants), the new table is not granted and the generator there now leaves it out:
+```bash
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" | grep -c 'YSE_App_feedback'
+```
+**Expected:** `0`. If the Explorer user still has the database-wide `GRANT SELECT ON <DB>.*`, feedback is readable through Explorer by Explorer users; do Step E before turning the button on.
+
+**Rollback:** set `FEEDBACK_ENABLED: False` (or delete the line) and restart Apache. Stored feedback stays in the table and in the staff review page. To stop posting, untick "Is active" on the credential, or revoke the token on GitHub.
+
+<a id="ghost-removal"></a>
+
+### GHOST removal and requests 2.32.4 (2026-10-12, #613) one check recommended, the rest optional, per stack
+
+The legacy GHOST host-association code is removed ([#613](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/613)). Host association is done by Prost inside the TNS crons, as before. Three classes leave `CRON_CLASSES`: `TNS_uploads.UpdateGHOST`, `host_associate.YSE` and `PS1_PhotoZ.YSE` (none had a crontab line in the inventory). `astro-ghost` is dropped from `requirements.txt`, and `requests` goes from 2.28.2 to 2.32.4 (Python 3.8; the file still resolves as a whole). `[main] ghost_path` stays: it is Prost's scratch directory. No migration. `<STACK_DIR>` / `<STACK_PYTHON>` are from [section 0](#paths).
+
+**(a) Recommended check: no crontab line names a removed cron.** Run as each user that runs crons for the stack:
+```bash
+crontab -l | grep -n -E 'UpdateGHOST|host_associate|PS1_PhotoZ|add_ghost_hosts'
+```
+**Expected:** no output. If a line prints, delete it (`crontab -e`): that cron no longer exists, and `runcrons` would fail with an import error on that line. A bare `manage.py runcrons` line (no class name) needs no change; it just no longer runs the three classes.
+
+**(b) requests 2.32.4 on venvs the deploy does not install** (yse\_test\_virtual, production; the yse\_experimental venv is updated by Deploy Stack). Optional: the code also works on 2.28.2.
+```bash
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip install -r <STACK_DIR>/requirements.txt
+<STACK_PYTHON> -c "import requests; print(requests.__version__)"
+sudo systemctl restart apache2
+```
+**Expected:** `2.32.4`. While `astro-ghost` is still installed, `pip` may print a warning that astro-ghost requires `requests<2.29`. That warning is harmless; step (c) removes it. **Check:** log in on that stack and open a transient page.
+
+**(c) Optional: uninstall astro-ghost.** pip does not remove a package that was dropped from the requirements file.
+```bash
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip uninstall -y astro-ghost
+<STACK_PYTHON> -c "import importlib.util; print(importlib.util.find_spec('astro_ghost'))"
+```
+**Expected:** `None`. Leave TensorFlow and the other packages alone; their removal is #186.
+
+**(d) Optional: delete the GHOST files.** Nothing reads them any more. `<GHOST_PATH>` is the `[main] ghost_path` value in that stack's `settings.ini`; `<CRON_WORKDIR>` is the directory the crons run from.
+```bash
+ls -d <GHOST_PATH>/database 2>/dev/null && du -sh <GHOST_PATH>/database
+rm -rf <GHOST_PATH>/database                     # GHOST.csv and the GHOST catalogue files
+ls -d <CRON_WORKDIR>/transients_20* 2>/dev/null  # dated GHOST scratch trees, if any
+```
+Remove the dated trees only after checking that the listing is GHOST output. Keep `<GHOST_PATH>` itself: Prost writes there. `MLP_lupton.hdf5` and `sfddata-master/` in the stack's `STATIC_ROOT` were read only by `PS1_PhotoZ`; delete them only after checking that nothing else on the server uses them.
+
+**Rollback:** redeploy the previous commit; `pip install -r requirements.txt` from that commit restores `astro-ghost` and `requests` 2.28.2.
+
 ### IERS table refresh (optional cron, per stack) nothing required
 
 Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
@@ -2213,13 +2299,15 @@ Everything still waiting on David, with its source. Rows change status here as t
 | Slack events check, then optional login/session/transport keys per stack | `/slack/events/` needs both `SLACK_ENABLED` and `SLACK_SIGNING_SECRET`; lockout, session length, host/proxy, HTTPS cookies and HSTS are opt-in `[security]` keys | [login, session and transport settings](#authn) | pending |
 | Runbook Part A (yse\_test on develop, dedupe, chown) | Deploy green 07:34; dedupe run 07:37; Ryan confirmed 07:41 | [runbook](https://claude.ai/artifact/Epp8VK8jZm2VqNBDBLUj7c) | done |
 | Migration 0010 on the shared YSE\_test database | Applied by the experimental deploy of #333, 17:23-17:42 UTC | [run 36604581592](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36604581592) | done |
-| `backfill_quality_mask` dry run on YSE\_test (and `--apply` if it reports changes); production after the promotion carrying 0035 | Confirms the mask matches the DataQuality flags; rows that `develop` flags need the `--apply` until develop has this code | [#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80) · [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81) · [section](#quality-mask) | pending |
+| `backfill_quality_mask` dry run on YSE\_test (and `--apply` if it reports changes); production after the promotion carrying 0036 | Confirms the mask matches the DataQuality flags; rows that `develop` flags need the `--apply` until develop has this code | [#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80) · [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81) · [section](#quality-mask) | pending |
 
 <a id="changelog"></a>
 
 ## 6 · Changelog
 
-* 2026-10-12 v42, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0035_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
+* 2026-10-12 v44, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0036_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
+* 2026-10-12 v43, one check recommended, the rest optional. GHOST removal ([#613](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/613)): `UpdateGHOST`, `host_associate` and `PS1_PhotoZ` leave `CRON_CLASSES`, `astro-ghost` leaves `requirements.txt`, and `requests` goes to 2.32.4. New section [GHOST removal](#ghost-removal): check that no crontab line names a removed cron; optional pip upgrade on yse\_test\_virtual and production, `pip uninstall astro-ghost`, and deletion of the GHOST database files. No migration.
+* 2026-10-12 v42, optional (off by default). Feedback button ([#443](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/443)): new section [Feedback button](#feedback). Migration `0035_feedback` (one new table, `YSE_App_feedback`; safe on the shared database). New `[site_settings]` keys `FEEDBACK_ENABLED` (default off; env `YSE_FEEDBACK_ENABLED`), `FEEDBACK_MAX_PER_HOUR`, `FEEDBACK_GITHUB_REPO`, `FEEDBACK_GITHUB_LABEL`. The GitHub token is an encrypted credential with service `github_feedback`, never a settings.ini value. Step E's grant generator now also leaves out `YSE_App_feedback`. No new dependency.
 * 2026-10-12 v41, informational, nothing required. https follow-up ([#441](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/441)): hard-coded http links replaced (own links from `YSE_PUBLIC_BASE_URL`; dead hosts repointed; the two ZTF hosts that refuse https are now `[ztf]` settings with http defaults), new `manage.py https_urls` (dry run by default, `--apply` to write). New section [https follow-up](#https-followup) lays out the Apache vs Django redirect choice and the order redirect, then HSTS with a short max-age; **a decision for David and Ryan, nothing is switched on**. No migration, no dependency.
 * 2026-10-12 v40, one check recommended. Photometry statistics leftovers ([#269](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/269), [#270](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/270), [#271](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/271)): migrations `0033_photstat_extrapolated` (four nullable columns) and `0034_transient_photstat_view` (Explorer view `yse_transient_photstat_v`), applied by the deploy; new section [Photometry statistics view and upkeep jobs](#photstat-view): check the view and the Explorer user's SELECT on it, create it by hand if the deploy user lacks `CREATE VIEW`. New hourly `PhotStatRefresh` cron (in `CRON_CLASSES`, runs from the existing `runcrons` pass; Bazin write-back off by default). No new dependencies.
 * 2026-10-11 v39, optional (off by default). Two-factor sign-in for staff and superusers ([#512](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/512)): new section [Two-factor sign-in for staff](#staff-mfa). New dependencies django-otp 1.5.4 and segno 1.6.6; django-otp's own tables (`otp_totp`, `otp_static`) are created by `manage.py migrate` once the flag is on. New `[security]` keys `STAFF_MFA_REQUIRED` and `STAFF_MFA_ENFORCE_AFTER` (grace date), env `YSE_STAFF_MFA_REQUIRED` / `YSE_STAFF_MFA_ENFORCE_AFTER`, `manage.py reset_staff_mfa` and an admin action to reset a user's authenticator. The Explorer grant generator (Step E) now also leaves out `otp_*` tables. No YSE\_App migration; nothing changes until the flag is set.

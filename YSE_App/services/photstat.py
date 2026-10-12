@@ -68,7 +68,7 @@ from YSE_App.models.phot_stat_models import (
     datetime_to_mjd,
     mjd_to_datetime,
 )
-from YSE_App.common.quality_mask import USABLE
+from YSE_App.common.quality_mask import is_legacy_flagged
 from YSE_App.services import phot_points
 
 logger = logging.getLogger(__name__)
@@ -289,7 +289,7 @@ def points_by_transient(transient_ids: Sequence[int]) -> Dict[int, List[PhotPoin
         grouped[tid].append(PhotPoint(
             mjd=datetime_to_mjd(obs_date), band_id=band_id, band_name=band_name or '',
             mag=mag, mag_err=mag_err, flux=flux, flux_err=flux_err, flux_zero_point=zp,
-            flagged=(mask or 0) >= USABLE,
+            flagged=is_legacy_flagged(mask, 'TransientPhotData'),
         ))
     return grouped
 

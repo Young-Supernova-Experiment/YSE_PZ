@@ -8,7 +8,7 @@ from YSE_App.models.tag_models import *
 from YSE_App.common.utilities import GetSexigesimalString
 from YSE_App.common.utilities import date_to_mjd
 from YSE_App.common.galactic import galactic_coords
-from YSE_App.common.quality_mask import USABLE, quality_lt
+from YSE_App.common.quality_mask import legacy_good
 from YSE_App import models as yse_models
 from django.dispatch import receiver
 from pytz import timezone
@@ -268,7 +268,7 @@ class Transient(BaseModel):
 		phot_ids = all_phot.values('id')
 		phot_data_query = Q(photometry__id__in=phot_ids)
 		disc_query = Q(discovery_point = 1)
-		disc_mag = yse_models.TransientPhotData.objects.filter(quality_lt(USABLE)).filter(phot_data_query & disc_query)
+		disc_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(phot_data_query & disc_query)
 		if len(disc_mag):
 			return disc_mag[0].mag
 		else:
@@ -281,7 +281,7 @@ class Transient(BaseModel):
 		all_phot = yse_models.TransientPhotometry.objects.filter(transient_query)
 		phot_ids = all_phot.values('id')
 		phot_data_query = Q(photometry__id__in=phot_ids)
-		recent_mag = yse_models.TransientPhotData.objects.filter(quality_lt(USABLE)).filter(mag__isnull=False).filter(phot_data_query).order_by('-obs_date')
+		recent_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(mag__isnull=False).filter(phot_data_query).order_by('-obs_date')
 
 		if len(recent_mag):
 			return '%.2f'%(recent_mag[0].mag)
@@ -295,7 +295,7 @@ class Transient(BaseModel):
 		all_phot = yse_models.TransientPhotometry.objects.filter(transient_query)
 		phot_ids = all_phot.values('id')
 		phot_data_query = Q(photometry__id__in=phot_ids)
-		recent_mag = yse_models.TransientPhotData.objects.filter(quality_lt(USABLE)).filter(phot_data_query).order_by('-obs_date')
+		recent_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(phot_data_query).order_by('-obs_date')
 
 		if len(recent_mag):
 			return '%s'%(recent_mag[0].obs_date.strftime(date_format))

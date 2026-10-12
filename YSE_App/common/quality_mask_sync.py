@@ -3,7 +3,7 @@
 The bit rules live in ``quality_mask.py`` (``merge_data_quality``,
 ``apply_wavelength_medium``); this module reads the through tables and writes
 the masks. It works on the live models and on a migration's historical models
-alike (only ``_meta`` and managers are used), so migration 0035 and the
+alike (only ``_meta`` and managers are used), so migration 0036 and the
 ``backfill_quality_mask`` command share it.
 
 Writes use ``QuerySet.update``: no ``save()``/``post_save`` runs, so the
@@ -130,7 +130,7 @@ def scan(model, *, apply: bool, batch_size: int = 5000,
 
 
 def backfill_flagged(model) -> int:
-    """Set the mask of every row that has a DataQuality (migration 0035). Returns rows written."""
+    """Set the mask of every row that has a DataQuality (migration 0036). Returns rows written."""
     through = model._meta.get_field('data_quality').remote_field.through
     owner = _through_owner_attname(model)
     pks = list(through.objects.values_list(owner, flat=True).distinct())
@@ -141,7 +141,7 @@ def backfill_flagged(model) -> int:
 
 
 def backfill_wavelength_medium(model) -> int:
-    """Set WAVELENGTH_MEDIUM_UNKNOWN on every spectrum whose medium is NULL or unknown (migration 0035)."""
+    """Set WAVELENGTH_MEDIUM_UNKNOWN on every spectrum whose medium is NULL or unknown (migration 0036)."""
     from django.db.models import F
 
     from YSE_App.common.quality_mask import SpecFlag, WavelengthMedium

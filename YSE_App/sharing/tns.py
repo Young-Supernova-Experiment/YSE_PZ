@@ -37,7 +37,7 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from YSE_App.common.quality_mask import USABLE, quality_lt
+from YSE_App.common.quality_mask import legacy_good
 from YSE_App.jobs import JobFailed, JobRetry, enqueue, job
 from YSE_App.models.log_models import Log
 from YSE_App.models.phot_models import TransientPhotData
@@ -236,7 +236,7 @@ def _photometry_rows(service: SharingService, transient: Transient):
     qs = (
         TransientPhotData.objects.filter(photometry__transient=transient)
         .select_related("photometry__instrument", "photometry__obs_group", "band")
-        .filter(quality_lt(USABLE))
+        .filter(legacy_good('TransientPhotData'))
         .order_by("obs_date")
     )
     allowed_inst = service.allowed_instrument_ids()

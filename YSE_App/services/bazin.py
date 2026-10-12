@@ -51,7 +51,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from YSE_App.common.filter_display import band_effective_wavelength
-from YSE_App.common.quality_mask import USABLE, quality_lt
+from YSE_App.common.quality_mask import legacy_good
 from YSE_App.services import phot_points
 
 logger = logging.getLogger(__name__)
@@ -477,7 +477,7 @@ def detections_by_transient(transient_ids: Iterable[int]):
         TransientPhotData.objects.filter(
             photometry__transient_id__in=ids, mag__isnull=False, mag_err__isnull=False,
         )
-        .filter(quality_lt(USABLE))
+        .filter(legacy_good('TransientPhotData'))
         .values_list(
             'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
             'mag', 'mag_err', 'flux', 'flux_err', 'modified_date',

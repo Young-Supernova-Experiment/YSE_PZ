@@ -214,8 +214,6 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.Photo_Z.YSE',
 	'YSE_App.data_ingest.SDSS_Photo_Z.YSE',
 	'YSE_App.data_ingest.PS1_cutouts.YSE',
-	'YSE_App.data_ingest.host_associate.YSE',
-	'YSE_App.data_ingest.PS1_PhotoZ.YSE',
 	'YSE_App.data_ingest.Apply_Tags.Tags',
 	'YSE_App.data_ingest.YSE_observations.SurveyObs',
 	'YSE_App.data_ingest.Query_ZTF.AntaresZTF',
@@ -235,7 +233,6 @@ CRON_CLASSES = [
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
     'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
-    'YSE_App.data_ingest.TNS_uploads.UpdateGHOST',
     # Personal-dashboard saved-query cache warmer; no-op unless
     # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
     'YSE_App.data_ingest.Dashboard_Cache_Warm.WarmDashboardQueries',
@@ -374,6 +371,8 @@ TEMPLATES = [
                 'django.template.context_processors.static',
                 # Bare parent template for the SQL Explorer schema iframe (#450).
                 'YSE_App.explorer_shell.explorer_shell',
+                # feedback_enabled for the navbar Feedback button (#443).
+                'YSE_App.context_processors.feedback',
             ],
         },
     },
@@ -718,6 +717,23 @@ API_SERVICE_USERNAMES = [
 EXPLORER_RESTRICTED_ACCESS = _authz_flag('YSE_EXPLORER_RESTRICTED_ACCESS', 'EXPLORER_RESTRICTED_ACCESS')
 EXPLORER_ACCESS_GROUP = config.get('site_settings', 'EXPLORER_ACCESS_GROUP', fallback='explorer_users')
 
+# Feedback button (#443). Off by default: YSE_FEEDBACK_ENABLED=1 or
+# [site_settings] FEEDBACK_ENABLED = True shows the navbar button and accepts
+# POST /feedback/. Feedback is only stored (YSE_App_feedback); staff review it
+# at /feedback/review/ and post an edited version to GitHub by hand. The GitHub
+# token is an EncryptedCredential with service FEEDBACK_GITHUB_CREDENTIAL_SERVICE
+# holding {"token": ...}, never a settings.ini value (runbook).
+_feedback_env = os.environ.get('YSE_FEEDBACK_ENABLED', '').strip().lower()
+if _feedback_env:
+    FEEDBACK_ENABLED = _feedback_env in ('1', 'true', 'yes', 'on')
+else:
+    FEEDBACK_ENABLED = config.getboolean('site_settings', 'FEEDBACK_ENABLED', fallback=False)
+# Submissions per user per rolling hour (counted in the Feedback table).
+FEEDBACK_MAX_PER_HOUR = config.getint('site_settings', 'FEEDBACK_MAX_PER_HOUR', fallback=5)
+FEEDBACK_GITHUB_REPO = config.get('site_settings', 'FEEDBACK_GITHUB_REPO', fallback='Young-Supernova-Experiment/YSE_PZ')
+FEEDBACK_GITHUB_LABEL = config.get('site_settings', 'FEEDBACK_GITHUB_LABEL', fallback='feedback')
+FEEDBACK_GITHUB_CREDENTIAL_SERVICE = 'github_feedback'
+
 EXPLORER_CONNECTIONS = { 'Explorer': 'explorer' }
 EXPLORER_DEFAULT_CONNECTION = 'explorer'
 
@@ -748,6 +764,7 @@ EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
     'sessions_',
     'admin_',
     'YSE_App_encryptedcredential',
+    'YSE_App_feedback',
     'YSE_App_profile',
     'YSE_App_principalinvestigator',
     'YSE_App_externalservicerun',

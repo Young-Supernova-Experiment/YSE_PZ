@@ -1,6 +1,7 @@
 # quality_mask: data-quality bits for photometry and spectra
 
-The spec is final (issue #79, v6, approved 2026-10-11). The code is in
+The spec is final (issue #79: v6, approved 2026-10-11, with the v7 amendments of
+2026-10-12). The code is in
 `YSE_App/common/quality_mask.py`, and `YSE_App/tests/test_quality_mask_defs.py`
 checks that the tables below match it.
 
@@ -16,7 +17,8 @@ Each set bit records one deficiency. A flag is set only when it applies, so
 - **Order.** Higher bits are more serious. A plain integer comparison therefore
   triages quality: `mask < 2**k` means that nothing at bit k or above is set.
 - **Spacing.** Flags sit on even bits, and the odd bits are reserved. A new flag
-  can go between two existing ones without renumbering any stored mask.
+  can go between two existing ones without renumbering any stored mask. v7 used
+  two of them: 23 (BAD_SUBTRACTION) and 41 (MASKED).
 - **Fixed positions in every set:**
   - `REJECTED` = 51.
   - `OTHER` = 50, a catch-all that means "there is an issue; someone should look".
@@ -45,6 +47,7 @@ are `TRANSIENT_PHOT_ALLOWED` and `HOST_PHOT_ALLOWED`.
 | 18 | `POOR_SEEING` (or bad PSF fit) | both |
 | 20 | `LOW_SN` | host |
 | 22 | `TEMPLATE_SUSPECT` | transient |
+| 23 | `BAD_SUBTRACTION` (bad difference image; v7) | both |
 | 24 | `QUICKLOOK` | both |
 | 26 | `BLENDED` | both |
 | 28 | `SHREDDED` (split by the deblender) | host |
@@ -54,6 +57,7 @@ are `TRANSIENT_PHOT_ALLOWED` and `HOST_PHOT_ALLOWED`.
 | 36 | `CR` | both |
 | 38 | `TRAIL_GHOST` (satellite, asteroid, reflection) | both |
 | 40 | `BAD_PIXEL` | both |
+| 41 | `MASKED` (v7) | both |
 | 42 | `SATURATED` (or non-linear) | both |
 | 50 | `OTHER` | both |
 | 51 | `REJECTED` | both |
@@ -137,10 +141,10 @@ threshold's bit or above:
 | `SPEC_BEST` | 2^2 | spectra: also no processing choice flagged (bits 2-10) |
 
 ```python
-from YSE_App.common.quality_mask import USABLE, PHOT_SCIENCE, quality_lt
+from YSE_App.common.quality_mask import PHOT_SCIENCE, legacy_good, quality_lt
 
-TransientPhotData.objects.filter(quality_lt(USABLE))        # the "good data" filter
-TransientPhotData.objects.filter(quality_lt(PHOT_SCIENCE))  # stricter science cut
+TransientPhotData.objects.filter(legacy_good('TransientPhotData'))  # the "good data" filter (see below)
+TransientPhotData.objects.filter(quality_lt(PHOT_SCIENCE))          # an opt-in science cut
 ```
 
 `flags_from_mask(mask, PhotFlag)` lists the flag names in a mask, least serious
@@ -157,7 +161,7 @@ publication entirely, compare `mask >> 1`.
 
 ## Reserved bits
 
-The odd bits 1-49 are reserved, as are the even bits 44-48 in photometry and
+The odd bits 1-49 are reserved (except photometry 23 and 41), as are the even bits 44-48 in photometry and
 34-48 in spectra. Nothing writes them. If one appears, `flags_from_mask` reports
 it as `BIT_<n>`.
 
@@ -166,18 +170,15 @@ it as `BIT_<n>`.
 The `DataQuality` ManyToMany (`data_quality` on photometry and spectra) remains
 in use. While it is, the mask follows it.
 
-- **Any DataQuality sets REJECTED.** Until #82 every row with any DataQuality
-  was left out of the "good data" queries, so `mask < USABLE` keeps exactly the
-  rows that the old `exclude(data_quality__isnull=False)` kept.
-- **Each name adds its own bit.** The mapping is `DATA_QUALITY_PHOT_BITS` and
+- **Each name sets its own bit (spec v7).** Only "Bad" sets REJECTED. The mapping is `DATA_QUALITY_PHOT_BITS` and
   `DATA_QUALITY_SPEC_BITS`, and names compare case-insensitively:
 
   | DataQuality name | Photometry | Spectra |
   |---|---|---|
-  | Bad | REJECTED only | REJECTED only |
+  | Bad | REJECTED (51) | REJECTED (51) |
   | Quicklook | QUICKLOOK (24) | QUICKLOOK (20) |
-  | Masking | BAD_PIXEL (40) | OTHER |
-  | Bad Subtraction | TEMPLATE_SUSPECT (22); OTHER on host photometry | OTHER |
+  | Masking | MASKED (41) | OTHER |
+  | Bad Subtraction | BAD_SUBTRACTION (23) | OTHER |
   | Saturation | SATURATED (42) | OTHER |
   | Crowding | BLENDED (26) | OTHER |
   | Bad Calibration | NOT_CALIBRATED (34) | NOT_FLUX_CALIBRATED (32) |
@@ -185,8 +186,8 @@ in use. While it is, the mask follows it.
 
 - **Dual-write.** An `m2m_changed` receiver on each through table (`signals.py`)
   recomputes the DataQuality-managed bits whenever a flag is added, removed or
-  cleared, from either side of the relation. Those bits are REJECTED, OTHER and
-  every mapped bit; all other bits are kept. The one ingest path that
+  cleared, from either side of the relation. Those bits are `LEGACY_EXCLUDE`;
+  all other bits are kept. The one ingest path that
   bulk-inserts through rows (`data_utils._write_photdata_points`) sets the mask
   itself.
 - **Read-only in the API.** `quality_mask` cannot be written through the REST
@@ -196,7 +197,13 @@ in use. While it is, the mask follows it.
   written by code that does not know the mask (for example `develop` on the
   shared `YSE_test` database) are what it fixes.
 
-The good-data readers use `quality_lt(USABLE)`. These are `PhotometryService`,
+**The good-data filter keeps today's behaviour exactly.** Before #82 any
+DataQuality excluded a row. The readers now use `legacy_good(model)`, which is
+`quality_mask & LEGACY_EXCLUDE = 0`. `LEGACY_EXCLUDE` is the OR of every bit
+the mapping above can set: `PHOT_LEGACY_EXCLUDE` (bits 23, 24, 26, 34, 41,
+42, 50, 51) and `SPEC_LEGACY_EXCLUDE` (bits 20, 32, 50, 51). Bits that never
+come from DataQuality, such as NOT_PUBLISHED and WAVELENGTH_MEDIUM_UNKNOWN,
+do not exclude data. The `<` triage cuts are opt-in per view. The readers are `PhotometryService`,
 `SpectraService`, `table_utils`, the transient detail view,
 `Transient.disc_mag`/`recent_mag`, Bazin, PhotStat, the TNS photometry
 selection and the analysis payload.

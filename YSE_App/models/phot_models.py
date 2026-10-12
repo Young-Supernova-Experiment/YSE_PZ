@@ -81,7 +81,7 @@ class PhotData(BaseModel):
     diffim = models.BooleanField(null=True, blank=True)
     # dq = models.BooleanField(null=True, blank=True)
     # Data-quality bits, 0 = best (YSE_App/common/quality_mask.py, docs/quality-mask.md).
-    # MySQL DEFAULT 0 too (migration 0035), so code that predates the column still inserts.
+    # MySQL DEFAULT 0 too (migration 0036), so code that predates the column still inserts.
     # While DataQuality is in use the DataQuality-managed bits follow that M2M (signals.py).
     quality_mask = models.PositiveBigIntegerField(default=0)
 

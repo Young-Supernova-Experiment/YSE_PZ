@@ -8,7 +8,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.urls import reverse, reverse_lazy
 from django.db.models import Q
-from YSE_App.common.quality_mask import USABLE, quality_lt
+from YSE_App.common.quality_mask import legacy_good
 from rest_framework.renderers import JSONRenderer
 import requests
 from django.template.defaulttags import register
@@ -1825,7 +1825,7 @@ def transient_detail(request, slug):
             good_photdata = TransientPhotData.objects.filter(
                 photometry__transient_id=transient_id,
                 mag__isnull=False,
-            ).filter(quality_lt(USABLE)).select_related('band')
+            ).filter(legacy_good('TransientPhotData')).select_related('band')
             lastphotdata = good_photdata.order_by('-obs_date').first()
             firstphotdata = view_utils.get_disc_mag_from_photdata(good_photdata)
             allphotdata = None
@@ -1844,7 +1844,7 @@ def transient_detail(request, slug):
                 )
                 .prefetch_related('data_quality')
             )
-            good_photdata = allphotdata.filter(quality_lt(USABLE))
+            good_photdata = allphotdata.filter(legacy_good('TransientPhotData'))
             lastphotdata = (
                 good_photdata.filter(mag__isnull=False).order_by('-obs_date').first()
             )

@@ -70,6 +70,7 @@ class PhotFlag(enum.IntFlag):
     POOR_SEEING = 1 << 18           # or bad PSF fit
     LOW_SN = 1 << 20                # host
     TEMPLATE_SUSPECT = 1 << 22      # transient
+    BAD_SUBTRACTION = 1 << 23       # difference image is bad (legacy DataQuality 'Bad Subtraction'; v7)
     QUICKLOOK = 1 << 24
     BLENDED = 1 << 26
     SHREDDED = 1 << 28              # host: split by the deblender
@@ -79,6 +80,7 @@ class PhotFlag(enum.IntFlag):
     CR = 1 << 36
     TRAIL_GHOST = 1 << 38           # satellite, asteroid, reflection
     BAD_PIXEL = 1 << 40
+    MASKED = 1 << 41                # masked (legacy DataQuality 'Masking'; v7)
     SATURATED = 1 << 42             # or non-linear
     OTHER = 1 << OTHER_BIT
     REJECTED = 1 << REJECTED_BIT
@@ -157,6 +159,7 @@ _SHARED_PHOT = {
     PhotFlag.NOT_PUBLISHED, PhotFlag.HIGH_BACKGROUND, PhotFlag.NOT_FULLY_REDUCED,
     PhotFlag.POOR_SEEING, PhotFlag.QUICKLOOK, PhotFlag.BLENDED, PhotFlag.NEAR_EDGE,
     PhotFlag.NOT_CALIBRATED, PhotFlag.CR, PhotFlag.TRAIL_GHOST, PhotFlag.BAD_PIXEL,
+    PhotFlag.BAD_SUBTRACTION, PhotFlag.MASKED,
     PhotFlag.SATURATED, PhotFlag.OTHER, PhotFlag.REJECTED,
 }
 #: Bits a ``TransientPhotData.quality_mask`` may use.
@@ -305,26 +308,30 @@ def allowed_mask(model_name: str) -> int:
 # --------------------------------------------------------------------------
 # DataQuality names -> bits (#81)
 # --------------------------------------------------------------------------
-# While the DataQuality ManyToMany stays in use, the mask follows it: every row
-# with at least one DataQuality is REJECTED (today every flagged row is left
-# out of the "good data" queries, so ``mask < USABLE`` keeps exactly the rows
-# the old anti-join kept), plus the bit its name maps to. A name with no bit
-# here, or whose bit the model's set does not use, adds OTHER. Names compare
-# case-insensitively, ignoring surrounding spaces. ``0`` = REJECTED only.
+# Spec v7 (#79): while the DataQuality ManyToMany stays in use, the mask
+# follows it. Each name sets its own bit; only "Bad" sets REJECTED. A name with
+# no bit here adds OTHER. Names compare case-insensitively, ignoring spaces.
+#
+# Today every row with any DataQuality is left out of the "good data" queries,
+# so the readers keep exactly that behaviour with ``mask & LEGACY_EXCLUDE == 0``
+# (:func:`legacy_good`), where LEGACY_EXCLUDE is the OR of every bit this
+# mapping can set. Bits that never come from DataQuality (NOT_PUBLISHED,
+# WAVELENGTH_MEDIUM_UNKNOWN, ...) do not exclude data. ``<`` triage cuts are
+# opt-in per view.
 
 DATA_QUALITY_PHOT_BITS = {
-    'bad': 0,
-    'masking': int(PhotFlag.BAD_PIXEL),
-    'bad subtraction': int(PhotFlag.TEMPLATE_SUSPECT),  # transient only; OTHER on host photometry
+    'bad': int(PhotFlag.REJECTED),
+    'quicklook': int(PhotFlag.QUICKLOOK),
+    'masking': int(PhotFlag.MASKED),
+    'bad subtraction': int(PhotFlag.BAD_SUBTRACTION),
     'saturation': int(PhotFlag.SATURATED),
     'crowding': int(PhotFlag.BLENDED),
     'bad calibration': int(PhotFlag.NOT_CALIBRATED),
-    'quicklook': int(PhotFlag.QUICKLOOK),
 }
 DATA_QUALITY_SPEC_BITS = {
-    'bad': 0,
-    'bad calibration': int(SpecFlag.NOT_FLUX_CALIBRATED),
+    'bad': int(SpecFlag.REJECTED),
     'quicklook': int(SpecFlag.QUICKLOOK),
+    'bad calibration': int(SpecFlag.NOT_FLUX_CALIBRATED),
 }
 _DATA_QUALITY_BITS = {
     'TransientPhotData': DATA_QUALITY_PHOT_BITS,
@@ -333,15 +340,21 @@ _DATA_QUALITY_BITS = {
     'HostSpectrum': DATA_QUALITY_SPEC_BITS,
 }
 
+#: Every bit the legacy DataQuality mapping can set (mapped bits plus OTHER).
+PHOT_LEGACY_EXCLUDE = _union(DATA_QUALITY_PHOT_BITS.values()) | NO_OTHER
+SPEC_LEGACY_EXCLUDE = _union(DATA_QUALITY_SPEC_BITS.values()) | NO_OTHER
+LEGACY_EXCLUDE = {
+    'TransientPhotData': PHOT_LEGACY_EXCLUDE,
+    'HostPhotData': PHOT_LEGACY_EXCLUDE,
+    'TransientSpectrum': SPEC_LEGACY_EXCLUDE,
+    'HostSpectrum': SPEC_LEGACY_EXCLUDE,
+}
+
 
 def data_quality_bit(name: Optional[str], model_name: str) -> int:
-    """The bit (without REJECTED) that DataQuality ``name`` sets on ``model_name``; OTHER if none."""
-    table = _DATA_QUALITY_BITS[model_name]
-    key = (name or '').strip().lower()
-    if key not in table:
-        return 1 << OTHER_BIT
-    bit = table[key]
-    if bit and not (bit & allowed_mask(model_name)):
+    """The bit DataQuality ``name`` sets on ``model_name``; OTHER if it has none."""
+    bit = _DATA_QUALITY_BITS[model_name].get((name or '').strip().lower())
+    if bit is None or not (bit & allowed_mask(model_name)):
         return 1 << OTHER_BIT
     return bit
 
@@ -350,22 +363,42 @@ def data_quality_mask(names: Iterable[Optional[str]], model_name: str) -> int:
     """The DataQuality-managed part of the mask for a row flagged with ``names`` (0 if none)."""
     mask = 0
     for name in names:
-        mask |= USABLE | data_quality_bit(name, model_name)
+        mask |= data_quality_bit(name, model_name)
     return mask
 
 
 def data_quality_managed(model_name: str) -> int:
-    """Bits that :func:`merge_data_quality` owns on ``model_name`` (REJECTED, OTHER, every mapped bit)."""
-    mask = USABLE | NO_OTHER
-    for bit in _DATA_QUALITY_BITS[model_name].values():
-        if bit & allowed_mask(model_name):
-            mask |= bit
-    return mask
+    """Bits that :func:`merge_data_quality` owns on ``model_name``: :data:`LEGACY_EXCLUDE`."""
+    return LEGACY_EXCLUDE[model_name]
 
 
 def merge_data_quality(old_mask: Optional[int], names: Iterable[Optional[str]], model_name: str) -> int:
     """``old_mask`` with its DataQuality-managed bits replaced by those of ``names``; other bits kept."""
     return (int(old_mask or 0) & ~data_quality_managed(model_name)) | data_quality_mask(names, model_name)
+
+
+def is_legacy_flagged(mask: Optional[int], model_name: str) -> bool:
+    """Whether ``mask`` carries a bit the legacy DataQuality mapping sets (the old "flagged")."""
+    return bool(int(mask or 0) & LEGACY_EXCLUDE[model_name])
+
+
+class BitsClear(models.Lookup):
+    """``field__bits_clear=X``: ``(field & X) = 0`` (registered on PositiveBigIntegerField)."""
+
+    lookup_name = 'bits_clear'
+
+    def as_sql(self, compiler, connection):
+        lhs, lhs_params = self.process_lhs(compiler, connection)
+        rhs, rhs_params = self.process_rhs(compiler, connection)
+        return '(%s & %s) = 0' % (lhs, rhs), list(lhs_params) + list(rhs_params)
+
+
+models.PositiveBigIntegerField.register_lookup(BitsClear)
+
+
+def legacy_good(model_name: str, field: str = 'quality_mask') -> Q:
+    """The "good data" filter: no bit the legacy DataQuality mapping sets (spec v7)."""
+    return Q(**{'%s__bits_clear' % field: LEGACY_EXCLUDE[model_name]})
 
 
 def describe() -> Dict[str, List[tuple]]:

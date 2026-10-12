@@ -406,7 +406,6 @@ class NotificationAdmin(admin.ModelAdmin):
 	search_fields = ("recipient__username", "subject", "text")
 	readonly_fields = ("created", "delivered")
 	raw_id_fields = ("recipient", "transient")
-	date_hierarchy = "created"
 	list_select_related = ("recipient",)
 
 	def delivery_summary(self, obj):
@@ -581,7 +580,6 @@ class UserFavoriteTransientAdmin(admin.ModelAdmin):
 	list_display = ("user", "transient", "created")
 	search_fields = ("user__username", "transient__name")
 	raw_id_fields = ("user", "transient")
-	date_hierarchy = "created"
 	list_select_related = ("user", "transient")
 
 
@@ -759,6 +757,34 @@ class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
 	list_filter = ("ai_enabled",)
 	search_fields = ("user__username",)
 	raw_id_fields = ("user",)
+
+
+from django.urls import reverse as _reverse  # noqa: E402
+from django.utils.html import format_html as _format_html  # noqa: E402
+
+from YSE_App.models.feedback_models import Feedback  # noqa: E402
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+	"""Feedback button rows (#443). Posting to GitHub is only on the staff review page."""
+	list_display = ("id", "created", "kind", "title", "status", "page_url", "review_link")
+	list_filter = ("status", "kind")
+	search_fields = ("title", "text", "page_url")
+	readonly_fields = ("user", "kind", "title", "text", "page_url", "created", "github_issue_url",
+					   "reviewed_by", "reviewed_at", "review_link")
+	fields = ("status", "review_link", "user", "created", "kind", "title", "text", "page_url",
+			  "github_issue_url", "reviewed_by", "reviewed_at")
+
+	def has_add_permission(self, request):
+		return False
+
+	def review_link(self, obj):
+		if not obj or not obj.pk:
+			return ""
+		return _format_html('<a href="{}">Review / create GitHub issue</a>', _reverse("feedback_review_detail", args=[obj.pk]))
+
+	review_link.short_description = "review"
 
 
 # Two-factor sign-in (#512): superuser action on Users to reset a user's devices.

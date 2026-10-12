@@ -1,6 +1,6 @@
 from YSE_App.models import *
 from django.db.models import Q
-from YSE_App.common.quality_mask import USABLE, quality_lt
+from YSE_App.common.quality_mask import legacy_good
 from YSE_App.services.visibility import get_user_group_query as GetUserGroupQuery
 
 def GetAuthorizedTransientSpectrum_ByUser(user, includeBadData=True):
@@ -74,10 +74,10 @@ def _GetTransientSpectrum(includeBadData,filter):
     if includeBadData:
         return TransientSpectrum.objects.filter(filter)
     else:
-        return TransientSpectrum.objects.filter(quality_lt(USABLE)).filter(filter)
+        return TransientSpectrum.objects.filter(legacy_good('TransientSpectrum')).filter(filter)
 
 def _GetHostSpectrum(includeBadData, filter):
     if includeBadData:
         return HostSpectrum.objects.filter(filter)
     else:
-        return HostSpectrum.objects.filter(quality_lt(USABLE)).filter(filter)
+        return HostSpectrum.objects.filter(legacy_good('HostSpectrum')).filter(filter)

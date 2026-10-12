@@ -1,6 +1,6 @@
 """Check, and with ``--apply`` fix, ``quality_mask`` against the DataQuality M2M (#81).
 
-Migration ``0035_quality_mask`` fills the mask for every flagged row and the
+Migration ``0036_quality_mask`` fills the mask for every flagged row and the
 ``m2m_changed`` receivers keep it current, so on a healthy database this
 reports nothing to change. It is needed after writes that bypass the signals
 (``develop`` code on the shared ``YSE_test`` database, raw SQL, a restore)::
@@ -10,8 +10,8 @@ reports nothing to change. It is needed after writes that bypass the signals
   python manage.py backfill_quality_mask --model TransientSpectrum --batch-size 2000
 
 For each row it recomputes the DataQuality-managed bits
-(``quality_mask.merge_data_quality``: REJECTED plus the mapped bit, OTHER for
-unmapped names) and, on spectra, WAVELENGTH_MEDIUM_UNKNOWN from
+(``quality_mask.merge_data_quality``: the bit each name maps to, OTHER for
+unmapped names; only "Bad" sets REJECTED) and, on spectra, WAVELENGTH_MEDIUM_UNKNOWN from
 ``wavelength_medium``. Other bits are kept. Rows are read in primary-key
 batches (``--batch-size``, default 5000); each batch's fixes are one UPDATE per
 distinct mask value. Output lists the DataQuality names found and the bit each
@@ -73,7 +73,7 @@ class Command(BaseCommand):
                 'updated' if apply else 'to update', time.perf_counter() - started))
             for dq_name, count in sorted(stats['by_name'].items(), key=lambda kv: str(kv[0])):
                 bit = qm.data_quality_bit(dq_name, name)
-                flags = ['REJECTED'] + [f for f in qm.flags_from_mask(bit, flag_cls)]
+                flags = qm.flags_from_mask(bit, flag_cls)
                 self.stdout.write('  DataQuality %r on %d row(s) -> %s' % (dq_name, count, '|'.join(flags)))
             for line in shown:
                 self.stdout.write(line)

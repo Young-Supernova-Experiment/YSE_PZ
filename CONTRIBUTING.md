@@ -81,7 +81,7 @@ Edit `docker/.env` so paths are **absolute** (required for Docker Desktop on mac
 - `VOL` — repo root
 - `VOL_DB` — e.g. `…/YSE_PZ/database`
 - `STATIC_VOL` — e.g. `…/YSE_PZ/YSE_PZ/static`
-- `VOL_GHOST` — e.g. `…/YSE_PZ/ghost_logs`
+- `VOL_GHOST` — e.g. `…/YSE_PZ/ghost_logs` (Prost's scratch directory, `ghost_path`; the name is left over from GHOST)
 
 Then from the repo root:
 
