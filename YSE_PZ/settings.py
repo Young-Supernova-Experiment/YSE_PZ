@@ -273,6 +273,13 @@ CRON_CLASSES = [
 # settings.ini overrides the 30-day default.
 DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RETENTION_DAYS', fallback=30)
 
+# yse_home "Next Telescope Nights" lists classical observing dates up to this
+# many days ahead (#65). Optional env YSE_HOME_CLASSICAL_DAYS_AHEAD or
+# [site_settings] CLASSICAL_DAYS_AHEAD in settings.ini; default 30.
+YSE_HOME_CLASSICAL_DAYS_AHEAD = _int_setting(
+    'YSE_HOME_CLASSICAL_DAYS_AHEAD', 'site_settings', 'CLASSICAL_DAYS_AHEAD', 30
+)
+
 # django_cron's default CacheLock lives in the 'default' cache, which is the
 # per-process LocMemCache unless REDIS_URL is set, so two `runcrons` processes
 # never see each other's lock and a slow job overlaps the next pass (#472).

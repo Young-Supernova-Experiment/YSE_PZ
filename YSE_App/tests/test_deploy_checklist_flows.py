@@ -514,7 +514,9 @@ class DeployChecklistFlowTests(TestCase):
                 begin_date_valid=utc_days_from_now(days, hour=0),
                 end_date_valid=utc_days_from_now(days + 1, hour=0), **audit)
             res.groups.add(self.yse_group)
-            return res
+            # yse_home lists ClassicalObservingDate rows, one per night (#65)
+            return ClassicalObservingDate.objects.create(
+                resource=res, night_type=self.night_type, obs_date=res.begin_date_valid, **audit)
 
         swope_night = classical(swope, 12)        # hidden before: Swope, and > 5 days out
         soon_night = classical(self.telescope, 2)
