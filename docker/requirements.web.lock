@@ -8,12 +8,13 @@
 # Also hand-added for #512 (same pins as requirements.txt): django-otp, segno (two-factor
 # sign-in for staff; used only with [security] STAFF_MFA_REQUIRED). CI installs them too.
 # requests 2.25.1 / idna 2.6 stay as frozen (requests caps idna below 3).
+# astro-ghost removed by hand (#619; GHOST is no longer used). It stays installed in the
+# current image until the image is rebuilt; nothing imports it.
 absl-py==2.1.0
 alerce==1.0.1
 antares-client==1.2.0
 asgiref==3.4.1
 asn1crypto==0.24.0
-astro-ghost==2.0.16
 astroplan==0.8
 astropy==5.0
 astropy-helpers==4.0.1

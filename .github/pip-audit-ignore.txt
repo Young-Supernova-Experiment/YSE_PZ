@@ -24,7 +24,8 @@ GHSA-8qcx-xf44-272x    # django 3.2.25 (fixed in 5.2.16,6.0.7)
 # --- Pinned in #539 at the newest release that the deployed stack allows: Python 3.8
 # (Pillow, sqlparse, tornado, Werkzeug), Django 3.2 (djangorestframework 3.15.2+
 # needs Django 4.2), TensorFlow 2.13.1's typing-extensions<4.6 (cryptography 46+),
-# astro-ghost 2.0.16's requests<2.29 (requests), and the urllib3 1.26 line (urllib3 2
+# Python 3.8 again for requests (2.33+ needs Python 3.10; the old astro-ghost
+# requests<2.29 cap is gone, #619), and the urllib3 1.26 line (urllib3 2
 # needs OpenSSL 1.1.1+ on the host).
 PYSEC-2026-36          # cryptography 45.0.7 (fixed in 46.0.7)
 PYSEC-2026-35          # cryptography 45.0.7 (fixed in 46.0.6)
@@ -53,10 +54,7 @@ PYSEC-2026-3495        # pillow 10.4.0 (fixed in 12.3.0)
 PYSEC-2026-3496        # pillow 10.4.0 (fixed in 12.3.0)
 PYSEC-2026-3494        # pillow 10.4.0 (fixed in 12.3.0)
 PYSEC-2026-3493        # pillow 10.4.0 (fixed in 12.3.0)
-PYSEC-2023-74          # requests 2.28.2 (fixed in 2.31.0)
-PYSEC-2026-1873        # requests 2.28.2 (fixed in 2.32.0)
-PYSEC-2026-1872        # requests 2.28.2 (fixed in 2.32.4)
-PYSEC-2026-2275        # requests 2.28.2 (fixed in 2.33.0)
+PYSEC-2026-2275        # requests 2.32.4 (fixed in 2.33.0)
 PYSEC-2026-3698        # sqlparse 0.5.5 (fixed in 0.6.0)
 PYSEC-2026-3697        # sqlparse 0.5.5 (fixed in 0.6.0)
 PYSEC-2026-3699        # sqlparse 0.5.5 (fixed in 0.6.0)

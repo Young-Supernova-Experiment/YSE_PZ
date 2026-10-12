@@ -42,8 +42,9 @@ the PR but the Merge button still works.
 ## Dependencies
 
 `requirements.txt` is the web/app runtime (Apache/mod_wsgi and the django_cron
-ingest jobs; it still carries TensorFlow because `astro-ghost` declares it as a
-hard dependency); `requirements-ingest.txt` layers the machine-learning extras
+ingest jobs; it still carries TensorFlow for the `Photo_Z` / `SDSS_Photo_Z` crons
+until #186, although `astro-ghost`, which first pulled it in, was dropped in #613);
+`requirements-ingest.txt` layers the machine-learning extras
 nothing in the web venv imports (RAPID/TCN, TensorFlow-addons) on top of it for a
 cron or analysis environment. Both install without `--no-deps`. Django stays on
 the 3.2 LTS line until the Django 4 upgrade (#133) is scheduled.
@@ -53,7 +54,7 @@ the 3.2 LTS line until the Django 4 upgrade (#133) is scheduled.
 - `.github/workflows/pip-audit.yml` audits the exact pins of both files (Django as
   3.2.25) when they change and every Monday. It fails only on advisories missing from
   `.github/pip-audit-ignore.txt`, the accepted baseline with a reason per group (Django
-  3.2 by decision, pins held back by Python 3.8 / TensorFlow / astro-ghost, older pins
+  3.2 by decision, pins held back by Python 3.8 / TensorFlow, older pins
   left for #186). When a package is upgraded past a fix, delete its lines; add a line
   only with a reason.
 - `.github/dependabot.yml` opens weekly pip and GitHub Actions update PRs into

@@ -21,11 +21,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from YSE_App.util.TNS_Synopsis import mastrequests
 #from YSE_App.data_ingest.TNS_uploads import get_ps_score
-from astro_ghost.ghostHelperFunctions import *
-try:
-    from astro_ghost.photoz_helper import calc_photoz
-except:
-    pass
+import numpy as np
 import datetime
 import json
 from astropy.time import Time
@@ -253,8 +249,6 @@ class DECam_clusters(CronJobBase):
                               help='email password, if post=True (default=%default)')
             parser.add_argument('--dburl', default=config.get('main','dburl'), type=str,
                               help='URL to POST transients to a database (default=%default)')
-            parser.add_argument('--ghost_path', default=config.get('main','ghost_path'), type=str,
-                                help='GHOST data directory (default=%default)')
             parser.add_argument('--ztfurl', default=config.get('ztf','ztfurl'), type=str,
                               help='ZTF URL (default=%default)')
             parser.add_argument('--STATIC', default=config.get('site_settings','STATIC'), type=str,
@@ -276,22 +270,6 @@ class DECam_clusters(CronJobBase):
 
         return(parser)
 
-    def getGHOSTData(self,sc,ghost_host):
-        hostdict = {}; hostcoords = ''
-        hostdict = {'name':ghost_host['objName'].to_numpy()[0],'ra':ghost_host['raMean'].to_numpy()[0],
-                    'dec':ghost_host['decMean'].to_numpy()[0]}
-
-        hostcoords = f"ra={hostdict['ra']:.7f}, dec={hostdict['dec']:.7f}\n"
-        if 'photo_z' in ghost_host.keys():
-            hostdict['photo_z_internal'] = ghost_host['photo_z'].to_numpy()[0]
-        if 'NED_redshift' in ghost_host.keys() and ghost_host['NED_redshift'].to_numpy()[0] == ghost_host['NED_redshift'].to_numpy()[0]:
-            hostdict['redshift'] = ghost_host['NED_redshift'].to_numpy()[0]
-
-        if 'photo_z_internal' in hostdict.keys():
-            if hostdict['photo_z_internal'] != hostdict['photo_z_internal']:
-                hostdict['photo_z_internal'] = None
-
-        return hostdict,hostcoords
     
     def main(self):
         date = datetime.datetime.now()-datetime.timedelta(self.options.max_decam_days)
@@ -312,8 +290,6 @@ class DECam_clusters(CronJobBase):
 
         # prelims
         transientdict = {}
-        if not os.path.exists(f'{self.options.ghost_path}/database/GHOST.csv'):
-            getGHOST(real=True, verbose=True, installpath=self.options.ghost_path)
 
         nowdate = datetime.datetime.now()
         numdays = (datetime.datetime.now()-date).days
@@ -370,24 +346,6 @@ class DECam_clusters(CronJobBase):
                             except:
                                 ps_prob = None
 
-                            # run GHOST
-                            #import pdb; pdb.set_trace()
-                            try:
-                                ghost_hosts = getTransientHosts(
-                                    ['tmp'+candid],[SkyCoord(ra,dec,unit=(u.hour,u.deg))], verbose=True, starcut='gentle', ascentMatch=False,
-                                    GHOSTpath=self.options.ghost_path)
-                                ghost_hosts = calc_photoz(ghost_hosts)
-                            except:
-                                ghost_hosts = None
-
-                            if ghost_hosts is not None:
-                                ghost_host = ghost_hosts[ghost_hosts['TransientName'] == candid]
-                                if not len(ghost_host): ghost_host = None
-                            else:
-                                ghost_host = None
-                        else:
-                            ghost_host = None
-
                         # is the most recent photometry greater than what exists on YSE-PZ?
                         if transient_exists:
                             tdate = dateutil.parser.parse(mjd_to_date(np.max(lcdata['MJD'])))
@@ -408,11 +366,6 @@ class DECam_clusters(CronJobBase):
                                  'tags':['DECAT']}
                         if not transient_exists:
                             tdict['point_source_probability'] = ps_prob
-
-                        if ghost_host is not None:
-                            hostdict,hostcoords = self.getGHOSTData(sc,ghost_host)
-                            tdict['host'] = hostdict
-                            tdict['candidate_hosts'] = hostcoords
 
 
                         PhotUploadAll = {"mjdmatchmin":0.01,
