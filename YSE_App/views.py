@@ -28,8 +28,15 @@ from astropy.utils import iers
 
 logger = logging.getLogger(__name__)
 QUERY_CACHE_VERSION = os.environ.get('YSE_QUERY_CACHE_VERSION', '2')
-# yse_home "Next Telescope Nights": classical runs starting within this many days (#397).
+# yse_home "Next Telescope Nights": classical nights within this many days (#397, #65).
+# Default; settings.YSE_HOME_CLASSICAL_DAYS_AHEAD (settings.ini / env) overrides it.
 YSE_HOME_CLASSICAL_DAYS_AHEAD = 30
+
+
+def _yse_home_classical_days_ahead():
+    from django.conf import settings as _settings
+
+    return int(getattr(_settings, 'YSE_HOME_CLASSICAL_DAYS_AHEAD', YSE_HOME_CLASSICAL_DAYS_AHEAD))
 # Web workers never wait on an IERS download (#466); the refresh cron in the runbook does it.
 iers.conf.auto_download = False
 from astropy.utils.iers import conf
@@ -922,11 +929,14 @@ def too_requests(request, telescope, pi_name):
         raise Http404('No active ToO resource found for this telescope/PI')
 
     from YSE_App.services.followup_requests import requests_prefetch
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     follow_requests = TransientFollowup.objects.filter(too_resource = too_resource).\
         filter(valid_start__lte = too_resource.end_date_valid).\
         filter(valid_stop__gte = too_resource.begin_date_valid).\
-        filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed')).\
+        filter(Q(status__name='Requested') | Q(status__name='InProcess') | Q(status__name='Failed'))
+    # only the follow-ups this user may see (#499), as on the follow-up page
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related().prefetch_related(requests_prefetch())
 
     followuptransientfilter = FollowupFilter(
@@ -1052,14 +1062,19 @@ def yse_home(request):
         else:
             context[key] = _yse_home_section_tuple(request, section)
 
-    #obsnights = view_utils.get_obs_nights_happening_soon(request.user)
-    # Upcoming classical nights, all telescopes (Swope included), far enough ahead
-    # that a run added from the form below shows up here (#397).
+    # Upcoming classical nights, all telescopes (Swope included), one row per
+    # ClassicalObservingDate (#65), far enough ahead that a run added from the
+    # form below shows up here (#397). A night stays listed until the morning
+    # after it at the observatory, as in the follow-up form's pulldown.
+    from YSE_App.services.classical_nights import upcoming_classical_nights
+
     now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
-    obsnights = ObservingResourceService.GetAuthorizedClassicalResource_ByUser(request.user).\
-        filter(begin_date_valid__lte=now_utc+datetime.timedelta(YSE_HOME_CLASSICAL_DAYS_AHEAD)).\
-        filter(end_date_valid__gte=now_utc).\
-        select_related('telescope', 'principal_investigator').order_by('begin_date_valid')
+    classical_days_ahead = _yse_home_classical_days_ahead()
+    obsnights = upcoming_classical_nights(
+        ObservingResourceService.GetAuthorizedClassicalObservingDate_ByUser(request.user),
+        classical_days_ahead,
+        now=now_utc,
+    )
 
     # Only allocations still valid, soonest first; expired ones made the list a
     # long alphabetical history in which a new resource was hard to find (#396).
@@ -1092,6 +1107,7 @@ def yse_home(request):
                'date_start': datetime.datetime.now().__str__().split()[0],
                'date_end': (datetime.datetime.now()+datetime.timedelta(1)).__str__().split()[0],
                'upcoming_observing_nights':obsnights,
+               'classical_days_ahead':classical_days_ahead,
                'too_resources':too_resources,
                'all_transient_statuses':all_transient_statuses,
                'survey_fields_tonight':survey_fields_tonight,
@@ -1263,14 +1279,11 @@ def observing_night(request, telescope, obs_date, pi_name):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date/PI')
 
-    #follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-    #    filter(valid_start__lte = classical_obs_date.obs_date).\
-    #    filter(valid_stop__gte = classical_obs_date.obs_date).select_related()
+    from YSE_App.services.classical_nights import night_followups
     from YSE_App.services.followup_requests import requests_prefetch
 
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.resource.begin_date_valid).\
-        filter(valid_stop__gte = classical_obs_date.resource.end_date_valid).\
+    # follow-ups whose window contains this night (#64), only those this user may see (#499)
+    follow_requests = night_followups(classical_obs_date, request.user).\
         select_related().prefetch_related(requests_prefetch())
 
     followuptransientfilter = FollowupFilter(request.GET, queryset=follow_requests,prefix=telescope)
@@ -1361,8 +1374,8 @@ def yse_observing_night(request, obs_date):
 
 @login_required
 def download_target_list(request, telescope, obs_date):
+    from YSE_App.services.classical_nights import night_followups
     from YSE_App.services.followup_requests import format_comments, requests_prefetch
-    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1371,10 +1384,8 @@ def download_target_list(request, telescope, obs_date):
     classical_obs_date = classical_obs_date.first()
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
-    # only the follow-ups this user may see (#499)
-    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
+    # same follow-ups as the observing-night page (#64), only those this user may see (#499)
+    follow_requests = night_followups(classical_obs_date, request.user).\
         select_related('transient').prefetch_related(requests_prefetch())
 
     location = EarthLocation.from_geodetic(
@@ -1416,7 +1427,7 @@ def download_target_list(request, telescope, obs_date):
 
 @login_required
 def download_targets_and_finders(request, telescope, obs_date):
-    from YSE_App.services.visibility import filter_transient_followups_for_user
+    from YSE_App.services.classical_nights import night_followups
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1425,10 +1436,8 @@ def download_targets_and_finders(request, telescope, obs_date):
     classical_obs_date = classical_obs_date.first()
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
-    follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
-    # only the follow-ups this user may see (#499)
-    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
+    # same follow-ups as the observing-night page (#64), only those this user may see (#499)
+    follow_requests = night_followups(classical_obs_date, request.user).\
         select_related('transient')
 
     location = EarthLocation.from_geodetic(

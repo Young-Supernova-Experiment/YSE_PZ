@@ -94,9 +94,9 @@
             <tbody>
               {% for n in upcoming_observing_nights %}
                 <tr>
-                    <td>{{ n.telescope }}</td>
-                    <td data-order="{{ n.begin_date_valid|date:'c' }}">{{ n.begin_date_valid|date:'Y-m-d' }}</td>
-                    <td>{{ n.principal_investigator|default:'' }}</td>
+                    <td>{{ n.resource.telescope }}</td>
+                    <td data-order="{{ n.obs_date|date:'c' }}"><a href="{% if n.resource.principal_investigator %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' n.resource.principal_investigator.name %}{% else %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' 'None' %}{% endif %}">{{ n.obs_date|date:'Y-m-d' }}</a></td>
+                    <td>{{ n.resource.principal_investigator|default:'' }}</td>
                 </tr>
               {% endfor %}
               </tbody>
