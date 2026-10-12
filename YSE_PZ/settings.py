@@ -812,7 +812,13 @@ SCISERVER_USER = os.environ.get('SCISERVER_USER') or config.get('main', 'sciserv
 SCISERVER_PASSWORD = os.environ.get('SCISERVER_PASSWORD') or config.get('main', 'sciserverpass', fallback='')
 # Optional CA bundle path for the Gemini ODB; empty uses the system trust store.
 GEMINI_CA_BUNDLE = os.environ.get('GEMINI_CA_BUNDLE') or config.get('main', 'gemini_ca_bundle', fallback='')
-KEPLER_API_ENDPOINT = "http://api.keplerscience.org/is-k2-observing"
+KEPLER_API_ENDPOINT = _str_setting('YSE_KEPLER_API_ENDPOINT', 'main', 'kepler_api_endpoint',
+                                   'https://api.keplerscience.org/is-k2-observing')
+# ZTF hosts that refuse https today; override in [ztf] / env once they are fixed (#441).
+ZTF_OBS_SUMMARY_URL = _str_setting('YSE_ZTF_OBS_SUMMARY_URL', 'ztf', 'obs_summary_url',
+                                   'http://skyvision.caltech.edu/ztf/msip/nightly_summary')
+ZTF_SCHEDULE_URL = _str_setting('YSE_ZTF_SCHEDULE_URL', 'ztf', 'schedule_url',
+                                'http://schedule.ztf.uw.edu')
 TNSUSER = config.get('main','tns_bot_name')
 TNSID = config.get('main','tns_bot_id')
 TNSAPIKEY = os.environ.get('TNS_API_KEY') or config.get('main', 'tnsapikey')

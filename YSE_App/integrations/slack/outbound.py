@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from django.conf import settings
 
+from YSE_App.common.url_utils import public_base_url
 from YSE_App.integrations.slack.client import chat_post_message
 from YSE_App.models import Log
 from YSE_App.models.integration_models import SlackThreadLink
 
 
 def _detail_url(log: Log) -> str:
-    base = getattr(settings, "YSE_PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-    return f"{base}/transient_detail/{log.transient.slug}/"
+    return f"{public_base_url()}transient_detail/{log.transient.slug}/"
 
 
 def post_transient_comment(log: Log) -> None:
