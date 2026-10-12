@@ -1619,7 +1619,7 @@ SELECT CONCAT('GRANT SELECT ON \`', table_schema, '\`.\`', table_name, '\` TO ''
 FROM information_schema.tables WHERE table_schema='<DB>'
 AND table_name NOT LIKE 'auth\_%' AND table_name NOT LIKE 'authtoken\_%' AND table_name NOT LIKE 'axes\_%'
 AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT LIKE 'otp\_%' AND table_name NOT IN ('django_session','django_admin_log',
-'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun');" > /tmp/explorer_grants.sql
+'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun','YSE_App_feedback');" > /tmp/explorer_grants.sql
 wc -l /tmp/explorer_grants.sql
 ```
 
@@ -1864,6 +1864,55 @@ cd <STACK_DIR> && <STACK_PYTHON> manage.py reset_staff_mfa <USERNAME>
 
 **Rollback:** set `STAFF_MFA_REQUIRED: False` (or delete the line) and restart Apache. Sign-in is password-only again at once. Enrolled devices stay in the tables, so turning the flag back on keeps them. To remove the tables as well, while the flag is still on: `<STACK_PYTHON> manage.py migrate otp_totp zero && <STACK_PYTHON> manage.py migrate otp_static zero`. Then set the flag off and restart Apache.
 
+<a id="feedback"></a>
+
+### Feedback button (2026-10-12, #443) optional, off by default, per stack
+
+A "Feedback" button in the navbar lets a signed-in user send a bug report, idea or question. Feedback is **only stored** in the new table `YSE_App_feedback` (migration `0035_feedback`). Staff read it at `/feedback/review/` (or admin > Feedback), edit a draft, and press "Create GitHub issue" to post it to the public repository. Nothing is ever posted automatically, and the sender's name or email is never put in the issue. Until the flag is on, nothing changes: no button, and `POST /feedback/` returns 404. `<STACK_DIR>` / `<STACK_PYTHON>` are from [section 0](#paths).
+
+**(a) Migration.** On yse\_experimental the deploy applies it; yse\_test shares `YSE_test`, so it is already there. On production it runs with the normal `migrate` in [section 3](#prod).
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py showmigrations YSE_App | grep 0035
+```
+**Expected:** `[X] 0035_feedback`. It creates one new table and changes no existing one.
+
+**(b) GitHub token (Ryan, as repository owner).** On GitHub: Settings > Developer settings > Fine-grained tokens > Generate new token. Resource owner `Young-Supernova-Experiment`, repository access "Only select repositories" > `YSE_PZ`, permission **Issues: Read and write** (nothing else), an expiry date. Create the label `feedback` on the repository if it does not exist (Issues > Labels). Keep the token value out of email, chat, notes and `settings.ini`.
+
+**(c) Store the token as an encrypted credential.** Production needs `[secrets] credentials_key` first (step 3.2). Sign in as a superuser, open admin > Encrypted credentials > Add, and enter:
+- Name: `GitHub feedback issues`
+- Service: `github_feedback` (exactly this)
+- Kind: Generic; Owner group and Owner user: blank (staff only); Is active: checked
+- New secret (JSON object): `{"token": "<GITHUB_TOKEN>"}`
+
+Save. **Expected:** the list shows the row with secret `token=••••`. Check without printing the token:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py shell -c "from YSE_App.services.feedback import github_token; print(bool(github_token()))"
+```
+**Expected:** `True`.
+
+**(d) Turn the button on.** In `[site_settings]` of `<STACK_DIR>/YSE_PZ/settings.ini` (or env `YSE_FEEDBACK_ENABLED=1`):
+```ini
+FEEDBACK_ENABLED: True
+```
+Optional keys, with their defaults: `FEEDBACK_MAX_PER_HOUR: 5` (submissions per user per hour), `FEEDBACK_GITHUB_REPO: Young-Supernova-Experiment/YSE_PZ`, `FEEDBACK_GITHUB_LABEL: feedback`. Then:
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py check && sudo systemctl restart apache2
+```
+**Expected:** `System check identified no issues (0 silenced).`
+
+**(e) Check.**
+1. Sign in as any user. **Expected:** a "Feedback" button left of "Light mode". Send a test message. **Expected:** "Thank you. Your feedback was saved for the YSE-PZ team to review."
+2. Sign in as staff and open the user menu > "Feedback review". **Expected:** the test item with status New. Open it, then press "Dismiss" (do not post a test issue unless you want one on GitHub). **Expected:** status Dismissed.
+3. Optional, posts a real public issue: on a second test item, edit the draft and press "Create GitHub issue". **Expected:** "GitHub issue created." and a link to the issue, labelled `feedback`, with no sender name. Close that issue on GitHub afterwards.
+
+**(f) Explorer.** The schema browser already hides `YSE_App_feedback`. If you did [Step E](#authz-flags) (per-table grants), the new table is not granted and the generator there now leaves it out:
+```bash
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';" | grep -c 'YSE_App_feedback'
+```
+**Expected:** `0`. If the Explorer user still has the database-wide `GRANT SELECT ON <DB>.*`, feedback is readable through Explorer by Explorer users; do Step E before turning the button on.
+
+**Rollback:** set `FEEDBACK_ENABLED: False` (or delete the line) and restart Apache. Stored feedback stays in the table and in the staff review page. To stop posting, untick "Is active" on the credential, or revoke the token on GitHub.
+
 ### IERS table refresh (optional cron, per stack) nothing required
 
 Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
@@ -2086,6 +2135,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v41, optional (off by default). Feedback button ([#443](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/443)): new section [Feedback button](#feedback). Migration `0035_feedback` (one new table, `YSE_App_feedback`; safe on the shared database). New `[site_settings]` keys `FEEDBACK_ENABLED` (default off; env `YSE_FEEDBACK_ENABLED`), `FEEDBACK_MAX_PER_HOUR`, `FEEDBACK_GITHUB_REPO`, `FEEDBACK_GITHUB_LABEL`. The GitHub token is an encrypted credential with service `github_feedback`, never a settings.ini value. Step E's grant generator now also leaves out `YSE_App_feedback`. No new dependency.
 * 2026-10-12 v40, one check recommended. Photometry statistics leftovers ([#269](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/269), [#270](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/270), [#271](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/271)): migrations `0033_photstat_extrapolated` (four nullable columns) and `0034_transient_photstat_view` (Explorer view `yse_transient_photstat_v`), applied by the deploy; new section [Photometry statistics view and upkeep jobs](#photstat-view): check the view and the Explorer user's SELECT on it, create it by hand if the deploy user lacks `CREATE VIEW`. New hourly `PhotStatRefresh` cron (in `CRON_CLASSES`, runs from the existing `runcrons` pass; Bazin write-back off by default). No new dependencies.
 * 2026-10-11 v39, optional (off by default). Two-factor sign-in for staff and superusers ([#512](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/512)): new section [Two-factor sign-in for staff](#staff-mfa). New dependencies django-otp 1.5.4 and segno 1.6.6; django-otp's own tables (`otp_totp`, `otp_static`) are created by `manage.py migrate` once the flag is on. New `[security]` keys `STAFF_MFA_REQUIRED` and `STAFF_MFA_ENFORCE_AFTER` (grace date), env `YSE_STAFF_MFA_REQUIRED` / `YSE_STAFF_MFA_ENFORCE_AFTER`, `manage.py reset_staff_mfa` and an admin action to reset a user's authenticator. The Explorer grant generator (Step E) now also leaves out `otp_*` tables. No YSE\_App migration; nothing changes until the flag is set.
 * 2026-10-11 v38, **required on venvs the deploy does not install** (yse\_test\_virtual, production). Low-risk dependency pin bumps ([#539](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/539)): new section [Dependency pin bumps](#dep-pins) (`pip install -r requirements.txt`, `pip check`, version check). The yse\_experimental venv is updated by Deploy Stack. Django stays on 3.2. No migration.

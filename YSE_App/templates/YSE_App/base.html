@@ -63,6 +63,13 @@
 			<input id="yse-header-summary-q" class="form-control form-control-sm" name="q" type="search" placeholder="Ask the summaries…" aria-label="Search the transient summaries">
 		</form>
 		<ul class="navbar-nav ml-auto">
+			{% if feedback_enabled and user.is_authenticated %}
+			<li class="nav-item mr-2">
+				<button type="button" class="btn btn-sm btn-outline-light" id="yse-feedback-button" data-toggle="modal" data-target="#yse-feedback-modal" title="Report a problem or suggest an idea">
+					<i class="fa fa-comment-o" aria-hidden="true"></i> Feedback
+				</button>
+			</li>
+			{% endif %}
 			<li class="nav-item">
 				<button type="button" class="btn btn-sm btn-outline-light yse-theme-toggle" id="yse-theme-toggle" aria-pressed="false">Light mode</button>
 			</li>
@@ -84,6 +91,7 @@
 					<a class="dropdown-item" href="{% url 'my_interests' %}">My interests</a>
 					<a class="dropdown-item" id="yse-dar-menu-link" href="{% url 'data_access_requests' %}" data-count-url="{% url 'data_access_pending_count' %}">Data access requests <span class="badge badge-warning yse-dar-menu-badge" id="yse-dar-menu-badge" hidden></span></a>
 					{% if user.is_staff %}<a class="dropdown-item" href="{% url 'jobs_status' %}">Background jobs</a>{% endif %}
+					{% if user.is_staff and feedback_enabled %}<a class="dropdown-item" href="{% url 'feedback_review_list' %}">Feedback review</a>{% endif %}
 					<div class="dropdown-divider"></div>
 					{% endif %}
 					<form method="post" action="{% url 'auth_logout' %}" class="m-0">{% csrf_token %}<button type="submit" class="dropdown-item">Logout</button></form>
@@ -270,6 +278,7 @@
 		If you use YSE-PZ in your research, cite the papers in the <a href="{% url 'acknowledgements' %}">acknowledgements</a>.
 	</footer>
 </div>
+{% if feedback_enabled and user.is_authenticated %}{% include "YSE_App/partials/feedback_modal.html" %}{% endif %}
 {% endwith %}
 
 <script src="{% static 'YSE_App/bower_components/jquery/dist/jquery.min.js' %}"></script>

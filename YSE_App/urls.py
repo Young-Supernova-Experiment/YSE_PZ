@@ -21,6 +21,7 @@ from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
+    feedback_views,
     feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
@@ -363,6 +364,10 @@ urlpatterns = [
             name='interest_status'),
     re_path(r'^my/interests/$', collaboration_views.my_interests, name='my_interests'),
     # Favorite transients (#323)
+    # Feedback button (#443): stored for staff review; nothing is posted automatically.
+    path('feedback/', feedback_views.feedback_submit, name='feedback_submit'),
+    path('feedback/review/', feedback_views.feedback_review_list, name='feedback_review_list'),
+    path('feedback/review/<int:pk>/', feedback_views.feedback_review_detail, name='feedback_review_detail'),
     re_path(r'^my/favorites/$', favorite_views.my_favorites, name='my_favorites'),
     re_path(r'^my/favorites/section/$', favorite_views.my_favorites_section, name='my_favorites_section'),
     re_path(r'^my/favorites/ids\.json$', favorite_views.favorite_ids, name='favorite_ids'),
