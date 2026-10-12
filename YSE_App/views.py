@@ -2204,34 +2204,8 @@ def download_photometry(request, slug):
 
     return response
 
-@csrf_exempt
-@login_or_basic_auth_required
-def download_bulk_photometry(request, query_title):
-
-    if 'HTTP_AUTHORIZATION' in request.META.keys():
-        auth_method, credentials = request.META['HTTP_AUTHORIZATION'].split(' ', 1)
-        credentials = base64.b64decode(credentials.strip()).decode('utf-8')
-        username, password = credentials.split(':', 1)
-        user = auth.authenticate(username=username, password=password)
-    else:
-        user = request.user
-
-
-    query = Query.objects.filter(title=unquote(query_title))
-    if len(query):
-        transients = Transient.objects.filter(name__in=run_explorer_query_cached(query[0])).order_by('-disc_date')
-        from YSE_App.services.visibility import filter_transients_by_user_access
-
-        transients = filter_transients_by_user_access(user, transients)
-
-    elif query_title in yse_python_queries.python_query_reg.all:
-        from YSE_App.services.visibility import filter_transients_by_user_access
-
-        transients = yse_python_queries.run_python_query(query_title)
-        transients = filter_transients_by_user_access(user, transients)
-    else:
-        raise Http404('Invalid Query')
-
+def bulk_photometry_zip_response(user, transients):
+    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284)."""
     s = BytesIO()
     archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
     for transient in transients:
@@ -2312,6 +2286,36 @@ def download_bulk_photometry(request, query_title):
     response = HttpResponse(s.getvalue(), content_type='application/x-zip-compressed')
     response['Content-Disposition'] = 'attachment; filename=YSEPZ_transient_photometry.zip'
     return response
+
+@csrf_exempt
+@login_or_basic_auth_required
+def download_bulk_photometry(request, query_title):
+
+    if 'HTTP_AUTHORIZATION' in request.META.keys():
+        auth_method, credentials = request.META['HTTP_AUTHORIZATION'].split(' ', 1)
+        credentials = base64.b64decode(credentials.strip()).decode('utf-8')
+        username, password = credentials.split(':', 1)
+        user = auth.authenticate(username=username, password=password)
+    else:
+        user = request.user
+
+
+    query = Query.objects.filter(title=unquote(query_title))
+    if len(query):
+        transients = Transient.objects.filter(name__in=run_explorer_query_cached(query[0])).order_by('-disc_date')
+        from YSE_App.services.visibility import filter_transients_by_user_access
+
+        transients = filter_transients_by_user_access(user, transients)
+
+    elif query_title in yse_python_queries.python_query_reg.all:
+        from YSE_App.services.visibility import filter_transients_by_user_access
+
+        transients = yse_python_queries.run_python_query(query_title)
+        transients = filter_transients_by_user_access(user, transients)
+    else:
+        raise Http404('Invalid Query')
+
+    return bulk_photometry_zip_response(user, transients)
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2647,11 +2651,22 @@ class SearchResultsView(TemplateView):
             'per_page_choices': SEARCH_PER_PAGE_CHOICES,
             'all_transient_statuses': TransientStatus.objects.order_by('name'),
             'api_url': '%s?%s' % (reverse('transient-list'), params.urlencode()) if params else reverse('transient-list'),
+            'bulk_params': self._bulk_params(params),
+            'export_url': '%s?%s' % (reverse('search_export_csv'), self._bulk_params(params)),
+            'bulk_result': self.request.GET.get('bulk_result') or None,
+            'all_transient_tags': TransientTag.objects.order_by('name'),
         })
         context.update(self._save_search_context(params, filterset))
         # Backwards-compatible name used by older templates/tests.
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         return context
+
+    @staticmethod
+    def _bulk_params(params):
+        search_params = params.copy()
+        for key in _SEARCH_STATE_KEYS:
+            search_params.pop(key, None)
+        return search_params.urlencode()
 
     def _save_search_context(self, params, filterset):
         """The "Save as SQL query" modal: compiled SQL preview, title suggestion, last result."""
@@ -2718,6 +2733,137 @@ def save_search(request):
     if result['user_query'] is not None:
         back['saved_user_query'] = str(result['user_query'].id)
     return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
+
+SEARCH_BULK_MAX_ROWS = 5000
+SEARCH_BULK_PHOTOMETRY_MAX_ROWS = 300
+SEARCH_EXPORT_MAX_ROWS = 50000
+_SEARCH_STATE_KEYS = ('page', 'saved_query', 'saved_user_query', 'save_error', 'bulk_result')
+
+
+def _csv_safe(value):
+    """Neutralise spreadsheet formula injection in a text cell (``=``, ``+``, ``-``, ``@``, tab, CR)."""
+    if isinstance(value, str) and value and value[0] in '=+-@\t\r':
+        return "'" + value
+    return value
+
+
+def _search_bulk_redirect(params, message):
+    back = params.copy()
+    for key in _SEARCH_STATE_KEYS:
+        back.pop(key, None)
+    back['bulk_result'] = message
+    return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
+
+
+@login_required
+@require_POST
+def search_bulk_action(request):
+    """POST from the search page: act on the selected rows, or on every row the search matches (#287, #284).
+
+    Fields: ``action`` (``status``, ``add_tag`` or ``photometry``), ``status_id`` / ``tag_id``
+    for the first two, ``params`` (the search's query string) and either one
+    ``transient_id`` per ticked row or ``select_all=1`` for every match of
+    ``params``. Needs POST and the CSRF token (the global middleware). Only
+    transients the user may see (``filter_transients_by_user_access``, the
+    rule of the API and the dashboard) are touched, whatever ids were posted;
+    changing a status or tag is open to any logged-in user, as the status
+    dropdown and ``PATCH /api/transients/`` are.
+    """
+    from django.http import QueryDict
+    from django.utils import timezone
+    from YSE_App.filters.transient_search import TransientSearchFilterSet, quick_search_params
+
+    params = QueryDict(request.POST.get('params', ''), mutable=True)
+    for key in _SEARCH_STATE_KEYS:
+        params.pop(key, None)
+    action = request.POST.get('action', '')
+    if action not in ('status', 'add_tag', 'photometry'):
+        return _search_bulk_redirect(params, 'Choose an action first.')
+
+    status_obj = tag_obj = None
+    if action == 'status':
+        status_obj = TransientStatus.objects.filter(pk=request.POST.get('status_id') or 0).first() \
+            if str(request.POST.get('status_id', '')).isdigit() else None
+        if status_obj is None:
+            return _search_bulk_redirect(params, 'Choose a status first.')
+    elif action == 'add_tag':
+        tag_obj = TransientTag.objects.filter(pk=request.POST.get('tag_id') or 0).first() \
+            if str(request.POST.get('tag_id', '')).isdigit() else None
+        if tag_obj is None:
+            return _search_bulk_redirect(params, 'Choose a tag first.')
+
+    limit = SEARCH_BULK_PHOTOMETRY_MAX_ROWS if action == 'photometry' else SEARCH_BULK_MAX_ROWS
+    if request.POST.get('select_all') in ('1', 'true', 'on'):
+        filterset = TransientSearchFilterSet(
+            quick_search_params(params), queryset=Transient.objects.all(), request=request)
+        if not filterset.is_valid():
+            return _search_bulk_redirect(params, 'That search is not valid, so nothing was changed.')
+        pks = list(filterset.qs.values_list('pk', flat=True)[:limit + 1])
+    else:
+        pks = [int(v) for v in request.POST.getlist('transient_id') if v.isdigit()][:limit + 1]
+    if len(pks) > limit:
+        return _search_bulk_redirect(
+            params, 'Too many rows for this action (limit %d); narrow the search first.' % limit)
+    if not pks:
+        return _search_bulk_redirect(params, 'No transients selected.')
+
+    rows = filter_transients_by_user_access(request.user, Transient.objects.filter(pk__in=pks))
+    visible_pks = list(rows.values_list('pk', flat=True))
+
+    if action == 'photometry':
+        return bulk_photometry_zip_response(
+            request.user, Transient.objects.filter(pk__in=visible_pks).order_by('-disc_date'))
+    if action == 'status':
+        n_changed = Transient.objects.filter(pk__in=visible_pks).exclude(status=status_obj).update(
+            status=status_obj, modified_by=request.user, modified_date=timezone.now())
+        return _search_bulk_redirect(
+            params, 'Status set to %s on %d of %d transients.' % (status_obj.name, n_changed, len(visible_pks)))
+    through = Transient.tags.through
+    have = set(through.objects.filter(transienttag_id=tag_obj.pk, transient_id__in=visible_pks)
+               .values_list('transient_id', flat=True))
+    through.objects.bulk_create(
+        [through(transient_id=pk, transienttag_id=tag_obj.pk) for pk in visible_pks if pk not in have],
+        ignore_conflicts=True)
+    return _search_bulk_redirect(
+        params, 'Tag %s added to %d of %d transients.' % (tag_obj.name, len(visible_pks) - len(have), len(visible_pks)))
+
+
+@login_required
+def search_export_csv(request):
+    """``/search/export/?<search params>``: the search's rows as CSV (#284).
+
+    Same filters and ordering as the page, restricted to transients the user may
+    see, at most ``SEARCH_EXPORT_MAX_ROWS`` rows (a trailing comment line says
+    when it was cut). Read-only, so GET, like the page itself.
+    """
+    import csv
+    from YSE_App.filters.transient_search import TransientSearchFilterSet, quick_search_params
+
+    params = quick_search_params(request.GET)
+    filterset = TransientSearchFilterSet(params, queryset=Transient.objects.all(), request=request)
+    if not filterset.is_valid():
+        return HttpResponse('Invalid search: %s' % filterset.form.errors.as_text(), status=400, content_type='text/plain')
+    qs = filter_transients_by_user_access(request.user, filterset.qs)
+    columns = [
+        ('name', 'name'), ('ra', 'ra'), ('dec', 'dec'), ('gal_l', 'gal_l'), ('gal_b', 'gal_b'),
+        ('disc_date', 'disc_date'), ('status', 'status__name'), ('obs_group', 'obs_group__name'),
+        ('best_spec_class', 'best_spec_class__name'), ('photo_class', 'photo_class__name'),
+        ('redshift', 'redshift'), ('host_redshift', 'host__redshift'), ('mw_ebv', 'mw_ebv'),
+        ('peak_mag', 'photstat__peak_mag'), ('last_det_mag', 'photstat__last_detected_mag'),
+        ('last_det_mjd', 'photstat__last_detected_mjd'), ('num_det', 'photstat__num_det_global'),
+    ]
+    rows = list(qs.values_list(*[lookup for _, lookup in columns])[:SEARCH_EXPORT_MAX_ROWS + 1])
+    truncated = len(rows) > SEARCH_EXPORT_MAX_ROWS
+    response = HttpResponse(content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = 'attachment; filename="yse_pz_search.csv"'
+    writer = csv.writer(response)
+    writer.writerow([label for label, _ in columns])
+    for row in rows[:SEARCH_EXPORT_MAX_ROWS]:
+        writer.writerow([_csv_safe(v.isoformat() if hasattr(v, 'isoformat') else ('' if v is None else v)) for v in row])
+    if truncated:
+        writer.writerow(['# truncated at %d rows; narrow the search' % SEARCH_EXPORT_MAX_ROWS])
+    return response
+
 
 #@login_required
 #def atlas_forced_phot(request,slug):
