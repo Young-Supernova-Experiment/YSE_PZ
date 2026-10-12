@@ -160,11 +160,14 @@ class MagnitudeColumnTests(TestCase):
         col = MagnitudeColumn()
         self.assertEqual(col.render(17.4567), '17.46')
 
-    def test_dashboard_annotation_still_numeric(self):
+    def test_dashboard_last_detection_still_numeric(self):
+        from YSE_App.services import photstat
+
         user = create_test_user(username='mag_col_user')
         transient = create_minimal_transient(user, name='mag-col-test')
         attach_synthetic_photometry(user, transient, n_points=2)
+        photstat.recompute(transient.pk)
         row = annotate_dashboard_transient_fields(
             Transient.objects.filter(pk=transient.pk)
         ).first()
-        self.assertIsNotNone(row.recent_mag)
+        self.assertIsInstance(row.photstat.last_detected_mag, float)

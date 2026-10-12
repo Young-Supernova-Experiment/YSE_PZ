@@ -29,7 +29,7 @@ from YSE_App.feeds.jobs import enqueue_screen
 from YSE_App.services import annotations as annotations_svc
 # ... and the AI summariser runner + summaries.refresh_stale job (#296).
 import YSE_App.services.summaries  # noqa: E402,F401
-from YSE_App.models.phot_models import TransientPhotData
+from YSE_App.models.phot_models import TransientPhotData, TransientPhotometry
 from YSE_App.services import photstat
 # Favorite-transient activity (#323): comments, audited transient changes, spectra, follow-ups.
 from auditlog.models import LogEntry
@@ -138,6 +138,36 @@ def refresh_photstat_on_quality_flag(sender, instance, action, reverse, **kwargs
     if action not in ('post_add', 'post_remove', 'post_clear'):
         return
     photstat.schedule_recompute(_photdata_transient_id(instance), photometry_id=instance.photometry_id)
+
+
+@receiver(pre_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moving")
+def remember_photometry_transient(sender, instance, raw=False, update_fields=None, **kwargs):
+    """Note the old transient when a photometry set is moved to another one (#269).
+
+    ``QUB_data.CheckDuplicates`` (and an API update) re-point a
+    ``TransientPhotometry`` at another transient; no point is saved, so the
+    point signals above never run. One pk lookup per update of an existing row.
+    """
+    instance._photstat_old_transient_id = None
+    if raw or instance.pk is None:
+        return
+    if update_fields is not None and not {'transient', 'transient_id'} & set(update_fields):
+        return
+    old = TransientPhotometry.objects.filter(pk=instance.pk).values_list('transient_id', flat=True).first()
+    if old is not None and old != instance.transient_id:
+        instance._photstat_old_transient_id = old
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moved")
+def refresh_photstat_on_photometry_move(sender, instance, created, raw=False, **kwargs):
+    """Both transients' stat rows follow a moved photometry set (#269)."""
+    old = getattr(instance, '_photstat_old_transient_id', None)
+    if raw or created or old is None:
+        return
+    instance._photstat_old_transient_id = None
+    # The old transient may be deleted right after (duplicate clean-up): update, never create.
+    photstat.schedule_recompute(old, create=False)
+    photstat.schedule_recompute(instance.transient_id)
 
 
 # ---- favorite-transient activity (#323) ------------------------------------

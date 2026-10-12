@@ -34,6 +34,9 @@ from YSE_App.models.transient_models import Transient
 
 __all__ = ['TransientPhotStat', 'MJD_EPOCH', 'datetime_to_mjd', 'mjd_to_datetime']
 
+# Columns filled by the Bazin job, not by the photometry recompute (#271).
+EXTRAPOLATED_FIELDS = ('extrapolated_mag', 'extrapolated_band', 'extrapolated_mjd', 'extrapolated_at')
+
 MJD_EPOCH = datetime.datetime(1858, 11, 17, tzinfo=datetime.timezone.utc)
 
 
@@ -114,6 +117,19 @@ class TransientPhotStat(models.Model):
     # mag/day, both positive: brightening before peak, fading after it.
     rise_rate = models.FloatField(null=True, blank=True)
     decay_rate = models.FloatField(null=True, blank=True)
+
+    # Bazin-extrapolated magnitude (#271, for #225 scheduling): the joint fit
+    # of ``services.bazin`` evaluated at ``extrapolated_mjd``, in
+    # ``extrapolated_band``; written by ``bazin.store_extrapolations`` (the
+    # ``photstat.bazin_extrapolate`` job), never by the photometry recompute.
+    # ``extrapolated_at`` is when it was computed; a NULL magnitude with a set
+    # ``extrapolated_at`` means no usable fit then. Nullable (shared DB).
+    extrapolated_mag = models.FloatField(null=True, blank=True)
+    extrapolated_band = models.ForeignKey(
+        PhotometricBand, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    extrapolated_mjd = models.FloatField(null=True, blank=True)
+    extrapolated_at = models.DateTimeField(null=True, blank=True)
 
     # {"<band_id>": {"name", "n_det", "peak_mag", "peak_mjd", "last_mag", "last_mjd"}}
     # as JSON text (a TextField so no database JSON type is required).

@@ -266,12 +266,32 @@ CRON_CLASSES = [
     # AI summaries (#296): nightly batch of summariser runs for transients with new
     # comments / spectra / follow-ups; no-op unless SUMMARY_BATCH_CRON_ENABLED ([llm]).
     'YSE_App.data_ingest.Summary_Jobs.SummaryRefresh',
+    # Photometry statistics upkeep (#269, #271): hourly photstat.refresh_stale job
+    # (on by default) and photstat.bazin_extrapolate job (off unless
+    # PHOTSTAT_BAZIN_CRON_ENABLED); see the settings below.
+    'YSE_App.data_ingest.PhotStat_Jobs.PhotStatRefresh',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
 # older than this many days. Optional [site_settings] CRON_LOG_RETENTION_DAYS in
 # settings.ini overrides the 30-day default.
 DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RETENTION_DAYS', fallback=30)
+
+# TransientPhotStat upkeep (#269, #271; YSE_App/data_ingest/PhotStat_Jobs.py).
+# [site_settings] keys; env YSE_PHOTSTAT_REFRESH_CRON / YSE_PHOTSTAT_BAZIN_CRON
+# override the two switches. The refresh recomputes at most
+# PHOTSTAT_REFRESH_LIMIT missing or outdated rows per run; the Bazin job stores
+# the extrapolated magnitude of at most PHOTSTAT_BAZIN_LIMIT transients with an
+# open follow-up request.
+PHOTSTAT_REFRESH_CRON_ENABLED = _flag(
+    'YSE_PHOTSTAT_REFRESH_CRON', 'site_settings', 'PHOTSTAT_REFRESH_CRON_ENABLED', True
+)
+PHOTSTAT_BAZIN_CRON_ENABLED = _flag(
+    'YSE_PHOTSTAT_BAZIN_CRON', 'site_settings', 'PHOTSTAT_BAZIN_CRON_ENABLED', False
+)
+PHOTSTAT_REFRESH_CRON_MINUTES = config.getint('site_settings', 'PHOTSTAT_REFRESH_CRON_MINUTES', fallback=60)
+PHOTSTAT_REFRESH_LIMIT = config.getint('site_settings', 'PHOTSTAT_REFRESH_LIMIT', fallback=2000)
+PHOTSTAT_BAZIN_LIMIT = config.getint('site_settings', 'PHOTSTAT_BAZIN_LIMIT', fallback=500)
 
 # yse_home "Next Telescope Nights" lists classical observing dates up to this
 # many days ahead (#65). Optional env YSE_HOME_CLASSICAL_DAYS_AHEAD or

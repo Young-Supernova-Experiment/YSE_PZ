@@ -60,7 +60,6 @@ from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
-from YSE_App.queries.raw_sql import RECENT_MAG_SQL
 from YSE_App.services.dashboard_queries import (
     dashboard_sql_is_supported,
     dashboard_sql_rejection_reason,

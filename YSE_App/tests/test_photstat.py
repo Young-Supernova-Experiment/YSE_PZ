@@ -162,10 +162,11 @@ class ComputeStatsTests(PhotStatFixture):
     def test_last_detection_matches_the_dashboard_recent_mag_rule(self):
         stat = TransientPhotStat.objects.get(transient=self.transient)
         self.assertEqual("%.2f" % stat.last_detected_mag, self.transient.recent_mag())
+        # The dashboard cells read the stat row itself (#557, #270).
         qs = annotate_dashboard_transient_fields(Transient.objects.filter(pk=self.transient.pk))
         row = qs[0]
-        self.assertAlmostEqual(row.recent_mag, stat.last_detected_mag)
-        self.assertEqual(row.recent_magdate, stat.last_obs_date)
+        self.assertAlmostEqual(row.photstat.last_detected_mag, stat.last_detected_mag)
+        self.assertEqual(row.photstat.last_obs_date, stat.last_obs_date)
 
     def test_pure_compute_edge_cases(self):
         P = photstat.PhotPoint

@@ -34,6 +34,18 @@ def get_python_query(name):
 def run_python_query(name):
     return get_python_query(name)()
 
+def annotate_recent_mag(qs):
+    """``recent_mag`` for the saved-query and planning tables: the stored last detection (#270).
+
+    ``TransientPhotStat.last_detected_mag`` (a LEFT JOIN, NULL without a stat
+    row or detection) instead of a correlated photometry subquery per row, so
+    the "Max Recent Mag" filter and the "Last Det." cell agree: the latest
+    unflagged detection by the light-curve plot's rule. Explorer users read
+    the same columns from ``yse_transient_photstat_v`` (docs/photstat.md).
+    """
+    return qs.annotate(recent_mag=F('photstat__last_detected_mag'))
+
+
 def annotate_rising_transient_qs(qs):
 
     g_filters = "('g-ZTF', 'g', 'V', 'gp', 'g-Sloan')"

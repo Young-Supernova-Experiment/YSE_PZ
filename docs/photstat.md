@@ -19,10 +19,10 @@ limits the Photometry statistics block counts are the triangles drawn before the
 photometry uploads a `mag`/`mag_err` for every epoch, S/N < 3 included; until #368 those rows counted as
 detections and a transient like 2022abom reported no pre-detection limits while the plot showed them.
 
-`last_detected_mag` / `last_obs_date` match the dashboard "Last Mag" / "Last Obs. Date" columns
-(`_recent_phot_subqueries`: latest unflagged `mag`) except when the latest unflagged row is a
-forced-photometry magnitude noisier than 0.36 mag, which the statistics do not call a detection; switching
-those columns to the stat table is follow-up work (#270, #331).
+`last_detected_mag` / `last_obs_date` are what the dashboard "Last Det." / "Last Obs." cells show and sort
+on (#557); the old per-row `recent_mag` / `recent_magdate` photometry subqueries are gone (#270). The
+planning and saved-query tables (`yse_sky`, `yse_planning`, `yse_fields`) filter "Max Recent Mag" on
+`last_detected_mag` too (`yse_python_queries.annotate_recent_mag`), so the filter and the cell agree.
 
 ## Columns (`YSE_App_transientphotstat`)
 
@@ -38,6 +38,7 @@ those columns to the stat table is follow-up work (#270, #331).
 | `rise_rate` | mag/day, positive: `(first_mag - peak_mag) / (peak_mjd - first_mjd)` in the band of the first detection; NULL when that detection is the band's peak |
 | `decay_rate` | mag/day, positive: `(last_mag - peak_mag) / (last_mjd - peak_mjd)` in the band of the last detection; NULL when that detection is the peak |
 | `per_band_json` | `{"<band_id>": {name, n_det, peak_mag, peak_mjd, first_mag, first_mjd, last_mag, last_mjd, n_limits, deepest_limit, deepest_limit_mjd, last_limit_mjd}}` (a band with only pre-detection limits has `n_det: 0`) |
+| `extrapolated_mag`, `extrapolated_band_id`, `extrapolated_mjd`, `extrapolated_at` | Bazin-extrapolated magnitude at `extrapolated_mjd` in that band (the joint fit behind the detail-page overlay and the "Bazin Mag @ Night" column), and when it was computed; NULL magnitude with a set `extrapolated_at` = no usable fit then (#271). Written only by `bazin.store_extrapolations` / the `photstat.bazin_extrapolate` job, never by a recompute. Internal for now: not in the API or the Explorer view (#607) |
 | `phot_hash`, `last_updated` | fingerprint of the stored values (an unchanged recompute writes nothing) and when it last changed |
 | `schema_version` | `services.photstat.SCHEMA_VERSION` when the row was written (2 since #349, 3 since #368). A smaller value marks a row computed under older rules: the detail page recomputes it when opened, the next signal rewrites it, `rebuild_photstats --stale-only` visits only those rows |
 
@@ -54,6 +55,16 @@ Indexes: `peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, 
 * Bulk paths wrapped in `deferred_updates()`: `data_utils.add_transient` (bulk inserts fire no signals, so it
   schedules each transient explicitly), `data_utils.add_transient_phot`, `Query_LSST.store_points`. Other
   crons write rows one at a time and are covered by the signals.
+* The REST API (`/api/transientphotdata/`, `/api/transientphotometry/`) wraps each create and update in
+  `deferred_updates()`, so one request recomputes each transient once; a POST whose body is a JSON list
+  creates up to 1000 rows in one request (#269).
+* Moving a `TransientPhotometry` to another transient (`QUB_data.CheckDuplicates`, an API update) refreshes
+  both transients' rows (`pre_save` / `post_save` on `TransientPhotometry`, #269).
+* `photstat.refresh_stale` job, queued hourly by the `PhotStatRefresh` cron (`PHOTSTAT_REFRESH_CRON_ENABLED`,
+  on by default): recomputes at most `PHOTSTAT_REFRESH_LIMIT` (2000) missing or outdated rows per run (#269).
+* `photstat.bazin_extrapolate` job (`PHOTSTAT_BAZIN_CRON_ENABLED`, off by default): stores the Bazin
+  magnitude at "now" for transients with an open follow-up request, or for the `transient_ids` /
+  `at_mjd` in its payload (#271).
 * `manage.py rebuild_photstats` for the backfill and for repairs (below); `--stale-only` after a rules change
   (`SCHEMA_VERSION` bump) reads photometry only for missing or outdated rows.
 
@@ -75,7 +86,18 @@ Indexes: `peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, 
   `last_non_detection_band=<band name>`; `ordering=peak_mag,-last_detected_mjd,...`; rows carry
   `deepest_limit_band(_name)`, `last_non_detection_band(_name)` and `schema_version`). `/api/transients/` accepts the same
   `peak_mag_lte` ... filters and `ordering=peak_mag|peak_mjd|last_det_mag|last_det_mjd|first_det_mjd|num_det|rise_rate|decay_rate`.
-* Explorer: join `YSE_App_transientphotstat ps ON ps.transient_id = t.id`.
+* Explorer: the view `yse_transient_photstat_v` (migration `0034`, #270), one row per stat row:
+  `transient_id`, `transient_name`, `num_obs`, `num_det`, `num_limits`, `last_obs_mjd/_date`,
+  `first_detected_mjd/_date/_mag/_band`, `last_detected_mjd/_date/_mag/_band`, `peak_mjd/_date/_mag/_band`,
+  `mean_mag`, `faintest_mag`, `deepest_limit`, `deepest_limit_mjd`, `deepest_limit_band`,
+  `last_non_detection_mjd`, `last_non_detection_band`, `time_to_non_detection`, `rise_rate`, `decay_rate`,
+  `schema_version`, `last_updated`. Band columns are band names. The Bazin `extrapolated_*` columns are
+  not in the view or the API: derived values get no new exposure until #607 computes them per
+  visibility scope. The
+  limit columns count pre-detection non-detections only, as on the Summary tab. Example:
+  `SELECT v.transient_name, v.peak_mag, v.peak_band, v.rise_rate FROM yse_transient_photstat_v v
+  WHERE v.num_det >= 3 AND v.last_detected_date > NOW() - INTERVAL 7 DAY ORDER BY v.peak_mag`.
+  Joining `YSE_App_transientphotstat ps ON ps.transient_id = t.id` still works.
 
 ## Ziggy runbook (David)
 
@@ -119,7 +141,8 @@ photometry upload for the transient rewrites it. To refresh every row at once (s
 filters on `num_limits_gte` / `deepest_limit_gte` see the new values before anyone opens the page), the same
 `rebuild_photstats --stale-only` command applies.
 
-No new settings.
+No new settings for the backfill. The upkeep jobs, the view and their checks are in the Ziggy runbook,
+section "Photometry statistics view and upkeep jobs" (#269-#271).
 
 ## Indexes
 
