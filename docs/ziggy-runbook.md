@@ -1884,6 +1884,57 @@ Before turning `API_THROTTLE_USER` on, ask Ryan which scripts read `/api/` in bu
 
 **Template change only:** `public_settings.ini` now has `IS_DEBUG: False`. Ziggy's stacks read only their own `settings.ini`, never the template, so nothing changes there; local docker and CI turn DEBUG on with `YSE_IS_DEBUG=1` in `docker/.env`.
 
+<a id="https-followup"></a>
+
+### https follow-up (2026-10-12, #441) nothing required; a decision for David and Ryan, then optional steps, per stack
+
+The code now builds its own links from `YSE_PUBLIC_BASE_URL` (default `https://ziggy.ucolick.org/yse/`) and uses https for the services that support it. **Nothing below is switched on by the deploy**; the HTTPS flags from step (g) of [Login, session and transport settings](#authn) keep their defaults (off).
+
+**(1) Decision needed: who redirects http to https?** Ryan has not chosen. Both options end with the same result for a browser.
+
+| | A. Apache redirect | B. Django `SECURE_SSL_REDIRECT` |
+|---|---|---|
+| Where | the port-80 `VirtualHost` in `/etc/apache2/sites-enabled/*.conf` (a `Redirect permanent / https://ziggy.ucolick.org/` or `RewriteRule`) | `[security] SECURE_SSL_REDIRECT: True` in each stack's `settings.ini` |
+| Covers | every app and path on the host (other services on `ziggy.ucolick.org` too) | only requests that reach this Django stack |
+| Needs | Apache edit, `apache2ctl configtest`, reload | Django must see https: fine under mod\_wsgi; behind a proxy `TRUST_X_FORWARDED_PROTO: True` first, otherwise pages redirect to themselves |
+| Risk | affects other services on the host; one change for all stacks | per stack, easy to roll back |
+| Rollback | revert the Apache file, reload | remove the key, restart Apache |
+
+**Recommended order, one stack at a time (yse\_experimental, yse\_test, production last):**
+1. Confirm https works for the stack and see what http does now:
+   ```bash
+   curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | head -1
+   curl -sI http://ziggy.ucolick.org/yse_experimental/login/ | head -3
+   ```
+   **Expected:** `200` for https; http answers with a redirect or an error.
+2. Turn on the redirect (A or B, once decided). **Check:** the second `curl` above now shows `301` with `Location: https://...`, and logging in from a browser still works.
+3. Only after the redirect has run for a few days: set `SECURE_HSTS_SECONDS: 3600` (one hour) in `[security]`, restart Apache. **Check:** `curl -sI https://ziggy.ucolick.org/yse_experimental/login/ | grep -i strict-transport` prints `max-age=3600`.
+4. Raise it step by step (one day, one week, one year), only after a quiet period at each step; browsers that saw HSTS keep it until the max-age runs out. Leave `SECURE_HSTS_INCLUDE_SUBDOMAINS` off (other services share the host). The first HSTS value is also open: 3600 is only a suggestion.
+5. Secure cookies (`SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`) can go on together with step 2.
+
+**(2) Deployment check.**
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py check --deploy
+```
+**Expected:** with the flags above on and `IS_DEBUG: False`, no cookie, HSTS or SSL-redirect warnings (yse\_test and yse\_experimental run with `IS_DEBUG: 1`, so DEBUG warnings are expected there). Record what remains.
+
+**(3) Stored http URLs (optional, any time after the deploy).** Rewrites only our own host and known https-capable services; other hosts, URLs with an explicit port and comment text are never changed. Dry run first (the default):
+```bash
+cd <STACK_DIR> && <STACK_PYTHON> manage.py https_urls
+```
+**Expected:** one line per field with counts, then `dry run: N URLs would be rewritten, M left on http` (and a count of comments containing http://, which is never changed). Review the "left" hosts. Then:
+```bash
+<STACK_PYTHON> manage.py https_urls --apply
+```
+**Expected:** `applied: N URLs rewritten, M left on http`; running it again prints `0 URLs rewritten`. yse\_test and yse\_experimental share one database, so run it once for both. No migration; modified dates are not touched.
+
+**(4) Hosts that still use http (recheck from Ziggy now and then).** `skyvision.caltech.edu` (refuses https) and `schedule.ztf.uw.edu` (certificate for another name) are used by the ZTF scheduler; `datastore.ipp.ifa.hawaii.edu` by the YSE forced-photometry cron. Test each:
+```bash
+for h in skyvision.caltech.edu schedule.ztf.uw.edu datastore.ipp.ifa.hawaii.edu; do echo $h; curl -sS -o /dev/null -w '%{http_code}\n' "https://$h/"; done
+```
+**Expected:** a three-digit code without a certificate error. If a host works, set it in `settings.ini` under `[ztf]` (`obs_summary_url`, `schedule_url`; the defaults are the http URLs) or, for the datastore, the `[yse] stamp` / `detectability` keys (the template now shows https; Ziggy's own `settings.ini` is not changed by the deploy).
+`plpsipp1v.stsci.edu`, `antares.noao.edu` and `api.keplerscience.org` no longer resolve; the code now points at `ps1images.stsci.edu`, the ANTARES host `api.antares.noirlab.edu` and https for Kepler (`[main] kepler_api_endpoint` overrides it). If Ziggy's `settings.ini` has `antaresapi=http://antares.noao.edu/api`, replace it with the template's `https://api.antares.noirlab.edu/v1` and test one ANTARES cron run.
+
 <a id="staff-mfa"></a>
 
 ### Two-factor sign-in for staff (2026-10-11, #512) optional, off by default, per stack
@@ -2168,7 +2219,8 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
-* 2026-10-12 v41, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0035_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
+* 2026-10-12 v42, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0035_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
+* 2026-10-12 v41, informational, nothing required. https follow-up ([#441](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/441)): hard-coded http links replaced (own links from `YSE_PUBLIC_BASE_URL`; dead hosts repointed; the two ZTF hosts that refuse https are now `[ztf]` settings with http defaults), new `manage.py https_urls` (dry run by default, `--apply` to write). New section [https follow-up](#https-followup) lays out the Apache vs Django redirect choice and the order redirect, then HSTS with a short max-age; **a decision for David and Ryan, nothing is switched on**. No migration, no dependency.
 * 2026-10-12 v40, one check recommended. Photometry statistics leftovers ([#269](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/269), [#270](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/270), [#271](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/271)): migrations `0033_photstat_extrapolated` (four nullable columns) and `0034_transient_photstat_view` (Explorer view `yse_transient_photstat_v`), applied by the deploy; new section [Photometry statistics view and upkeep jobs](#photstat-view): check the view and the Explorer user's SELECT on it, create it by hand if the deploy user lacks `CREATE VIEW`. New hourly `PhotStatRefresh` cron (in `CRON_CLASSES`, runs from the existing `runcrons` pass; Bazin write-back off by default). No new dependencies.
 * 2026-10-11 v39, optional (off by default). Two-factor sign-in for staff and superusers ([#512](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/512)): new section [Two-factor sign-in for staff](#staff-mfa). New dependencies django-otp 1.5.4 and segno 1.6.6; django-otp's own tables (`otp_totp`, `otp_static`) are created by `manage.py migrate` once the flag is on. New `[security]` keys `STAFF_MFA_REQUIRED` and `STAFF_MFA_ENFORCE_AFTER` (grace date), env `YSE_STAFF_MFA_REQUIRED` / `YSE_STAFF_MFA_ENFORCE_AFTER`, `manage.py reset_staff_mfa` and an admin action to reset a user's authenticator. The Explorer grant generator (Step E) now also leaves out `otp_*` tables. No YSE\_App migration; nothing changes until the flag is set.
 * 2026-10-11 v38, **required on venvs the deploy does not install** (yse\_test\_virtual, production). Low-risk dependency pin bumps ([#539](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/539)): new section [Dependency pin bumps](#dep-pins) (`pip install -r requirements.txt`, `pip check`, version check). The yse\_experimental venv is updated by Deploy Stack. Django stays on 3.2. No migration.
