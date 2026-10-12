@@ -29,7 +29,7 @@ from YSE_App.feeds.jobs import enqueue_screen
 from YSE_App.services import annotations as annotations_svc
 # ... and the AI summariser runner + summaries.refresh_stale job (#296).
 import YSE_App.services.summaries  # noqa: E402,F401
-from YSE_App.models.phot_models import TransientPhotData, TransientPhotometry
+from YSE_App.models.phot_models import HostPhotData, TransientPhotData, TransientPhotometry
 from YSE_App.services import photstat
 # Favorite-transient activity (#323): comments, audited transient changes, spectra, follow-ups.
 from auditlog.models import LogEntry
@@ -37,7 +37,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models.signals import pre_save
 from YSE_App.models.followup_models import TransientFollowup
 from YSE_App.models.log_models import Log
-from YSE_App.models.spectra_models import TransientSpectrum
+from YSE_App.models.spectra_models import HostSpectrum, TransientSpectrum
+from YSE_App.common import quality_mask_sync
 from YSE_App.services import favorites
 
 User = get_user_model()
@@ -93,6 +94,57 @@ def _photdata_transient_id(instance):
     """transient_id without a query when the photometry object is already loaded."""
     photometry = instance._state.fields_cache.get('photometry')
     return getattr(photometry, 'transient_id', None)
+
+
+# ---- quality_mask follows the DataQuality ManyToMany (#81) ------------------
+# Every add / remove / clear on a data_quality relation recomputes the
+# DataQuality-managed bits of the rows involved (quality_mask.merge_data_quality).
+# These receivers are connected before the PhotStat one below, so a PhotStat
+# recompute triggered by the same change already sees the new mask.
+# Writes that bypass m2m_changed (bulk_create of through rows) set the mask
+# themselves (data_utils._write_photdata_points); `backfill_quality_mask`
+# finds anything that slipped through.
+
+
+def _sync_quality_mask(model, instance, action, reverse, pk_set):
+    if reverse:
+        # DataQuality.<model>_set.add/remove/clear(...): many rows at once; clear()
+        # reports no pk_set, so remember the affected rows before it runs.
+        memo = '_quality_mask_%s_pks' % model._meta.model_name
+        if action == 'pre_clear':
+            setattr(instance, memo, list(
+                getattr(instance, '%s_set' % model._meta.model_name).values_list('pk', flat=True)
+            ))
+            return
+        if action == 'post_clear':
+            pks = getattr(instance, memo, [])
+            setattr(instance, memo, [])
+        elif action in ('post_add', 'post_remove'):
+            pks = pk_set or ()
+        else:
+            return
+        quality_mask_sync.recompute(model, pks)
+        return
+    if action not in ('post_add', 'post_remove', 'post_clear') or instance.pk is None:
+        return
+    new = quality_mask_sync.recompute(model, [instance.pk]).get(instance.pk)
+    if new is not None:
+        # Keep the in-memory row current, so a later instance.save() writes the new mask.
+        instance.quality_mask = new
+
+
+def _connect_quality_mask_sync(model):
+    def receiver_fn(sender, instance, action, reverse, **kwargs):
+        _sync_quality_mask(model, instance, action, reverse, kwargs.get('pk_set'))
+
+    m2m_changed.connect(
+        receiver_fn, sender=model.data_quality.through, weak=False,
+        dispatch_uid='yse_quality_mask_dq_%s' % model._meta.model_name,
+    )
+
+
+for _model in (TransientPhotData, HostPhotData, TransientSpectrum, HostSpectrum):
+    _connect_quality_mask_sync(_model)
 
 
 @receiver(post_save, sender=TransientPhotData, dispatch_uid="yse_photstat_photdata_saved")

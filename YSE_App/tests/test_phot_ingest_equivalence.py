@@ -89,7 +89,7 @@ def _snapshot(transient):
             e.photometry.instrument_id, e.photometry.obs_group_id, e.band_id, e.obs_date,
             e.flux, e.flux_err, e.flux_zero_point, e.mag, e.mag_err, e.forced, e.diffim,
             e.discovery_point, e.created_by_id, e.modified_by_id,
-            tuple(sorted(e.data_quality.values_list('name', flat=True))), diffs,
+            tuple(sorted(e.data_quality.values_list('name', flat=True))), e.quality_mask, diffs,
         ))
     phots = sorted(
         (p.instrument_id, p.obs_group_id, tuple(sorted(p.groups.values_list('name', flat=True))))

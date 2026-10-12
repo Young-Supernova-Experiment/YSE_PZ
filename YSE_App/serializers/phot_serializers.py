@@ -206,6 +206,8 @@ class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = TransientPhotData
         fields = "__all__"
+        # follows the DataQuality M2M while that is in use (#81); not written through the API
+        read_only_fields = ["quality_mask"]
 
     def create(self, validated_data):
 
@@ -284,6 +286,8 @@ class HostPhotDataSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = HostPhotData
         fields = "__all__"
+        # follows the DataQuality M2M while that is in use (#81); not written through the API
+        read_only_fields = ["quality_mask"]
 
     def create(self, validated_data):
 

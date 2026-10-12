@@ -161,6 +161,46 @@ The odd bits 1-49 are reserved, as are the even bits 44-48 in photometry and
 34-48 in spectra. Nothing writes them. If one appears, `flags_from_mask` reports
 it as `BIT_<n>`.
 
+## DataQuality and the mask (#81)
+
+The `DataQuality` ManyToMany (`data_quality` on photometry and spectra) remains
+in use. While it is, the mask follows it.
+
+- **Any DataQuality sets REJECTED.** Until #82 every row with any DataQuality
+  was left out of the "good data" queries, so `mask < USABLE` keeps exactly the
+  rows that the old `exclude(data_quality__isnull=False)` kept.
+- **Each name adds its own bit.** The mapping is `DATA_QUALITY_PHOT_BITS` and
+  `DATA_QUALITY_SPEC_BITS`, and names compare case-insensitively:
+
+  | DataQuality name | Photometry | Spectra |
+  |---|---|---|
+  | Bad | REJECTED only | REJECTED only |
+  | Quicklook | QUICKLOOK (24) | QUICKLOOK (20) |
+  | Masking | BAD_PIXEL (40) | OTHER |
+  | Bad Subtraction | TEMPLATE_SUSPECT (22); OTHER on host photometry | OTHER |
+  | Saturation | SATURATED (42) | OTHER |
+  | Crowding | BLENDED (26) | OTHER |
+  | Bad Calibration | NOT_CALIBRATED (34) | NOT_FLUX_CALIBRATED (32) |
+  | anything else | OTHER (50) | OTHER (50) |
+
+- **Dual-write.** An `m2m_changed` receiver on each through table (`signals.py`)
+  recomputes the DataQuality-managed bits whenever a flag is added, removed or
+  cleared, from either side of the relation. Those bits are REJECTED, OTHER and
+  every mapped bit; all other bits are kept. The one ingest path that
+  bulk-inserts through rows (`data_utils._write_photdata_points`) sets the mask
+  itself.
+- **Read-only in the API.** `quality_mask` cannot be written through the REST
+  API, because the M2M is the source of truth for now.
+- **Checking.** `python manage.py backfill_quality_mask` recomputes every row
+  and reports differences, but changes nothing unless you add `--apply`. Rows
+  written by code that does not know the mask (for example `develop` on the
+  shared `YSE_test` database) are what it fixes.
+
+The good-data readers use `quality_lt(USABLE)`. These are `PhotometryService`,
+`SpectraService`, `table_utils`, the transient detail view,
+`Transient.disc_mag`/`recent_mag`, Bazin, PhotStat, the TNS photometry
+selection and the analysis payload.
+
 ## Adding a flag
 
 1. Choose the bit by seriousness. Find the two existing flags it falls between,

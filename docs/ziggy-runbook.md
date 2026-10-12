@@ -1398,6 +1398,87 @@ cd <STACK> && <STACK_PYTHON> manage.py run_jobs --status
 
 **Rollback:** `cd <STACK> && <STACK_PYTHON> manage.py migrate YSE_App 0032` drops the view and the four columns (only after the code is rolled back too).
 
+<a id="quality-mask"></a>
+
+### Data-quality mask columns, migration 0035 (2026-10-12, #80-#82, #480): one check recommended, per database
+
+Migration `0035_quality_mask` adds these columns:
+
+- `quality_mask` (`BIGINT UNSIGNED NOT NULL DEFAULT 0`) to `YSE_App_transientphotdata`, `YSE_App_hostphotdata`, `YSE_App_transientspectrum` and `YSE_App_hostspectrum`;
+- `pixel_mask` (`SMALLINT UNSIGNED NOT NULL DEFAULT 0`) to `YSE_App_transientspecdata` and `YSE_App_hostspecdata`;
+- nullable `wavelength_medium` (both spectrum tables), `host_subtraction` (transient spectra) and `phot_type` (host photometry).
+
+The defaults are real MySQL column defaults, so `develop`'s INSERTs on the shared `YSE_test` database keep working (#395).
+
+Each `ALTER TABLE` asks for `ALGORITHM=INSTANT` (MySQL 8.0.12+). That is a metadata-only change, so it takes seconds however large the table is, including the very large `YSE_App_transientspecdata`. If MySQL refuses INSTANT for a table, `migrate` logs `0035: MySQL refused ALGORITHM=INSTANT on <table>` and repeats the ALTER without the clause. That fallback may copy the table, which takes minutes to hours for the spec-data table.
+
+The migration sets `lock_wait_timeout` to 60 s. If a long-running query holds a table, the ALTER fails with `Lock wait timeout exceeded` instead of making the site wait behind it. Re-run `migrate`: columns that already exist are skipped.
+
+The migration then fills `quality_mask` for every row that has a DataQuality flag, which reads only the small through tables. It also sets the "wavelength medium unknown" bit on every spectrum, with one UPDATE per spectrum table. The deploy runs all of this, and the readers switch to the mask in the same deploy. Docs: [docs/quality-mask.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/quality-mask.md).
+
+Placeholders: `<STACK>` and `<STACK_PYTHON>` come from section 0. For the shared `YSE_test` database, use the yse\_experimental checkout, which has the migration first; use production after the promotion. `<DB>`, `<DB_USER>` and `<DB_HOST>` are that stack's database.
+
+1. **Before migrating (production; on YSE\_test the deploy has already run it).** Check the MySQL version and look for long-running queries:
+
+```
+mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT VERSION(); SELECT id, time, LEFT(info, 60) FROM information_schema.processlist WHERE command <> 'Sleep' AND time > 30;"
+```
+
+**Expected:** a version of `8.0.12` or later, and no rows from the second query. If the version is older than 8.0.12, budget a maintenance window: each ALTER then copies its table. If the second query returns rows, wait for those queries to finish before you migrate.
+
+2. **After migrating.** Check the migration, the columns and that the ALTERs were instant:
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py showmigrations YSE_App | grep 0035
+mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT table_name, column_name, column_type, column_default, is_nullable FROM information_schema.columns WHERE table_schema = DATABASE() AND column_name IN ('quality_mask','pixel_mask','wavelength_medium','host_subtraction','phot_type') ORDER BY table_name, column_name;"
+mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT name, instant_cols, total_row_versions FROM information_schema.innodb_tables WHERE name LIKE CONCAT(DATABASE(), '/yse_app_%spec%') OR name LIKE CONCAT(DATABASE(), '/yse_app_%photdata');"
+```
+
+**Expected:**
+- `[X] 0035_quality_mask`.
+- Ten rows. The mask columns are `bigint unsigned` or `smallint unsigned`, with default `0` and nullable `NO`. The other three are `varchar(16)`, default `NULL`, nullable `YES`.
+- In the last query, `total_row_versions` (MySQL 8.0.29+) or `instant_cols` (older 8.0) is greater than 0 for each table. That shows the ALTER was instant. If that column is missing on your MySQL version, the `migrate` log saying nothing about `refused ALGORITHM=INSTANT` is the check.
+
+3. **Backfill check, dry run** (from the stack's checkout):
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py backfill_quality_mask
+```
+
+**Expected:**
+- One line per model: `TransientPhotData: N row(s) scanned, M with DataQuality, 0 to update (...)`, and the same for the others.
+- `DataQuality '<name>' on K row(s) -> REJECTED|...` lines listing the flag names in use and the bits they map to.
+- At the end, `dry run: 0 row(s) would change`.
+
+The scan reads every row in 5000-row primary-key batches. Allow about a minute per few million photometry rows.
+
+On `YSE_test`, a non-zero count is expected after `develop` has flagged points, because `develop`'s code does not know the mask. A non-zero count on a stack that runs only this code means something wrote around the signals: post the output, which lists primary keys and flag names only.
+
+4. **Backfill, for real (only if step 3 reported changes):**
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py backfill_quality_mask --apply
+cd <STACK> && <STACK_PYTHON> manage.py backfill_quality_mask
+```
+
+**Expected:** the first command ends with `done: N row(s) updated`, with N the count from step 3. The second ends with `dry run: 0 row(s) would change`. On yse\_test, repeat steps 3 and 4 after each promotion until `develop` has this code.
+
+5. **Verify that good data is unchanged.** Count photometry by the old rule and by the new one:
+
+```
+mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SELECT (SELECT COUNT(*) FROM YSE_App_transientphotdata p WHERE NOT EXISTS (SELECT 1 FROM YSE_App_transientphotdata_data_quality d WHERE d.transientphotdata_id = p.id)) AS good_old, (SELECT COUNT(*) FROM YSE_App_transientphotdata WHERE quality_mask < POW(2,51)) AS good_new;"
+```
+
+**Expected:** `good_old` equals `good_new`.
+
+**Rollback:**
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py migrate YSE_App 0034_transient_photstat_view
+```
+
+Run this from this code's checkout, then roll the code back. The older code works with the columns still present, because they have defaults, so you can also roll back only the code. The migration drops the ten columns, using an instant DROP COLUMN where MySQL supports it (8.0.29+); otherwise it rebuilds the table. The DataQuality M2M is untouched, so the masks can be rebuilt from it. What is lost is any `wavelength_medium`, `host_subtraction`, `phot_type` or `pixel_mask` value that someone set by hand.
+
 ### Performance audit 2026-10-10: server settings (optional, per stack) nothing required
 
 Everything here is optional and off by default; code lands with the PR for [#481](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/481)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490). Placeholders: `<STACK_DIR>` (the checkout), `<STACK_PYTHON>` (that stack's interpreter), `<CRON_PYTHON>`, `<STATIC_DIR>` (that stack's `STATIC_ROOT`, the directory its Apache `Alias` points at), `<APACHE_SITE_CONF>`, `<MYSQL_ADMIN_USER>`.
@@ -2081,11 +2162,13 @@ Everything still waiting on David, with its source. Rows change status here as t
 | Slack events check, then optional login/session/transport keys per stack | `/slack/events/` needs both `SLACK_ENABLED` and `SLACK_SIGNING_SECRET`; lockout, session length, host/proxy, HTTPS cookies and HSTS are opt-in `[security]` keys | [login, session and transport settings](#authn) | pending |
 | Runbook Part A (yse\_test on develop, dedupe, chown) | Deploy green 07:34; dedupe run 07:37; Ryan confirmed 07:41 | [runbook](https://claude.ai/artifact/Epp8VK8jZm2VqNBDBLUj7c) | done |
 | Migration 0010 on the shared YSE\_test database | Applied by the experimental deploy of #333, 17:23-17:42 UTC | [run 36604581592](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36604581592) | done |
+| `backfill_quality_mask` dry run on YSE\_test (and `--apply` if it reports changes); production after the promotion carrying 0035 | Confirms the mask matches the DataQuality flags; rows that `develop` flags need the `--apply` until develop has this code | [#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80) · [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81) · [section](#quality-mask) | pending |
 
 <a id="changelog"></a>
 
 ## 6 · Changelog
 
+* 2026-10-12 v41, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0035_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
 * 2026-10-12 v40, one check recommended. Photometry statistics leftovers ([#269](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/269), [#270](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/270), [#271](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/271)): migrations `0033_photstat_extrapolated` (four nullable columns) and `0034_transient_photstat_view` (Explorer view `yse_transient_photstat_v`), applied by the deploy; new section [Photometry statistics view and upkeep jobs](#photstat-view): check the view and the Explorer user's SELECT on it, create it by hand if the deploy user lacks `CREATE VIEW`. New hourly `PhotStatRefresh` cron (in `CRON_CLASSES`, runs from the existing `runcrons` pass; Bazin write-back off by default). No new dependencies.
 * 2026-10-11 v39, optional (off by default). Two-factor sign-in for staff and superusers ([#512](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/512)): new section [Two-factor sign-in for staff](#staff-mfa). New dependencies django-otp 1.5.4 and segno 1.6.6; django-otp's own tables (`otp_totp`, `otp_static`) are created by `manage.py migrate` once the flag is on. New `[security]` keys `STAFF_MFA_REQUIRED` and `STAFF_MFA_ENFORCE_AFTER` (grace date), env `YSE_STAFF_MFA_REQUIRED` / `YSE_STAFF_MFA_ENFORCE_AFTER`, `manage.py reset_staff_mfa` and an admin action to reset a user's authenticator. The Explorer grant generator (Step E) now also leaves out `otp_*` tables. No YSE\_App migration; nothing changes until the flag is set.
 * 2026-10-11 v38, **required on venvs the deploy does not install** (yse\_test\_virtual, production). Low-risk dependency pin bumps ([#539](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/539)): new section [Dependency pin bumps](#dep-pins) (`pip install -r requirements.txt`, `pip check`, version check). The yse\_experimental venv is updated by Deploy Stack. Django stays on 3.2. No migration.

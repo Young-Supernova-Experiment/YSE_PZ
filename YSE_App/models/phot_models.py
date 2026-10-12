@@ -7,6 +7,7 @@ from YSE_App.models.transient_models import *
 from YSE_App.models.host_models import *
 from astropy.time import Time
 from django.contrib.auth.models import Group
+from YSE_App.common.quality_mask import PhotType
 
 class Photometry(BaseModel):
 
@@ -79,6 +80,10 @@ class PhotData(BaseModel):
     forced = models.BooleanField(null=True, blank=True)
     diffim = models.BooleanField(null=True, blank=True)
     # dq = models.BooleanField(null=True, blank=True)
+    # Data-quality bits, 0 = best (YSE_App/common/quality_mask.py, docs/quality-mask.md).
+    # MySQL DEFAULT 0 too (migration 0035), so code that predates the column still inserts.
+    # While DataQuality is in use the DataQuality-managed bits follow that M2M (signals.py).
+    quality_mask = models.PositiveBigIntegerField(default=0)
 
 
 class TransientPhotData(PhotData):
@@ -115,6 +120,10 @@ class HostPhotData(PhotData):
     # Entity relationships ###
     # Required
     photometry = models.ForeignKey(HostPhotometry, on_delete=models.CASCADE)
+
+    ### Properties ###
+    # Optional
+    phot_type = models.CharField(max_length=16, choices=PhotType.choices, null=True, blank=True)
 
     def __str__(self):
         return '%s - %s - %s' % (self.photometry.host.HostString(), self.band.name, self.obs_date.strftime('%m/%d/%Y'))

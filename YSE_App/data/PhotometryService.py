@@ -1,5 +1,6 @@
 from YSE_App.models import *
 from django.db.models import Q
+from YSE_App.common.quality_mask import USABLE, quality_lt
 from YSE_App.models import phot_models
 from YSE_App.services.visibility import get_user_group_query as GetUserGroupQuery
 
@@ -91,10 +92,10 @@ def _GetTransientPhotData(includeBadData,filter):
     if includeBadData:
         return TransientPhotData.objects.filter(filter)
     else:
-        return TransientPhotData.objects.exclude(data_quality__isnull=False).filter(filter)
+        return TransientPhotData.objects.filter(quality_lt(USABLE)).filter(filter)
 
 def _GetHostPhotData(includeBadData, filter):
     if includeBadData:
         return HostPhotData.objects.filter(filter)
     else:
-        return HostPhotData.objects.exclude(data_quality__isnull=False).filter(filter)
+        return HostPhotData.objects.filter(quality_lt(USABLE)).filter(filter)

@@ -302,6 +302,72 @@ def allowed_mask(model_name: str) -> int:
     return FLAG_SETS[model_name][1]
 
 
+# --------------------------------------------------------------------------
+# DataQuality names -> bits (#81)
+# --------------------------------------------------------------------------
+# While the DataQuality ManyToMany stays in use, the mask follows it: every row
+# with at least one DataQuality is REJECTED (today every flagged row is left
+# out of the "good data" queries, so ``mask < USABLE`` keeps exactly the rows
+# the old anti-join kept), plus the bit its name maps to. A name with no bit
+# here, or whose bit the model's set does not use, adds OTHER. Names compare
+# case-insensitively, ignoring surrounding spaces. ``0`` = REJECTED only.
+
+DATA_QUALITY_PHOT_BITS = {
+    'bad': 0,
+    'masking': int(PhotFlag.BAD_PIXEL),
+    'bad subtraction': int(PhotFlag.TEMPLATE_SUSPECT),  # transient only; OTHER on host photometry
+    'saturation': int(PhotFlag.SATURATED),
+    'crowding': int(PhotFlag.BLENDED),
+    'bad calibration': int(PhotFlag.NOT_CALIBRATED),
+    'quicklook': int(PhotFlag.QUICKLOOK),
+}
+DATA_QUALITY_SPEC_BITS = {
+    'bad': 0,
+    'bad calibration': int(SpecFlag.NOT_FLUX_CALIBRATED),
+    'quicklook': int(SpecFlag.QUICKLOOK),
+}
+_DATA_QUALITY_BITS = {
+    'TransientPhotData': DATA_QUALITY_PHOT_BITS,
+    'HostPhotData': DATA_QUALITY_PHOT_BITS,
+    'TransientSpectrum': DATA_QUALITY_SPEC_BITS,
+    'HostSpectrum': DATA_QUALITY_SPEC_BITS,
+}
+
+
+def data_quality_bit(name: Optional[str], model_name: str) -> int:
+    """The bit (without REJECTED) that DataQuality ``name`` sets on ``model_name``; OTHER if none."""
+    table = _DATA_QUALITY_BITS[model_name]
+    key = (name or '').strip().lower()
+    if key not in table:
+        return 1 << OTHER_BIT
+    bit = table[key]
+    if bit and not (bit & allowed_mask(model_name)):
+        return 1 << OTHER_BIT
+    return bit
+
+
+def data_quality_mask(names: Iterable[Optional[str]], model_name: str) -> int:
+    """The DataQuality-managed part of the mask for a row flagged with ``names`` (0 if none)."""
+    mask = 0
+    for name in names:
+        mask |= USABLE | data_quality_bit(name, model_name)
+    return mask
+
+
+def data_quality_managed(model_name: str) -> int:
+    """Bits that :func:`merge_data_quality` owns on ``model_name`` (REJECTED, OTHER, every mapped bit)."""
+    mask = USABLE | NO_OTHER
+    for bit in _DATA_QUALITY_BITS[model_name].values():
+        if bit & allowed_mask(model_name):
+            mask |= bit
+    return mask
+
+
+def merge_data_quality(old_mask: Optional[int], names: Iterable[Optional[str]], model_name: str) -> int:
+    """``old_mask`` with its DataQuality-managed bits replaced by those of ``names``; other bits kept."""
+    return (int(old_mask or 0) & ~data_quality_managed(model_name)) | data_quality_mask(names, model_name)
+
+
 def describe() -> Dict[str, List[tuple]]:
     """``{set name: [(bit, flag name), ...]}``; used by the docs test to keep the tables in step."""
     out = {}
