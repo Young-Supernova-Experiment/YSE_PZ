@@ -21,6 +21,7 @@ from datetime import timedelta
 import json
 import logging
 import os
+import tempfile
 from astropy.coordinates import SkyCoord, Angle
 from astropy.coordinates import ICRS, Galactic, FK4, FK5
 from astropy.time import Time
@@ -126,6 +127,31 @@ def get_ps_score(RA, DEC):
 
     return output
     
+PROST_RUN_PREFIX = 'prost-'
+PROST_STALE_SECONDS = 24 * 3600
+
+
+def make_prost_run_dir(base, stale_seconds=PROST_STALE_SECONDS):
+    """Create and return a unique per-run scratch directory under ``base``.
+
+    The base directory is created if missing but is never removed. Stale
+    ``prost-*`` subdirectories older than ``stale_seconds`` (left by aborted
+    runs) are removed; nothing else under ``base`` is touched.
+    """
+    os.makedirs(base, exist_ok=True)
+    cutoff = time.time() - stale_seconds
+    try:
+        for name in os.listdir(base):
+            path = os.path.join(base, name)
+            if (name.startswith(PROST_RUN_PREFIX) and os.path.isdir(path)
+                    and not os.path.islink(path)
+                    and os.path.getmtime(path) < cutoff):
+                rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+    return tempfile.mkdtemp(dir=base, prefix=PROST_RUN_PREFIX)
+
+
 class processTNS:
     
     def __init__(self):
@@ -188,7 +214,9 @@ class processTNS:
             parser.add_argument('--hostmatchrad', default=config.get('main','hostmatchrad'), type=float,
                                 help='matching radius for hosts (arcmin) (default=%default)')
             parser.add_argument('--ghost_path', default=config.get('main','ghost_path'), type=str,
-                                help='Prost scratch directory; the setting keeps its old GHOST name (default=%default)')
+                                help='Prost scratch directory; legacy name, used when prost_path is unset (default=%default)')
+            parser.add_argument('--prost_path', default=config.get('main','prost_path',fallback=''), type=str,
+                                help='Prost scratch base directory; falls back to ghost_path (default=%default)')
 
             parser.add_argument('--ztfurl', default=config.get('ztf','ztfurl'), type=str,
                                 help='ZTF URL (default=%default)')
@@ -224,7 +252,9 @@ class processTNS:
             parser.add_argument('--ztfurl', default="", type=str,
                                 help='ZTF URL (default=%default)')
             parser.add_argument('--ghost_path', default="", type=str,
-                                help='Prost scratch directory; the setting keeps its old GHOST name (default=%default)')
+                                help='Prost scratch directory; legacy name, used when prost_path is unset (default=%default)')
+            parser.add_argument('--prost_path', default="", type=str,
+                                help='Prost scratch base directory; falls back to ghost_path (default=%default)')
             
             parser.add_argument('--SMTP_LOGIN', default='', type=str,
                                 help='SMTP login (default=%default)')
@@ -620,9 +650,10 @@ class processTNS:
             print("astro_prost not installed; skipping host association")
             return None
 
-        # Define and create output file root directory
-        output_dir = os.path.join(self.ghost_path, objs[0])
-        os.makedirs(output_dir, exist_ok=True)
+        # Each run gets its own unique directory under the configured base, so
+        # overlapping runs never touch each other's files (#617).
+        output_dir = make_prost_run_dir(
+            getattr(self, 'prost_path', '') or self.ghost_path)
 
         # define priors for properties
         priorfunc_z = halfnorm(loc=0.0001, scale=0.5)
@@ -678,12 +709,8 @@ class processTNS:
                 best_redshift=True
             )
         finally:
-            # Cleanup Prost file cache
-            # TODO: Over time we may accumulate Prost temp files that are not deleted
-            #       due to processes aborted before this block is executed. More robust
-            #       garbage collection may be necessary, such as a periodic task triggered
-            #       by Celery Beat.
-            rmtree(self.ghost_path, ignore_errors=True)
+            # Remove only this run's directory, never the configured base.
+            rmtree(output_dir, ignore_errors=True)
 
         return hosts
 
@@ -1418,6 +1445,7 @@ class TNS_emails(CronJobBase):
         tnsproc.tns_bot_name = options.tns_bot_name
         tnsproc.ztfurl = options.ztfurl
         tnsproc.ghost_path = options.ghost_path
+        tnsproc.prost_path = options.prost_path
         
         # in case of code failures
         smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
