@@ -14,6 +14,16 @@ to allow users to query its database.  The link `<http://127.0.0.1:8000/explorer
 from other users and write their own (links assume the default URL for running the server locally).
 Please see additional documentation through the :code:`SQL Explorer` link.
 
+The Explorer pages render inside the YSE-PZ site shell (navbar, sidebar and the
+dark/light theme). For developers: :code:`YSE_App/templates/explorer/base.html`
+overrides django-sql-explorer 2.3's base template and maps its
+:code:`sql_explorer_*` blocks onto :code:`YSE_App/base.html`;
+:code:`YSE_App/static/YSE_App/explorer-theme.css` and :code:`explorer-shell.js`
+adapt Explorer's Bootstrap 3 markup to the site's Bootstrap 4, and the schema
+pane (an iframe) uses the bare :code:`explorer/yse_bare.html`
+(:code:`YSE_App/explorer_shell.py`). When django-sql-explorer is upgraded
+(#584), check that its base template still defines the same block names.
+
 When writing a new query `<http://127.0.0.1:8000/explorer/new/>`_, the show schema button provides a way to view
 each database table for YSE-PZ.  However, because the YSE-PZ model is complex,
 and we summarize the most useful transient tables below.

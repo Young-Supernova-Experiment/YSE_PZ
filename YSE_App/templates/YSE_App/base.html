@@ -175,7 +175,7 @@
 						</a>
 					</li>
 					<li class="nav-item">
-						<a href="{% url 'explorer_index' %}" class="nav-link{% if url_name == 'explorer_index' %} active{% endif %}">
+						<a href="{% url 'explorer_index' %}" class="nav-link{% if '/explorer/' in request.path %} active{% endif %}">
 							<i class="nav-icon fa fa-database"></i>
 							<p>Query Explorer</p>
 						</a>
