@@ -1362,6 +1362,42 @@ cd /data/yse_pz/YSE_PZ && git checkout dc70630 && <PROD_PYTHON> manage.py collec
 gunzip -c /data/yse_pz/backups/<PROD_DB>_pre-0004-0010_<DATE>.sql.gz | mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> <PROD_DB>
 ```
 
+<a id="photstat-view"></a>
+
+### Photometry statistics view and upkeep jobs, migrations 0033-0034 (2026-10-12, #269-#271) one check recommended, per database
+
+Migration `0033_photstat_extrapolated` adds four nullable columns to `YSE_App_transientphotstat` (`extrapolated_mag`, `extrapolated_band_id`, `extrapolated_mjd`, `extrapolated_at`; safe on the shared `YSE_test` database, `develop` never writes them). Migration `0034_transient_photstat_view` creates the SQL Explorer view `yse_transient_photstat_v` (one row per stat row, with the transient name and band names). Creating a view needs MySQL's `CREATE VIEW` privilege: if the deploy's database user lacks it, `migrate` logs `yse_transient_photstat_v not changed: the database user lacks the privilege` and carries on, and step 2 below creates it by hand. The deploy runs both migrations; nothing else is required for the site to work. Docs: [docs/photstat.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/photstat.md).
+
+Placeholders: `<STACK>` / `<STACK_PYTHON>` from section 0 (for the shared `YSE_test` database use the yse\_experimental checkout, which has the migration first; production after the promotion), `<DB>`, `<DB_USER>`, `<DB_HOST>` the stack's database, `<EXPLORER_USER>` the `[database] EXPLORER_USER` from that stack's `settings.ini`, `<ADMIN_USER>` a MySQL user with `CREATE VIEW` on `<DB>`.
+
+1. Check the view exists and the Explorer user can read it:
+
+```
+mysql -u <DB_USER> -p -h <DB_HOST> <DB> -e "SHOW FULL TABLES WHERE Table_type = 'VIEW'; SELECT COUNT(*) FROM yse_transient_photstat_v; SELECT COUNT(*) FROM YSE_App_transientphotstat;"
+mysql -u <EXPLORER_USER> -p -h <DB_HOST> <DB> -e "SELECT transient_name, peak_mag, peak_band FROM yse_transient_photstat_v LIMIT 3;"
+```
+
+**Expected:** `yse_transient_photstat_v VIEW` is listed, the two counts are equal, and the Explorer user prints three rows. **If the view is missing**, do step 2. **If the Explorer user gets `SELECT command denied`** (its grants are per table rather than on `<DB>.*`): `mysql -u <ADMIN_USER> -p -h <DB_HOST> -e "GRANT SELECT ON <DB>.yse_transient_photstat_v TO '<EXPLORER_USER>'@'%';"` (use the host part shown by `SHOW GRANTS FOR '<EXPLORER_USER>'`), then repeat the second command.
+
+2. Only if step 1 found no view: write the statement out of the migration and run it as `<ADMIN_USER>`:
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "import importlib; print(importlib.import_module('YSE_App.migrations.0034_transient_photstat_view').CREATE_VIEW_SQL)" > /tmp/photstat_view.sql
+mysql -u <ADMIN_USER> -p -h <DB_HOST> <DB> < /tmp/photstat_view.sql
+```
+
+**Expected:** no output from `mysql`. **Check:** repeat step 1.
+
+3. Upkeep jobs (nothing to install; they run from the existing `runcrons` pass through the job runner, 3.18 / the `run_jobs` crontab line on yse\_test). The `PhotStatRefresh` cron queues one `photstat.refresh_stale` job an hour, which recomputes at most 2000 missing or outdated stat rows (the `rebuild_photstats --stale-only` selection), so a stack never needs a manual `rebuild_photstats` after a rules change again. Check after the next hour:
+
+```
+cd <STACK> && <STACK_PYTHON> manage.py run_jobs --status
+```
+
+**Expected:** `photstat.refresh_stale` and `photstat.bazin_extrapolate` among the registered kinds, and a `done` `photstat.refresh_stale` job once an hour. Optional `[site_settings]` keys in `settings.ini` (read by the cron process at its next run; no Apache restart needed): `PHOTSTAT_REFRESH_CRON_ENABLED: False` turns the refresh off; `PHOTSTAT_REFRESH_LIMIT` (2000) and `PHOTSTAT_REFRESH_CRON_MINUTES` (60) size it; `PHOTSTAT_BAZIN_CRON_ENABLED: True` (off by default) also stores the Bazin-extrapolated magnitude for transients with an open follow-up request every run (at most `PHOTSTAT_BAZIN_LIMIT`, 500, each a Bazin fit), which fills the `extrapolated_*` columns of the view.
+
+**Rollback:** `cd <STACK> && <STACK_PYTHON> manage.py migrate YSE_App 0032` drops the view and the four columns (only after the code is rolled back too).
+
 ### Performance audit 2026-10-10: server settings (optional, per stack) nothing required
 
 Everything here is optional and off by default; code lands with the PR for [#481](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/481)-[#490](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/490). Placeholders: `<STACK_DIR>` (the checkout), `<STACK_PYTHON>` (that stack's interpreter), `<CRON_PYTHON>`, `<STATIC_DIR>` (that stack's `STATIC_ROOT`, the directory its Apache `Alias` points at), `<APACHE_SITE_CONF>`, `<MYSQL_ADMIN_USER>`.
@@ -2050,6 +2086,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v40, one check recommended. Photometry statistics leftovers ([#269](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/269), [#270](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/270), [#271](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/271)): migrations `0033_photstat_extrapolated` (four nullable columns) and `0034_transient_photstat_view` (Explorer view `yse_transient_photstat_v`), applied by the deploy; new section [Photometry statistics view and upkeep jobs](#photstat-view): check the view and the Explorer user's SELECT on it, create it by hand if the deploy user lacks `CREATE VIEW`. New hourly `PhotStatRefresh` cron (in `CRON_CLASSES`, runs from the existing `runcrons` pass; Bazin write-back off by default). No new dependencies.
 * 2026-10-11 v39, optional (off by default). Two-factor sign-in for staff and superusers ([#512](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/512)): new section [Two-factor sign-in for staff](#staff-mfa). New dependencies django-otp 1.5.4 and segno 1.6.6; django-otp's own tables (`otp_totp`, `otp_static`) are created by `manage.py migrate` once the flag is on. New `[security]` keys `STAFF_MFA_REQUIRED` and `STAFF_MFA_ENFORCE_AFTER` (grace date), env `YSE_STAFF_MFA_REQUIRED` / `YSE_STAFF_MFA_ENFORCE_AFTER`, `manage.py reset_staff_mfa` and an admin action to reset a user's authenticator. The Explorer grant generator (Step E) now also leaves out `otp_*` tables. No YSE\_App migration; nothing changes until the flag is set.
 * 2026-10-11 v38, **required on venvs the deploy does not install** (yse\_test\_virtual, production). Low-risk dependency pin bumps ([#539](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/539)): new section [Dependency pin bumps](#dep-pins) (`pip install -r requirements.txt`, `pip check`, version check). The yse\_experimental venv is updated by Deploy Stack. Django stays on 3.2. No migration.
 * 2026-10-11 v37, informational. Transient tables show "Last Det." and "Last Obs." from TransientPhotStat ([#557](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/557)); personal-dashboard section counts are visible rows only ([#558](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/558)). Nothing to run on yse\_experimental / yse\_test (the shared database is backfilled). On production the two columns are empty for transients without a stat row until `rebuild_photstats` (step 3.10, already required for Peak Mag) has run. No migration.

@@ -143,10 +143,14 @@ class VisibilityParityTests(TestCase):
 
     def test_queryset_keeps_ordering_and_annotations(self):
         member = self.users["member"]
-        qs = annotate_dashboard_transient_fields(self._qs().order_by("-disc_date", "-pk"))
+        from django.db.models import IntegerField, Value
+
+        qs = annotate_dashboard_transient_fields(self._qs().order_by("-disc_date", "-pk")).annotate(
+            marker=Value(1, output_field=IntegerField())
+        )
         filtered = filter_transients_by_user_access(member, qs)
         self.assertIsInstance(filtered, PageFirstQuerySet)
-        self.assertIn("recent_mag", filtered.query.annotations)
+        self.assertIn("marker", filtered.query.annotations)
         names = [t.name for t in filtered]
         self.assertEqual(names, [t.name for t in legacy_filter_transients_by_user_access(member, qs)])
 
@@ -444,8 +448,14 @@ class RecentPhotOrderingTests(TestCase):
                 self.assertIs(table_cls.order_recent_mag, RecentPhotOrderMixin.order_recent_mag)
                 self.assertIs(table_cls.order_recent_magdate, RecentPhotOrderMixin.order_recent_magdate)
 
+    @staticmethod
+    def _shown(t):
+        """What the Last Det. / Last Obs. cells show: the stat row's values (#557, #270)."""
+        stat = getattr(t, "photstat", None)
+        return (getattr(stat, "last_detected_mag", None), getattr(stat, "last_obs_date", None))
+
     def test_sort_uses_photstat_and_keeps_display(self):
-        displayed = {t.pk: (t.recent_mag, t.recent_magdate) for t in self._qs()}
+        displayed = {t.pk: self._shown(t) for t in self._qs()}
         table = TransientTable(self._qs())
         for column, field in (("recent_mag", "last_detected_mag"), ("recent_magdate", "last_obs_date")):
             for descending in (False, True):
@@ -463,7 +473,7 @@ class RecentPhotOrderingTests(TestCase):
                     with_value = [k for k in keys if k is not None]
                     self.assertEqual(with_value, sorted(with_value, reverse=descending))
                     for t in page:
-                        self.assertEqual((t.recent_mag, t.recent_magdate), displayed[t.pk])
+                        self.assertEqual(self._shown(t), displayed[t.pk])
 
     @override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS)
     def test_transient_summary_sort(self):

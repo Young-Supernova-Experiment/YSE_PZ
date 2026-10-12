@@ -1541,9 +1541,13 @@ class CheckDuplicates(CronJobBase):
             
             tp = TransientPhotometry.objects.filter(transient__name=t.name)
             ts = TransientSpectrum.objects.filter(transient__name=t.name)
-            for tps in tp:
-                tps.transient = t_good
-                tps.save()
+            # Moving photometry refreshes both transients' TransientPhotStat
+            # rows (signals.py, #269); deferred, so once per transient.
+            from YSE_App.services import photstat
+            with photstat.deferred_updates():
+                for tps in tp:
+                    tps.transient = t_good
+                    tps.save()
             for tss in ts:
                 tss.transient = t_good
                 tss.save()

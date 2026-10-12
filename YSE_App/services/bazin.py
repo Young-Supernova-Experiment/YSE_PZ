@@ -21,7 +21,7 @@ the classical observing-night table.
 
 Only detections are fitted: rows with a magnitude and a magnitude error,
 no upper limits, no rows carrying a ``data_quality`` flag (the same
-exclusion as ``_recent_phot_subqueries`` / ``Transient.recent_mag()``), and
+exclusion as ``Transient.recent_mag()`` and ``TransientPhotStat``), and
 the light-curve plot's ``mag_err <= MAX_MAG_ERR`` cut when flux and flux
 error are present.  A transient needs ``MIN_DETECTIONS`` such points in
 total.
@@ -542,15 +542,11 @@ def fits_for_transients(transient_ids: Iterable[int]) -> Dict[int, Dict[int, Tup
     return result
 
 
-def extrapolated_mags(
+def _extrapolated_with_band_ids(
     transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None,
-) -> Dict[int, Tuple[float, str]]:
-    """``{transient_id: (mag, band_name)}`` at ``at_mjd`` for every transient with a usable fit.
-
-    ``band_preference`` lists band names to try first; otherwise the band
-    with the most recent detection wins (see :func:`pick_extrapolated_mag`).
-    """
-    out: Dict[int, Tuple[float, str]] = {}
+) -> Dict[int, Tuple[float, int, str]]:
+    """``{transient_id: (mag, band_id, band_name)}``; see :func:`extrapolated_mags`."""
+    out: Dict[int, Tuple[float, int, str]] = {}
     for tid, bands in fits_for_transients(transient_ids).items():
         if not bands:
             continue
@@ -561,8 +557,67 @@ def extrapolated_mags(
         picked = pick_extrapolated_mag(fits, at_mjd, preferred)
         if picked is not None:
             mag, band_id = picked
-            out[tid] = (mag, bands[band_id][0])
+            out[tid] = (mag, band_id, bands[band_id][0])
     return out
+
+
+def extrapolated_mags(
+    transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None,
+) -> Dict[int, Tuple[float, str]]:
+    """``{transient_id: (mag, band_name)}`` at ``at_mjd`` for every transient with a usable fit.
+
+    ``band_preference`` lists band names to try first; otherwise the band
+    with the most recent detection wins (see :func:`pick_extrapolated_mag`).
+    """
+    return {
+        tid: (mag, band_name)
+        for tid, (mag, _band_id, band_name) in _extrapolated_with_band_ids(
+            transient_ids, at_mjd, band_preference
+        ).items()
+    }
+
+
+def store_extrapolations(
+    transient_ids: Iterable[int], at_mjd: Optional[float] = None, *, now: Optional[datetime.datetime] = None,
+) -> Dict[str, int]:
+    """Write the extrapolated magnitude at ``at_mjd`` onto each transient's stat row (#271).
+
+    The same fit and band choice as the "Bazin Mag @ Night" column and the
+    detail-page overlay (:func:`extrapolated_mags`). ``at_mjd`` defaults to
+    ``now``. Fills ``TransientPhotStat.extrapolated_mag`` / ``_band`` /
+    ``_mjd`` / ``_at``; a transient without a usable fit gets a NULL
+    magnitude and band with ``extrapolated_at`` set, so a stale value never
+    survives. Only existing stat rows are updated (none is created here).
+    Returns ``{"fitted": n, "cleared": m}``.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+
+    from YSE_App.models.phot_stat_models import TransientPhotStat
+
+    if now is None:
+        now = timezone.now()
+    if at_mjd is None:
+        at_mjd = datetime_to_mjd(now)
+    ids = sorted({int(t) for t in transient_ids if t is not None})
+    if not ids:
+        return {'fitted': 0, 'cleared': 0}
+    picked = _extrapolated_with_band_ids(ids, at_mjd)
+    rows = TransientPhotStat.objects.filter(transient_id__in=ids)
+    with transaction.atomic():
+        for tid, (mag, band_id, _name) in picked.items():
+            rows.filter(transient_id=tid).update(
+                extrapolated_mag=float(mag), extrapolated_band_id=band_id,
+                extrapolated_mjd=float(at_mjd), extrapolated_at=now,
+            )
+        missing = [tid for tid in ids if tid not in picked]
+        cleared = 0
+        if missing:
+            cleared = rows.filter(transient_id__in=missing).update(
+                extrapolated_mag=None, extrapolated_band_id=None,
+                extrapolated_mjd=float(at_mjd), extrapolated_at=now,
+            )
+    return {'fitted': len(picked), 'cleared': cleared}
 
 
 def extrapolated_mag(transient, at_mjd, band_preference: Optional[Sequence[str]] = None) -> Optional[Tuple[float, str]]:

@@ -851,23 +851,51 @@ class PageFirstQuerySetTests(TestCase):
             )
             cls.transients.append(t)
 
+    @staticmethod
+    def _latest_phot():
+        """A caller-added correlated annotation (the dashboard itself adds none since #270)."""
+        from django.db.models import OuterRef, Subquery
+
+        from YSE_App.models import TransientPhotData
+
+        recent = TransientPhotData.objects.filter(photometry__transient=OuterRef("pk")).exclude(
+            data_quality__isnull=False
+        )
+        return {
+            "recent_mag": Subquery(recent.filter(mag__isnull=False).order_by("-obs_date").values("mag")[:1]),
+            "recent_magdate": Subquery(recent.order_by("-obs_date").values("obs_date")[:1]),
+        }
+
     def _qs(self):
         from YSE_App.table_utils import annotate_dashboard_transient_fields
 
         return annotate_dashboard_transient_fields(
             Transient.objects.filter(name__startswith="pf").order_by("-disc_date")
-        )
+        ).annotate(**self._latest_phot())
 
     def _plain(self):
-        from YSE_App.table_utils import _recent_phot_subqueries
-
-        recent_mag, recent_magdate = _recent_phot_subqueries("pk")
         return (
             Transient.objects.filter(name__startswith="pf")
             .order_by("-disc_date")
             .select_related("status", "host", "obs_group")
-            .annotate(recent_mag=recent_mag, recent_magdate=recent_magdate)
+            .annotate(**self._latest_phot())
         )
+
+    def test_dashboard_fields_add_no_photometry_subquery(self):
+        """#270: the Last Det. / Last Obs. cells read photstat; no per-row photometry subquery."""
+        from YSE_App.table_utils import annotate_dashboard_transient_fields
+
+        qs = annotate_dashboard_transient_fields(
+            Transient.objects.filter(name__startswith="pf").order_by("-disc_date")
+        )
+        self.assertEqual(dict(qs.query.annotations), {})
+        with CaptureQueriesContext(connection) as ctx:
+            rows = list(qs[2:5])
+            _stats = [getattr(r, "photstat", None) for r in rows]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(ctx.captured_queries), 1)
+        self.assertNotIn("YSE_App_transientphotdata", ctx.captured_queries[0]["sql"])
+        self.assertIn("YSE_App_transientphotstat", ctx.captured_queries[0]["sql"])
 
     def test_slice_runs_a_bare_pk_query_then_the_annotated_rows(self):
         with CaptureQueriesContext(connection) as ctx:
@@ -896,7 +924,7 @@ class PageFirstQuerySetTests(TestCase):
 
         qs = annotate_dashboard_transient_fields(
             Transient.objects.filter(name__startswith="pf").order_by("-disc_date").prefetch_related("tags")
-        )
+        ).annotate(**self._latest_phot())
         with CaptureQueriesContext(connection) as ctx:
             rows = list(qs[:4])
             tags = [list(r.tags.all()) for r in rows]

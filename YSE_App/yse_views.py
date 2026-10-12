@@ -16,7 +16,8 @@ from django.utils import timezone
 from astropy.time import Time
 from django.core import serializers
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound
-from YSE_App.queries.raw_sql import DAYS_SINCE_DISC_SQL, RECENT_MAG_SQL
+from YSE_App.queries.raw_sql import DAYS_SINCE_DISC_SQL
+from YSE_App.queries.yse_python_queries import annotate_recent_mag
 
 @login_required
 def select_yse_fields(request):
@@ -284,12 +285,10 @@ def yse_sky(request):
         title = 'Transients with Any Status Except Ignore'
         query_name = 'default'
 
-    recent_mag_raw_query = RECENT_MAG_SQL
-
     has_transients = transients.exists()  # one existence check for both annotation steps
 
     if has_transients:
-        transients = transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,()))
+        transients = annotate_recent_mag(transients)
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
 
@@ -326,8 +325,7 @@ def yse_planning(request):
     # rising transients
     rising_transients = rising_transient_queryset(ndays=7).filter(~Q(status__name='Ignore')).filter(~Q(tags__name='YSE'))
 
-    recent_mag_raw_query = RECENT_MAG_SQL
-    rising_transients = rising_transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,()))
+    rising_transients = annotate_recent_mag(rising_transients)
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
     rising_transients = rising_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
@@ -339,8 +337,7 @@ def yse_planning(request):
     # possibly interesting transients
     good_transients = Transient.objects.filter(~Q(status__name='Ignore'))
 
-    recent_mag_raw_query = RECENT_MAG_SQL
-    good_transients = good_transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,())).filter(~Q(tags__name='YSE'))
+    good_transients = annotate_recent_mag(good_transients).filter(~Q(tags__name='YSE'))
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
     good_transients = good_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
@@ -352,9 +349,7 @@ def yse_planning(request):
     # transients w/i 15 deg of existing fields
     nearby_transients = sne_15deg_from_yse() #qs_start=rising_transients)
 
-    recent_mag_raw_query = RECENT_MAG_SQL
-
-    nearby_transients = nearby_transients.annotate(recent_mag=RawSQL(recent_mag_raw_query,())).filter(~Q(tags__name='YSE'))
+    nearby_transients = annotate_recent_mag(nearby_transients).filter(~Q(tags__name='YSE'))
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
     nearby_transients = nearby_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
@@ -419,9 +414,6 @@ def yse_fields(request,ra_min_hour,ra_max_hour,min_mag):
     for sf in SurveyField.objects.filter(ztf_field_id__in=ztf_ids).order_by('pk'):
         fields_by_tile.setdefault(sf.ztf_field_id, []).append(sf)
 
-    recent_mag_subquery = TransientPhotData.objects.filter(
-        photometry__transient=OuterRef('id')
-    ).order_by('-obs_date').values('mag')[:1]
     brighter_than_limit = TransientPhotData.objects.filter(
         photometry__transient=OuterRef('pk'), mag__lt=mag_limit)
 
@@ -443,9 +435,7 @@ def yse_fields(request,ra_min_hour,ra_max_hour,min_mag):
                          Q(dec__lt = sf.dec_cen+dec_offset.degree))]
 
         query_full = functools.reduce(operator.or_, qs_list)
-        qs_final = qs.filter(query_full).annotate(
-            recent_mag=Subquery(recent_mag_subquery),
-        ).filter(Exists(brighter_than_limit))
+        qs_final = annotate_recent_mag(qs.filter(query_full)).filter(Exists(brighter_than_limit))
 
         days_from_disc_query = DAYS_SINCE_DISC_SQL
         qs_final = qs_final.annotate(days_since_disc=RawSQL(days_from_disc_query,()))

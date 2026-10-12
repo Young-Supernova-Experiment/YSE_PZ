@@ -28,7 +28,6 @@ from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
 from .common.magnitude_format import format_magnitude
-from YSE_App.queries.raw_sql import RECENT_MAG_SQL
 # Circular: table_utils is imported from yse_pa during views import, before
 # follow-up request helpers are safe to load. Import in render methods.
 rcParams['figure.figsize'] = (7,7)
@@ -39,23 +38,6 @@ def stable_order_by(queryset, field, is_descending):
     if is_descending:
         return queryset.order_by(f'-{field}', '-pk')
     return queryset.order_by(field, 'pk')
-
-
-def _recent_phot_subqueries(transient_ref):
-    """(recent_mag, recent_magdate) scalar subqueries for the transient at ``transient_ref``.
-
-    Matches PhotometryService / Transient.recent_mag(): flagged bad data excluded.
-    """
-    recent_phot = TransientPhotData.objects.filter(
-        photometry__transient=OuterRef(transient_ref),
-    ).exclude(data_quality__isnull=False)
-    recent_mag_sq = (
-        recent_phot.filter(mag__isnull=False)
-        .order_by('-obs_date')
-        .values('mag')[:1]
-    )
-    recent_magdate_sq = recent_phot.order_by('-obs_date').values('obs_date')[:1]
-    return Subquery(recent_mag_sq), Subquery(recent_magdate_sq)
 
 
 # Sort keys for the "Last Det." and "Last Obs." columns (#454, per #270):
@@ -1687,21 +1669,18 @@ class PageFirstQuerySet(QuerySet):
 
 def annotate_dashboard_transient_fields(qs):
     """
-    Prefetch FKs and annotate recent photometry for dashboard tables.
+    Prefetch the FKs the dashboard tables render, including the stat row.
 
-    Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
-    Returns a PageFirstQuerySet so django-tables2's page slice does not evaluate the
-    subqueries for every row of the bucket (see PageFirstQuerySet).
+    The Last Det. / Last Obs. cells and sorts read ``TransientPhotStat``
+    (``photstat__last_detected_mag`` / ``photstat__last_obs_date``, #557), so
+    the former ``recent_mag`` / ``recent_magdate`` photometry subqueries are
+    gone (#270). Returns a PageFirstQuerySet so django-tables2's page slice
+    stays cheap when a caller adds annotations (see PageFirstQuerySet).
     """
-    recent_mag, recent_magdate = _recent_phot_subqueries('pk')
     return PageFirstQuerySet.wrap(
-        # photstat: the Last Det. / Last Obs. cells (#557) read it from the page
-        # rows; select_related is left out of the bare pk and count queries.
+        # select_related is left out of the bare pk and count queries.
         qs.select_related('status', 'host', 'obs_group',
-                          'photstat', 'photstat__last_detected_band').annotate(
-            recent_mag=recent_mag,
-            recent_magdate=recent_magdate,
-        )
+                          'photstat', 'photstat__last_detected_band')
     )
 
 

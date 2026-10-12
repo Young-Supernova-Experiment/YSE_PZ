@@ -298,7 +298,45 @@ class YSEOnCallDateViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     permission_classes = (permissions.IsAuthenticated,)
 
 ### `Phot` ViewSets ###
-class TransientPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class PhotStatBatchMixin:
+    """Photometry writes refresh each touched transient's stat row once per request (#269).
+
+    The ``TransientPhotData`` / ``TransientPhotometry`` signals schedule a
+    ``TransientPhotStat`` recompute per saved row (and again per data-quality
+    change); inside ``photstat.deferred_updates()`` they are collected and run
+    once per transient when the request's writes are done. A POST whose body
+    is a JSON list creates every row in it (up to ``MAX_BATCH``) the same way.
+    """
+
+    MAX_BATCH = 1000
+
+    def create(self, request, *args, **kwargs):
+        if not isinstance(request.data, list):
+            return super().create(request, *args, **kwargs)
+        if len(request.data) > self.MAX_BATCH:
+            return Response(
+                {'detail': 'At most %d rows per request.' % self.MAX_BATCH},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer):
+        from YSE_App.services import photstat
+
+        with photstat.deferred_updates():
+            super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        from YSE_App.services import photstat
+
+        with photstat.deferred_updates():
+            super().perform_update(serializer)
+
+
+class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotometrySerializer
     permission_classes = (permissions.IsAuthenticated,)
     lookup_field = "id"
@@ -316,7 +354,7 @@ class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         allowed_phot = PhotometryService.GetAuthorizedHostPhotometry_ByUser(self.request.user)
         return allowed_phot.prefetch_related('groups')
 
-class TransientPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class TransientPhotDataViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
 

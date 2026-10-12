@@ -64,6 +64,7 @@ from django.db import transaction
 from django.db.models import Count
 
 from YSE_App.models.phot_stat_models import (
+    EXTRAPOLATED_FIELDS,
     TransientPhotStat,
     datetime_to_mjd,
     mjd_to_datetime,
@@ -318,6 +319,23 @@ def apply_values(stat: TransientPhotStat, values: PhotStatValues) -> bool:
     return True
 
 
+def _recompute_update_fields() -> List[str]:
+    """Columns a recompute writes on an existing row: everything but the
+    Bazin columns (``EXTRAPOLATED_FIELDS``, written by the Bazin job), so a
+    recompute never overwrites a newer extrapolation with the value it read."""
+    return [
+        f.name for f in TransientPhotStat._meta.concrete_fields
+        if not f.primary_key and f.name not in EXTRAPOLATED_FIELDS and f.name != 'transient'
+    ]
+
+
+def _save(stat: TransientPhotStat) -> None:
+    if stat.pk is None:
+        stat.save()
+    else:
+        stat.save(update_fields=_recompute_update_fields())
+
+
 def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPhotStat]:
     """Recompute and store the stat row for ``transient_id``.
 
@@ -337,7 +355,7 @@ def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPh
     had_row = stat.pk is not None
     old_num_det = stat.num_det_global or 0
     if apply_values(stat, values):
-        stat.save()
+        _save(stat)
         if had_row and (stat.num_det_global or 0) > old_num_det:
             _announce_new_photometry(stat, (stat.num_det_global or 0) - old_num_det)
     return stat
@@ -444,13 +462,33 @@ def recompute_many(transient_ids: Sequence[int], *, batch_size: int = DEFAULT_BA
                     to_create.append(stat)
                     result.created += 1
                 elif apply_values(stat, values):
-                    stat.save()
+                    _save(stat)
                     result.updated += 1
                 else:
                     result.unchanged += 1
             if to_create:
                 TransientPhotStat.objects.bulk_create(to_create, batch_size=batch_size)
     return result
+
+
+def stale_transient_ids(limit: Optional[int] = None) -> List[int]:
+    """Transients whose stat row is missing or was written under older rules.
+
+    The same selection as ``rebuild_photstats --stale-only``, oldest pk first;
+    ``limit`` caps one pass of the periodic refresh (#269).
+    """
+    from YSE_App.models.transient_models import Transient
+
+    current = TransientPhotStat.objects.filter(schema_version__gte=SCHEMA_VERSION)
+    qs = Transient.objects.exclude(pk__in=current.values('transient_id')).order_by('pk')
+    if limit:
+        qs = qs[:int(limit)]
+    return list(qs.values_list('pk', flat=True))
+
+
+def refresh_stale(limit: Optional[int] = None, *, batch_size: int = DEFAULT_BATCH_SIZE) -> RecomputeResult:
+    """Recompute up to ``limit`` missing or outdated rows (the periodic job, #269)."""
+    return recompute_many(stale_transient_ids(limit), batch_size=batch_size)
 
 
 # --------------------------------------------------------------- scheduling
