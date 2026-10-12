@@ -1,0 +1,64 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Feedback #{{ item.pk }} <small><a href="{% url 'feedback_review_list' %}">all feedback</a> &middot; <a href="{% url 'admin:YSE_App_feedback_change' item.pk %}">admin</a></small></h1>
+</section>
+
+<section class="content">
+	{% if messages %}{% for message in messages %}<div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
+	<div class="row">
+		<div class="col-lg-5 col-12">
+			<div class="box">
+				<div class="box-header"><h3 class="box-title">As sent (private)</h3></div>
+				<div class="box-body">
+					<dl class="mb-0">
+						<dt>From</dt><dd>{{ item.user.get_username|default:"(deleted user)" }}</dd>
+						<dt>Sent</dt><dd>{{ item.created|date:"Y-m-d H:i" }}</dd>
+						<dt>Type</dt><dd>{{ item.get_kind_display }}</dd>
+						<dt>Page</dt><dd>{% if item.page_url %}<a href="{{ item.page_url }}"><code>{{ item.page_url }}</code></a>{% else %}<span class="text-muted">not included</span>{% endif %}</dd>
+						<dt>Status</dt><dd>{{ item.get_status_display }}{% if item.reviewed_by %} by {{ item.reviewed_by.get_username }} {{ item.reviewed_at|date:"Y-m-d H:i" }}{% endif %}</dd>
+						{% if item.github_issue_url %}<dt>GitHub issue</dt><dd><a href="{{ item.github_issue_url }}" target="_blank" rel="noopener noreferrer">{{ item.github_issue_url }}</a></dd>{% endif %}
+						<dt>Title</dt><dd>{{ item.title|default:"-" }}</dd>
+						<dt>Text</dt><dd><pre class="mb-0" style="white-space: pre-wrap;">{{ item.text }}</pre></dd>
+					</dl>
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-7 col-12">
+			<form method="post" class="box">
+				{% csrf_token %}
+				<div class="box-header"><h3 class="box-title">GitHub issue draft</h3></div>
+				<div class="box-body">
+					{% if item.github_issue_url %}
+					<p>This feedback has been posted: <a href="{{ item.github_issue_url }}" target="_blank" rel="noopener noreferrer">{{ item.github_issue_url }}</a>.</p>
+					{% else %}
+					<div class="alert alert-warning">
+						The issue is <strong>public</strong> on {{ github_repo }}. Remove unpublished results, transient details from private groups and anything personal (names, emails) before posting. The sender is never added to the issue.
+					</div>
+					{% if not token_configured %}<div class="alert alert-info">No GitHub token is configured yet (see the runbook), so "Create GitHub issue" will fail.</div>{% endif %}
+					<div class="form-group">
+						<label for="issue_title">Title</label>
+						<input id="issue_title" name="issue_title" class="form-control" maxlength="200" value="{{ issue_title }}" required>
+					</div>
+					<div class="form-group">
+						<label for="issue_body">Body</label>
+						<textarea id="issue_body" name="issue_body" class="form-control" rows="12" required>{{ issue_body }}</textarea>
+					</div>
+					{% endif %}
+				</div>
+				<div class="box-footer">
+					{% if not item.github_issue_url %}
+					<button type="submit" name="action" value="create_issue" class="btn btn-primary" onclick="return confirm('Post this as a public GitHub issue?');">Create GitHub issue</button>
+					{% endif %}
+					{% if item.status != 'posted' %}
+					<button type="submit" name="action" value="reviewed" class="btn btn-default" formnovalidate>Mark reviewed</button>
+					<button type="submit" name="action" value="dismissed" class="btn btn-default" formnovalidate>Dismiss</button>
+					{% if item.status != 'new' %}<button type="submit" name="action" value="new" class="btn btn-default" formnovalidate>Back to new</button>{% endif %}
+					{% endif %}
+				</div>
+			</form>
+		</div>
+	</div>
+</section>
+{% endblock %}

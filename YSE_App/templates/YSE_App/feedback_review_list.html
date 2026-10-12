@@ -1,0 +1,40 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Feedback <small><a href="{% url 'admin:YSE_App_feedback_changelist' %}">admin</a></small></h1>
+</section>
+
+<section class="content">
+	{% if messages %}{% for message in messages %}<div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
+	<p class="text-muted">Feedback is stored here only. It can contain unpublished results or personal details, and the GitHub repository is public: open an item, edit the draft, and press "Create GitHub issue" only for what may be public.</p>
+	<ul class="nav nav-pills mb-2">
+		<li class="nav-item"><a class="nav-link{% if not status %} active{% endif %}" href="{% url 'feedback_review_list' %}">All</a></li>
+		{% for value, label in status_choices %}
+		<li class="nav-item"><a class="nav-link{% if status == value %} active{% endif %}" href="{% url 'feedback_review_list' %}?status={{ value }}">{{ label }}</a></li>
+		{% endfor %}
+	</ul>
+	<div class="box">
+		<div class="box-body table-responsive">
+			<table class="table table-striped table-sm">
+				<thead><tr><th>#</th><th>Sent</th><th>Type</th><th>Title</th><th>Page</th><th>Status</th><th>Issue</th></tr></thead>
+				<tbody>
+				{% for row in rows %}
+					<tr>
+						<td><a href="{% url 'feedback_review_detail' row.pk %}">{{ row.pk }}</a></td>
+						<td>{{ row.created|date:"Y-m-d H:i" }}</td>
+						<td>{{ row.get_kind_display }}</td>
+						<td><a href="{% url 'feedback_review_detail' row.pk %}">{{ row.title|default:row.text|truncatechars:80 }}</a></td>
+						<td><code>{{ row.page_url|truncatechars:60 }}</code></td>
+						<td>{{ row.get_status_display }}</td>
+						<td>{% if row.github_issue_url %}<a href="{{ row.github_issue_url }}" target="_blank" rel="noopener noreferrer">issue</a>{% endif %}</td>
+					</tr>
+				{% empty %}
+					<tr><td colspan="7" class="text-muted">No feedback.</td></tr>
+				{% endfor %}
+				</tbody>
+			</table>
+		</div>
+	</div>
+</section>
+{% endblock %}
