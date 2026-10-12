@@ -38,7 +38,7 @@ planning and saved-query tables (`yse_sky`, `yse_planning`, `yse_fields`) filter
 | `rise_rate` | mag/day, positive: `(first_mag - peak_mag) / (peak_mjd - first_mjd)` in the band of the first detection; NULL when that detection is the band's peak |
 | `decay_rate` | mag/day, positive: `(last_mag - peak_mag) / (last_mjd - peak_mjd)` in the band of the last detection; NULL when that detection is the peak |
 | `per_band_json` | `{"<band_id>": {name, n_det, peak_mag, peak_mjd, first_mag, first_mjd, last_mag, last_mjd, n_limits, deepest_limit, deepest_limit_mjd, last_limit_mjd}}` (a band with only pre-detection limits has `n_det: 0`) |
-| `extrapolated_mag`, `extrapolated_band_id`, `extrapolated_mjd`, `extrapolated_at` | Bazin-extrapolated magnitude at `extrapolated_mjd` in that band (the joint fit behind the detail-page overlay and the "Bazin Mag @ Night" column), and when it was computed; NULL magnitude with a set `extrapolated_at` = no usable fit then (#271). Written only by `bazin.store_extrapolations` / the `photstat.bazin_extrapolate` job, never by a recompute |
+| `extrapolated_mag`, `extrapolated_band_id`, `extrapolated_mjd`, `extrapolated_at` | Bazin-extrapolated magnitude at `extrapolated_mjd` in that band (the joint fit behind the detail-page overlay and the "Bazin Mag @ Night" column), and when it was computed; NULL magnitude with a set `extrapolated_at` = no usable fit then (#271). Written only by `bazin.store_extrapolations` / the `photstat.bazin_extrapolate` job, never by a recompute. Internal for now: not in the API or the Explorer view (#607) |
 | `phot_hash`, `last_updated` | fingerprint of the stored values (an unchanged recompute writes nothing) and when it last changed |
 | `schema_version` | `services.photstat.SCHEMA_VERSION` when the row was written (2 since #349, 3 since #368). A smaller value marks a row computed under older rules: the detail page recomputes it when opened, the next signal rewrites it, `rebuild_photstats --stale-only` visits only those rows |
 
@@ -91,7 +91,9 @@ Indexes: `peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, 
   `first_detected_mjd/_date/_mag/_band`, `last_detected_mjd/_date/_mag/_band`, `peak_mjd/_date/_mag/_band`,
   `mean_mag`, `faintest_mag`, `deepest_limit`, `deepest_limit_mjd`, `deepest_limit_band`,
   `last_non_detection_mjd`, `last_non_detection_band`, `time_to_non_detection`, `rise_rate`, `decay_rate`,
-  `extrapolated_mag/_band/_mjd/_at`, `schema_version`, `last_updated`. Band columns are band names. The
+  `schema_version`, `last_updated`. Band columns are band names. The Bazin `extrapolated_*` columns are
+  not in the view or the API: derived values get no new exposure until #607 computes them per
+  visibility scope. The
   limit columns count pre-detection non-detections only, as on the Summary tab. Example:
   `SELECT v.transient_name, v.peak_mag, v.peak_band, v.rise_rate FROM yse_transient_photstat_v v
   WHERE v.num_det >= 3 AND v.last_detected_date > NOW() - INTERVAL 7 DAY ORDER BY v.peak_mag`.

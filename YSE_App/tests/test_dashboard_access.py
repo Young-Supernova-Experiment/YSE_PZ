@@ -385,8 +385,19 @@ class PageFirstCountTests(TestCase):
         seed_access_transients(cls.owner, prefix="dacccnt")
 
     def _qs(self):
+        """The dashboard queryset plus a caller-added photometry subquery (the
+        dashboard itself has none since #270), so count() has two to leave out."""
+        from django.db.models import OuterRef, Subquery
+
+        from YSE_App.models import TransientPhotData
+
         base = Transient.objects.filter(name__startswith="dacccnt").order_by("-disc_date", "-pk")
-        return annotate_open_interest_count(annotate_peak_mag(annotate_dashboard_transient_fields(base)))
+        latest = TransientPhotData.objects.filter(photometry__transient=OuterRef("pk"), mag__isnull=False).exclude(
+            data_quality__isnull=False
+        )
+        return annotate_open_interest_count(annotate_peak_mag(annotate_dashboard_transient_fields(base))).annotate(
+            recent_mag=Subquery(latest.order_by("-obs_date").values("mag")[:1])
+        )
 
     def test_django_32_count_selects_annotations(self):
         """The claim: the stock count() keeps every annotation in the derived table."""

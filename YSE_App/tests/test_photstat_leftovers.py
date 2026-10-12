@@ -222,21 +222,36 @@ class ExplorerViewTests(_Fixture):
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT transient_name, num_det, num_limits, peak_mag, peak_band, deepest_limit, "
-                "deepest_limit_band, last_non_detection_band, extrapolated_mag "
+                "deepest_limit_band, last_non_detection_band "
                 "FROM yse_transient_photstat_v WHERE transient_id = %s",
                 [self.transient.pk],
             )
             rows = cursor.fetchall()
         stat = self.stat()
         self.assertEqual(len(rows), 1)
-        name, num_det, num_limits, peak_mag, peak_band, deepest, deepest_band, last_nd_band, xmag = rows[0]
+        name, num_det, num_limits, peak_mag, peak_band, deepest, deepest_band, last_nd_band = rows[0]
         self.assertEqual(name, self.transient.name)
         self.assertEqual((num_det, num_limits), (stat.num_det_global, stat.num_limits_global))
         self.assertAlmostEqual(peak_mag, stat.peak_mag)
         self.assertEqual(peak_band, self.r.name)
         self.assertAlmostEqual(deepest, stat.deepest_limit)
         self.assertEqual((deepest_band, last_nd_band), (self.r.name, self.r.name))
-        self.assertIsNone(xmag)
+
+    def test_bazin_columns_are_not_exposed(self):
+        """#607: no new exposure of derived values: not in the view, not in the API."""
+        if connection.vendor == "mysql":
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM yse_transient_photstat_v LIMIT 0")
+                columns = [c[0] for c in cursor.description]
+            self.assertFalse([c for c in columns if c.startswith("extrapolated")], columns)
+        client = Client()
+        client.force_login(self.user)
+        response = client.get("/api/transientphotstats/?transient_name=%s" % self.transient.name)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        row = (data["results"] if isinstance(data, dict) and "results" in data else data)[0]
+        self.assertIn("peak_mag", row)
+        self.assertFalse([k for k in row if k.startswith("extrapolated")], sorted(row))
 
     def test_missing_privilege_is_a_warning_not_a_failed_deploy(self):
         import importlib

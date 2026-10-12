@@ -1394,7 +1394,7 @@ mysql -u <ADMIN_USER> -p -h <DB_HOST> <DB> < /tmp/photstat_view.sql
 cd <STACK> && <STACK_PYTHON> manage.py run_jobs --status
 ```
 
-**Expected:** `photstat.refresh_stale` and `photstat.bazin_extrapolate` among the registered kinds, and a `done` `photstat.refresh_stale` job once an hour. Optional `[site_settings]` keys in `settings.ini` (read by the cron process at its next run; no Apache restart needed): `PHOTSTAT_REFRESH_CRON_ENABLED: False` turns the refresh off; `PHOTSTAT_REFRESH_LIMIT` (2000) and `PHOTSTAT_REFRESH_CRON_MINUTES` (60) size it; `PHOTSTAT_BAZIN_CRON_ENABLED: True` (off by default) also stores the Bazin-extrapolated magnitude for transients with an open follow-up request every run (at most `PHOTSTAT_BAZIN_LIMIT`, 500, each a Bazin fit), which fills the `extrapolated_*` columns of the view.
+**Expected:** `photstat.refresh_stale` and `photstat.bazin_extrapolate` among the registered kinds, and a `done` `photstat.refresh_stale` job once an hour. Optional `[site_settings]` keys in `settings.ini` (read by the cron process at its next run; no Apache restart needed): `PHOTSTAT_REFRESH_CRON_ENABLED: False` turns the refresh off; `PHOTSTAT_REFRESH_LIMIT` (2000) and `PHOTSTAT_REFRESH_CRON_MINUTES` (60) size it; `PHOTSTAT_BAZIN_CRON_ENABLED: True` (off by default) also stores the Bazin-extrapolated magnitude for transients with an open follow-up request every run (at most `PHOTSTAT_BAZIN_LIMIT`, 500, each a Bazin fit), which fills the internal `extrapolated_*` columns (not in the view or the API until #607).
 
 **Rollback:** `cd <STACK> && <STACK_PYTHON> manage.py migrate YSE_App 0032` drops the view and the four columns (only after the code is rolled back too).
 

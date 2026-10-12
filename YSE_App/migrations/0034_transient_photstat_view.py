@@ -3,7 +3,9 @@
 One row per ``TransientPhotStat`` with the transient name and band names
 joined in, so an Explorer query can read the stored photometry statistics
 without repeating the photometry subqueries. Adds no column or table, so it
-is safe on the shared ``YSE_test`` database.
+is safe on the shared ``YSE_test`` database. The Bazin ``extrapolated_*``
+columns (0033) are left out: derived values get no new exposure until #607
+computes them per visibility scope.
 
 MySQL only (``CREATE OR REPLACE VIEW``); other backends skip it. Creating a
 view needs the ``CREATE VIEW`` privilege. When the migrating database user
@@ -52,10 +54,6 @@ SELECT
     ps.time_to_non_detection AS time_to_non_detection,
     ps.rise_rate AS rise_rate,
     ps.decay_rate AS decay_rate,
-    ps.extrapolated_mag AS extrapolated_mag,
-    xb.name AS extrapolated_band,
-    ps.extrapolated_mjd AS extrapolated_mjd,
-    ps.extrapolated_at AS extrapolated_at,
     ps.schema_version AS schema_version,
     ps.last_updated AS last_updated
 FROM YSE_App_transientphotstat ps
@@ -65,7 +63,6 @@ LEFT JOIN YSE_App_photometricband lb ON lb.id = ps.last_detected_band_id
 LEFT JOIN YSE_App_photometricband pb ON pb.id = ps.peak_band_id
 LEFT JOIN YSE_App_photometricband db ON db.id = ps.deepest_limit_band_id
 LEFT JOIN YSE_App_photometricband nb ON nb.id = ps.last_non_detection_band_id
-LEFT JOIN YSE_App_photometricband xb ON xb.id = ps.extrapolated_band_id
 """
 
 DROP_VIEW_SQL = 'DROP VIEW IF EXISTS yse_transient_photstat_v'
