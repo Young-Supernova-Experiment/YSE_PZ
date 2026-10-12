@@ -185,7 +185,7 @@ INACTIVE_USER_EXEMPT_USERNAMES = _list_setting(
     'YSE_INACTIVE_USER_EXEMPT_USERNAMES', 'security', 'INACTIVE_USER_EXEMPT_USERNAMES')
 
 
-# Application definitionEXPLORER_SQL_BLACKLIST
+# Application definition
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -372,6 +372,8 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.static',
+                # Bare parent template for the SQL Explorer schema iframe (#450).
+                'YSE_App.explorer_shell.explorer_shell',
             ],
         },
     },
@@ -727,6 +729,9 @@ def _explorer_permission(request):
 
 EXPLORER_PERMISSION_VIEW = _explorer_permission
 EXPLORER_PERMISSION_CHANGE = _explorer_permission
+# Signed-in users without Explorer access get 403 (Explorer's default shows
+# the admin login form); anonymous users go to the site login (#450).
+EXPLORER_NO_PERMISSION_VIEW = 'YSE_App.explorer_shell.explorer_no_permission'
 # Tables hidden from the Explorer schema browser (django-sql-explorer 2.3).
 # This only affects the schema listing; what queries can read is set by the
 # Explorer MySQL user's grants (runbook).

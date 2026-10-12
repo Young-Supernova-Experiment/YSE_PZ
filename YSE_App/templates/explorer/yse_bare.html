@@ -1,0 +1,41 @@
+{% load i18n static %}<!DOCTYPE html>
+<html lang="en" data-yse-theme="dark">
+{% comment %}
+Bare parent for the SQL Explorer pages shown inside an iframe (the schema pane,
+url name explorer_schema), chosen by YSE_App.explorer_shell.explorer_shell.
+No site navbar or sidebar; it keeps Explorer's own Bootstrap 3 layout and
+takes its colours from the YSE-PZ theme so it matches the page around it.
+{% endcomment %}
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>{% trans "SQL Explorer" %}</title>
+	<script>
+	(function () {
+		try {
+			var t = localStorage.getItem("yse-theme") || "dark";
+			document.documentElement.setAttribute("data-yse-theme", t !== "light" ? "dark" : "light");
+		} catch (e) {
+			document.documentElement.setAttribute("data-yse-theme", "dark");
+		}
+		// Follow the theme toggle on the page around the iframe.
+		window.addEventListener("storage", function (e) {
+			if (e.key === "yse-theme") {
+				document.documentElement.setAttribute("data-yse-theme", e.newValue !== "light" ? "dark" : "light");
+			}
+		});
+	})();
+	</script>
+	<link rel="stylesheet" href="{% static 'explorer/css/bootstrap.min.css' %}">
+	<link rel="stylesheet" href="{% static 'explorer/css/explorer.css' %}">
+	<link rel="stylesheet" href="{% static 'YSE_App/yse-theme.css' %}?v=obs-night-3">
+	<link rel="stylesheet" href="{% static 'YSE_App/explorer-theme.css' %}?v=450-1">
+</head>
+<body class="yse-theme yse-explorer yse-explorer-bare">
+	{% block sql_explorer_content_takeover %}{% endblock %}
+	{% block sql_explorer_footer %}{% endblock %}
+	<script src="{% static 'explorer/js/jquery.min.js' %}"></script>
+	<script src="{% static 'explorer/js/list.min.js' %}"></script>
+	{% block sql_explorer_scripts %}{% endblock %}
+</body>
+</html>
