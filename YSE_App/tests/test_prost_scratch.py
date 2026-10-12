@@ -32,9 +32,11 @@ class ProstScratchTests(SimpleTestCase):
         self.addCleanup(self._tmp.cleanup)
         self.base = os.path.join(self._tmp.name, 'scratch')
         os.makedirs(self.base)
-        patcher = mock.patch.object(TNS_uploads, 'HAS_ASTRO_PROST', True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (('HAS_ASTRO_PROST', True),
+                            ('SnRateAbsmag', mock.MagicMock())):
+            patcher = mock.patch.object(TNS_uploads, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_interleaved_runs_do_not_delete_each_other(self):
         other_dirs = []
