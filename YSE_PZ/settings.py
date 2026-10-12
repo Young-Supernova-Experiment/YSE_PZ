@@ -832,6 +832,9 @@ ZTFPASS = os.environ.get('ZTF_FORCED_PHOT_PASS') or config.get('ztf', 'ztfforced
 # SciServer account for the photo-z crons; required only when those crons run.
 SCISERVER_USER = os.environ.get('SCISERVER_USER') or config.get('main', 'sciserveruser', fallback='')
 SCISERVER_PASSWORD = os.environ.get('SCISERVER_PASSWORD') or config.get('main', 'sciserverpass', fallback='')
+# MAST CasJobs login for the PS1 star/galaxy-score lookups; required only by those ingest jobs.
+CASJOBS_WSID = os.environ.get('CASJOBS_WSID') or config.get('casjobs', 'wsid', fallback='')
+CASJOBS_PW = os.environ.get('CASJOBS_PW') or config.get('casjobs', 'password', fallback='')
 # Optional CA bundle path for the Gemini ODB; empty uses the system trust store.
 GEMINI_CA_BUNDLE = os.environ.get('GEMINI_CA_BUNDLE') or config.get('main', 'gemini_ca_bundle', fallback='')
 KEPLER_API_ENDPOINT = _str_setting('YSE_KEPLER_API_ENDPOINT', 'main', 'kepler_api_endpoint',

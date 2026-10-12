@@ -4,6 +4,31 @@ title = "YSE_PZ gitleaks config"
 [extend]
 useDefault = true
 
+# Custom rules (#626): inline credentials in Python ingest/util scripts. Read them from
+# settings.ini or the environment instead; see docs/credentials-and-external-services.md.
+[[rules]]
+id = "yse-python-env-credential-literal"
+description = "Credential assigned as a string literal to an environment variable in code"
+regex = '''(?i)os\.environ\[\s*['"][A-Za-z0-9_]*(pw|pass|passwd|password|pwd|secret|token|api_?key)['"]\s*\]\s*=\s*['"][^'"\s<]{4,}['"]'''
+keywords = ["environ"]
+
+[[rules]]
+id = "yse-python-basic-auth-literal"
+description = "HTTP basic auth with a literal user and password"
+regex = '''(?i)(HTTPBasicAuth|HTTPDigestAuth)\(\s*['"][^'"]+['"]\s*,\s*['"][^'"\s<]{3,}['"]\s*\)'''
+keywords = ["httpbasicauth", "httpdigestauth"]
+
+[[rules]]
+id = "yse-python-password-kwarg-literal"
+description = "Password, token or secret passed or assigned as a string literal in code"
+regex = '''(?i)\b(set_password\(|(password|passwd|userpass|secret|api_?key|token)\s*=)\s*['"][^'"\s<]{6,}['"]'''
+keywords = ["set_password", "password", "passwd", "userpass", "secret", "apikey", "api_key", "token"]
+path = '''\.py$'''
+
+[rules.allowlist]
+description = "Throwaway passwords in test fixtures"
+paths = ['''(^|/)tests?/''', '''(^|/)test_[^/]*\.py$''']
+
 [allowlist]
 description = "Known public values and placeholders"
 regexes = [
