@@ -12,11 +12,19 @@ description = "Credential assigned as a string literal to an environment variabl
 regex = '''(?i)os\.environ\[\s*['"][A-Za-z0-9_]*(pw|pass|passwd|password|pwd|secret|token|api_?key)['"]\s*\]\s*=\s*['"][^'"\s<]{4,}['"]'''
 keywords = ["environ"]
 
+[rules.allowlist]
+description = "Throwaway passwords in test fixtures"
+paths = ['''(^|/)tests?/''', '''(^|/)test_[^/]*\.py$''']
+
 [[rules]]
 id = "yse-python-basic-auth-literal"
 description = "HTTP basic auth with a literal user and password"
 regex = '''(?i)(HTTPBasicAuth|HTTPDigestAuth)\(\s*['"][^'"]+['"]\s*,\s*['"][^'"\s<]{3,}['"]\s*\)'''
 keywords = ["httpbasicauth", "httpdigestauth"]
+
+[rules.allowlist]
+description = "Throwaway passwords in test fixtures"
+paths = ['''(^|/)tests?/''', '''(^|/)test_[^/]*\.py$''']
 
 [[rules]]
 id = "yse-python-password-kwarg-literal"
