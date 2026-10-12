@@ -166,8 +166,6 @@ class DECam(CronJobBase):
                               help='email password, if post=True (default=%default)')
             parser.add_argument('--dburl', default=config.get('main','dburl'), type=str,
                               help='URL to POST transients to a database (default=%default)')
-            parser.add_argument('--ghost_path', default=config.get('main','ghost_path'), type=str,
-                              help='GHOST data directory (default=%default)')
             parser.add_argument('--ztfurl', default=config.get('ztf','ztfurl'), type=str,
                               help='ZTF URL (default=%default)')
             parser.add_argument('--STATIC', default=config.get('site_settings','STATIC'), type=str,
@@ -189,22 +187,6 @@ class DECam(CronJobBase):
 
         return(parser)
 
-    def getGHOSTData(self,sc,ghost_host):
-        hostdict = {}; hostcoords = ''
-        hostdict = {'name':ghost_host['objName'].to_numpy()[0],'ra':ghost_host['raMean'].to_numpy()[0],
-                    'dec':ghost_host['decMean'].to_numpy()[0]}
-
-        hostcoords = f"ra={hostdict['ra']:.7f}, dec={hostdict['dec']:.7f}\n"
-        if 'photo_z' in ghost_host.keys():
-            hostdict['photo_z_internal'] = ghost_host['photo_z'].to_numpy()[0]
-        if 'NED_redshift' in ghost_host.keys() and ghost_host['NED_redshift'].to_numpy()[0] == ghost_host['NED_redshift'].to_numpy()[0]:
-            hostdict['redshift'] = ghost_host['NED_redshift'].to_numpy()[0]
-
-        if 'photo_z_internal' in hostdict.keys():
-            if hostdict['photo_z_internal'] != hostdict['photo_z_internal']:
-                hostdict['photo_z_internal'] = None
-
-        return hostdict,hostcoords
     
     def main(self):
         # get all the DECam links
@@ -226,11 +208,7 @@ class DECam(CronJobBase):
         scexisting = SkyCoord(ra,dec,unit=u.deg)
             
         # prelims
-        # astro_ghost fetches the VO registry on import; keep it out of module import
-        from astro_ghost.ghostHelperFunctions import getGHOST, getTransientHosts
         transientdict = {}
-        if not os.path.exists(f'{self.options.ghost_path}/database/GHOST.csv'):
-            getGHOST(real=True, verbose=True, installpath=self.options.ghost_path)
 
 
         count = 0
@@ -311,23 +289,6 @@ class DECam(CronJobBase):
                     except:
                         ps_prob = None
 
-                    # run GHOST
-                    try:
-                        from astro_ghost.photoz_helper import calc_photoz
-                        ghost_hosts = getTransientHosts(
-                            ['tmp'+candid],[SkyCoord(ra,dec,unit=(u.hour,u.deg))], verbose=True, starcut='gentle', ascentMatch=False,
-                            GHOSTpath=self.options.ghost_path)
-                        ghost_hosts = calc_photoz(ghost_hosts)
-                    except:
-                        ghost_hosts = None
-
-                    if ghost_hosts is not None:
-                        ghost_host = ghost_hosts[ghost_hosts['TransientName'] == candid]
-                        if not len(ghost_host): ghost_host = None
-                    else:
-                        ghost_host = None
-                else: ghost_host = None
-
                 # get photometry
                 tdict = {'name':tname,
                          'ra':sc[0].ra.deg,
@@ -339,11 +300,6 @@ class DECam(CronJobBase):
                 if not transient_exists:
                     tdict['point_source_probability'] = ps_prob
                     tdict['mw_ebv'] = mw_ebv
-
-                if ghost_host is not None:
-                    hostdict,hostcoords = self.getGHOSTData(sc,ghost_host)
-                    tdict['host'] = hostdict
-                    tdict['candidate_hosts'] = hostcoords
 
 
                 PhotUploadAll = {"mjdmatchmin":0.01,

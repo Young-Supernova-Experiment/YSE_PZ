@@ -214,8 +214,6 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.Photo_Z.YSE',
 	'YSE_App.data_ingest.SDSS_Photo_Z.YSE',
 	'YSE_App.data_ingest.PS1_cutouts.YSE',
-	'YSE_App.data_ingest.host_associate.YSE',
-	'YSE_App.data_ingest.PS1_PhotoZ.YSE',
 	'YSE_App.data_ingest.Apply_Tags.Tags',
 	'YSE_App.data_ingest.YSE_observations.SurveyObs',
 	'YSE_App.data_ingest.Query_ZTF.AntaresZTF',
@@ -235,7 +233,6 @@ CRON_CLASSES = [
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
     'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
-    'YSE_App.data_ingest.TNS_uploads.UpdateGHOST',
     # Personal-dashboard saved-query cache warmer; no-op unless
     # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
     'YSE_App.data_ingest.Dashboard_Cache_Warm.WarmDashboardQueries',

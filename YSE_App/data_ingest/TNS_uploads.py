@@ -18,11 +18,9 @@ from astropy import coordinates
 import numpy as np
 from astroquery.irsa_dust import IrsaDust
 from datetime import timedelta
-import glob
 import json
 import logging
 import os
-import shutil
 from astropy.coordinates import SkyCoord, Angle
 from astropy.coordinates import ICRS, Galactic, FK4, FK5
 from astropy.time import Time
@@ -59,19 +57,6 @@ def _remove_quietly(*paths):
             os.remove(path)
         except FileNotFoundError:
             pass
-        except OSError as exc:
-            logger.warning("could not remove %s: %s", path, exc)
-
-
-def _remove_dated_ghost_dirs():
-    """Remove the transients_<YYYYMMDD>* scratch trees GHOST writes in the cwd."""
-    stamp = datetime.utcnow().isoformat().split('T')[0].replace('-', '')
-    for path in glob.glob('transients_%s*' % stamp):
-        try:
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
         except OSError as exc:
             logger.warning("could not remove %s: %s", path, exc)
 
@@ -203,7 +188,7 @@ class processTNS:
             parser.add_argument('--hostmatchrad', default=config.get('main','hostmatchrad'), type=float,
                                 help='matching radius for hosts (arcmin) (default=%default)')
             parser.add_argument('--ghost_path', default=config.get('main','ghost_path'), type=str,
-                                help='GHOST data directory (default=%default)')
+                                help='Prost scratch directory; the setting keeps its old GHOST name (default=%default)')
 
             parser.add_argument('--ztfurl', default=config.get('ztf','ztfurl'), type=str,
                                 help='ZTF URL (default=%default)')
@@ -239,7 +224,7 @@ class processTNS:
             parser.add_argument('--ztfurl', default="", type=str,
                                 help='ZTF URL (default=%default)')
             parser.add_argument('--ghost_path', default="", type=str,
-                                help='GHOST data directory (default=%default)')
+                                help='Prost scratch directory; the setting keeps its old GHOST name (default=%default)')
             
             parser.add_argument('--SMTP_LOGIN', default='', type=str,
                                 help='SMTP login (default=%default)')
@@ -1017,12 +1002,6 @@ class processTNS:
         ebv_timeout,ned_timeout = False,False
         if doProst:
 
-            #if not os.path.exists(f'{self.ghost_path}/database/GHOST.csv'):
-            #    try:
-            #        getGHOST(real=True, verbose=True, installpath=self.ghost_path)
-            #    except:
-            #        pass
-                
             def handler(signum, frame):
                 raise Exception("timeout!")
                 
@@ -1803,57 +1782,3 @@ class TNS_recent_realtime(CronJobBase):
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
 
         print('TNS -> YSE_PZ took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
-
-
-class UpdateGHOST(CronJobBase):
-
-    RUN_AT_TIMES = ['00:00', '08:00']
-
-    schedule = Schedule(run_at_times=RUN_AT_TIMES)
-    code = 'YSE_App.data_ingest.TNS_uploads.UpdateGHOST'
-    
-    def do(self):
-        
-        # check for instance of code already running
-        # no email hook on this one for now
-        me = singleton.SingleInstance(flavor_id="6")
-
-        from astro_ghost.ghostHelperFunctions import getTransientHosts
-        try:
-            from astro_ghost.photoz_helper import calc_photoz
-            is_photoz = True
-        except ImportError:
-            is_photoz = False
-
-        from YSE_App.models import Transient,User,Host
-        transients = Transient.objects.filter(
-            modified_date__gt=datetime.now()-timedelta(days=5),
-            host__isnull=True)
-
-        scall = [SkyCoord(t.ra,t.dec,unit=u.deg) for t in transients]
-        names = [t.name for t in transients]
-
-        ghost_hosts = getTransientHosts(names, scall, verbose=True, starcut='gentle', ascentMatch=False, GHOSTpath=djangoSettings.ghost_path)
-        if is_photoz:
-            iNorth = ghost_hosts['decMean'] > -30
-            iSouth = ghost_hosts['decMean'] <= -30
-            ghost_zphot = calc_photoz(ghost_hosts[iNorth])
-            ghost_hosts = pd.concat([ghost_zphot,ghost_hosts[iSouth]])
-
-        _remove_dated_ghost_dirs()
-
-        for i in ghost_hosts.index:
-            t = Transient.objects.get(name=ghost_hosts['TransientName'][i])
-            print(f'Adding host for {t.name}')
-            t.host = Host.objects.create(name=ghost_hosts['objName'][i],ra=ghost_hosts['raMean'][i],dec=ghost_hosts['decMean'][i],
-                                         modified_by=User.objects.get(username='admin'),created_by=User.objects.get(username='admin'))
-
-            if ghost_hosts['NED_redshift'][i] == ghost_hosts['NED_redshift'][i]:
-                t.host.redshift = ghost_hosts['NED_redshift'][i]
-
-            if 'photo_z' in ghost_hosts.keys() and ghost_hosts['photo_z'][i] == ghost_hosts['photo_z'][i]:
-                t.host.photo_z_internal = ghost_hosts['photo_z'][i]
-            
-            t.host.save()
-            t.save()
-        print('success')

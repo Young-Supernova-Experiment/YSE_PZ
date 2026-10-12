@@ -31,9 +31,10 @@ updates:
         versions: [">=4.6"]
       - dependency-name: "cryptography"
         versions: [">=46"]
-      # astro-ghost 2.0.16 requires requests < 2.29.
+      # requests 2.33+ needs Python 3.10; production runs Python 3.8. (The older
+      # <2.29 cap came from astro-ghost, removed in #619.)
       - dependency-name: "requests"
-        versions: [">=2.29"]
+        versions: [">=2.33"]
       # urllib3 2 needs OpenSSL 1.1.1+ on the host; stay on 1.26.x.
       - dependency-name: "urllib3"
         versions: [">=2"]

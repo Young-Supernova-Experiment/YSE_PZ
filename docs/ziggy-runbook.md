@@ -1964,6 +1964,43 @@ mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_U
 
 **Rollback:** set `FEEDBACK_ENABLED: False` (or delete the line) and restart Apache. Stored feedback stays in the table and in the staff review page. To stop posting, untick "Is active" on the credential, or revoke the token on GitHub.
 
+<a id="ghost-removal"></a>
+
+### GHOST removal and requests 2.32.4 (2026-10-12, #613) one check recommended, the rest optional, per stack
+
+The legacy GHOST host-association code is removed ([#613](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/613)). Host association is done by Prost inside the TNS crons, as before. Three classes leave `CRON_CLASSES`: `TNS_uploads.UpdateGHOST`, `host_associate.YSE` and `PS1_PhotoZ.YSE` (none had a crontab line in the inventory). `astro-ghost` is dropped from `requirements.txt`, and `requests` goes from 2.28.2 to 2.32.4 (Python 3.8; the file still resolves as a whole). `[main] ghost_path` stays: it is Prost's scratch directory. No migration. `<STACK_DIR>` / `<STACK_PYTHON>` are from [section 0](#paths).
+
+**(a) Recommended check: no crontab line names a removed cron.** Run as each user that runs crons for the stack:
+```bash
+crontab -l | grep -n -E 'UpdateGHOST|host_associate|PS1_PhotoZ|add_ghost_hosts'
+```
+**Expected:** no output. If a line prints, delete it (`crontab -e`): that cron no longer exists, and `runcrons` would fail with an import error on that line. A bare `manage.py runcrons` line (no class name) needs no change; it just no longer runs the three classes.
+
+**(b) requests 2.32.4 on venvs the deploy does not install** (yse\_test\_virtual, production; the yse\_experimental venv is updated by Deploy Stack). Optional: the code also works on 2.28.2.
+```bash
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip install -r <STACK_DIR>/requirements.txt
+<STACK_PYTHON> -c "import requests; print(requests.__version__)"
+sudo systemctl restart apache2
+```
+**Expected:** `2.32.4`. While `astro-ghost` is still installed, `pip` may print a warning that astro-ghost requires `requests<2.29`. That warning is harmless; step (c) removes it. **Check:** log in on that stack and open a transient page.
+
+**(c) Optional: uninstall astro-ghost.** pip does not remove a package that was dropped from the requirements file.
+```bash
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip uninstall -y astro-ghost
+<STACK_PYTHON> -c "import importlib.util; print(importlib.util.find_spec('astro_ghost'))"
+```
+**Expected:** `None`. Leave TensorFlow and the other packages alone; their removal is #186.
+
+**(d) Optional: delete the GHOST files.** Nothing reads them any more. `<GHOST_PATH>` is the `[main] ghost_path` value in that stack's `settings.ini`; `<CRON_WORKDIR>` is the directory the crons run from.
+```bash
+ls -d <GHOST_PATH>/database 2>/dev/null && du -sh <GHOST_PATH>/database
+rm -rf <GHOST_PATH>/database                     # GHOST.csv and the GHOST catalogue files
+ls -d <CRON_WORKDIR>/transients_20* 2>/dev/null  # dated GHOST scratch trees, if any
+```
+Remove the dated trees only after checking that the listing is GHOST output. Keep `<GHOST_PATH>` itself: Prost writes there. `MLP_lupton.hdf5` and `sfddata-master/` in the stack's `STATIC_ROOT` were read only by `PS1_PhotoZ`; delete them only after checking that nothing else on the server uses them.
+
+**Rollback:** redeploy the previous commit; `pip install -r requirements.txt` from that commit restores `astro-ghost` and `requests` 2.28.2.
+
 ### IERS table refresh (optional cron, per stack) nothing required
 
 Web workers no longer download IERS Earth-orientation tables (#466: `iers.conf.auto_download = False` in `views.py` and `view_utils.py`, as `services/observability.py` already did), so a request never waits on the network for rise/set times. Refresh the astropy cache from a cron so command-line jobs (default `auto_download`) find a current table. Without it everything still works; UT1 accuracy only changes by milliseconds.
@@ -2186,6 +2223,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v43, one check recommended, the rest optional. GHOST removal ([#613](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/613)): `UpdateGHOST`, `host_associate` and `PS1_PhotoZ` leave `CRON_CLASSES`, `astro-ghost` leaves `requirements.txt`, and `requests` goes to 2.32.4. New section [GHOST removal](#ghost-removal): check that no crontab line names a removed cron; optional pip upgrade on yse\_test\_virtual and production, `pip uninstall astro-ghost`, and deletion of the GHOST database files. No migration.
 * 2026-10-12 v42, optional (off by default). Feedback button ([#443](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/443)): new section [Feedback button](#feedback). Migration `0035_feedback` (one new table, `YSE_App_feedback`; safe on the shared database). New `[site_settings]` keys `FEEDBACK_ENABLED` (default off; env `YSE_FEEDBACK_ENABLED`), `FEEDBACK_MAX_PER_HOUR`, `FEEDBACK_GITHUB_REPO`, `FEEDBACK_GITHUB_LABEL`. The GitHub token is an encrypted credential with service `github_feedback`, never a settings.ini value. Step E's grant generator now also leaves out `YSE_App_feedback`. No new dependency.
 * 2026-10-12 v41, informational, nothing required. https follow-up ([#441](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/441)): hard-coded http links replaced (own links from `YSE_PUBLIC_BASE_URL`; dead hosts repointed; the two ZTF hosts that refuse https are now `[ztf]` settings with http defaults), new `manage.py https_urls` (dry run by default, `--apply` to write). New section [https follow-up](#https-followup) lays out the Apache vs Django redirect choice and the order redirect, then HSTS with a short max-age; **a decision for David and Ryan, nothing is switched on**. No migration, no dependency.
 * 2026-10-12 v40, one check recommended. Photometry statistics leftovers ([#269](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/269), [#270](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/270), [#271](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/271)): migrations `0033_photstat_extrapolated` (four nullable columns) and `0034_transient_photstat_view` (Explorer view `yse_transient_photstat_v`), applied by the deploy; new section [Photometry statistics view and upkeep jobs](#photstat-view): check the view and the Explorer user's SELECT on it, create it by hand if the deploy user lacks `CREATE VIEW`. New hourly `PhotStatRefresh` cron (in `CRON_CLASSES`, runs from the existing `runcrons` pass; Bazin write-back off by default). No new dependencies.
