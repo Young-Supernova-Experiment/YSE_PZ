@@ -162,11 +162,36 @@ selective time window MySQL can start from `yse_transient_gal_b_idx` instead; ei
 scan. Production `EXPLAIN` after the deploy (`docs/dashboard-performance.md`, "Checks before
 promoting") is still the go/no-go for keeping each new index.
 
+## Bulk actions and CSV export (#284, #287)
+
+* The results table has a tick box per row. "With selected" offers **Set status**, **Add tag** and
+  **Download photometry (zip)**, for the ticked rows, "All on this page", or "All N matches" (the
+  server re-runs the search; ticks are then ignored). Status and tag changes ask for confirmation.
+* `POST /search/bulk/` (fields `action`, `status_id` / `tag_id`, `params`, `transient_id` ... or
+  `select_all=1`) needs a logged-in user and the CSRF token; a GET is 405. Whatever ids are posted, only
+  transients the user may see (`filter_transients_by_user_access`, the same collaboration-visibility rule
+  as the API and the dashboard; staff see all) are touched. Status change is one `UPDATE` stamping
+  `modified_by`; tag add is one `INSERT IGNORE`; photometry uses the zip builder of the saved-query
+  download (`bulk_photometry_zip_response`), which also filters photometry per user. Limits: 5000 rows for
+  status/tag, 300 for photometry; over the limit nothing is done.
+* `GET /search/export/?<same query string>` downloads the search as CSV (name, coordinates, galactic
+  coordinates, discovery date, status, group, classes, redshifts, E(B-V), and the stat-row peak / latest
+  magnitude, MJD and detection count), same filters and ordering, only rows the user may see, at most
+  50000 rows (a final `# truncated` line says so). Text cells starting with `=`, `+`, `-` or `@` get a
+  leading apostrophe (spreadsheet formula injection).
+
+## Filters in `/api/schema/`
+
+Each filter carries a one-line description (`FILTER_HELP` in `filters/transient_search.py`, set as the
+filter's `help_text`), which DRF's schema view lists next to the query parameter. A test fails when a
+filter has no description. The schema stays DRF's built-in `get_schema_view`; moving to drf-spectacular
+belongs with the Django 5.2 upgrade (#601).
+
 ## Not in this change (rest of #284)
 
-* Bulk actions on results (status change, tag, photometry download) and CSV export (#287); saving a
-  search is covered above.
-* Annotation-origin filters (#319, after #317).
+* Select2 on the multi-selects, together with the tag Select2 of #86.
+* The search page itself (not the bulk actions or the CSV) still lists every transient to any logged-in
+  user, as before; the API and the dashboard apply the visibility rule.
 
 ## Tests
 

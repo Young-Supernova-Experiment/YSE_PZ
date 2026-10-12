@@ -118,8 +118,38 @@
 <div class="box" id="search-results">
   <div class="box-header with-border">
     <h3 class="box-title">Results{% if cone %} within {{ cone.2|floatformat:1 }}&Prime; of {{ cone.0|floatformat:5 }}, {{ cone.1|floatformat:5 }}{% endif %}</h3>
+    <a class="btn btn-outline-secondary btn-sm float-right" id="search-export-csv" href="{{ export_url }}" title="Download every row of this search you may see as CSV"><i class="fa fa-download" aria-hidden="true"></i> CSV</a>
   </div>
   <div class="box-body">
+    {% if bulk_result %}
+    <div class="alert alert-info py-1 px-2" role="alert" id="search-bulk-result">{{ bulk_result }}</div>
+    {% endif %}
+    <form id="search-bulk-form" class="form-inline mb-2" action="{% url 'search_bulk_action' %}" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="params" value="{{ bulk_params }}">
+      <label class="mr-2" for="search-bulk-action">With selected</label>
+      <select id="search-bulk-action" name="action" class="form-control form-control-sm mr-2">
+        <option value="">Choose action</option>
+        <option value="status">Set status</option>
+        <option value="add_tag">Add tag</option>
+        <option value="photometry">Download photometry (zip)</option>
+      </select>
+      <select name="status_id" id="search-bulk-status" class="form-control form-control-sm mr-2" style="display:none">
+        {% for st in all_transient_statuses %}<option value="{{ st.id }}">{{ st.name }}</option>{% endfor %}
+      </select>
+      <select name="tag_id" id="search-bulk-tag" class="form-control form-control-sm mr-2" style="display:none">
+        {% for tag in all_transient_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <div class="form-check mr-2">
+        <input type="checkbox" class="form-check-input" id="search-bulk-select-all-page">
+        <label class="form-check-label" for="search-bulk-select-all-page">All on this page</label>
+      </div>
+      <div class="form-check mr-2">
+        <input type="checkbox" class="form-check-input" id="search-bulk-select-all" name="select_all" value="1">
+        <label class="form-check-label" for="search-bulk-select-all">All {{ result_count|default_if_none:"" }} matches (ignores ticks)</label>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm" id="search-bulk-submit">Apply</button>
+    </form>
     {% render_table table %}
   </div>
   <div class="box-footer"></div>
@@ -172,6 +202,27 @@ $(function() {
       navigator.clipboard.writeText(url).then(done, function() { window.prompt('Copy this link', url); });
     } else {
       window.prompt('Copy this link', url);
+    }
+  });
+
+  $('#search-bulk-action').on('change', function() {
+    $('#search-bulk-status').toggle($(this).val() === 'status');
+    $('#search-bulk-tag').toggle($(this).val() === 'add_tag');
+  });
+  $('#search-bulk-select-all-page').on('change', function() {
+    $('.search-select-row').prop('checked', $(this).prop('checked'));
+  });
+  $('#search-bulk-form').on('submit', function(event) {
+    var action = $('#search-bulk-action').val();
+    var all = $('#search-bulk-select-all').prop('checked');
+    var n = $('.search-select-row:checked').length;
+    if (!action) { event.preventDefault(); alert('Choose an action first.'); return; }
+    if (!all && n === 0) { event.preventDefault(); alert('Tick at least one row, or choose "All matches".'); return; }
+    if (action !== 'photometry') {
+      var what = all ? 'every match of this search' : (n + ' selected transient(s)');
+      if (!window.confirm('Apply "' + $('#search-bulk-action option:selected').text() + '" to ' + what + '?')) {
+        event.preventDefault();
+      }
     }
   });
 

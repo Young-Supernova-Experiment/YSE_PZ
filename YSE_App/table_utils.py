@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.utils.html import format_html
 from .models import *
 from . import view_utils
 import django_tables2 as tables
@@ -653,6 +654,14 @@ class SearchTransientTable(TransientTable):
     without per-row queries.
     """
 
+    # #284: tick box for the bulk actions (POSTed as ``transient_id``).
+    select = tables.Column(accessor='pk', verbose_name='', orderable=False, empty_values=())
+
+    def render_select(self, value):
+        return format_html(
+            '<input type="checkbox" class="search-select-row" name="transient_id" value="{}" form="search-bulk-form"'
+            ' aria-label="Select transient">', value)
+
     separation = tables.Column(accessor='separation', verbose_name='Sep. (arcsec)', orderable=True)
 
     def render_separation(self, value):
@@ -675,7 +684,7 @@ class SearchTransientTable(TransientTable):
         return (stable_order_by(queryset, 'gal_b', is_descending), True)
 
     class Meta(TransientTable.Meta):
-        fields = ('name_string', 'separation', 'ra_string', 'dec_string', 'gal_b', 'disc_date_string', 'recent_mag',
+        fields = ('select', 'name_string', 'separation', 'ra_string', 'dec_string', 'gal_b', 'disc_date_string', 'recent_mag',
                   'recent_magdate', 'peak_mag', 'mw_ebv', 'obs_group', 'best_spec_class', 'best_redshift',
                   'annotation_value', 'status_string', 'interest_count', 'favorite')
         sequence = fields
