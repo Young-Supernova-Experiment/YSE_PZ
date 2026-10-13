@@ -1,0 +1,42 @@
+<script>
+/* User autocomplete with a free-text fallback (#628): fills a <datalist> from the
+   advisor_suggest endpoint; picking a listed user stores its id, anything else is kept as a name. */
+(function () {
+	document.querySelectorAll(".yse-user-picker").forEach(function (box) {
+		var url = box.getAttribute("data-suggest-url");
+		var text = box.querySelector(".yse-user-picker-text");
+		var hidden = box.querySelector(".yse-user-picker-id");
+		if (!url || !text || !hidden) { return; }
+		var list = document.getElementById(text.getAttribute("list"));
+		var byLabel = {};
+		var timer = null;
+		function sync() {
+			var id = byLabel[text.value];
+			hidden.value = id ? String(id) : "";
+		}
+		text.addEventListener("input", function () {
+			sync();
+			if (timer) { clearTimeout(timer); }
+			var q = text.value.trim();
+			if (q.length < 2) { return; }
+			timer = setTimeout(function () {
+				fetch(url + "?q=" + encodeURIComponent(q), {credentials: "same-origin", headers: {"X-Requested-With": "XMLHttpRequest"}})
+					.then(function (r) { return r.ok ? r.json() : {results: []}; })
+					.then(function (data) {
+						list.innerHTML = "";
+						(data.results || []).forEach(function (u) {
+							byLabel[u.label] = u.id;
+							var opt = document.createElement("option");
+							opt.value = u.label;
+							list.appendChild(opt);
+						});
+						sync();
+					})
+					.catch(function () {});
+			}, 200);
+		});
+		text.addEventListener("change", sync);
+		if (hidden.value && text.value) { byLabel[text.value] = hidden.value; }
+	});
+})();
+</script>

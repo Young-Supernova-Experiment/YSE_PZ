@@ -505,6 +505,60 @@ DETAIL_RADIUS_ARCSEC: 5
 
 **Expected** the smoke test prints `N messages decoded, 0 saved` (dry run) with no traceback; once the consumer runs, admin > Ingest heartbeats shows a fresh row for the connection and the dashboard shows no stale-stream banner.
 
+<a id="onboarding"></a>
+
+### User agreement, researcher profile and onboarding gate (develop-direct PR; #627-#631) required key step, flags optional
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migrations `0031_researcher_profile` (new tables only) and `0032_seed_user_agreement` (loads agreement v1) run automatically on deploy and are safe on the shared `YSE_test` database. No new Python dependency (`cryptography` is already pinned).
+
+**Effect on deploy:** the onboarding gate is **on by default**. Every signed-in browser user is sent to `/agreement/` and then `/profile/edit/` on their next page view. Scripts, crons and brokers are not affected (`/api/`, Authorization headers, every `login_or_basic_auth_required` ingest view, `query_api`, Slack, callbacks, `.json` status endpoints, static/media). Superusers can always reach `/admin/`.
+
+**Step A (required for the encrypted fields): install ONLY the research public key.** Ryan generates the key pair on his own machine (`python manage.py generate_research_keypair --out-dir <DIR> --passphrase`) and sends David `research_public_key.pem` and its fingerprint. The private key never goes to Ziggy. On each stack (`<CHECKOUT>` = `/data/yse_pz/YSE_PZ_test`, `/data/yse_pz/YSE_PZ_experimental`, later production; `<PYTHON>` is that stack's Python from [section 0](#paths)):
+
+```bash
+install -m 0644 research_public_key.pem <CHECKOUT>/YSE_PZ/research_public_key.pem
+# then in <CHECKOUT>/YSE_PZ/settings.ini:
+#   [research]
+#   public_key_path: <CHECKOUT>/YSE_PZ/research_public_key.pem
+sudo systemctl restart apache2
+```
+
+**Check:**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from YSE_App.services import research_crypto as r; print(r.key_available(), r.current_fingerprint())"
+```
+
+Expected: `True <fingerprint>`, matching what Ryan sent. If it prints `False`, the admin index shows a warning to staff; the site still works and the encrypted fields (country, gender, PhD year) show "not available yet", with the PhD-year requirement waived. **Never copy a file named `research_private_key.pem` to Ziggy.**
+
+**Step B (optional): rollback flag.** To turn the gate off without a deploy, add to `<CHECKOUT>/YSE_PZ/settings.ini` and restart Apache:
+
+```ini
+[site_settings]
+ONBOARDING_GATE_ENABLED: False
+```
+
+(or export `YSE_ONBOARDING_GATE=0` in the web environment). **Check:** a signed-in user who has not accepted the agreement opens `/dashboard/` without a redirect. Remove the line (or set `True`) to turn it back on.
+
+**Step C (optional, off by default): SciX researcher metrics.** Admin > Encrypted credentials > Add: kind Generic, service `scix`, name e.g. "SciX service account", secret `{"token": "<SciX API token of the service account>"}`. Then:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py refresh_researcher_metrics --even-if-disabled --limit 1
+```
+
+Expected: `researcher metrics: fetched 1, skipped 0, failed 0` (or `fetched 0` if no profile has an ORCID yet). To run it monthly from the existing `runcrons` crontab, add to settings.ini:
+
+```ini
+[research]
+RESEARCHER_METRICS_ENABLED: True
+```
+
+Optional `[research]` keys (defaults): `RESEARCHER_METRICS_CRON_MINUTES: 43200`, `REQUEST_INTERVAL_SECONDS: 2.0`, `MAX_PER_RUN: 200`, `MIN_AGE_DAYS: 25`, `SCIX_API_URL: https://api.adsabs.harvard.edu/v1`.
+
+**Step D (optional, recommended): Explorer grants.** The new tables are hidden from SQL Explorer and refused by its SQL blacklist. The hard barrier is the Explorer MySQL user: if it has database-wide `SELECT`, consider replacing that with table-level grants that leave out `YSE_App_researcherprofile*`, `YSE_App_encryptedprofilevalue`, `YSE_App_profilefieldhistory`, `YSE_App_mentorship`, `YSE_App_affiliationhistory`, `YSE_App_researchermetrics`, `YSE_App_useragreement` and `YSE_App_agreementacceptance`. Check with `SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<host>';`.
+
+Production: the same steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
 <a id="merge"></a>
 
 ## 2 · Before merging #143 to master David
@@ -1414,6 +1468,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v28, **required once the develop-direct PR is merged** (develop first, then experimental). User agreement, researcher profile and onboarding gate ([#627](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/627)-[#631](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/631)): migrations 0031/0032 (new tables, agreement v1); the gate is on by default (rollback `ONBOARDING_GATE_ENABLED: False`); **required:** install only the research public key ([step A](#onboarding)); optional SciX metrics and Explorer grants.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.
 * 2026-10-02 08:00 UTC v25, **required** (yse_test checkout ownership). David's 10/1 list fixed on experimental: [#402](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/402), [#403](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/403), [#404](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/404) (migration `0030_shared_db_column_defaults`, applied to `YSE_test` 07:13 UTC; four `ALTER TABLE ... MODIFY`, seconds), [#405](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/405), [#406](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/406). Production gets 0030 with the other migrations at 3.9. Ryan merged #362 at 07:40 UTC; its yse_test deploy failed on checkout ownership, so a **REQUIRED** `chown` step was added above section 1.
