@@ -385,6 +385,10 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_researchermetrics',
     'YSE_App_useragreement',
     'YSE_App_agreementacceptance',
+    # Invitation links and per-user preferences (#445, #440).
+    'YSE_App_groupinvitation',
+    'YSE_App_groupinvitationuse',
+    'YSE_App_userpreference',
 )
 EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
     'auth_',
@@ -823,6 +827,27 @@ ONBOARDING_GATE_ENABLED = (
     _onboarding_env not in ('0', 'false', 'no', 'off') if _onboarding_env
     else config.getboolean('site_settings', 'ONBOARDING_GATE_ENABLED', fallback=True)
 )
+# Research teams (#445, #440). System groups are never owned, joined by invitation or
+# managed on /teams/; staff manage their membership in the admin. Groups holding model
+# permissions, and groups ticked "is system" in the admin, count as system too.
+# [groups] SYSTEM_GROUP_NAMES / PICKER_VISIBLE_SYSTEM_GROUPS take comma-separated names.
+def _group_names_setting(key, default):
+    raw = config.get('groups', key, fallback=None) if config.has_section('groups') else None
+    if raw is None:
+        return tuple(default)
+    return tuple(name.strip() for name in raw.split(',') if name.strip())
+
+
+YSE_SYSTEM_GROUP_NAMES = _group_names_setting(
+    'SYSTEM_GROUP_NAMES', ('Public', 'api_writers', 'explorer_users'))
+# System groups still offered in audience pickers: Public is the follow-up "share with
+# everyone in Public" choice, so it stays unless removed here.
+YSE_PICKER_VISIBLE_SYSTEM_GROUPS = _group_names_setting('PICKER_VISIBLE_SYSTEM_GROUPS', ('Public',))
+GROUP_INVITE_DEFAULT_DAYS = config.getint('groups', 'INVITE_DEFAULT_DAYS', fallback=14) if config.has_section('groups') else 14
+GROUP_INVITE_MAX_DAYS = config.getint('groups', 'INVITE_MAX_DAYS', fallback=60) if config.has_section('groups') else 60
+GROUP_INVITE_MAX_USES_LIMIT = config.getint('groups', 'INVITE_MAX_USES_LIMIT', fallback=50) if config.has_section('groups') else 50
+GROUP_INVITE_PURGE_DAYS = config.getint('groups', 'INVITE_PURGE_DAYS', fallback=90) if config.has_section('groups') else 90
+
 # Research PUBLIC key for the encrypted profile fields. env YSE_RESEARCH_PUBLIC_KEY
 # (PEM text or a path) or [research] public_key_path. The private key is never
 # on the server. Without a key those fields are not collected; nothing breaks.

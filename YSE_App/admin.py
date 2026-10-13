@@ -893,3 +893,118 @@ class AgreementAcceptanceAdmin(_ReadOnlyAdmin):
 	list_display = ("user", "agreement", "accepted_at")
 	list_filter = ("agreement",)
 	search_fields = ("user__username",)
+
+
+# ---------------------------------------------------------------------------
+# Research teams (#445, #440). Staff assign the first owners here, as data: the
+# migrations create no owner rows. Owners then manage their team on /teams/<id>/.
+from django.contrib.auth.admin import GroupAdmin as _DjangoGroupAdmin  # noqa: E402
+from django.contrib.auth.models import Group as _AuthGroup  # noqa: E402
+
+from YSE_App.models.group_models import GroupInvitation, GroupInvitationUse, GroupProfile  # noqa: E402
+from YSE_App.services import groups as _group_svc  # noqa: E402
+
+
+class GroupProfileAdminForm(forms.ModelForm):
+	class Meta:
+		model = GroupProfile
+		fields = ("description", "is_active", "is_system", "owners")
+
+	def clean(self):
+		cleaned = super().clean()
+		group = getattr(self.instance, "group", None) if self.instance and self.instance.group_id else None
+		group = cleaned.get("group") or group
+		system = bool(cleaned.get("is_system")) or (group is not None and group.name in _group_svc.system_group_names())
+		if system and cleaned.get("owners"):
+			raise forms.ValidationError("System groups cannot have owners (they are not research teams).")
+		return cleaned
+
+
+class GroupProfileInline(admin.StackedInline):
+	model = GroupProfile
+	form = GroupProfileAdminForm
+	can_delete = False
+	extra = 0
+	max_num = 1
+	filter_horizontal = ("owners",)
+	fields = ("description", "is_active", "is_system", "owners")
+
+
+admin.site.unregister(_AuthGroup)
+
+
+@admin.register(_AuthGroup)
+class YSEGroupAdmin(_DjangoGroupAdmin):
+	inlines = (GroupProfileInline,)
+	list_display = ("name", "team_active", "team_system", "owner_names")
+
+	def get_queryset(self, request):
+		return super().get_queryset(request).select_related("group_profile").prefetch_related("group_profile__owners")
+
+	def get_object(self, request, object_id, from_field=None):
+		obj = super().get_object(request, object_id, from_field)
+		if obj is not None and getattr(obj, "group_profile", None) is None:
+			_group_svc.profile_for(obj)  # groups created by older code: show the profile inline
+			obj = super().get_object(request, object_id, from_field)
+		return obj
+
+	def _profile(self, obj):
+		return getattr(obj, "group_profile", None)
+
+	def team_active(self, obj):
+		profile = self._profile(obj)
+		return True if profile is None else profile.is_active
+	team_active.boolean = True
+	team_active.short_description = "active"
+
+	def team_system(self, obj):
+		profile = self._profile(obj)
+		return bool(profile and profile.is_system) or obj.name in _group_svc.system_group_names()
+	team_system.boolean = True
+	team_system.short_description = "system"
+
+	def owner_names(self, obj):
+		profile = self._profile(obj)
+		return ", ".join(u.get_username() for u in profile.owners.all()) if profile else ""
+	owner_names.short_description = "owners"
+
+
+@admin.register(GroupProfile)
+class GroupProfileAdmin(admin.ModelAdmin):
+	form = GroupProfileAdminForm
+	list_display = ("group", "is_active", "is_system", "owner_count", "updated_at")
+	list_filter = ("is_active", "is_system")
+	search_fields = ("group__name",)
+	filter_horizontal = ("owners",)
+	readonly_fields = ("group", "created_at", "updated_at")
+	fields = ("group", "description", "is_active", "is_system", "owners", "created_at", "updated_at")
+
+	def has_add_permission(self, request):
+		return False  # one per group, created automatically; edit it from the group
+
+	def owner_count(self, obj):
+		return obj.owners.count()
+	owner_count.short_description = "owners"
+
+
+class GroupInvitationUseInline(admin.TabularInline):
+	model = GroupInvitationUse
+	extra = 0
+	can_delete = False
+	readonly_fields = ("used_by", "used_at")
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(GroupInvitation)
+class GroupInvitationAdmin(admin.ModelAdmin):
+	"""Invitations are created on the team pages; here staff can only review and revoke them."""
+	list_display = ("id", "group", "created_by", "created_at", "expires_at", "max_uses", "status")
+	list_filter = ("group",)
+	readonly_fields = ("group", "created_by", "created_at", "expires_at", "max_uses", "revoked_by", "status")
+	fields = ("group", "created_by", "created_at", "expires_at", "max_uses", "revoked_at", "revoked_by", "status")
+	inlines = (GroupInvitationUseInline,)
+
+	def has_add_permission(self, request):
+		return False

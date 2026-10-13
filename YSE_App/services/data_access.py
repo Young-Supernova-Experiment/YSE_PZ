@@ -86,11 +86,21 @@ def count_hidden(transient_id: int, user: User) -> Dict[str, Dict[str, int]]:
     return out
 
 
-def requestable_groups(user: User) -> List[Group]:
-    """Groups a requester may be granted into: their own groups, never Public."""
+def eligible_target_groups(user: User) -> List[Group]:
+    """Groups a requester may be granted into: their own research teams, never Public or a system group."""
     if not user.is_authenticated:
         return []
-    return list(user.groups.exclude(name=PUBLIC_COLLABORATION_GROUP_NAME).order_by("name"))
+    from YSE_App.services.groups import system_group_ids
+
+    return list(user.groups.exclude(name=PUBLIC_COLLABORATION_GROUP_NAME).exclude(
+        id__in=system_group_ids(user)).order_by("name"))
+
+
+def requestable_groups(user: User) -> List[Group]:
+    """The target-group picker: ``eligible_target_groups`` minus inactive and user-hidden groups (#440)."""
+    from YSE_App.services.groups import picker_groups
+
+    return picker_groups(user, eligible_target_groups(user))
 
 
 def _owner_names_by_dataset(transient_id: int, kind: str) -> Dict[int, Dict[int, str]]:
@@ -249,7 +259,7 @@ def request_access(
                                 "granted to; ask an administrator to add you to one first.",
             })
         target_group = choices[0]
-    elif target_group.pk not in {g.pk for g in choices}:
+    elif target_group.pk not in {g.pk for g in eligible_target_groups(user)}:
         raise PermissionDenied({"message": "Access can only be granted to a collaboration group you belong to (not Public)."})
     if target_group.pk == owner_group.pk:
         raise ValidationError({"target_group": "That group already owns the data."})

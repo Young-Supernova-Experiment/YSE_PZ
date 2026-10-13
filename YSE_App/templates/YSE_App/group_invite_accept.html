@@ -1,0 +1,32 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Team invitation</h1>
+</section>
+
+<section class="content" id="yse-group-invite">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="box box-default box-solid">
+		<div class="box-body">
+			{% if problem %}
+			<p class="mb-0">{{ problem }} Ask the team's owner for a new link.</p>
+			{% elif already_member %}
+			<p class="mb-0">You are already a member of this team. <a href="{% url 'team_list' %}">My teams</a></p>
+			{% else %}
+			<p>You have been invited to join <strong>{{ group.name }}</strong>{% if inviter_name %} by {{ inviter_name }}{% endif %}.</p>
+			{% if group.group_profile.description %}<p class="text-muted">{{ group.group_profile.description|linebreaksbr }}</p>{% endif %}
+			<p class="small text-muted">Joining lets you see the data shared with this team, and lets its owners see that you are a member.</p>
+			<form method="post" action="{% url 'group_invite_accept' %}">{% csrf_token %}
+				<button type="submit" class="btn btn-primary">Join {{ group.name }}</button>
+				<a class="btn btn-outline-secondary ml-2" href="{% url 'dashboard' %}">Not now</a>
+			</form>
+			{% endif %}
+		</div>
+	</div>
+</section>
+{% endblock %}

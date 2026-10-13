@@ -607,6 +607,64 @@ cd <CHECKOUT> && <PYTHON> manage.py shell -c "from django.conf import settings a
 
 Expected: the values you set for that stack. Then sign in to `/yse_test/` and `/yse_experimental/` in the same browser: the browser's cookie list shows `sessionid_yse_test` (path `/yse_test/`) and `sessionid_yse_experimental` (path `/yse_experimental/`), and signing in to one no longer signs you out of the other. To undo, remove the keys and restart (one more logout).
 
+<a id="teams"></a>
+
+### Research teams: group owners, invitation links and user settings (develop-direct PR; #445, #440) nothing required, owners optional
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migrations `0033_group_profiles` (new tables only: `YSE_App_groupprofile` with its owners table, `YSE_App_groupinvitation`, `YSE_App_groupinvitationuse`, `YSE_App_userpreference` with three group tables) and `0034_seed_group_profiles` (one profile per existing group, **no owners**, every group active; Public, `api_writers`, `explorer_users` and any group holding model permissions marked *system*) run automatically on deploy and are safe on the shared `YSE_test` database. No new dependency.
+
+**Effect on deploy:** nothing changes for users until owners are assigned. New pages: `/teams/` (My teams), `/teams/<id>/` (team page), `/teams/join/...` (invitation links) and `/settings/` (group pickers and defaults), linked from the user menu and from My profile. Audience pickers stop offering `api_writers` / `explorer_users` (Public stays).
+
+**Step A (optional): check the seed.**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py ensure_group_profiles
+```
+
+Expected: `group profiles: created 0, marked system 0` (the migration already did it). A non-zero `created` only means groups were added by code that predates group profiles; running it again prints zeros.
+
+**Step B (David or Ryan, in the admin): assign owners.** Owners are data, not code (Ryan, 2026-10-11).
+
+1. Admin > Authentication and Authorization > Groups > click the team.
+2. In the **Group profile** box at the bottom: move one or more users into **Owners**, optionally add a **Description**, leave **Is active** ticked, leave **Is system** unticked. Save.
+3. The admin refuses owners on a system group ("System groups cannot have owners"). Public, `api_writers`, `explorer_users` and permission groups keep staff-only membership, edited on the same Group page as before.
+
+**Check:** the owner signs in, opens User menu > My teams, and sees the team with role "Owner"; its page shows Members, "Invite people" and the invitation list.
+
+**Step C (optional): mark a group inactive.** Undecided which groups start inactive, so all start active. Staff: the same Group page, untick **Is active**; or an owner on `/teams/<id>/`. Inactive groups disappear from pickers and default audiences only: members, data and who can see existing data are unchanged. Tick it again to undo.
+
+**Invite flow (for owners; nothing to run on the server):**
+
+1. On `/teams/<id>/`, "Invite people": choose the expiry (default 14 days, at most 60) and how many people may use the link (default 1). Click "Create link" and copy the link: it is shown **once** and only its hash is stored. Send it yourself (email, Slack). No email address is stored.
+2. The invitee opens the link. Signed out: they sign in and come back to it (accounts are still created by staff; self-signup is #448). Signed in: they land on `/teams/join/`.
+3. A new user is first sent to the User Agreement and the profile (the onboarding gate), then back to `/teams/join/`. They click "Join <team>" and become a member; owners get a notification.
+4. Owners can revoke an open link, and remove members (not owners) on the team page.
+
+**Step D (optional): purge old links.** Expired, revoked or used-up invitations older than 90 days can be deleted (open links and memberships are never touched):
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_invitations --dry-run
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_invitations
+```
+
+Expected: `group invitations: would delete N ...` then `deleted N`.
+
+**Optional settings** (`<CHECKOUT>/YSE_PZ/settings.ini`, restart Apache), defaults shown:
+
+```ini
+[groups]
+SYSTEM_GROUP_NAMES: Public, api_writers, explorer_users
+PICKER_VISIBLE_SYSTEM_GROUPS: Public
+INVITE_DEFAULT_DAYS: 14
+INVITE_MAX_DAYS: 60
+INVITE_MAX_USES_LIMIT: 50
+INVITE_PURGE_DAYS: 90
+```
+
+**Explorer:** `YSE_App_groupinvitation*` and `YSE_App_userpreference*` are hidden from SQL Explorer and its SQL blacklist; add them to the table-level grant exclusions of [step D above](#onboarding) if you set those up.
+
+Production: steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
 <a id="merge"></a>
 
 ## 2 · Before merging #143 to master David
@@ -1516,6 +1574,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v31, nothing required (owners optional). Research teams, invitation links and user settings ([#445](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/445), [#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)): migrations 0033/0034 (new tables, one profile per group, no owners, all active, system groups marked); staff assign owners in Admin > Groups ([section "Research teams"](#teams)); optional `ensure_group_profiles` check, inactive flag, `purge_group_invitations` and `[groups]` keys.
 * 2026-10-12 v30, optional (recommended). Per-stack session / CSRF cookie names and paths ([#637](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/637)): defaults unchanged; set the four `[site_settings]` keys on yse\_test and yse\_experimental (section "Per-stack session and CSRF cookies"); everyone on that stack is logged out once.
 * 2026-10-12 v29, optional. Onboarding gate under the `/yse_test/` prefix ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)): mitigation (turn the gate off on yse\_test) until the fix deploys; the fix itself needs no server step.
 * 2026-10-12 v28, **required once the develop-direct PR is merged** (develop first, then experimental). User agreement, researcher profile and onboarding gate ([#627](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/627)-[#631](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/631)): migrations 0031/0032 (new tables, agreement v1); the gate is on by default (rollback `ONBOARDING_GATE_ENABLED: False`); **required:** install only the research public key ([step A](#onboarding)); optional SciX metrics and Explorer grants.

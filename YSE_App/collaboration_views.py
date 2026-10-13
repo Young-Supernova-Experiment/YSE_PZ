@@ -12,10 +12,10 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models import DataAccessRequest, Transient, TransientInterest
 from YSE_App.services import data_access as dar
 from YSE_App.services import interests as svc
+from YSE_App.services.groups import picker_groups
 
 
 def _safe_next(request, fallback):
@@ -42,7 +42,7 @@ def interests_context(request, transient, user_groups=None):
         user_groups = svc.selectable_groups(request.user)
     return {
         "interests": list(svc.interest_queryset(transient.id, include_withdrawn=show_withdrawn)),
-        "interest_groups": list(user_groups),
+        "interest_groups": picker_groups(request.user, user_groups),
         "interest_roles": TransientInterest.ROLE_CHOICES,
         "interest_statuses": TransientInterest.STATUS_CHOICES,
         "interests_show_withdrawn": show_withdrawn,
@@ -63,7 +63,7 @@ def data_access_context(request, transient, kinds=None, user_groups=None):
         "hidden_rows": rows,
         "hidden_rows_spectrum": [r for r in rows if r["kind"] == "spectrum"],
         "hidden_rows_photometry": [r for r in rows if r["kind"] == "photometry"],
-        "access_target_groups": [g for g in user_groups if g.name != PUBLIC_COLLABORATION_GROUP_NAME],
+        "access_target_groups": dar.requestable_groups(request.user),
     }
 
 
