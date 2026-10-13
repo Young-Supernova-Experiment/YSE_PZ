@@ -50,10 +50,15 @@ def agreement(request):
             messages.success(request, "Thank you: you accepted the YSE-PZ User Agreement (%s)." % current.version)
             return redirect(onboarding.safe_next(request, next_url))
     elif request.method in ("GET", "HEAD"):
+        if accepted is not None and next_url:
+            # Already accepted (a second tab, the Back button, a restored session):
+            # carry on to the page asked for instead of stopping here (#634).
+            return redirect(onboarding.safe_next(request, next_url))
         form = AgreementForm(initial={"next": next_url})
     else:
         return HttpResponseBadRequest("GET or POST")
     return render(request, "YSE_App/agreement.html", {
+        "continue_url": onboarding.safe_next(request, next_url),
         "agreement": current,
         "agreement_body": render_agreement_body(current) if current else "",
         "accepted": accepted,

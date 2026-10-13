@@ -7,6 +7,7 @@ All users here are synthetic. The suite's runner turns the gate off globally
 from __future__ import annotations
 
 import base64
+from urllib.parse import parse_qs, quote, urlsplit
 
 from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase, override_settings
@@ -281,3 +282,206 @@ class GateExemptionTests(TestCase):
     def test_onboarded_user_passes(self):
         onboard(self.user)
         self.assertExempt(reverse("notification_list"))
+
+
+# --- Served under a URL prefix, as /yse_test/ and /yse_experimental/ are on Ziggy (#634) ---
+
+PREFIX = "/yse_test"
+BROWSER = dict(HTTP_ACCEPT="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+               HTTP_SEC_FETCH_MODE="navigate", HTTP_SEC_FETCH_DEST="document")
+
+
+@override_settings(FORCE_SCRIPT_NAME=PREFIX, **GATE_ON)
+class GateUnderUrlPrefixTests(TestCase):
+    """Deep links under SCRIPT_NAME: every page goes agreement -> profile -> back to that page.
+
+    Django's test client does not set the script prefix the way the WSGI handler
+    does, so ``browse`` sets it per request, like mod_wsgi with WSGIScriptAlias.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from YSE_App.tests.fixtures_minimal import create_minimal_transient
+        cls.user = User.objects.create_user("gate_prefix_newcomer", password="x")
+        cls.transient = create_minimal_transient(cls.user, name="2026gateprefix")
+
+    def setUp(self):
+        from django.urls import clear_script_prefix
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(clear_script_prefix)
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        self.client.force_login(self.user)
+
+    def browse(self, method, url, data=None, **extra):
+        """Request ``url`` (a full, prefixed path as a browser sends it)."""
+        from django.urls import set_script_prefix
+        self.assertTrue(url.startswith(PREFIX + "/"), url)
+        set_script_prefix(PREFIX + "/")
+        headers = dict(BROWSER)
+        headers.update(extra)
+        return getattr(self.client, method)(url[len(PREFIX):], data, SCRIPT_NAME=PREFIX, **headers)
+
+    def prefixed(self, name, *args, **kwargs):
+        from django.urls import set_script_prefix
+        set_script_prefix(PREFIX + "/")
+        return reverse(name, args=args or None, kwargs=kwargs or None)
+
+    def deep_links(self):
+        return [
+            self.prefixed("transient_detail", slug=self.transient.slug),
+            self.prefixed("transient_summary", status_or_query_name="New"),
+            self.prefixed("dashboard"),
+        ]
+
+    def assertRedirectsToStep(self, resp, step_name, wanted):
+        self.assertEqual(resp.status_code, 302, wanted)
+        location = urlsplit(resp["Location"])
+        self.assertEqual(location.path, self.prefixed(step_name), resp["Location"])
+        self.assertEqual(parse_qs(location.query).get("next"), [wanted], resp["Location"])
+        return resp["Location"]
+
+    def test_reverse_carries_the_prefix(self):
+        self.assertEqual(self.prefixed("agreement"), PREFIX + "/agreement/")
+
+    def test_every_deep_link_redirects_to_the_prefixed_agreement(self):
+        for url in self.deep_links():
+            with self.subTest(url=url):
+                self.assertRedirectsToStep(self.browse("get", url), "agreement", url)
+
+    def test_deep_link_round_trip_returns_to_the_page_first_asked_for(self):
+        for url in self.deep_links():
+            with self.subTest(url=url):
+                AgreementAcceptance.objects.filter(user=self.user).delete()
+                ResearcherProfile.objects.filter(user=self.user).delete()
+                session = self.client.session
+                session.pop(onboarding.SESSION_KEY, None)
+                session.save()
+
+                agreement_url = self.assertRedirectsToStep(self.browse("get", url), "agreement", url)
+                page = self.browse("get", agreement_url)
+                self.assertEqual(page.status_code, 200)
+                self.assertContains(page, 'action="%s?next=%s"' % (self.prefixed("agreement"), quote(url, safe="")))
+                self.assertContains(page, 'value="%s"' % url)
+
+                resp = self.browse("post", self.prefixed("agreement"), {"agree": "on", "next": url})
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(resp["Location"], url)
+
+                profile_url = self.assertRedirectsToStep(self.browse("get", url), "researcher_profile_edit", url)
+                page = self.browse("get", profile_url)
+                self.assertEqual(page.status_code, 200)
+                self.assertContains(page, 'action="%s?next=%s"' % (self.prefixed("researcher_profile_edit"),
+                                                                     quote(url, safe="")))
+                self.assertContains(page, 'value="%s"' % url)
+
+                resp = self.browse("post", self.prefixed("researcher_profile_edit"), {
+                    "full_name": "Test Person", "institution": "Example University", "department": "Physics",
+                    "career_level": "tenured", "orcid": VALID_ORCID, "next": url,
+                })
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(resp["Location"], url)
+
+                final = self.browse("get", url)
+                self.assertEqual(final.status_code, 200, url)
+
+    def test_onboarded_user_reaches_every_deep_link_directly(self):
+        onboard(self.user)
+        for url in self.deep_links():
+            with self.subTest(url=url):
+                self.assertEqual(self.browse("get", url).status_code, 200, url)
+
+    def test_fragments_requested_before_onboarding_do_not_redirect(self):
+        fragment = self.prefixed("transient_detail_photometry_fragment", self.transient.id)
+        resp = self.browse("get", fragment, HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+                           HTTP_ACCEPT="text/html, */*; q=0.01", HTTP_SEC_FETCH_MODE="cors",
+                           HTTP_SEC_FETCH_DEST="empty")
+        self.assertNotEqual(resp.status_code, 302, resp.get("Location"))
+
+    def test_agreement_post_that_bounces_through_login_keeps_next(self):
+        """The form posts to /agreement/?next=...: a login bounce on the POST keeps the deep link."""
+        url = self.deep_links()[0]
+        self.client.logout()
+        resp = self.browse("post", "%s?next=%s" % (self.prefixed("agreement"), quote(url, safe="")),
+                           {"agree": "on", "next": url})
+        self.assertEqual(resp.status_code, 302)
+        login_next = parse_qs(urlsplit(resp["Location"]).query)["next"][0]
+        self.assertEqual(parse_qs(urlsplit(login_next).query).get("next"), [url])
+
+    def test_already_accepted_agreement_link_continues_to_next(self):
+        url = self.deep_links()[0]
+        AgreementAcceptance.objects.create(user=self.user, agreement=UserAgreement.objects.get(is_current=True))
+        resp = self.browse("get", "%s?next=%s" % (self.prefixed("agreement"), quote(url, safe="")))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], url)
+        page = self.browse("get", self.prefixed("agreement"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, 'id="yse-agreement-continue"')
+        self.assertContains(page, 'href="%s"' % self.prefixed("dashboard"))
+
+    def test_login_without_next_goes_to_this_stacks_dashboard(self):
+        self.client.logout()
+        resp = self.browse("post", self.prefixed("auth_login"), {"username": "gate_prefix_newcomer", "password": "x"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], self.prefixed("dashboard"))
+        self.client.logout()
+        resp = self.browse("post", self.prefixed("auth_login"),
+                           {"username": "gate_prefix_newcomer", "password": "x", "next": "https://elsewhere.example/"})
+        self.assertEqual(resp["Location"], self.prefixed("dashboard"))
+        self.client.logout()
+        url = self.deep_links()[0]
+        resp = self.browse("post", self.prefixed("auth_login"),
+                           {"username": "gate_prefix_newcomer", "password": "x", "next": url})
+        self.assertEqual(resp["Location"], url)
+
+
+@override_settings(FORCE_SCRIPT_NAME=PREFIX, **GATE_ON)
+class GateCoversEveryPageTests(TestCase):
+    """Every argument-free page in the URLconf is gated for a browser GET, with a prefixed next (#634)."""
+
+    def setUp(self):
+        from django.urls import clear_script_prefix, set_script_prefix
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(clear_script_prefix)
+        set_script_prefix(PREFIX + "/")
+        self.user = User.objects.create_user("gate_every_page", password="x")
+        self.mw = OnboardingGateMiddleware(lambda r: None)
+
+    def test_every_page_redirects_to_the_prefixed_agreement(self):
+        from django.contrib.sessions.backends.db import SessionStore
+        from django.urls import get_resolver
+
+        def walk(patterns, prefix=""):
+            for p in patterns:
+                if hasattr(p, "url_patterns"):
+                    yield from walk(p.url_patterns, prefix + str(p.pattern))
+                else:
+                    yield prefix + str(p.pattern), p
+
+        factory = RequestFactory()
+        checked = 0
+        for regex, pattern in walk(get_resolver().url_patterns):
+            if "<" in regex or "(" in regex or "[" in regex or "\\" in regex or "*" in regex or "+" in regex:
+                continue  # needs arguments
+            path = "/" + regex.replace("^", "").replace("$", "")
+            if path.endswith(".json") or path.startswith(onboarding.EXEMPT_PATH_PREFIXES):
+                continue
+            try:
+                match = resolve(path)
+            except Exception:  # noqa: BLE001 - optional-slash patterns etc.
+                continue
+            if match.url_name in onboarding.EXEMPT_URL_NAMES or getattr(match.func, "onboarding_exempt", False):
+                continue
+            request = factory.get(path, SCRIPT_NAME=PREFIX, **BROWSER)
+            request.user = self.user
+            request.session = SessionStore()
+            request.resolver_match = match
+            resp = self.mw.process_view(request, match.func, match.args, match.kwargs)
+            with self.subTest(path=path):
+                self.assertIsNotNone(resp, path)
+                location = urlsplit(resp["Location"])
+                self.assertEqual(location.path, PREFIX + "/agreement/", path)
+                self.assertEqual(parse_qs(location.query).get("next"), [PREFIX + path], path)
+            checked += 1
+        self.assertGreater(checked, 40)

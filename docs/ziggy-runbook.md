@@ -7,6 +7,20 @@ A living checklist for David Jones, in the order things should happen. It replac
 
 **Done:** [#335](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/335) merged to `develop` (5da66de) and deployed green to yse\_test at 18:01 UTC; migrations `0010_dashboard_indexes` (18 min) through 0029 (#341 PhotStat 18:43 UTC to #386 broker streams) already applied on the shared `YSE_test` database, nothing on yse\_test to run for them; [#143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) (develop to master) is conflict-free with 8/8 checks green and its body carries all 66 `Fixes` lines.
 
+**OPTIONAL MITIGATION (2026-10-12): onboarding gate on `/yse_test/`** ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)). Ryan reported that after #633 pages on `/yse_test/` break unless you start on the dashboard. Until the fix PR for #634 is merged and deployed, you may turn the gate off on yse\_test only:
+
+```bash
+cd /data/yse_pz/YSE_PZ_test
+grep -n "ONBOARDING_GATE_ENABLED" YSE_PZ/settings.ini || echo "not set"
+```
+**Expected:** `not set` (or an existing line). Add under the existing `[site_settings]` section of `YSE_PZ/settings.ini` (do not add a second `[site_settings]` header):
+
+```ini
+ONBOARDING_GATE_ENABLED: False
+```
+(or export `YSE_ONBOARDING_GATE=0` in that stack's web environment), then `sudo systemctl restart apache2`.
+**Check:** `/data/yse_pz/yse_test_virtual/bin/python manage.py shell -c "from django.conf import settings; print(settings.ONBOARDING_GATE_ENABLED)"` prints `False`, and a signed-in user who has not accepted the agreement opens a transient page on `/yse_test/` without a redirect. After the fix deploys, delete the line and restart Apache again (the check then prints `True`).
+
 **REQUIRED NOW (2026-10-02): `/yse_test/` did not deploy [#362](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/362).** Ryan merged #362 into `develop` at 07:40 UTC, but Deploy Stack [run 36979824014](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36979824014) stopped at `git fetch` with `error: cannot open .git/FETCH_HEAD: Permission denied`. Some files in the yse_test checkout are no longer owned by `foley`, the runner user, probably from the hotfix commit made there by hand. `/yse_test/` is still on 82b2580; nothing was migrated or restarted.
 
 ```bash
@@ -1468,6 +1482,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v29, optional. Onboarding gate under the `/yse_test/` prefix ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)): mitigation (turn the gate off on yse\_test) until the fix deploys; the fix itself needs no server step.
 * 2026-10-12 v28, **required once the develop-direct PR is merged** (develop first, then experimental). User agreement, researcher profile and onboarding gate ([#627](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/627)-[#631](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/631)): migrations 0031/0032 (new tables, agreement v1); the gate is on by default (rollback `ONBOARDING_GATE_ENABLED: False`); **required:** install only the research public key ([step A](#onboarding)); optional SciX metrics and Explorer grants.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).
 * 2026-10-06 v26, **required**. ZTF forced phot `FileNotFoundError` on yse_test ([#411](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/411), [#412](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/412)): check that the Apache user can write `<ZTFTMPDIR>/forced_phot_out` and run `wget` (steps above section 1). #412 creates the directory if it is missing and reports wget's own error.

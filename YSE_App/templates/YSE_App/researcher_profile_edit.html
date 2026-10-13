@@ -19,7 +19,7 @@
 		<i class="fa fa-lock" aria-hidden="true"></i> encrypted; even administrators cannot read it. Stored encrypted values are never shown again: leave a field blank to keep it, or tick "Delete" to remove it.
 		Every change is recorded with its date. See the <a href="{% url 'agreement' %}">User Agreement</a> (section 8) for how this information is used.
 	</p>
-	<form method="post" action="{% url 'researcher_profile_edit' %}" id="yse-profile-form" class="yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
+	<form method="post" action="{% url 'researcher_profile_edit' %}{% if next_url %}?next={{ next_url|urlencode:'' }}{% endif %}" id="yse-profile-form" class="yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
 		{% csrf_token %}
 		<input type="hidden" name="next" value="{{ next_url }}">
 		{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
