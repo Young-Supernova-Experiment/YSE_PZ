@@ -636,7 +636,7 @@ Expected: `group profiles: created 0, marked system 0` (the migration already di
 **Invite flow (for owners; nothing to run on the server):**
 
 1. On `/teams/<id>/`, "Invite people": choose the expiry (default 14 days, at most 60) and how many people may use the link (default 1). Click "Create link" and copy the link: it is shown **once** and only its hash is stored. Send it yourself (email, Slack). No email address is stored.
-2. The invitee opens the link. Signed out: they sign in and come back to it (accounts are still created by staff; self-signup is #448). Signed in: they land on `/teams/join/`.
+2. The invitee opens the link. Signed out: they sign in and come back to it (or create an account at `/signup/` when self-signup is on, [section "Self-service signup"](#self-signup)). Signed in: they land on `/teams/join/`.
 3. A new user is first sent to the User Agreement and the profile (the onboarding gate), then back to `/teams/join/`. They click "Join <team>" and become a member; owners get a notification.
 4. Owners can revoke an open link, and remove members (not owners) on the team page.
 
@@ -695,6 +695,69 @@ cd <CHECKOUT> && <PYTHON> manage.py backfill_data_pis --apply
 Expected: the same first line, then `written: N datasets`. **Check:** running the dry run again prints `datasets to fill: 0`. Options: `--include-public` also fills public data, `--max-pis 2` accepts up to two PIs per dataset, and `--source obs_group` uses one source only. The command only adds PIs and never removes any. To undo, remove PIs per dataset in the admin.
 
 Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
+<a id="self-signup"></a>
+
+### Self-service signup and team membership requests (develop-direct PR; #448, #440 follow-up, #643) nothing required, signup off until turned on
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migration `0036_group_membership_requests` adds one new table, `YSE_App_groupmembershiprequest`, runs automatically on deploy, writes no data, and is safe on the shared `YSE_test` database. No new dependency (plain `django.contrib.auth`; no allauth, no CAPTCHA service).
+
+**Effect on deploy (flag off):** nothing opens. `/signup/`, `/signup/verify/...`, `/settings/email/` and new membership requests return 404, and the login page shows no "Create an account" link. Always on after deploy:
+
+* the login page has a "Forgot password?" link (Django's password reset, already routed);
+* the **Public** group is always offered in audience pickers: a user's hidden groups, an inactive flag and `PICKER_VISIBLE_SYSTEM_GROUPS` can no longer take it out (#440 follow-up);
+* the PrincipalInvestigator REST API returns only `url`, `id` and `name` to non-staff (staff still see email, phone and the rest; non-staff can still send those fields when they create or update a PI), and the PI table is hidden from SQL Explorer and its SQL blacklist (#643). If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_principalinvestigator`, `YSE_App_principalinvestigator_obs_group` and `YSE_App_groupmembershiprequest`.
+
+**Before Step A:** owners should exist on the teams that will take requests ([section "Research teams"](#teams), Step B). Only active, non-system teams with at least one active owner can be requested.
+
+**Step A (Ryan or David): turn signup on**, on one stack at a time (yse\_test first). In `<CHECKOUT>/YSE_PZ/settings.ini`:
+
+```ini
+[site_settings]
+SELF_SIGNUP_ENABLED: True
+```
+
+Then restart Apache (or the stack's WSGI process) as for any settings change. **Check:**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://<STACK_URL>/signup/
+```
+
+Expected: `200` (it was `404` before). The login page now shows "Create an account". Rollback: set `SELF_SIGNUP_ENABLED: False` (or env `YSE_SELF_SIGNUP=0`) and restart; existing accounts and pending requests stay, and owners can still decide pending requests.
+
+**What a new user sees:** `/signup/` asks for a username, an email address and a password (Django's password validators). The account is **active at once** (no staff approval, Ryan 2026-10-13) and only in Public. They are signed in and sent through the User Agreement and the researcher profile (the onboarding gate), then land on `/teams/`, where "Ask to join a team" lists the requestable teams. The owners get a notification (in-app, email and Slack by default: "Interests and data access" preference group) and approve or deny on the team page; the requester is notified of the decision.
+
+**Email verification** (on by default when email delivery is on, `NOTIFICATION_EMAIL_ENABLED`): the address is not stored on the account until its owner opens the emailed link and presses Confirm (the link holds the address encrypted with a key derived from `SECRET_KEY`, expires after 72 hours and works once). Until then the account gets no email and cannot reset its password by email; the user can resend the link from `/settings/email/`. If the server cannot send mail, signup still works and the page says so. **Check:** sign up with a test address you control on yse\_test, receive the email, confirm, and see the address under `/settings/email/` ("has a confirmed email address").
+
+**Spam guard** (no external service): a hidden honeypot field, a minimum fill time, and hourly limits kept in the cache (per client IP, hashed, and site-wide). Behind Apache's reverse proxy every request may come from the proxy address, so the per-IP limit then acts site-wide; to count real client addresses set `SELF_SIGNUP_CLIENT_IP_HEADER: HTTP_X_FORWARDED_FOR` (only if the proxy always sets that header). Without Redis (`REDIS_URL`) the counters are per WSGI process.
+
+**Step B (optional): purge old requests.** Approved, denied and withdrawn requests decided more than 90 days ago (pending ones and memberships are never touched):
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_membership_requests --dry-run
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_membership_requests
+```
+
+Expected: `group membership requests: would delete N ...` then `deleted N`.
+
+**Optional settings** (`<CHECKOUT>/YSE_PZ/settings.ini`, restart), defaults shown:
+
+```ini
+[site_settings]
+SELF_SIGNUP_ENABLED: False
+SELF_SIGNUP_EMAIL_VERIFICATION: <same as NOTIFICATION_EMAIL_ENABLED>
+SELF_SIGNUP_VERIFY_HOURS: 72
+SELF_SIGNUP_ATTEMPTS_PER_IP_PER_HOUR: 10
+SELF_SIGNUP_ACCOUNTS_PER_HOUR: 30
+SELF_SIGNUP_MIN_FILL_SECONDS: 3
+SELF_SIGNUP_CLIENT_IP_HEADER:
+
+[groups]
+REQUEST_PURGE_DAYS: 90
+REQUESTS_PER_USER_PER_DAY: 10
+```
+
+Production: Step A only when Ryan decides, after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
 <a id="merge"></a>
 
@@ -1605,6 +1668,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-13 v33, nothing required (signup off by default). Self-service signup and team membership requests ([#448](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/448)): migration 0036 (one new table); turn on with `SELF_SIGNUP_ENABLED: True` when ready; optional `purge_group_membership_requests`. Public always offered in pickers ([#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)); PI contact fields staff-only in the API and PI table hidden from Explorer ([#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)) ([section "Self-service signup"](#self-signup)).
 * 2026-10-13 v32, nothing required (PI accounts and backfill optional). PIs on private data ([#446](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/446)): migration 0035 (one nullable column, two new join tables); staff link PIs to accounts in the admin; optional `backfill_data_pis` (dry run by default) ([section "PIs on private data"](#data-pis)).
 * 2026-10-12 v31, nothing required (owners optional). Research teams, invitation links and user settings ([#445](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/445), [#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)): migrations 0033/0034 (new tables, one profile per group, no owners, all active, system groups marked); staff assign owners in Admin > Groups ([section "Research teams"](#teams)); optional `ensure_group_profiles` check, inactive flag, `purge_group_invitations` and `[groups]` keys.
 * 2026-10-12 v30, optional (recommended). Per-stack session / CSRF cookie names and paths ([#637](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/637)): defaults unchanged; set the four `[site_settings]` keys on yse\_test and yse\_experimental (section "Per-stack session and CSRF cookies"); everyone on that stack is logged out once.

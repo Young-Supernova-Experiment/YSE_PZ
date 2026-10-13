@@ -41,4 +41,5 @@ from YSE_App.models.researcher_models import (
     AffiliationHistory, AgreementAcceptance, EncryptedProfileValue, Mentorship, ProfileFieldHistory,
     ResearcherMetrics, ResearcherProfile, UserAgreement,
 )
-from YSE_App.models.group_models import GroupInvitation, GroupInvitationUse, GroupProfile, UserPreference
+from YSE_App.models.group_models import (GroupInvitation, GroupInvitationUse, GroupMembershipRequest, GroupProfile,
+                                         UserPreference)

@@ -389,6 +389,12 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_groupinvitation',
     'YSE_App_groupinvitationuse',
     'YSE_App_userpreference',
+    # Self-service membership requests (#448).
+    'YSE_App_groupmembershiprequest',
+    # PI contact details (#643). Explorer can only exclude whole tables, so the PI table
+    # (and, by prefix, its obs_group join table) is left out; PI names stay visible in
+    # the app and the REST API.
+    'YSE_App_principalinvestigator',
 )
 EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
     'auth_',
@@ -633,6 +639,7 @@ SUMMARY_BATCH_CRON_ENABLED = (
 )
 SUMMARY_BATCH_CRON_MINUTES = config.getint('llm', 'SUMMARY_BATCH_CRON_MINUTES', fallback=1440)
 SUMMARY_BATCH_HOURS = config.getint('llm', 'SUMMARY_BATCH_HOURS', fallback=24)
+
 SUMMARY_BATCH_MAX = config.getint('llm', 'SUMMARY_BATCH_MAX', fallback=200)
 
 # Email delivery defaults to "on when [SMTP_provider] holds real credentials"
@@ -693,6 +700,29 @@ DEFAULT_FROM_EMAIL = _ini_value(config.get('SMTP_provider', 'FROM_ADDRESS', fall
     EMAIL_HOST_USER if '@' in EMAIL_HOST_USER
     else ('%s@gmail.com' % EMAIL_HOST_USER if EMAIL_HOST_USER else 'yse-pz@localhost')
 )
+
+# Self-service signup and team membership requests (#448). Off by default: nothing
+# opens until [site_settings] SELF_SIGNUP_ENABLED = True (or env YSE_SELF_SIGNUP=1).
+# New accounts are active at once and go through the User Agreement and profile gate.
+# SELF_SIGNUP_EMAIL_VERIFICATION (default: on when email delivery is on) keeps the
+# address off the account until its owner opens the emailed link. Spam guard: a
+# honeypot field, a minimum fill time and per-IP / site-wide hourly limits (cache).
+_signup_env = os.environ.get('YSE_SELF_SIGNUP', '').strip().lower()
+SELF_SIGNUP_ENABLED = (
+    _signup_env in ('1', 'true', 'yes', 'on') if _signup_env
+    else config.getboolean('site_settings', 'SELF_SIGNUP_ENABLED', fallback=False)
+)
+SELF_SIGNUP_EMAIL_VERIFICATION = config.getboolean(
+    'site_settings', 'SELF_SIGNUP_EMAIL_VERIFICATION', fallback=NOTIFICATION_EMAIL_ENABLED)
+SELF_SIGNUP_VERIFY_HOURS = config.getint('site_settings', 'SELF_SIGNUP_VERIFY_HOURS', fallback=72)
+SELF_SIGNUP_ATTEMPTS_PER_IP_PER_HOUR = config.getint('site_settings', 'SELF_SIGNUP_ATTEMPTS_PER_IP_PER_HOUR', fallback=10)
+SELF_SIGNUP_ACCOUNTS_PER_HOUR = config.getint('site_settings', 'SELF_SIGNUP_ACCOUNTS_PER_HOUR', fallback=30)
+SELF_SIGNUP_MIN_FILL_SECONDS = config.getint('site_settings', 'SELF_SIGNUP_MIN_FILL_SECONDS', fallback=3)
+# Behind a reverse proxy REMOTE_ADDR is the proxy, so the per-IP limit acts site-wide.
+# Name the header the proxy sets (for example HTTP_X_FORWARDED_FOR) to use its last entry.
+SELF_SIGNUP_CLIENT_IP_HEADER = config.get('site_settings', 'SELF_SIGNUP_CLIENT_IP_HEADER', fallback='').strip()
+GROUP_REQUEST_PURGE_DAYS = config.getint('groups', 'REQUEST_PURGE_DAYS', fallback=90) if config.has_section('groups') else 90
+GROUP_REQUESTS_PER_USER_PER_DAY = config.getint('groups', 'REQUESTS_PER_USER_PER_DAY', fallback=10) if config.has_section('groups') else 10
 
 # ---------------------------------------------------------------------------
 # Alert brokers (YSE_App.brokers; issues #272, #276). All keys optional, under
@@ -840,8 +870,8 @@ def _group_names_setting(key, default):
 
 YSE_SYSTEM_GROUP_NAMES = _group_names_setting(
     'SYSTEM_GROUP_NAMES', ('Public', 'api_writers', 'explorer_users'))
-# System groups still offered in audience pickers: Public is the follow-up "share with
-# everyone in Public" choice, so it stays unless removed here.
+# System groups still offered in audience pickers. Public is always offered, whatever
+# this lists (#440 follow-up): it is the follow-up "share with everyone" choice.
 YSE_PICKER_VISIBLE_SYSTEM_GROUPS = _group_names_setting('PICKER_VISIBLE_SYSTEM_GROUPS', ('Public',))
 GROUP_INVITE_DEFAULT_DAYS = config.getint('groups', 'INVITE_DEFAULT_DAYS', fallback=14) if config.has_section('groups') else 14
 GROUP_INVITE_MAX_DAYS = config.getint('groups', 'INVITE_MAX_DAYS', fallback=60) if config.has_section('groups') else 60

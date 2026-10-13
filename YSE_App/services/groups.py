@@ -8,11 +8,14 @@ System groups
 
 Pickers
     Audience pickers (comments, follow-ups, interests, data-access targets) leave out system
-    groups, except those in ``settings.YSE_PICKER_VISIBLE_SYSTEM_GROUPS`` (default: Public,
-    which is the follow-up "share with everyone" option). Inactive groups and the groups a
-    user hides in /settings/ are left out of the main list as well, unless that would leave
-    nothing to choose. Pickers only narrow what is offered: who can see existing data, and
-    the server-side eligibility checks, are unchanged.
+    groups, except those in ``settings.YSE_PICKER_VISIBLE_SYSTEM_GROUPS``. Inactive groups and
+    the groups a user hides in /settings/ are left out of the main list as well, unless that
+    would leave nothing to choose. Pickers only narrow what is offered: who can see existing
+    data, and the server-side eligibility checks, are unchanged.
+
+    Public is ALWAYS offered (#440, Ryan 2026-10-13): every user belongs to it, and neither
+    ``YSE_PICKER_VISIBLE_SYSTEM_GROUPS``, an inactive flag nor a user's hidden groups can
+    take it out of a picker.
 
 Invitations
     ``create_invitation`` returns the raw token once; only its SHA-256 is stored.
@@ -32,6 +35,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.utils import timezone
 
+from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models.group_models import GroupInvitation, GroupInvitationUse, GroupProfile, UserPreference
 
 DEFAULT_SYSTEM_GROUP_NAMES = ("Public", "api_writers", "explorer_users")
@@ -55,7 +59,11 @@ def system_group_names() -> Tuple[str, ...]:
 
 
 def picker_visible_system_group_names() -> Tuple[str, ...]:
-    return tuple(getattr(settings, "YSE_PICKER_VISIBLE_SYSTEM_GROUPS", DEFAULT_PICKER_VISIBLE_SYSTEM_GROUPS))
+    """System groups offered in pickers; Public is always among them, whatever the setting says."""
+    names = tuple(getattr(settings, "YSE_PICKER_VISIBLE_SYSTEM_GROUPS", DEFAULT_PICKER_VISIBLE_SYSTEM_GROUPS) or ())
+    if PUBLIC_COLLABORATION_GROUP_NAME not in names:
+        names = (PUBLIC_COLLABORATION_GROUP_NAME,) + names
+    return names
 
 
 def invite_default_days() -> int:
@@ -121,18 +129,24 @@ def _group_meta(user: Optional[User] = None) -> dict:
     has_perm = Exists(Group.permissions.through.objects.filter(group_id=OuterRef("pk")))
     rows = (Group.objects.annotate(_has_perm=has_perm)
             .filter(Q(name__in=names) | Q(group_profile__is_system=True) | Q(_has_perm=True)
-                    | Q(group_profile__is_active=False))
+                    | Q(group_profile__is_active=False) | Q(name=PUBLIC_COLLABORATION_GROUP_NAME))
             .values_list("id", "name", "group_profile__is_system", "group_profile__is_active", "_has_perm"))
     visible = set(picker_visible_system_group_names())
-    system, excluded, inactive = set(), set(), set()
+    system, excluded, inactive, public = set(), set(), set(), set()
     for pk, name, profile_system, profile_active, perm in rows:
+        if name == PUBLIC_COLLABORATION_GROUP_NAME:
+            # Always offered (#440): never excluded, never treated as inactive.
+            public.add(pk)
+            if name in names or profile_system or perm:
+                system.add(pk)
+            continue
         if name in names or profile_system or perm:
             system.add(pk)
             if name not in visible:
                 excluded.add(pk)
         if profile_active is False:
             inactive.add(pk)
-    meta = {"system": system, "excluded": excluded, "inactive": inactive}
+    meta = {"system": system, "excluded": excluded, "inactive": inactive, "public": public}
     if user is not None:
         try:
             user._yse_group_meta = meta
@@ -150,6 +164,11 @@ def is_system_group(group: Group) -> bool:
         return True
     return Group.objects.filter(pk=group.pk).filter(
         Q(group_profile__is_system=True) | Q(permissions__isnull=False)).exists()
+
+
+def public_group_ids(user: Optional[User] = None) -> Set[int]:
+    """Ids of the Public group (a set: empty when it does not exist yet)."""
+    return set(_group_meta(user)["public"])
 
 
 def inactive_group_ids(user: Optional[User] = None) -> Set[int]:
@@ -373,7 +392,8 @@ def _pref_ids(user: User, attr: str) -> Set[int]:
 
 
 def hidden_group_ids(user: User) -> Set[int]:
-    return _pref_ids(user, "hidden_groups")
+    """Groups the user hides in pickers. Public can never be hidden (#440), even if a row says so."""
+    return _pref_ids(user, "hidden_groups") - public_group_ids(user)
 
 
 def default_group_ids(user: User, kind: str) -> Set[int]:
@@ -394,7 +414,7 @@ def picker_excluded_system_ids(user: Optional[User] = None) -> Set[int]:
 def partition_picker_groups(user: User, groups: Iterable[Group]) -> Tuple[List[Group], List[Group]]:
     """``(shown, more)``: system groups are dropped; inactive and user-hidden groups go to ``more``.
 
-    If nothing would be shown, everything goes back into ``shown`` so a picker is never empty
+    Public is always in ``shown`` (#440). If nothing would be shown, everything goes back into ``shown`` so a picker is never empty
     only because of a preference or an inactive flag.
     """
     groups = list(groups)
@@ -402,7 +422,7 @@ def partition_picker_groups(user: User, groups: Iterable[Group]) -> Tuple[List[G
         return [], []
     excluded = picker_excluded_system_ids(user)
     kept = [g for g in groups if g.id not in excluded]
-    soft = inactive_group_ids(user) | hidden_group_ids(user)
+    soft = (inactive_group_ids(user) | hidden_group_ids(user)) - public_group_ids(user)
     shown = [g for g in kept if g.id not in soft]
     more = [g for g in kept if g.id in soft]
     if not shown:

@@ -398,7 +398,7 @@ class UserPreferenceTests(GroupTestBase):
         self.assertEqual(form.fields["audience_groups"].initial, [self.team.pk])
         self.assertTrue(form.initial_is_public)
         labels = [label for _v, label in form.fields["audience_groups"].choices]
-        self.assertNotIn("Public", labels)
+        self.assertIn("Public", labels)  # Public cannot be hidden (#440 follow-up)
 
         is_public, groups = audience.resolve_comment_audience(self.member, self.transient.id, is_public=False)
         self.assertFalse(is_public)

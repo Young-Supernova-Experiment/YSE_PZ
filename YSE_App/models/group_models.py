@@ -8,6 +8,8 @@
   link cannot be rebuilt from the database. It expires, has a maximum number of uses (1 by
   default: single-use) and can be revoked. No email address is stored.
 * ``GroupInvitationUse``: who used an invitation and when (one row per user).
+* ``GroupMembershipRequest``: a signed-in user asks to join a team (#448); the team's owners
+  (or staff) approve or deny it. System groups cannot be requested.
 * ``UserPreference``: groups a user hides from pickers, default audiences for comments and
   follow-up requests, and the default for the comment "Public" box.
 
@@ -134,3 +136,38 @@ class UserPreference(models.Model):
 
     def __str__(self):
         return "Preferences #%s" % self.pk
+
+
+class GroupMembershipRequest(models.Model):
+    """A request to join a research team (#448), decided by the team's owners or staff."""
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_DENIED = "denied"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "pending"),
+        (STATUS_APPROVED, "approved"),
+        (STATUS_DENIED, "denied"),
+        (STATUS_CANCELLED, "cancelled"),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="group_membership_requests")
+    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="membership_requests")
+    message = models.TextField(blank=True, default="", help_text="Optional note to the team's owners.")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    decided_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    decided_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        verbose_name = "group membership request"
+        indexes = [models.Index(fields=["group", "status"], name="yse_gmr_group_status")]
+
+    def __str__(self):
+        return "Membership request #%s for %s (%s)" % (self.pk, self.group.name, self.status)
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == self.STATUS_PENDING

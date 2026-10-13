@@ -53,7 +53,7 @@ class UserPreferenceForm(forms.ModelForm):
         queryset=Group.objects.none(), required=False, widget=forms.CheckboxSelectMultiple,
         label="Hide these groups in pickers",
         help_text="You stay a member and keep seeing their data; they are just not offered when you "
-                  "choose who can see a comment, follow-up request or interest.",
+                  "choose who can see a comment, follow-up request or interest. Public is always offered.",
     )
     comment_default_groups = _GroupChoices(
         queryset=Group.objects.none(), required=False, widget=forms.CheckboxSelectMultiple,
@@ -79,5 +79,7 @@ class UserPreferenceForm(forms.ModelForm):
         qs = user.groups.exclude(id__in=excluded).select_related("group_profile").order_by("name")
         for name in ("hidden_groups", "comment_default_groups", "followup_default_groups"):
             self.fields[name].queryset = qs
+        # Public is always shown in pickers (#440): it cannot be hidden.
+        self.fields["hidden_groups"].queryset = qs.exclude(id__in=group_svc.public_group_ids(user))
         if self.instance is not None and self.instance.comment_default_public is not None:
             self.initial["comment_default_public"] = bool(self.instance.comment_default_public)

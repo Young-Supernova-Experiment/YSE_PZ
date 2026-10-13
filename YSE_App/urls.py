@@ -19,6 +19,7 @@ from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
 from YSE_App import profile_views
 from YSE_App import group_views
+from YSE_App import signup_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
@@ -371,6 +372,16 @@ urlpatterns = [
             group_views.team_invite_revoke, name='team_invite_revoke'),
     re_path(r'^teams/(?P<group_id>[0-9]+)/members/(?P<user_id>[0-9]+)/remove/$',
             group_views.team_member_remove, name='team_member_remove'),
+    # Self-service signup and membership requests (#448); 404 unless SELF_SIGNUP_ENABLED
+    re_path(r'^signup/$', signup_views.signup, name='signup'),
+    re_path(r'^signup/verify/(?P<token>[A-Za-z0-9_=-]{20,512})/$', signup_views.signup_verify_email,
+            name='signup_verify_email'),
+    re_path(r'^settings/email/$', signup_views.account_email, name='account_email'),
+    re_path(r'^teams/requests/$', signup_views.team_request_create, name='team_request_create'),
+    re_path(r'^teams/requests/(?P<request_id>[0-9]+)/cancel/$', signup_views.team_request_cancel,
+            name='team_request_cancel'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/requests/(?P<request_id>[0-9]+)/decide/$',
+            signup_views.team_request_decide, name='team_request_decide'),
     # Transient interests (#288) and data access requests (#291)
     re_path(r'^interests/(?P<interest_id>[0-9]+)/status/$', collaboration_views.interest_status,
             name='interest_status'),

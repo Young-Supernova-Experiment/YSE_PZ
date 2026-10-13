@@ -34,6 +34,8 @@ from YSE_App.models.group_models import GroupInvitation, UserPreference
 from YSE_App import onboarding
 from YSE_App.onboarding import onboarding_exempt
 from YSE_App.services import groups as group_svc
+from YSE_App.services import membership
+from YSE_App.signup_forms import MembershipRequestForm
 
 INVITE_SESSION_KEY = "_yse_group_invite"
 NEW_LINK_SESSION_KEY = "_yse_group_invite_new_link"
@@ -78,7 +80,16 @@ def team_list(request):
     member_of = set(request.user.groups.values_list("id", flat=True))
     rows = [{"group": g, "profile": getattr(g, "group_profile", None), "is_owner": g.id in owned,
              "is_member": g.id in member_of} for g in teams]
-    return render(request, "YSE_App/teams.html", {"rows": rows})
+    # Membership requests (#448): teams the user can ask to join, and their own requests.
+    requests_open = membership.requests_enabled()
+    my_requests = list(membership.requests_for_user(request.user)[:50])
+    pending_ids = {r.group_id for r in my_requests if r.is_pending}
+    requestable = ([{"group": g, "profile": getattr(g, "group_profile", None), "pending": g.id in pending_ids}
+                    for g in membership.requestable_groups(request.user)] if requests_open else [])
+    return render(request, "YSE_App/teams.html", {
+        "rows": rows, "requests_open": requests_open, "requestable": requestable, "my_requests": my_requests,
+        "request_form": MembershipRequestForm(),
+    })
 
 
 @login_required
@@ -102,6 +113,7 @@ def team_detail(request, group_id):
         "invite_form": InvitationForm() if manage else None,
         "profile_form": GroupProfileForm(instance=profile) if manage else None,
         "new_link": new_link,
+        "pending_requests": list(membership.pending_for_group(group)) if manage else [],
     })
     return _no_referrer(response) if new_link else response
 
@@ -245,4 +257,5 @@ def user_settings(request):
         form = UserPreferenceForm(instance=instance, user=request.user)
     else:
         return HttpResponseBadRequest("GET or POST")
-    return render(request, "YSE_App/user_settings.html", {"form": form})
+    from YSE_App.services.signup import signup_enabled
+    return render(request, "YSE_App/user_settings.html", {"form": form, "signup_enabled": signup_enabled()})
