@@ -55,6 +55,9 @@ def login_or_basic_auth_required(view):
 			else:
 				return HttpResponseForbidden('Incorrect user credentials')
 	_decorator.onboarding_exempt = True
+	# functools.wraps replaces __qualname__, so LoginRequiredMiddleware (#496)
+	# recognises these views by this marker (YSE_App/login_required.py).
+	_decorator.login_or_basic_auth = True
 	return _decorator
 
 
