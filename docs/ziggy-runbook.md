@@ -665,6 +665,37 @@ INVITE_PURGE_DAYS: 90
 
 Production: steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
+<a id="data-pis"></a>
+
+### PIs on private data (develop-direct PR; #446) nothing required, PI accounts and backfill optional
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migration `0035_data_pis` adds one nullable column, `YSE_App_principalinvestigator.user_id`, and two new join tables, `YSE_App_transientphotometry_pis` and `YSE_App_transientspectrum_pis`. It runs automatically on deploy, writes no data, and is safe on the shared `YSE_test` database. No new dependency.
+
+**Effect on deploy:** nothing changes until PIs are set. The upload-spectrum form, the `add_transient_spec` / `add_transient_phot` upload APIs (`"pis": [<PrincipalInvestigator id>, ...]`), the REST API and the admin can set PIs on a spectrum or photometry set. The spectra and photometry tables show the PI names, and the "restricted data" hint shows the PI names of hidden data. The "Register interest" form has two opt-in boxes: "Tell the PIs" and "Also request access".
+
+**Step A (optional, David or Ryan, in the admin): link PIs to their accounts.** Only a linked PI is notified or can accept and decline requests.
+
+1. Admin > YSE_App > Principal investigators > click the PI.
+2. Set **User** to the PI's YSE-PZ account (the magnifier opens a user search). Save.
+
+**Check:** on a transient with private data that has this PI, a second user who cannot see the data registers an interest with both boxes ticked. The PI gets one "Data access request" notification, and the request is in the PI's Data access requests inbox.
+
+**Step B (optional): backfill PIs on existing data.** This fills only datasets that have no PI yet, from an allocation that covers the spectrum (same instrument, or same telescope, with the observation date inside its dates) or from the PIs linked to the dataset's observation group. Anything ambiguous or unmatched stays blank. By default it is a dry run on restricted data only.
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py backfill_data_pis
+```
+
+Expected: `datasets to fill: N (allocation A, obs_group O); ambiguous X; unmatched U` then `dry run: nothing written (pass --apply to write)`. If the numbers look right:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py backfill_data_pis --apply
+```
+
+Expected: the same first line, then `written: N datasets`. **Check:** running the dry run again prints `datasets to fill: 0`. Options: `--include-public` also fills public data, `--max-pis 2` accepts up to two PIs per dataset, and `--source obs_group` uses one source only. The command only adds PIs and never removes any. To undo, remove PIs per dataset in the admin.
+
+Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
 <a id="merge"></a>
 
 ## 2 · Before merging #143 to master David
@@ -1574,6 +1605,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-13 v32, nothing required (PI accounts and backfill optional). PIs on private data ([#446](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/446)): migration 0035 (one nullable column, two new join tables); staff link PIs to accounts in the admin; optional `backfill_data_pis` (dry run by default) ([section "PIs on private data"](#data-pis)).
 * 2026-10-12 v31, nothing required (owners optional). Research teams, invitation links and user settings ([#445](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/445), [#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)): migrations 0033/0034 (new tables, one profile per group, no owners, all active, system groups marked); staff assign owners in Admin > Groups ([section "Research teams"](#teams)); optional `ensure_group_profiles` check, inactive flag, `purge_group_invitations` and `[groups]` keys.
 * 2026-10-12 v30, optional (recommended). Per-stack session / CSRF cookie names and paths ([#637](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/637)): defaults unchanged; set the four `[site_settings]` keys on yse\_test and yse\_experimental (section "Per-stack session and CSRF cookies"); everyone on that stack is logged out once.
 * 2026-10-12 v29, optional. Onboarding gate under the `/yse_test/` prefix ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)): mitigation (turn the gate off on yse\_test) until the fix deploys; the fix itself needs no server step.

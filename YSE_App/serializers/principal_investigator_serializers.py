@@ -10,7 +10,8 @@ class PrincipalInvestigatorSerializer(serializers.HyperlinkedModelSerializer):
 
 	class Meta:
 		model = PrincipalInvestigator
-		fields = "__all__"
+		# The PI's YSE-PZ account link (#446) is set by staff in the admin and not exposed here.
+		exclude = ('user',)
 
 	def create(self, validated_data):
 		ogs = validated_data.pop('obs_group')

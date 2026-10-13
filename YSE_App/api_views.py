@@ -17,6 +17,13 @@ from YSE_App.filters.transient_search import TransientSearchFilterSet
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
 
+
+def _truthy(value) -> bool:
+    """A JSON boolean or a form-style flag ("1", "true", "on")."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "on", "true", "yes")
+
 ### `Additional Info` ViewSets ###
 class TransientWebResourceViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = TransientWebResource.objects.all()
@@ -1291,6 +1298,8 @@ class TransientInterestViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
             data["transient"], self.request.user, data.get("title", ""), group=data.get("group"),
             role=data.get("role") or TransientInterest.ROLE_LEAD, description=data.get("description") or "",
             status=data.get("status") or TransientInterest.STATUS_PLANNED,
+            notify_pis=_truthy(self.request.data.get("notify_pis")),
+            request_data=_truthy(self.request.data.get("request_data")),
         )
 
     def _update(self, serializer):

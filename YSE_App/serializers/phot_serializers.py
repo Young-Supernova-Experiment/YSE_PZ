@@ -13,6 +13,8 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
     followup = serializers.HyperlinkedRelatedField(queryset=TransientFollowup.objects.all(), allow_null=True, required=False, view_name='transientfollowup-detail')
 
     groups = serializers.HyperlinkedRelatedField(queryset=Group.objects.all(), many=True, view_name='group-detail')
+    # PIs (#446): PrincipalInvestigator links; optional.
+    pis = serializers.HyperlinkedRelatedField(queryset=PrincipalInvestigator.objects.all(), many=True, required=False, view_name='principalinvestigator-detail')
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 
@@ -37,7 +39,10 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
                 raise PermissionDenied({"message": "You don't have permission to create transient photometry with",
                                         "group": groups })
 
+        pis = validated_data.pop('pis', None)
         transient_photometry = TransientPhotometry.objects.create(**validated_data)
+        if pis:
+            transient_photometry.pis.set(pis)
         transient_photometry.save()
 
         if groups_exist:
@@ -94,6 +99,15 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
                     if group_result.exists():
                         g = group_result.first()
                         instance.groups.add(g)
+
+        if 'pis' in validated_data.keys():
+            from YSE_App.services.data_pis import user_can_edit_pis
+
+            pis = validated_data.pop('pis')
+            if not user_can_edit_pis(self.context['request'].user, instance):
+                raise PermissionDenied({"message": "You don't have permission to change the PIs of",
+                                        "transient photometry": instance})
+            instance.pis.set(pis)
 
         instance.save()
 

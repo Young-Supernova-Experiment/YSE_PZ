@@ -84,6 +84,7 @@
             <th>Mag Error</th>
             <th>Filter</th>
             <th>Instrument</th>
+            <th>PI</th>
             <th>DQ</th>
         </tr>
     </thead>
@@ -96,6 +97,7 @@
             <td>{{allphot.mag_err}}</td>
             <td>{{allphot.band.name}}</td>
             <td>{{allphot.band.instrument.name}}</td>
+            <td class="yse-data-pis">{{ allphot.photometry.pis.all|join:", "|default:"—" }}</td>
             <td>{{ allphot.data_quality.all|join:"," }}</td>
         </tr>
     {% endfor %}

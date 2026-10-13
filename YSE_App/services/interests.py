@@ -6,6 +6,13 @@ automatic comment ("<user> registered an interest: <title>") through
 through the Slack mirror and mention flow, and notifies the transient's other
 open interest holders (kind ``interest``). Status changes to *withdrawn* and
 *published* post a comment too; the others are silent.
+
+PIs (#446): with ``notify_pis`` (opt-in) the PIs of the transient's private
+data that the user cannot see are told about the interest; with
+``request_data`` as well, a ``DataAccessRequest`` is filed for each owner group
+of that data, so the PIs (and the group's members) get the usual data-access
+notification with the accept / decline inbox link. A user who leaves
+``notify_pis`` unticked tells no PI.
 """
 
 from __future__ import annotations
@@ -56,6 +63,63 @@ def selectable_groups(user: User) -> List[Group]:
     from YSE_App.services.groups import picker_groups
 
     return picker_groups(user, user.groups.order_by("name"))
+
+
+def notify_data_pis(interest: TransientInterest, user: User, *, request_data: bool = False,
+                    target_group: Optional[Group] = None) -> dict:
+    """Tell the PIs of the restricted data on the transient that ``user`` cannot see about the interest.
+
+    With ``request_data``, file one access request per (kind, owner group) of that
+    data first (``data_access.request_access``, which notifies the PIs and the
+    group's members); PIs reached that way are not notified a second time.
+    Returns ``{"requests": [...], "skipped": [reason, ...], "notified": [user ids]}``.
+    """
+    from YSE_App.services import data_access as dar
+    from YSE_App.services.data_pis import pi_users_for
+
+    transient = interest.transient
+    result = {"requests": [], "skipped": [], "notified": []}
+    reached = {user.pk}
+    pi_users = {}
+    for kind in dar.DATASET_MODELS:
+        hidden = dar.hidden_datasets(user, transient.id, kind)
+        by_group = {}
+        for row in hidden:
+            for group in row.groups.all():
+                by_group.setdefault(group, []).append(row)
+        for row_user in pi_users_for(hidden):
+            pi_users[row_user.pk] = row_user
+        if not request_data:
+            continue
+        for owner_group, rows in sorted(by_group.items(), key=lambda kv: kv[0].name):
+            if owner_group.name == dar.PUBLIC_COLLABORATION_GROUP_NAME:
+                continue
+            tg = target_group if target_group is not None and target_group.pk != owner_group.pk else None
+            try:
+                req = dar.request_access(
+                    user, transient, kind, owner_group, target_group=tg,
+                    message="Registered interest: %s" % interest.title,
+                )
+            except (ValidationError, PermissionDenied) as exc:
+                detail = getattr(exc, "detail", exc)
+                if isinstance(detail, dict):
+                    detail = " ".join(str(v[0] if isinstance(v, (list, tuple)) else v) for v in detail.values())
+                result["skipped"].append("%s from %s: %s" % (dar.KIND_LABELS[kind][1], owner_group.name, detail))
+                continue
+            result["requests"].append(req)
+            reached.update(u.pk for u in dar.deciders_for(req))
+    rest = [u for pk, u in sorted(pi_users.items()) if pk not in reached]
+    if rest:
+        text = ("%s registered an interest on %s: %s\nThey cannot see restricted data you are a PI of; "
+                "share it from the transient page or answer an access request in the inbox.") % (
+            _display(user), transient.name, interest.title)
+        notify_service.notify(
+            rest, text, "/transient_detail/%s/" % transient.slug, "interest",
+            subject="Interest in your data on %s" % transient.name, transient=transient,
+            payload={"interest_id": interest.pk, "action": "pi_interest"}, created_by=user, exclude=[user.pk],
+        )
+    result["notified"] = sorted(reached - {user.pk}) + [u.pk for u in rest]
+    return result
 
 
 def _comment_audience(user: User, transient: Transient, group: Optional[Group]):
@@ -115,8 +179,14 @@ def register_interest(
     transient: Transient, user: User, title: str, *,
     group: Optional[Group] = None, role: str = TransientInterest.ROLE_LEAD, description: str = "",
     status: str = TransientInterest.STATUS_PLANNED, comment: bool = True, notify_others: bool = True,
+    notify_pis: bool = False, request_data: bool = False,
 ) -> TransientInterest:
-    """Register (or revive a withdrawn) interest and post the automatic comment."""
+    """Register (or revive a withdrawn) interest and post the automatic comment.
+
+    ``notify_pis`` (opt-in) tells the PIs of the private data the user cannot see;
+    ``request_data`` (only with ``notify_pis``) also files access requests for it
+    (``notify_data_pis``; the outcome is on ``interest.pi_outcome``).
+    """
     title = (title or "").strip()
     if not title:
         raise ValidationError({"title": "Give the planned paper a short title."})
@@ -153,6 +223,9 @@ def register_interest(
         notify_interest_holders(
             interest, "%s registered an interest on %s: %s" % (_display(user), transient.name, title), actor=user,
         )
+    interest.pi_outcome = None
+    if notify_pis:
+        interest.pi_outcome = notify_data_pis(interest, user, request_data=request_data, target_group=group)
     return interest
 
 

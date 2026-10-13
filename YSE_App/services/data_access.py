@@ -8,6 +8,12 @@ inbox; ``decide`` accepts (adds the requester's ``target_group`` to the
 datasets' ``groups`` M2M, so every existing access check honours it) or
 declines, and notifies the requester. See ``models/data_access_models.py`` for
 why the grant is a group on the dataset rather than a per-request table.
+
+Who decides (#446): the PIs of the requested datasets (``services.data_pis``,
+accounts linked through ``PrincipalInvestigator.user``), the active members of
+the owner group, and staff. ``named_deciders_for`` is the list of people named
+on the data (PIs today; the PI-designated sharers of #447 plug into
+``designated_sharers_for``); ``deciders_for`` adds the owner group's members.
 """
 
 from __future__ import annotations
@@ -16,13 +22,14 @@ from typing import Dict, Iterable, List, Optional
 
 from django.contrib.auth.models import Group, User
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models import DataAccessRequest, Transient, TransientPhotometry, TransientSpectrum
 from YSE_App.services import notify as notify_service
+from YSE_App.services.data_pis import pi_users_for
 from YSE_App.services.visibility import user_group_names
 
 DATASET_MODELS = {
@@ -109,15 +116,21 @@ def requestable_groups(user: User, user_groups=None) -> List[Group]:
     return picker_groups(user, eligible_target_groups(user, user_groups))
 
 
-def _owner_names_by_dataset(transient_id: int, kind: str) -> Dict[int, Dict[int, str]]:
-    """{dataset_id: {group_id: group_name}} for the restricted datasets of ``kind`` (one query)."""
+def _owner_names_by_dataset(transient_id: int, kind: str):
+    """({dataset_id: {group_id: group_name}}, {dataset_id: {PI names}}) for the restricted datasets of ``kind``.
+
+    One query: the PI names (#446) come along with the owner groups.
+    """
     rows = _model(kind).objects.filter(transient_id=transient_id, groups__isnull=False).values_list(
-        "id", "groups__id", "groups__name",
+        "id", "groups__id", "groups__name", "pis__name",
     )
     out: Dict[int, Dict[int, str]] = {}
-    for dataset_id, group_id, name in rows:
+    pis: Dict[int, set] = {}
+    for dataset_id, group_id, name, pi_name in rows:
         out.setdefault(dataset_id, {})[group_id] = name
-    return out
+        if pi_name:
+            pis.setdefault(dataset_id, set()).add(pi_name)
+    return out, pis
 
 
 def hidden_summary(transient: Transient, user: User, kinds: Optional[Iterable[str]] = None, *,
@@ -125,9 +138,10 @@ def hidden_summary(transient: Transient, user: User, kinds: Optional[Iterable[st
     """Rows for the detail-page hint: one per (kind, owner group) with hidden data.
 
     Each row: ``kind``, ``kind_label`` (pluralised), ``group`` (owner), ``count``,
+    ``pis`` (the PI names of those datasets, #446; names only),
     ``request`` (this user's latest request for that kind / group, or None) and
     ``can_request`` (the user has a non-Public group to be granted into).
-    Nothing about the hidden rows themselves is exposed. One query per kind
+    Nothing else about the hidden rows themselves is exposed. One query per kind
     plus one for the user's groups (pass ``user_groups`` to skip that one);
     the requests are looked up only when something is hidden.
     """
@@ -138,10 +152,13 @@ def hidden_summary(transient: Transient, user: User, kinds: Optional[Iterable[st
     names = {g.name for g in user_groups}
     rows: List[dict] = []
     per_group: Dict[str, Dict[int, int]] = {}
+    pi_names: Dict[str, Dict[int, set]] = {}
     owner_names: Dict[int, str] = {}
     for kind in kinds:
         counts: Dict[int, int] = {}
-        for owners in _owner_names_by_dataset(transient.id, kind).values():
+        kind_pis: Dict[int, set] = {}
+        by_dataset, dataset_pis = _owner_names_by_dataset(transient.id, kind)
+        for dataset_id, owners in by_dataset.items():
             if set(owners.values()) & names:
                 continue
             for group_id, name in owners.items():
@@ -149,7 +166,9 @@ def hidden_summary(transient: Transient, user: User, kinds: Optional[Iterable[st
                     continue
                 counts[group_id] = counts.get(group_id, 0) + 1
                 owner_names[group_id] = name
+                kind_pis.setdefault(group_id, set()).update(dataset_pis.get(dataset_id, ()))
         per_group[kind] = counts
+        pi_names[kind] = kind_pis
     if not any(per_group.values()):
         return []
     groups = {g.pk: g for g in Group.objects.filter(pk__in=owner_names)}
@@ -168,14 +187,57 @@ def hidden_summary(transient: Transient, user: User, kinds: Optional[Iterable[st
                 "kind_label": singular if n == 1 else plural,
                 "group": group,
                 "count": n,
+                "pis": sorted(pi_names[kind].get(group.pk, ())),
                 "request": latest.get((kind, group.pk)),
                 "can_request": can_request,
             })
     return rows
 
 
-def deciders_for(owner_group: Group) -> List[User]:
-    return list(owner_group.user_set.filter(is_active=True).order_by("id"))
+def request_datasets(request: DataAccessRequest):
+    """The restricted datasets a request covers: its kind, on its transient, owned by its owner group."""
+    qs = restricted_datasets(request.transient_id, request.dataset_kind).filter(groups=request.owner_group_id)
+    if request.dataset_id is not None:
+        qs = qs.filter(pk=request.dataset_id)
+    return qs.distinct()
+
+
+def designated_sharers_for(request: DataAccessRequest, datasets) -> List[User]:
+    """People a PI designated to share this data (#447, Stage 6c): none until that lands.
+
+    Extension point: return the sharers of the datasets' program / owner group
+    (``DataSharingPolicy.sharers``); ``named_deciders_for`` and so
+    ``deciders_for``, ``user_can_decide`` and the notifications pick them up.
+    """
+    return []
+
+
+def _unique_users(users: Iterable[User]) -> List[User]:
+    seen, out = set(), []
+    for user in users:
+        if user is not None and user.pk not in seen and user.is_active:
+            seen.add(user.pk)
+            out.append(user)
+    return out
+
+
+def named_deciders_for(request: DataAccessRequest) -> List[User]:
+    """People named on the requested data who may decide: its PIs (#446) and designated sharers (#447)."""
+    datasets = list(request_datasets(request))
+    return _unique_users(list(pi_users_for(datasets)) + list(designated_sharers_for(request, datasets)))
+
+
+def deciders_for(request) -> List[User]:
+    """Who is asked to decide a request: the data's PIs (and sharers), then the owner group's active members.
+
+    A ``Group`` may be passed instead of a request (the members only, the pre-#446 behaviour).
+    TODO(#447): once designated sharers exist, decide whether named deciders replace the
+    group-member fallback (the issue's "fall back to all members only when none are set").
+    """
+    if isinstance(request, Group):
+        return list(request.user_set.filter(is_active=True).order_by("id"))
+    members = list(request.owner_group.user_set.filter(is_active=True).order_by("id"))
+    return _unique_users(named_deciders_for(request) + members)
 
 
 def user_can_decide(user: User, request: DataAccessRequest) -> bool:
@@ -183,14 +245,34 @@ def user_can_decide(user: User, request: DataAccessRequest) -> bool:
         return False
     if _is_staff(user):
         return True
-    return user.groups.filter(pk=request.owner_group_id).exists()
+    if user.groups.filter(pk=request.owner_group_id).exists():
+        return True
+    return any(u.pk == user.pk for u in named_deciders_for(request))
+
+
+def _pi_request_annotations(user: User) -> Dict[str, Exists]:
+    """Exists() annotations: the user is a linked PI of the data a request covers (per dataset kind)."""
+    out = {}
+    for kind, model in DATASET_MODELS.items():
+        base = model.objects.filter(
+            transient_id=OuterRef("transient_id"), groups=OuterRef("owner_group_id"), pis__user_id=user.pk,
+        )
+        out["_pi_any_%s" % kind] = Exists(base)
+        out["_pi_one_%s" % kind] = Exists(base.filter(pk=OuterRef("dataset_id")))
+    return out
 
 
 def requests_to_decide(user: User, *, pending_only: bool = True):
-    """Requests addressed to groups the user belongs to (staff: every request)."""
+    """Requests addressed to groups the user belongs to or to data the user is a PI of (staff: every request)."""
     qs = DataAccessRequest.objects.select_related("requester", "transient", "owner_group", "target_group", "decided_by")
     if not _is_staff(user):
-        qs = qs.filter(owner_group__in=user.groups.all())
+        # TODO(Stage 5): add program-derived PIs here too (see data_pis._program_pis).
+        qs = qs.annotate(**_pi_request_annotations(user))
+        allowed = Q(owner_group__in=user.groups.all())
+        for kind in DATASET_MODELS:
+            allowed |= Q(dataset_kind=kind, dataset_id__isnull=True, **{"_pi_any_%s" % kind: True})
+            allowed |= Q(dataset_kind=kind, **{"_pi_one_%s" % kind: True})
+        qs = qs.filter(allowed)
     if pending_only:
         qs = qs.filter(status=DataAccessRequest.STATUS_PENDING)
     return qs
@@ -223,11 +305,11 @@ def pending_count_for(user: User) -> int:
     return int(value)
 
 
-def invalidate_pending_counts(owner_group: Group) -> None:
-    """Drop the cached badge counts of everyone who may decide requests to ``owner_group``."""
+def invalidate_pending_counts(owner_group: Group, extra_user_ids: Iterable[int] = ()) -> None:
+    """Drop the cached badge counts of everyone who may decide requests to ``owner_group`` (plus ``extra_user_ids``, the PIs)."""
     from django.core.cache import cache
 
-    ids = list(owner_group.user_set.values_list("id", flat=True))
+    ids = list(owner_group.user_set.values_list("id", flat=True)) + list(extra_user_ids)
     ids += list(User.objects.filter(Q(is_staff=True) | Q(is_superuser=True)).values_list("id", flat=True))
     cache.delete_many([_pending_cache_key(i) for i in set(ids)])
 
@@ -280,14 +362,14 @@ def request_access(
         requester=user, transient=transient, dataset_kind=kind, dataset_id=dataset_id, owner_group=owner_group,
         target_group=target_group, message=(message or "").strip(), created_by=user, modified_by=user,
     )
-    invalidate_pending_counts(owner_group)
+    invalidate_pending_counts(owner_group, [u.pk for u in named_deciders_for(request)])
     if notify_owners:
         notify_new_request(request)
     return request
 
 
 def notify_new_request(request: DataAccessRequest):
-    owners = deciders_for(request.owner_group)
+    owners = deciders_for(request)
     if not owners:
         return []
     n = len(hidden_datasets(request.requester, request.transient_id, request.dataset_kind))
@@ -322,7 +404,8 @@ def _grant(request: DataAccessRequest) -> List[int]:
 def decide(request: DataAccessRequest, user: User, accept: bool, *, note: str = "", notify_requester: bool = True):
     """Accept (grant the target group) or decline a pending request."""
     if not user_can_decide(user, request):
-        raise PermissionDenied({"message": "Only members of %s (or staff) may decide this request." % request.owner_group.name})
+        raise PermissionDenied({"message": "Only members of %s, the data's PIs (or staff) may decide this request."
+                                           % request.owner_group.name})
     if not request.is_pending:
         raise ValidationError({"status": "This request was already %s." % request.status})
     request.decided_by = user
@@ -335,7 +418,7 @@ def decide(request: DataAccessRequest, user: User, accept: bool, *, note: str = 
     else:
         request.status = DataAccessRequest.STATUS_DECLINED
     request.save()
-    invalidate_pending_counts(request.owner_group)
+    invalidate_pending_counts(request.owner_group, [u.pk for u in named_deciders_for(request)])
     if notify_requester:
         notify_decision(request)
     return request

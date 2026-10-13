@@ -13,6 +13,8 @@ class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
     data_quality = serializers.HyperlinkedRelatedField(queryset=DataQuality.objects.all(), many=True, view_name='dataquality-detail')
 
     groups = serializers.HyperlinkedRelatedField(queryset=Group.objects.all(), many=True, view_name='group-detail')
+    # PIs (#446): PrincipalInvestigator links; optional.
+    pis = serializers.HyperlinkedRelatedField(queryset=PrincipalInvestigator.objects.all(), many=True, required=False, view_name='principalinvestigator-detail')
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 
@@ -38,7 +40,10 @@ class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
 
         # Need to use a set operation to associate many-to-many
         dqs = validated_data.pop('data_quality')
+        pis = validated_data.pop('pis', None)
         transient_spectrum = TransientSpectrum.objects.create(**validated_data)
+        if pis:
+            transient_spectrum.pis.set(pis)
         transient_spectrum.data_quality.set(dqs)
 
         transient_spectrum.save()
@@ -128,6 +133,15 @@ class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
                     if group_result.exists():
                         g = group_result.first()
                         instance.groups.add(g)
+
+        if 'pis' in validated_data.keys():
+            from YSE_App.services.data_pis import user_can_edit_pis
+
+            pis = validated_data.pop('pis')
+            if not user_can_edit_pis(self.context['request'].user, instance):
+                raise PermissionDenied({"message": "You don't have permission to change the PIs of",
+                                        "transient spectrum": instance})
+            instance.pis.set(pis)
 
         instance.save()
 
