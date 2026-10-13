@@ -418,13 +418,24 @@
                     $choice.addClass('yse-followup-audience-ineligible');
                 } else {
                     $cb.prop('disabled', false);
-                    if (resetEligible) {
-                        $cb.prop('checked', true);
-                    }
                     $label.removeClass('text-muted');
                     $choice.removeClass('yse-followup-audience-ineligible');
                 }
             });
+            if (resetEligible) {
+                /* Saved defaults (#440) among the eligible shown groups; else every eligible
+                   shown group; else (only folded-away groups are eligible) every eligible one. */
+                var $eligible = $panel.find('.yse-followup-audience-group:not(:disabled)');
+                var $shown = $eligible.filter(function() {
+                    return String($(this).data('hidden-group')) !== 'true';
+                });
+                var $defaults = $shown.filter(function() {
+                    return String($(this).data('default')) === 'true';
+                });
+                var $check = $defaults.length ? $defaults : ($shown.length ? $shown : $eligible);
+                $eligible.prop('checked', false);
+                $check.prop('checked', true);
+            }
         }
 
         function yseInitFollowupResourceAudience($form) {

@@ -67,7 +67,10 @@ def create_transient_comment(
     if is_public is None:
         is_public = False
     if audience_groups is None and not is_public:
-        audience_groups = default_comment_audience_groups(user, transient.id)
+        from YSE_App.services.groups import KIND_COMMENT, narrow_default_audience
+
+        audience_groups = narrow_default_audience(
+            user, default_comment_audience_groups(user, transient.id), KIND_COMMENT)
         if not audience_groups:
             # No collaboration groups to scope to (e.g. public-only transient).
             is_public = True

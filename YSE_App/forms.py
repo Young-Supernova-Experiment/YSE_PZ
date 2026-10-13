@@ -77,6 +77,8 @@ class TransientFollowupForm(ModelForm):
             self.fields["transient"].widget = forms.HiddenInput()
         self.show_audience_picker = False
         self.followup_audience_choices = []
+        self.followup_audience_shown = []
+        self.followup_audience_more = []
         self.resource_audience_map = {}
 
         valid_after = timezone.now() - timedelta(days=1)
@@ -129,7 +131,13 @@ class TransientFollowupForm(ModelForm):
             eligible_ids = [
                 choice["group"].pk
                 for choice in self.followup_audience_choices
-                if choice["enabled"]
+                if choice["checked"]
+            ]
+            self.followup_audience_shown = [
+                c for c in self.followup_audience_choices if not c["hidden"]
+            ]
+            self.followup_audience_more = [
+                c for c in self.followup_audience_choices if c["hidden"]
             ]
             self.fields["audience_groups"].initial = eligible_ids
             self.resource_audience_map = build_followup_resource_audience_map(self)
@@ -365,13 +373,26 @@ class TransientCommentForm(ModelForm):
     def __init__(self, *args, user=None, transient_id=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.show_audience_picker = False
+        self.initial_is_public = False
         if user is not None and transient_id is not None:
-            from YSE_App.services.audience import selectable_audience_groups
+            from YSE_App.services.audience import (
+                comment_picker_initial,
+                selectable_audience_groups,
+            )
+            from YSE_App.services.groups import comment_default_public
 
-            qs = selectable_audience_groups(user, transient_id)
-            self.fields["audience_groups"].queryset = qs
-            self.fields["audience_groups"].initial = list(qs.values_list("pk", flat=True))
-            self.show_audience_picker = qs.exists()
+            # Offer the picker groups (no system, inactive or user-hidden groups, #440) but
+            # keep validating against every selectable group (eligibility is unchanged).
+            from YSE_App.services.groups import picker_groups
+
+            selectable = selectable_audience_groups(user, transient_id)
+            shown = picker_groups(user, selectable)
+            self.fields["audience_groups"].queryset = selectable
+            self.fields["audience_groups"].choices = [(g.pk, g.name) for g in shown]
+            self.fields["audience_groups"].initial = comment_picker_initial(user, shown)
+            self.fields["is_public"].initial = comment_default_public(user)
+            self.initial_is_public = self.fields["is_public"].initial
+            self.show_audience_picker = bool(shown)
 
     class Meta:
         model = Log

@@ -107,26 +107,18 @@
 							{% if form.show_audience_picker %}
 								<p class="text-muted small">
 									Select collaboration groups that can see the selected observing resource
-									(default: all eligible groups checked). Check <strong>Public</strong> to share
+									(default: your saved defaults from settings, or else all eligible groups). Check <strong>Public</strong> to share
 									with everyone in the Public group (only available for public observing resources).
 									For <strong>creator-only</strong> observing resources, you may leave all groups
 									unchecked so only you (the requester) can see the follow-up.
 								</p>
-								{% for choice in form.followup_audience_choices %}
-								<div class="checkbox yse-followup-audience-choice" data-group-id="{{ choice.group.pk }}">
-									<label class="yse-followup-audience-label{% if not choice.enabled %} text-muted{% endif %}">
-										<input type="checkbox"
-											name="audience_groups"
-											value="{{ choice.group.pk }}"
-											class="yse-followup-audience-group"
-											{% if choice.checked %}checked{% endif %}
-											{% if not choice.enabled %}disabled{% endif %}
-											data-resource-eligible="{{ choice.enabled|yesno:'true,false' }}"
-											data-is-public-group="{{ choice.is_public_group|yesno:'true,false' }}">
-										{{ choice.group.name }}
-									</label>
-								</div>
-								{% endfor %}
+								{% for choice in form.followup_audience_shown %}{% include "YSE_App/form_snippets/followup_audience_choice.html" %}{% endfor %}
+								{% if form.followup_audience_more %}
+								<details class="yse-followup-audience-more">
+									<summary class="small text-muted">More groups (inactive, or hidden in your <a href="{% url 'user_settings' %}">settings</a>)</summary>
+									{% for choice in form.followup_audience_more %}{% include "YSE_App/form_snippets/followup_audience_choice.html" %}{% endfor %}
+								</details>
+								{% endif %}
 							{% endif %}
 						</div>
 					</div>

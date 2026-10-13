@@ -49,8 +49,13 @@ def interests_for_user(user: User, *, include_withdrawn: bool = True):
 
 
 def selectable_groups(user: User) -> List[Group]:
-    """Collaboration groups a user may register a paper under (all of theirs)."""
-    return list(user.groups.order_by("name"))
+    """Collaboration groups offered when registering a paper (#440: no system, inactive or hidden groups).
+
+    Registering under any group the user belongs to is still allowed (``register_interest``).
+    """
+    from YSE_App.services.groups import picker_groups
+
+    return picker_groups(user, user.groups.order_by("name"))
 
 
 def _comment_audience(user: User, transient: Transient, group: Optional[Group]):

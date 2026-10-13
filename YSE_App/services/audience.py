@@ -8,6 +8,7 @@ from django.contrib.auth.models import Group, User
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
+from YSE_App.services import groups as group_svc
 from YSE_App.services.visibility import (
     default_comment_audience_groups,
     object_has_groups,
@@ -16,8 +17,29 @@ from YSE_App.services.visibility import (
 
 
 def selectable_audience_groups(user: User, transient_id: int):
-    """Collaboration groups the user may assign at create time."""
+    """Collaboration groups the user may assign at create time (the eligibility rule)."""
     return shared_groups_for_transient(user, transient_id).order_by("name")
+
+
+def picker_audience_groups(user: User, transient_id: int) -> List[Group]:
+    """Groups offered in the comment picker (#440).
+
+    ``selectable_audience_groups`` minus system groups, inactive groups and the groups the
+    user hides in /settings/ (never empty only because of those). Eligibility is unchanged:
+    the server still accepts any selectable group.
+    """
+    return group_svc.picker_groups(user, selectable_audience_groups(user, transient_id))
+
+
+def comment_picker_initial(user: User, groups: List[Group]) -> List[int]:
+    """Pre-checked comment groups: the user's saved defaults among ``groups``, else all."""
+    return [g.pk for g in group_svc.preferred_defaults(user, groups, group_svc.KIND_COMMENT)]
+
+
+def _default_comment_groups(user: User, transient_id: int) -> List[Group]:
+    """Server default when the client sends no audience: narrowed by pickers and saved defaults."""
+    return group_svc.narrow_default_audience(
+        user, default_comment_audience_groups(user, transient_id), group_svc.KIND_COMMENT)
 
 
 def _groups_from_ids(
@@ -69,7 +91,7 @@ def resolve_comment_audience(
     elif audience_group_ids is not None:
         selected = _groups_from_ids(user, transient_id, audience_group_ids)
     else:
-        selected = default_comment_audience_groups(user, transient_id)
+        selected = _default_comment_groups(user, transient_id)
         if not selected:
             return True, []
         return False, selected
@@ -77,7 +99,7 @@ def resolve_comment_audience(
     if not selected:
         if explicit_audience:
             return False, []
-        fallback = default_comment_audience_groups(user, transient_id)
+        fallback = _default_comment_groups(user, transient_id)
         if not fallback:
             return True, []
         return False, fallback
@@ -128,11 +150,19 @@ def eligible_followup_audience_groups(user: User, resource) -> List[Group]:
 
 
 def build_followup_audience_choices(user: User, resource) -> List[Dict[str, Any]]:
-    """All user groups with enabled/checked flags for the follow-up picker."""
+    """The user's groups with enabled/checked flags for the follow-up picker.
+
+    System groups other than Public are left out (#440). Inactive and user-hidden groups
+    come last with ``hidden=True`` (the template folds them away, unchecked). ``is_default``
+    marks the user's saved follow-up defaults; when none of those is enabled, every enabled
+    shown group is checked, as before.
+    """
     eligible_ids = {group.id for group in eligible_followup_audience_groups(user, resource)}
     resource_public = resource_is_public(resource)
+    shown, more = group_svc.partition_picker_groups(user, user.groups.order_by("name"))
+    default_ids = group_svc.default_group_ids(user, group_svc.KIND_FOLLOWUP)
     choices: List[Dict[str, Any]] = []
-    for group in user.groups.order_by("name"):
+    for group, hidden in [(g, False) for g in shown] + [(g, True) for g in more]:
         is_public_group = group.name == PUBLIC_COLLABORATION_GROUP_NAME
         if is_public_group:
             enabled = resource_public
@@ -142,10 +172,16 @@ def build_followup_audience_choices(user: User, resource) -> List[Dict[str, Any]
             {
                 "group": group,
                 "enabled": enabled,
-                "checked": enabled,
+                "checked": False,
                 "is_public_group": is_public_group,
+                "hidden": hidden,
+                "is_default": (group.id in default_ids) and not hidden,
             }
         )
+    candidates = [c for c in choices if c["enabled"] and not c["hidden"]]
+    preferred = [c for c in candidates if c["is_default"]]
+    for choice in preferred or candidates or [c for c in choices if c["enabled"]]:
+        choice["checked"] = True
     return choices
 
 
@@ -216,7 +252,7 @@ def resolve_followup_audience(
     elif explicit_audience:
         selected = []
     else:
-        selected = eligible
+        selected = group_svc.narrow_default_audience(user, eligible, group_svc.KIND_FOLLOWUP)
 
     if not selected:
         if resource_is_creator_only(linked_resource):
