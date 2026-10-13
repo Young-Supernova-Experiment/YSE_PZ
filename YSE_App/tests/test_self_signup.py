@@ -499,7 +499,11 @@ class PrincipalInvestigatorApiTests(TestCase):
     def test_anonymous_refused(self):
         self.assertIn(self.client.get("/api/principalinvestigators/").status_code, (401, 403))
 
-    def test_explorer_excludes_the_pi_and_request_tables(self):
-        for name in ("YSE_App_principalinvestigator", "YSE_App_groupmembershiprequest"):
-            self.assertIn(name, settings.EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES)
-            self.assertIn(name, settings.EXPLORER_SQL_BLACKLIST)
+    def test_explorer_excludes_the_request_table_but_not_the_pi_tables(self):
+        self.assertIn("YSE_App_groupmembershiprequest", settings.EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES)
+        self.assertIn("YSE_App_groupmembershiprequest", settings.EXPLORER_SQL_BLACKLIST)
+        # Ryan (2026-10-13): the PI tables are visible in SQL Explorer again
+        for name in ("YSE_App_principalinvestigator", "YSE_App_principalinvestigator_obs_group"):
+            self.assertFalse(any(name.startswith(prefix) for prefix in settings.EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES),
+                             name)
+            self.assertFalse(any(entry.lower() in name.lower() for entry in settings.EXPLORER_SQL_BLACKLIST), name)

@@ -117,6 +117,12 @@ class SettingPisTests(PiBase):
         self.assertTrue(data_pis.user_can_edit_pis(self.admin, self.spec))
         self.assertFalse(data_pis.user_can_edit_pis(self.requester, self.spec))
         self.assertFalse(data_pis.user_can_edit_pis(self.pi_user, self.spec))
+        # #447: once restricted data has a PI, only that PI (and staff) may change its PIs
+        self.spec.pis.add(self.pi)
+        self.assertFalse(data_pis.user_can_edit_pis(self.member, self.spec))
+        self.assertTrue(data_pis.user_can_edit_pis(self.pi_user, self.spec))
+        self.assertFalse(data_pis.user_can_edit_pis(self.pi_user2, self.spec))
+        self.assertTrue(data_pis.user_can_edit_pis(self.admin, self.spec))
 
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
@@ -179,11 +185,11 @@ class UploadPisTests(TestCase):
 
 
 class PiNotificationTests(PiBase):
-    def test_access_request_notifies_pis_and_group(self):
+    def test_access_request_notifies_pis_not_group(self):
         self.spec.pis.add(self.pi, self.pi_unlinked)
         req = dar.request_access(self.requester, self.transient, "spectrum", self.owners)
         recipients = set(Notification.objects.filter(kind="data_access").values_list("recipient__username", flat=True))
-        self.assertEqual(recipients, {"pi_account", "pi_member"})
+        self.assertEqual(recipients, {"pi_account"}, "#447: group members are not deciders")
         # the PI's inbox lists the request even though the PI is not in the owner group
         self.assertEqual(list(dar.requests_to_decide(self.pi_user)), [req])
         self.assertEqual(list(dar.requests_to_decide(self.pi_user2)), [])
@@ -197,7 +203,7 @@ class PiNotificationTests(PiBase):
         spec2.pis.add(self.pi2)
         req = dar.request_access(self.requester, self.transient, "spectrum", self.owners, dataset_id=spec2.pk)
         recipients = set(Notification.objects.filter(kind="data_access").values_list("recipient__username", flat=True))
-        self.assertEqual(recipients, {"pi_account2", "pi_member"})
+        self.assertEqual(recipients, {"pi_account2"})
         self.assertEqual(list(dar.requests_to_decide(self.pi_user2)), [req])
         self.assertEqual(list(dar.requests_to_decide(self.pi_user)), [])
 
@@ -258,21 +264,19 @@ class PiNotificationTests(PiBase):
 
 
 class DecidersTests(PiBase):
-    def test_deciders_for_includes_pis_then_members(self):
+    def test_deciders_for_is_pis_only(self):
         self.spec.pis.add(self.pi, self.pi_unlinked)
         req = dar.request_access(self.requester, self.transient, "spectrum", self.owners, notify_owners=False)
         self.assertEqual(dar.named_deciders_for(req), [self.pi_user])
-        self.assertEqual(dar.deciders_for(req), [self.pi_user, self.member])
-        # the group form keeps the pre-#446 behaviour (members only)
-        self.assertEqual(dar.deciders_for(self.owners), [self.member])
-        # the #447 extension point is empty for now
+        self.assertEqual(dar.deciders_for(req), [self.pi_user], "#447: group members are not deciders")
+        # no deputies designated
         self.assertEqual(dar.designated_sharers_for(req, [self.spec]), [])
 
     def test_pi_can_decide_and_others_cannot(self):
         self.spec.pis.add(self.pi)
         req = dar.request_access(self.requester, self.transient, "spectrum", self.owners, notify_owners=False)
         self.assertTrue(dar.user_can_decide(self.pi_user, req))
-        self.assertTrue(dar.user_can_decide(self.member, req), "group members still decide")
+        self.assertFalse(dar.user_can_decide(self.member, req), "#447: group members no longer decide")
         self.assertFalse(dar.user_can_decide(self.pi_user2, req), "a PI of other data cannot")
         self.assertFalse(dar.user_can_decide(self.outsider, req))
         # a PI of the photometry is not a decider for the spectra

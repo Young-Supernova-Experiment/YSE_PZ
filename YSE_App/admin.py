@@ -98,6 +98,16 @@ admin.site.register(ConfigElement)
 admin.site.register(PhotometricBand)
 
 
+class DataSharingDelegateInline(admin.TabularInline):
+	"""The PI's deputies (#447): who may share this PI's private data (all of it, or one group's)."""
+	model = DataSharingDelegate
+	fk_name = 'pi'
+	extra = 0
+	raw_id_fields = ('delegate',)
+	fields = ('delegate', 'group', 'note', 'created_by', 'created_date')
+	readonly_fields = ('created_by', 'created_date')
+
+
 @admin.register(PrincipalInvestigator)
 class PrincipalInvestigatorAdmin(admin.ModelAdmin):
 	"""PIs (#446): ``user`` links a PI to their YSE-PZ account (notifications, data-access decisions)."""
@@ -105,6 +115,32 @@ class PrincipalInvestigatorAdmin(admin.ModelAdmin):
 	search_fields = ('name', 'institution')
 	raw_id_fields = ('user',)
 	filter_horizontal = ('obs_group',)
+	inlines = [DataSharingDelegateInline]
+
+	def save_formset(self, request, form, formset, change):
+		instances = formset.save(commit=False)
+		for obj in instances:
+			if isinstance(obj, DataSharingDelegate) and not obj.created_by_id:
+				obj.created_by = request.user
+			obj.save()
+		for obj in formset.deleted_objects:
+			obj.delete()
+		formset.save_m2m()
+
+
+@admin.register(DataSharingDelegate)
+class DataSharingDelegateAdmin(admin.ModelAdmin):
+	"""PI-designated deputies who may share the PI's private data (#447)."""
+	list_display = ('pi', 'delegate', 'group', 'created_by', 'created_date')
+	list_filter = ('group',)
+	search_fields = ('pi__name', 'delegate__username')
+	raw_id_fields = ('pi', 'delegate')
+	readonly_fields = ('created_by', 'created_date')
+
+	def save_model(self, request, obj, form, change):
+		if not obj.created_by_id:
+			obj.created_by = request.user
+		super().save_model(request, obj, form, change)
 
 admin.site.register(Profile)
 admin.site.register(UserTelescopeToFollow)
@@ -660,11 +696,11 @@ class SharingServiceAdmin(admin.ModelAdmin):
 @admin.register(DataAccessRequest)
 class DataAccessRequestAdmin(admin.ModelAdmin):
 	list_display = ("id", "transient", "requester", "dataset_kind", "dataset_id", "owner_group", "target_group",
-	                "status", "decided_by", "decided_at", "created_date")
-	list_filter = ("status", "dataset_kind", "owner_group")
+	                "status", "decided_by", "decided_as", "decided_at", "created_date")
+	list_filter = ("status", "decided_as", "dataset_kind", "owner_group")
 	search_fields = ("transient__name", "requester__username", "message", "note")
 	raw_id_fields = ("transient", "requester", "decided_by")
-	readonly_fields = ("granted_dataset_ids", "created_by", "created_date", "modified_by", "modified_date")
+	readonly_fields = ("granted_dataset_ids", "decided_as", "created_by", "created_date", "modified_by", "modified_date")
 @admin.register(SharingSubmission)
 class SharingSubmissionAdmin(admin.ModelAdmin):
 	list_display = ("id", "service", "transient", "kind", "status", "tns_name", "external_id", "attempts",

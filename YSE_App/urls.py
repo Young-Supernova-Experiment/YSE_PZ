@@ -396,6 +396,7 @@ urlpatterns = [
             name='data_access_pending_count'),
     re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/decide/$', collaboration_views.data_access_decide,
             name='data_access_decide'),
+    re_path(r'^data_sharing_deputies/$', collaboration_views.data_sharing_deputies, name='data_sharing_deputies'),
     # Background job queue (#263) and notifications (#266)
     re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
     re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),

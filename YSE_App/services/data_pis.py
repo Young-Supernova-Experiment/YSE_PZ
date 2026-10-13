@@ -15,8 +15,16 @@ added in one place:
   program's PI(s) and :func:`pis_for` merges them with the explicit ones. Until
   then it returns nothing.
 
+* **Allocations (#447), a read-time fallback.** A dataset with no explicit
+  (or program) PI takes the PI of the allocation it was observed under:
+  ``followup`` -> the follow-up's ToO / classical / queued resource -> that
+  resource's ``Allocation`` PI (or the resource's own PI), or the follow-up's
+  ``FacilityRequest`` -> its ``Allocation`` PI. Nothing is written; see
+  :data:`ALLOCATION_PI_PATHS` and :func:`effective_pi_q` (the same rule in SQL).
+
 The PIs are separate from group owners (``GroupProfile.owners``, #445): owners
-manage a team's membership, PIs lead a dataset.
+manage a team's membership, PIs lead a dataset. Only PIs and the deputies they
+designate (``DataSharingDelegate``, #447) may share private data.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ from __future__ import annotations
 from typing import Dict, List, Sequence, Tuple
 
 from django.contrib.auth.models import User
+from django.db.models import Q
 
 from YSE_App.models import PrincipalInvestigator, TransientPhotometry, TransientSpectrum
 
@@ -44,8 +53,38 @@ def _program_pis(dataset) -> List[PrincipalInvestigator]:
     return []
 
 
-def pis_for(dataset) -> List[PrincipalInvestigator]:
-    """The PI rows of one dataset: the explicit ``pis`` plus (later) the program's, de-duplicated, by name."""
+# Read-time fallback (#447): where a dataset's allocation PI is found, as ORM paths from the dataset.
+ALLOCATION_PI_PATHS = (
+    "followup__too_resource__allocation__principal_investigator",
+    "followup__classical_resource__allocation__principal_investigator",
+    "followup__queued_resource__allocation__principal_investigator",
+    "followup__facility_requests__allocation__principal_investigator",
+    "followup__too_resource__principal_investigator",
+    "followup__classical_resource__principal_investigator",
+    "followup__queued_resource__principal_investigator",
+)
+
+
+def _allocation_pi_ids(dataset) -> List[int]:
+    """Ids of the allocation PIs of one dataset (one query; none without a follow-up)."""
+    if not getattr(dataset, "pk", None) or not getattr(dataset, "followup_id", None):
+        return []
+    ids = set()
+    for row in type(dataset).objects.filter(pk=dataset.pk).values_list(*ALLOCATION_PI_PATHS):
+        ids.update(v for v in row if v)
+    return sorted(ids)
+
+
+def allocation_pis_for(dataset) -> List[PrincipalInvestigator]:
+    """The PIs of the allocation(s) a dataset was observed under (the fallback, whether or not it applies)."""
+    ids = _allocation_pi_ids(dataset)
+    if not ids:
+        return []
+    return list(PrincipalInvestigator.objects.filter(pk__in=ids).select_related("user"))
+
+
+def explicit_pis_for(dataset) -> List[PrincipalInvestigator]:
+    """The explicit ``pis`` plus (later) the program's, de-duplicated (no fallback)."""
     if not getattr(dataset, "pk", None):
         rows = []
     elif "pis" in getattr(dataset, "_prefetched_objects_cache", {}):
@@ -57,7 +96,31 @@ def pis_for(dataset) -> List[PrincipalInvestigator]:
         if row.pk not in seen:
             seen.add(row.pk)
             rows.append(row)
+    return rows
+
+
+def pis_for(dataset) -> List[PrincipalInvestigator]:
+    """The PI rows of one dataset, by name: the explicit ``pis`` plus (later) the program's; when there are
+    none, the PIs of the dataset's allocation (#447, read-time fallback)."""
+    rows = explicit_pis_for(dataset) or allocation_pis_for(dataset)
     return sorted(rows, key=lambda r: (r.name or "", r.pk))
+
+
+def effective_pi_q(model, pi_ids) -> Q:
+    """``Q`` on ``model`` (photometry or spectra): datasets whose :func:`pis_for` includes one of ``pi_ids``.
+
+    The SQL form of :func:`pis_for` (explicit PIs, else the allocation fallback), as ``pk__in``
+    subqueries so it combines with other filters on the same model without sharing their joins.
+    TODO(Stage 5): add the program-derived PIs here too.
+    """
+    pi_ids = list(pi_ids)
+    explicit = model.objects.filter(pis__in=pi_ids).values("pk")
+    has_explicit = model.objects.filter(pis__isnull=False).values("pk")
+    fallback_q = Q()
+    for path in ALLOCATION_PI_PATHS:
+        fallback_q |= Q(**{"%s__in" % path: pi_ids})
+    fallback = model.objects.filter(fallback_q).values("pk")
+    return Q(pk__in=explicit) | (~Q(pk__in=has_explicit) & Q(pk__in=fallback))
 
 
 def pi_users_for(datasets) -> List[User]:
@@ -126,9 +189,9 @@ def apply_upload_pis(dataset, refs) -> List[str]:
 
 
 def user_can_edit_pis(user, dataset) -> bool:
-    """Staff, or (for restricted data) a member of one of its groups; public data: any signed-in writer.
-
-    The same rule the photometry / spectrum serializers apply to group changes.
+    """Staff; for restricted data that already has PIs (explicit or by the allocation fallback), only those PIs'
+    accounts (#447: the PIs decide who shares, so members cannot make themselves PIs); for restricted data
+    without a PI, a member of one of its groups; public data: any signed-in writer.
     """
     if not getattr(user, "is_authenticated", False):
         return False
@@ -139,6 +202,9 @@ def user_can_edit_pis(user, dataset) -> bool:
     group_ids = set(dataset.groups.values_list("id", flat=True))
     if not group_ids:
         return True
+    current = pis_for(dataset)
+    if current:
+        return any(p.user_id == user.pk for p in current)
     return user.groups.filter(pk__in=group_ids).exists()
 
 

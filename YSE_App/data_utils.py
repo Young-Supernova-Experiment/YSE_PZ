@@ -755,6 +755,7 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
         if not len(transientphot):
             transientphot = TransientPhotometry( #.objects.create
                 instrument=instrument, obs_group=obs_group, transient=transient,
+                reference=(photometry.get('reference') or None),  # #447: e.g. the TNS object of TNS imports
                 created_by_id=user.id, modified_by_id=user.id)
             transientphot_entries += [transientphot]
         else: transientphot = transientphot[0]

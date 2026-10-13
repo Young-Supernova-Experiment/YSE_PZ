@@ -1436,7 +1436,8 @@ class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixi
             qs = DataAccessRequest.objects.select_related(
                 "requester", "transient", "owner_group", "target_group", "decided_by")
             if not (user.is_staff or user.is_superuser):
-                qs = qs.filter(Q(requester=user) | Q(owner_group__in=user.groups.all()))
+                decidable = dar.requests_to_decide(user, pending_only=False).values("pk")
+                qs = qs.filter(Q(requester=user) | Q(owner_group__in=user.groups.all()) | Q(pk__in=decidable))
         return dar.filter_requests(qs, params).distinct()
 
     def perform_create(self, serializer):

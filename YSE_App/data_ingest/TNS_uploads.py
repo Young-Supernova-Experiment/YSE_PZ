@@ -42,6 +42,7 @@ from itertools import islice
 from astropy.cosmology import FlatLambdaCDM
 import sys
 from YSE_App.common import mast_query,chandra_query,spitzer_query
+from YSE_App.common.data_references import tns_reference
 from YSE_App.common.collaboration_groups import (
     PUBLIC_COLLABORATION_GROUP_NAME,
     TNS_IMPORT_COLLABORATION_GROUPS,
@@ -473,6 +474,7 @@ class processTNS:
             photometrydict = {'instrument':ins,
                               'obs_group':obsgroup,
                               'groups': list(TNS_IMPORT_COLLABORATION_GROUPS),
+                              'reference': tns_reference(jd),  # #447: public data carries its reference
                               'photdata':{}}
 
             for f,k in zip(np.unique(tfilt),range(len(np.unique(tfilt)))):
@@ -606,6 +608,7 @@ class processTNS:
             Spectrum['obs_date'] = so
             Spectrum['obs_group'] = re.sub(r'[^\x00-\x7f]',r'',sog)
             Spectrum['groups'] = PUBLIC_COLLABORATION_GROUP_NAME
+            Spectrum['reference'] = tns_reference(jd)  # #447: public data carries its reference
             SpecDictAll[s] = Spectrum
 
         return SpecDictAll
