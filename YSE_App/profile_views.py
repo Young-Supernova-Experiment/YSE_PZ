@@ -108,9 +108,11 @@ def researcher_profile_edit(request):
     form_kwargs = dict(user=user, key_available=key_available, encrypted_status=status, advisor=advisor,
                        instance=profile)
     if request.method == "POST":
+        # Snapshot first: ModelForm validation writes the new values onto ``profile``.
+        before = rp.snapshot(profile) if profile.pk else {name: "" for name in rp.PLAIN_FIELDS}
         form = ResearcherProfileForm(request.POST, **form_kwargs)
         if form.is_valid():
-            _save_profile(request, form, profile)
+            _save_profile(request, form, before)
             missing = rp.missing_fields(user)
             if missing:
                 messages.warning(request, "Saved. Still required: %s." % ", ".join(l for _n, l in rp.labels(missing)))
@@ -136,9 +138,8 @@ def researcher_profile_edit(request):
 
 
 @transaction.atomic
-def _save_profile(request, form, profile):
+def _save_profile(request, form, before):
     user = request.user
-    before = rp.snapshot(profile) if profile.pk else {name: "" for name in rp.PLAIN_FIELDS}
     obj = form.save(commit=False)
     obj.user = user
     obj.save()
