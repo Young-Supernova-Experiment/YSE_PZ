@@ -382,10 +382,14 @@ def request_access(
     model = _model(kind)
     if not user.is_authenticated:
         raise PermissionDenied({"message": "Log in to request access."})
+    if owner_group.name == PUBLIC_COLLABORATION_GROUP_NAME:
+        # #447: public data needs no PI and is never shared or requested
+        raise ValidationError({"owner_group": "Public data cannot be requested; it is already public."})
     hidden = hidden_datasets(user, transient.id, kind)
     if dataset_id is not None:
         hidden = [row for row in hidden if row.pk == int(dataset_id)]
-    owned = [row for row in hidden if any(g.pk == owner_group.pk for g in row.groups.all())]
+    owned = [row for row in hidden if any(g.pk == owner_group.pk for g in row.groups.all())
+             and not data_sharing.is_public_dataset(row)]
     if not owned:
         raise ValidationError({
             "owner_group": "%s holds no restricted %s on %s that you cannot already see."
