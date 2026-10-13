@@ -81,7 +81,7 @@ class ResearcherProfileForm(forms.ModelForm):
         widgets = {
             "research_interests": forms.Textarea(attrs={"rows": 3}),
             "acknowledgment_text": forms.Textarea(attrs={"rows": 3}),
-            "observing_experience": forms.SelectMultiple(attrs={"size": 8}),
+            "observing_experience": forms.CheckboxSelectMultiple(attrs={"class": "yse-obs-experience"}),
         }
 
     def __init__(self, *args, user=None, key_available=False, encrypted_status=None, advisor=None, **kwargs):
@@ -90,10 +90,14 @@ class ResearcherProfileForm(forms.ModelForm):
         self.key_available = key_available
         self.encrypted_status = encrypted_status or {}
         self.current_advisor = advisor
-        self.fields["observing_experience"].queryset = (
-            Instrument.objects.select_related("telescope").order_by("telescope__name", "name"))
-        self.fields["observing_experience"].label_from_instance = (
-            lambda i: "%s / %s" % (i.telescope.name, i.name))
+        # Check boxes grouped by telescope (#638). Assigning grouped choices keeps the queryset
+        # for validation; the widget renders one group per telescope.
+        instruments = Instrument.objects.select_related("telescope").order_by("telescope__name", "name")
+        self.fields["observing_experience"].queryset = instruments
+        grouped = {}
+        for inst in instruments:
+            grouped.setdefault(inst.telescope.name, []).append((inst.pk, inst.name))
+        self.fields["observing_experience"].choices = [(tel, opts) for tel, opts in grouped.items()]
         self.fields["career_level"].choices = [("", "(choose)")] + list(self.fields["career_level"].choices)[1:]
         lo, hi = _year_bounds()
         self.fields["phd_year"].widget.attrs.update({"min": lo, "max": hi})

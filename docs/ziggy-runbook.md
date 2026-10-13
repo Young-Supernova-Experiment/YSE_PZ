@@ -573,6 +573,40 @@ Optional `[research]` keys (defaults): `RESEARCHER_METRICS_CRON_MINUTES: 43200`,
 
 Production: the same steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
+### Per-stack session and CSRF cookies (develop-direct PR; #637) optional, recommended
+
+Ziggy serves production, `/yse_test/` and `/yse_experimental/` on one host. With Django's default cookie names (`sessionid`, `csrftoken`) and path `/`, signing in to one stack replaces the cookies of the others, so users bounce to login or lose their place. The PR makes the names and paths configurable; **defaults are unchanged**, so nothing changes until you set them. No migration, no dependency.
+
+**Effect:** setting these logs **everyone on that stack out once** (their old cookie is no longer read). Do it at a quiet time.
+
+Set, per stack, in `<CHECKOUT>/YSE_PZ/settings.ini` (or the env vars `YSE_SESSION_COOKIE_NAME`, `YSE_SESSION_COOKIE_PATH`, `YSE_CSRF_COOKIE_NAME`, `YSE_CSRF_COOKIE_PATH`, which win over the file), then `sudo systemctl restart apache2`:
+
+```ini
+# yse_test (/data/yse_pz/YSE_PZ_test)
+[site_settings]
+SESSION_COOKIE_NAME: sessionid_yse_test
+SESSION_COOKIE_PATH: /yse_test/
+CSRF_COOKIE_NAME: csrftoken_yse_test
+CSRF_COOKIE_PATH: /yse_test/
+
+# yse_experimental (/data/yse_pz/YSE_PZ_experimental)
+[site_settings]
+SESSION_COOKIE_NAME: sessionid_yse_experimental
+SESSION_COOKIE_PATH: /yse_experimental/
+CSRF_COOKIE_NAME: csrftoken_yse_experimental
+CSRF_COOKIE_PATH: /yse_experimental/
+```
+
+Production: leave these keys out (it keeps `sessionid`, `csrftoken` and `/`). Add them to the existing `[site_settings]` section rather than a second one. The path must match the URL prefix the stack is served under (with a trailing slash).
+
+**Check:**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from django.conf import settings as s; print(s.SESSION_COOKIE_NAME, s.SESSION_COOKIE_PATH, s.CSRF_COOKIE_NAME, s.CSRF_COOKIE_PATH)"
+```
+
+Expected: the values you set for that stack. Then sign in to `/yse_test/` and `/yse_experimental/` in the same browser: the browser's cookie list shows `sessionid_yse_test` (path `/yse_test/`) and `sessionid_yse_experimental` (path `/yse_experimental/`), and signing in to one no longer signs you out of the other. To undo, remove the keys and restart (one more logout).
+
 <a id="merge"></a>
 
 ## 2 · Before merging #143 to master David
@@ -1482,6 +1516,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-12 v30, optional (recommended). Per-stack session / CSRF cookie names and paths ([#637](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/637)): defaults unchanged; set the four `[site_settings]` keys on yse\_test and yse\_experimental (section "Per-stack session and CSRF cookies"); everyone on that stack is logged out once.
 * 2026-10-12 v29, optional. Onboarding gate under the `/yse_test/` prefix ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)): mitigation (turn the gate off on yse\_test) until the fix deploys; the fix itself needs no server step.
 * 2026-10-12 v28, **required once the develop-direct PR is merged** (develop first, then experimental). User agreement, researcher profile and onboarding gate ([#627](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/627)-[#631](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/631)): migrations 0031/0032 (new tables, agreement v1); the gate is on by default (rollback `ONBOARDING_GATE_ENABLED: False`); **required:** install only the research public key ([step A](#onboarding)); optional SciX metrics and Explorer grants.
 * 2026-10-07 v27, **required**. Job runner for the shared `YSE_test` database ([#431](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/431)): drain with `run_jobs`, then one per-minute crontab line; without it SALT fits and other queued work never run on yse_test / yse_experimental. **Required** `settings.ini` check for ZTF forced phot (ZTF answers 400; it is the submitting address/password) and the YSE forced-phot cron (fixed by #419, via #428).

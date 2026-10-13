@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
@@ -180,22 +181,54 @@ def researcher_profile_confirm(request):
     return redirect("researcher_profile")
 
 
+SUGGEST_MIN_CHARS = 2
+SUGGEST_MAX_RESULTS = 10
+SUGGEST_THROTTLE_REQUESTS = 40
+SUGGEST_THROTTLE_SECONDS = 60
+
+
+def _suggest_throttled(user):
+    """True once ``user`` has made more than SUGGEST_THROTTLE_REQUESTS lookups in the window."""
+    key = "yse:profile_suggest:%s" % user.pk
+    if cache.add(key, 1, SUGGEST_THROTTLE_SECONDS):
+        return False
+    try:
+        return cache.incr(key) > SUGGEST_THROTTLE_REQUESTS
+    except ValueError:  # key expired between add and incr
+        cache.add(key, 1, SUGGEST_THROTTLE_SECONDS)
+        return False
+
+
 @login_required
 @require_GET
 def researcher_advisor_suggest(request):
-    """JSON ``{"results": [{"id", "label"}]}``: active users matching ``q`` (autocomplete)."""
+    """JSON ``{"results": [{"id", "name", "institution", "label"}]}``: active users matching ``q``.
+
+    Type-ahead for the advisor and student pickers (#628, #638). Deliberately minimal: full name and
+    institution only (never email, username or any encrypted field), at most 10 results, at least
+    2 typed characters, and a per-user throttle (429).
+    """
     q = (request.GET.get("q") or "").strip()[:64]
-    if len(q) < 2:
+    if len(q) < SUGGEST_MIN_CHARS:
         return JsonResponse({"results": []})
+    if _suggest_throttled(request.user):
+        return JsonResponse({"results": [], "error": "Too many lookups; wait a moment."}, status=429)
     users = (User.objects.filter(is_active=True).exclude(pk=request.user.pk)
-             .filter(Q(username__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
+             .filter(Q(first_name__icontains=q) | Q(last_name__icontains=q)
                      | Q(researcher_profile__full_name__icontains=q))
-             .select_related("researcher_profile").order_by("last_name", "first_name", "username").distinct()[:15])
-    results = []
+             .select_related("researcher_profile").order_by("last_name", "first_name", "pk").distinct()[:SUGGEST_MAX_RESULTS])
+    results, seen = [], {}
     for u in users:
         profile = getattr(u, "researcher_profile", None)
-        name = (profile.full_name if profile and profile.full_name else u.get_full_name()) or u.username
-        results.append({"id": u.pk, "label": "%s (%s)" % (name, u.username)})
+        name = ((profile.full_name if profile and profile.full_name else u.get_full_name()) or "").strip()
+        if not name:
+            continue
+        institution = (profile.institution if profile else "") or ""
+        label = "%s, %s" % (name, institution) if institution else name
+        seen[label] = seen.get(label, 0) + 1
+        if seen[label] > 1:  # keep labels unique so the picker can map a label to one user
+            label = "%s [%d]" % (label, seen[label])
+        results.append({"id": u.pk, "name": name, "institution": institution, "label": label})
     return JsonResponse({"results": results})
 
 
