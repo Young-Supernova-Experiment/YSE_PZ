@@ -86,21 +86,27 @@ def count_hidden(transient_id: int, user: User) -> Dict[str, Dict[str, int]]:
     return out
 
 
-def eligible_target_groups(user: User) -> List[Group]:
-    """Groups a requester may be granted into: their own research teams, never Public or a system group."""
+def eligible_target_groups(user: User, user_groups=None) -> List[Group]:
+    """Groups a requester may be granted into: their own research teams, never Public or a system group.
+
+    ``user_groups`` (the user's groups, already loaded) saves a query.
+    """
     if not user.is_authenticated:
         return []
     from YSE_App.services.groups import system_group_ids
 
-    return list(user.groups.exclude(name=PUBLIC_COLLABORATION_GROUP_NAME).exclude(
-        id__in=system_group_ids(user)).order_by("name"))
+    system = system_group_ids(user)
+    if user_groups is None:
+        user_groups = user.groups.order_by("name")
+    return sorted((g for g in user_groups if g.name != PUBLIC_COLLABORATION_GROUP_NAME and g.id not in system),
+                  key=lambda g: g.name)
 
 
-def requestable_groups(user: User) -> List[Group]:
+def requestable_groups(user: User, user_groups=None) -> List[Group]:
     """The target-group picker: ``eligible_target_groups`` minus inactive and user-hidden groups (#440)."""
     from YSE_App.services.groups import picker_groups
 
-    return picker_groups(user, eligible_target_groups(user))
+    return picker_groups(user, eligible_target_groups(user, user_groups))
 
 
 def _owner_names_by_dataset(transient_id: int, kind: str) -> Dict[int, Dict[int, str]]:

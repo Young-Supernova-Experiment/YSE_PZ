@@ -29,7 +29,7 @@ from typing import Iterable, List, Optional, Sequence, Set, Tuple
 from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.utils import timezone
 
 from YSE_App.models.group_models import GroupInvitation, GroupInvitationUse, GroupProfile, UserPreference
@@ -115,14 +115,24 @@ def _group_meta(user: Optional[User] = None) -> dict:
     cached = getattr(user, "_yse_group_meta", None) if user is not None else None
     if cached is not None:
         return cached
-    q = Q(name__in=system_group_names()) | Q(group_profile__is_system=True) | Q(permissions__isnull=False)
-    rows = set(Group.objects.filter(q).values_list("id", "name").distinct())
+    # One query for both flags: system groups (by name, profile flag or held permissions)
+    # and inactive groups.
+    names = system_group_names()
+    has_perm = Exists(Group.permissions.through.objects.filter(group_id=OuterRef("pk")))
+    rows = (Group.objects.annotate(_has_perm=has_perm)
+            .filter(Q(name__in=names) | Q(group_profile__is_system=True) | Q(_has_perm=True)
+                    | Q(group_profile__is_active=False))
+            .values_list("id", "name", "group_profile__is_system", "group_profile__is_active", "_has_perm"))
     visible = set(picker_visible_system_group_names())
-    meta = {
-        "system": {pk for pk, _name in rows},
-        "excluded": {pk for pk, name in rows if name not in visible},
-        "inactive": set(GroupProfile.objects.filter(is_active=False).values_list("group_id", flat=True)),
-    }
+    system, excluded, inactive = set(), set(), set()
+    for pk, name, profile_system, profile_active, perm in rows:
+        if name in names or profile_system or perm:
+            system.add(pk)
+            if name not in visible:
+                excluded.add(pk)
+        if profile_active is False:
+            inactive.add(pk)
+    meta = {"system": system, "excluded": excluded, "inactive": inactive}
     if user is not None:
         try:
             user._yse_group_meta = meta

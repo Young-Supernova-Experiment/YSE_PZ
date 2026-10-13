@@ -63,7 +63,7 @@ def data_access_context(request, transient, kinds=None, user_groups=None):
         "hidden_rows": rows,
         "hidden_rows_spectrum": [r for r in rows if r["kind"] == "spectrum"],
         "hidden_rows_photometry": [r for r in rows if r["kind"] == "photometry"],
-        "access_target_groups": dar.requestable_groups(request.user),
+        "access_target_groups": dar.requestable_groups(request.user, user_groups=user_groups),
     }
 
 
