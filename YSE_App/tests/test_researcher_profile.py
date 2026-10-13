@@ -14,6 +14,7 @@ from unittest import mock
 from cryptography.hazmat.primitives import serialization
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.core.cache import cache
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -31,6 +32,7 @@ from YSE_App.models.researcher_models import (
     AgreementAcceptance,
     UserAgreement,
 )
+from YSE_App.models import Instrument, Observatory, Telescope
 from YSE_App.services import research_crypto
 from YSE_App.services import researcher_metrics
 from YSE_App.services import researcher_profile as rp
@@ -333,6 +335,176 @@ class MentorshipTests(TestCase):
     def test_affiliation_history_model(self):
         AffiliationHistory.objects.create(user=self.mentor, institution="Example University", start_year=2020)
         self.assertEqual(self.mentor.affiliation_history.count(), 1)
+
+
+class UserSuggestEndpointTests(TestCase):
+    """Type-ahead user search (#638): minimal fields, login required, limited and throttled."""
+
+    def setUp(self):
+        cache.clear()
+        research_crypto.reset_cache()
+        self.me = User.objects.create_user("suggest_me", password="x", first_name="Searcher")
+        self.url = reverse("researcher_advisor_suggest")
+
+    def tearDown(self):
+        cache.clear()
+
+    def _user(self, username, first, last, institution="Example University", **kw):
+        user = User.objects.create_user(username, password="x", first_name=first, last_name=last,
+                                        email="%s@example.invalid" % username, **kw)
+        ResearcherProfile.objects.create(user=user, full_name="%s %s" % (first, last), institution=institution)
+        return user
+
+    def test_returns_only_name_and_institution(self):
+        target = self._user("zed_user", "Zedorf", "Synthetic")
+        self.client.force_login(self.me)
+        resp = self.client.get(self.url, {"q": "zedo"})
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.json()["results"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(set(rows[0]), {"id", "name", "institution", "label"})
+        self.assertEqual(rows[0]["id"], target.pk)
+        self.assertEqual(rows[0]["name"], "Zedorf Synthetic")
+        self.assertEqual(rows[0]["institution"], "Example University")
+        body = resp.content.decode()
+        self.assertNotIn("example.invalid", body)
+        self.assertNotIn("zed_user", body)  # no username either
+
+    def test_username_is_not_searchable_and_inactive_and_self_excluded(self):
+        self._user("hidden_handle", "Quentin", "Plain")
+        self._user("gone_user", "Quentin", "Gone", is_active=False)
+        self.client.force_login(self.me)
+        self.assertEqual(self.client.get(self.url, {"q": "hidden_handle"}).json()["results"], [])
+        names = [r["name"] for r in self.client.get(self.url, {"q": "Quentin"}).json()["results"]]
+        self.assertEqual(names, ["Quentin Plain"])
+        self.assertEqual(self.client.get(self.url, {"q": "Searcher"}).json()["results"], [])
+
+    def test_anonymous_gets_no_data(self):
+        self._user("anon_target", "Anontarget", "Person")
+        resp = self.client.get(self.url, {"q": "Anontarget"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("login", resp["Location"])
+        self.assertNotIn("Anontarget", resp.content.decode())
+
+    def test_minimum_two_characters(self):
+        self._user("short_q", "Bartholomew", "Synthetic")
+        self.client.force_login(self.me)
+        self.assertEqual(self.client.get(self.url, {"q": "b"}).json()["results"], [])
+        self.assertEqual(self.client.get(self.url, {"q": " b "}).json()["results"], [])
+        self.assertEqual(self.client.get(self.url).json()["results"], [])
+        self.assertEqual(len(self.client.get(self.url, {"q": "ba"}).json()["results"]), 1)
+
+    def test_at_most_ten_results_and_unique_labels(self):
+        for i in range(14):
+            self._user("many_%d" % i, "Manyname", "Same")
+        self.client.force_login(self.me)
+        rows = self.client.get(self.url, {"q": "Manyname"}).json()["results"]
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(len({r["label"] for r in rows}), 10)
+
+    def test_post_refused(self):
+        self.client.force_login(self.me)
+        self.assertEqual(self.client.post(self.url, {"q": "ab"}).status_code, 405)
+
+    def test_throttled_per_user(self):
+        from YSE_App import profile_views
+        self.client.force_login(self.me)
+        for _ in range(profile_views.SUGGEST_THROTTLE_REQUESTS):
+            self.assertEqual(self.client.get(self.url, {"q": "ab"}).status_code, 200)
+        resp = self.client.get(self.url, {"q": "ab"})
+        self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.json()["results"], [])
+        other = User.objects.create_user("suggest_other", password="x")
+        self.client.force_login(other)
+        self.assertEqual(self.client.get(self.url, {"q": "ab"}).status_code, 200)
+
+    def test_available_to_users_who_have_not_onboarded(self):
+        """JSON endpoint: the onboarding gate must not redirect it (plain or AJAX request)."""
+        self._user("gate_target", "Gatetarget", "Person")
+        self.client.force_login(self.me)  # no agreement accepted, no profile
+        with override_settings(ONBOARDING_GATE_ENABLED=True, **NO_KEY):
+            plain = self.client.get(self.url, {"q": "Gatetarget"})
+            ajax = self.client.get(self.url, {"q": "Gatetarget"}, HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+                                   HTTP_ACCEPT="application/json")
+        for resp in (plain, ajax):
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(len(resp.json()["results"]), 1)
+
+
+class ProfileFormWidgetTests(TestCase):
+    """Observing experience as grouped check boxes; students linked or free-text (#638)."""
+
+    def setUp(self):
+        research_crypto.reset_cache()
+        creator = User.objects.create_user("inst_creator", password="x")
+        audit = {"created_by": creator, "modified_by": creator}
+        obs = Observatory.objects.create(name="Synthetic Observatory", utc_offset=0, tz_name="UTC", **audit)
+        self.insts = []
+        for tel_name, inst_names in (("Synthetic Scope A", ("CamA1", "CamA2")), ("Synthetic Scope B", ("SpecB1",))):
+            tel = Telescope.objects.create(name=tel_name, observatory=obs, latitude=0.0, longitude=0.0,
+                                           elevation=0.0, **audit)
+            for name in inst_names:
+                self.insts.append(Instrument.objects.create(name=name, telescope=tel, **audit))
+        self.user = User.objects.create_user("profile_user", password="x")
+        self.client.force_login(self.user)
+
+    def test_observing_experience_renders_grouped_checkboxes(self):
+        with override_settings(**NO_KEY):
+            page = self.client.get(reverse("researcher_profile_edit"))
+        html = page.content.decode()
+        self.assertEqual(html.count('name="observing_experience"'), 3)
+        self.assertEqual(html.count('type="checkbox" name="observing_experience"'), 3)
+        self.assertLess(html.index("Synthetic Scope A"), html.index("CamA1"))
+        self.assertLess(html.index("CamA2"), html.index("Synthetic Scope B"))
+        self.assertLess(html.index("Synthetic Scope B"), html.index("SpecB1"))
+
+    def test_checked_instruments_are_saved(self):
+        chosen = [self.insts[0].pk, self.insts[2].pk]
+        with override_settings(**NO_KEY):
+            resp = self.client.post(reverse("researcher_profile_edit"), dict(
+                BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0], observing_experience=chosen))
+        self.assertEqual(resp.status_code, 302)
+        saved = ResearcherProfile.objects.get(user=self.user)
+        self.assertEqual(sorted(saved.observing_experience.values_list("pk", flat=True)), sorted(chosen))
+        with override_settings(**NO_KEY):
+            page = self.client.get(reverse("researcher_profile_edit"))
+        import re
+        tags = re.findall(r'<input[^>]*name="observing_experience"[^>]*>', page.content.decode())
+        self.assertEqual(len(tags), 3)
+        self.assertEqual(sum(1 for t in tags if "checked" in t), 2)
+
+    def test_unknown_instrument_is_refused(self):
+        with override_settings(**NO_KEY):
+            resp = self.client.post(reverse("researcher_profile_edit"), dict(
+                BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0], observing_experience=[999999]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("observing_experience", resp.context["form"].errors)
+
+    def test_students_saved_linked_and_free_text(self):
+        mentor = User.objects.create_user("mentor_form", password="x")
+        ResearcherProfile.objects.create(user=mentor, career_level="tenured", orcid=VALID_ORCIDS[0], **BASE_POST)
+        linked = User.objects.create_user("linked_student", password="x")
+        self.client.force_login(mentor)
+        self.client.post(reverse("researcher_student_add"), {
+            "student_name": "Linked Student (picked)", "student_user_id": str(linked.pk),
+            "kind": Mentorship.KIND_PHD_ADVISOR})
+        self.client.post(reverse("researcher_student_add"), {
+            "student_name": "Typed Only Student", "student_user_id": "", "kind": Mentorship.KIND_PHD_ADVISOR})
+        rows = {m.mentee_id: m for m in rp.my_students(mentor)}
+        self.assertEqual(len(rows), 2)
+        self.assertIn(linked.pk, rows)
+        free = rows[None]
+        self.assertEqual(free.mentee_name, "Typed Only Student")
+
+    def test_advisor_linked_and_free_text_from_profile_form(self):
+        advisor = User.objects.create_user("advisor_form", password="x")
+        with override_settings(**NO_KEY):
+            self.client.post(reverse("researcher_profile_edit"), dict(
+                BASE_POST, career_level="grad", advisor_name="Picked Name", advisor_user_id=str(advisor.pk)))
+            self.assertEqual(rp.current_advisor(self.user).mentor, advisor)
+            self.client.post(reverse("researcher_profile_edit"), dict(
+                BASE_POST, career_level="grad", advisor_name="Free Text Advisor", advisor_user_id=""))
+        self.assertEqual(rp.current_advisor(self.user).mentor_name, "Free Text Advisor")
 
 
 class ExplorerAndApiExclusionTests(TestCase):

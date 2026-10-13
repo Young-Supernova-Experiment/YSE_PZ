@@ -795,6 +795,26 @@ FEEDS_MPC_SCREEN_OBS_CODE = config.get('feeds', 'MPC_SCREEN_OBS_CODE', fallback=
 # Researcher profile, user agreement and onboarding gate (#627-#630;
 # docs/researcher-profile.md). All keys optional.
 #
+# Session and CSRF cookie names/paths (#637). Ziggy serves production, /yse_test/
+# and /yse_experimental/ on one host; with Django's defaults (sessionid /
+# csrftoken, path "/") signing in to one stack replaces the cookies of the
+# others. Per stack, set [site_settings] SESSION_COOKIE_NAME / SESSION_COOKIE_PATH /
+# CSRF_COOKIE_NAME / CSRF_COOKIE_PATH, or the env vars YSE_SESSION_COOKIE_NAME,
+# YSE_SESSION_COOKIE_PATH, YSE_CSRF_COOKIE_NAME, YSE_CSRF_COOKIE_PATH (env wins).
+# Unset or empty keeps Django's defaults. Changing a value logs everyone on that
+# stack out once.
+def _cookie_setting(name, default):
+    value = os.environ.get('YSE_' + name, '').strip()
+    if not value:
+        value = config.get('site_settings', name, fallback='').strip()
+    return value or default
+
+
+SESSION_COOKIE_NAME = _cookie_setting('SESSION_COOKIE_NAME', 'sessionid')
+SESSION_COOKIE_PATH = _cookie_setting('SESSION_COOKIE_PATH', '/')
+CSRF_COOKIE_NAME = _cookie_setting('CSRF_COOKIE_NAME', 'csrftoken')
+CSRF_COOKIE_PATH = _cookie_setting('CSRF_COOKIE_PATH', '/')
+
 # Onboarding gate: signed-in browser users accept the current User Agreement,
 # then complete their profile. On by default; [site_settings]
 # ONBOARDING_GATE_ENABLED: False (or env YSE_ONBOARDING_GATE=0) turns it off.
