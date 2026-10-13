@@ -91,12 +91,25 @@ def interest_register(request, transient_id):
             transient, request.user, request.POST.get("title", ""), group=group,
             role=request.POST.get("role") or TransientInterest.ROLE_LEAD,
             description=(request.POST.get("description") or "").strip(),
+            notify_pis=_checked(request.POST.get("notify_pis")),
+            request_data=_checked(request.POST.get("request_data")),
         )
     except (ValidationError, PermissionDenied) as exc:
         messages.error(request, "Interest not registered: %s" % _error_text(exc))
     else:
         messages.success(request, "Interest registered: %s." % interest.title)
+        outcome = getattr(interest, "pi_outcome", None)
+        if outcome:
+            if outcome["requests"]:
+                messages.success(request, "Data access requested from %s; the PIs and group members were notified." % (
+                    ", ".join(sorted({r.owner_group.name for r in outcome["requests"]}))))
+            for reason in outcome["skipped"]:
+                messages.warning(request, "No access request for %s" % reason)
     return redirect(_safe_next(request, fallback))
+
+
+def _checked(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "on", "true", "yes")
 
 
 @login_required

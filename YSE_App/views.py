@@ -1500,7 +1500,8 @@ def transient_detail_gw_fragment(request, transient_id):
 @login_required
 def transient_detail_spectra_tab_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
-    spectra = list(_authorized_transient_spectra(request, transient_id))
+    # PIs (#446) are shown by name on the table: one prefetch query.
+    spectra = list(_authorized_transient_spectra(request, transient_id).prefetch_related('pis'))
     # The plot needs TransientSpecData points, not just a TransientSpectrum
     # row; show the count so a spectrum without points is visibly unplottable.
     point_counts = dict(
@@ -1568,7 +1569,7 @@ def transient_detail_photometry_fragment(request, transient_id):
             'photometry__instrument',
             'photometry__instrument__telescope',
         )
-        .prefetch_related('data_quality')
+        .prefetch_related('data_quality', 'photometry__pis')
     )
     diff_images = TransientDiffImage.objects.filter(
         phot_data__photometry__transient_id=transient_id
@@ -1716,7 +1717,7 @@ def transient_detail(request, slug):
                     'photometry__instrument',
                     'photometry__instrument__telescope',
                 )
-                .prefetch_related('data_quality')
+                .prefetch_related('data_quality', 'photometry__pis')
             )
             good_photdata = allphotdata.exclude(data_quality__isnull=False)
             lastphotdata = (
@@ -1728,7 +1729,7 @@ def transient_detail(request, slug):
             spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
                 request.user, transient_id, includeBadData=True
             ).select_related('instrument', 'instrument__telescope').prefetch_related(
-                'data_quality'
+                'data_quality', 'pis'
             )
             diff_images_qs = TransientDiffImage.objects.filter(
                 phot_data__photometry__transient_id=transient_id
@@ -2268,6 +2269,10 @@ def upload_spectrum(request):
                 for p in form.cleaned_data['permissions']:
                     tspec.groups.add(Group.objects.filter(name=p)[0])
                 tspec.save()
+
+            # PIs (#446): an upload that names PIs sets them; one that names none keeps any already set.
+            if form.cleaned_data.get('pis'):
+                tspec.pis.set(form.cleaned_data['pis'])
             
             existingspec = TransientSpecData.objects.filter(spectrum=tspec)
             if len(existingspec):

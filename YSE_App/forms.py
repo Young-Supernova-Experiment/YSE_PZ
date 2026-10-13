@@ -468,6 +468,9 @@ class SpectrumUploadForm(ModelForm):
     permissions = forms.MultipleChoiceField(
             choices=qs,
             required=False)
+    # PIs of the spectrum (#446); names only are shown.
+    pis = forms.ModelMultipleChoiceField(
+        PrincipalInvestigator.objects.order_by('name'), required=False, label='PI(s)')
 
     spec_instruments = [
         'SED-Machine','P200-TSPEC','SPRAT',

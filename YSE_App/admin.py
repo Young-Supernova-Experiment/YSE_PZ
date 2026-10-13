@@ -96,7 +96,16 @@ admin.site.register(ClassicalObservingDate)
 admin.site.register(InstrumentConfig)
 admin.site.register(ConfigElement)
 admin.site.register(PhotometricBand)
-admin.site.register(PrincipalInvestigator)
+
+
+@admin.register(PrincipalInvestigator)
+class PrincipalInvestigatorAdmin(admin.ModelAdmin):
+	"""PIs (#446): ``user`` links a PI to their YSE-PZ account (notifications, data-access decisions)."""
+	list_display = ('name', 'institution', 'user')
+	search_fields = ('name', 'institution')
+	raw_id_fields = ('user',)
+	filter_horizontal = ('obs_group',)
+
 admin.site.register(Profile)
 admin.site.register(UserTelescopeToFollow)
 #admin.site.register(UserQuery)
@@ -120,9 +129,29 @@ admin.site.register(TransientFollowupRequest)
 admin.site.register(HostFollowup)
 admin.site.register(TransientObservationTask)
 admin.site.register(HostObservationTask)
-admin.site.register(TransientSpectrum)
+
+
+@admin.register(TransientSpectrum)
+class TransientSpectrumAdmin(admin.ModelAdmin):
+	"""``pis`` (#446): the spectrum's principal investigator(s)."""
+	raw_id_fields = ('transient', 'followup')
+	filter_horizontal = ('groups', 'pis', 'data_quality')
+	list_display = ('__str__', 'instrument', 'obs_group')
+	list_select_related = ('transient', 'instrument', 'obs_group')
+
+
 admin.site.register(HostSpectrum)
-admin.site.register(TransientPhotometry)
+
+
+@admin.register(TransientPhotometry)
+class TransientPhotometryAdmin(admin.ModelAdmin):
+	"""``pis`` (#446): the photometry set's principal investigator(s)."""
+	raw_id_fields = ('transient', 'host', 'followup')
+	filter_horizontal = ('groups', 'pis')
+	list_display = ('__str__', 'instrument', 'obs_group')
+	list_select_related = ('transient', 'instrument', 'obs_group')
+
+
 admin.site.register(HostPhotometry)
 admin.site.register(InformationSource)
 admin.site.register(TransientWebResource)
