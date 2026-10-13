@@ -148,7 +148,9 @@ class SignupTests(CacheClearMixin, TestCase):
         make_user("SS_Taken")
         resp = signup_post(self.client, username="ss_taken")
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse(User.objects.filter(username="ss_taken").exists())
+        self.assertContains(resp, "already exists")
+        # MySQL's default collation compares usernames case-insensitively, so count by iexact.
+        self.assertEqual(User.objects.filter(username__iexact="ss_taken").count(), 1)
 
     def test_honeypot_creates_nothing(self):
         resp = signup_post(self.client, website="http://spam.example")
