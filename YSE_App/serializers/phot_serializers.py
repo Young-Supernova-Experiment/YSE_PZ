@@ -65,6 +65,9 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
         instance.modified_by_id = validated_data.get('modified_by', instance.modified_by)
 
         if 'groups' in validated_data.keys():
+            from YSE_App.services.data_sharing import check_group_change
+
+            check_group_change(self.context['request'].user, instance, validated_data['groups'])
 
             existing_groups = instance.groups.all() # From the existing instance
             user_groups = self.context['request'].user.groups.all()

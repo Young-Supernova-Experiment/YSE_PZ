@@ -9,15 +9,22 @@ datasets' ``groups`` M2M, so every existing access check honours it) or
 declines, and notifies the requester. See ``models/data_access_models.py`` for
 why the grant is a group on the dataset rather than a per-request table.
 
-Who decides (#446): the PIs of the requested datasets (``services.data_pis``,
-accounts linked through ``PrincipalInvestigator.user``), the active members of
-the owner group, and staff. ``named_deciders_for`` is the list of people named
-on the data (PIs today; the PI-designated sharers of #447 plug into
-``designated_sharers_for``); ``deciders_for`` adds the owner group's members.
+Who decides (#447, Ryan 2026-10-13): only the PIs of the requested datasets
+(``services.data_pis.pis_for``: explicit PIs, else the allocation's PI; accounts
+linked through ``PrincipalInvestigator.user``) and the deputies those PIs
+designated (``DataSharingDelegate``, ``designated_sharers_for``). Members and
+owners of the owner group do not decide. Staff may decide as administrators;
+that override is recorded (``DataAccessRequest.decided_as = "staff"``) and
+logged. A request whose data has no PI with an account and no deputy can only
+be decided by staff; the inbox says so. Accepting shares only the datasets the
+decider may share (staff: all of them). Public data (no collaboration group
+other than Public) is never requested (``hidden_summary`` only covers
+restricted data).
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, Iterable, List, Optional
 
 from django.contrib.auth.models import Group, User
@@ -28,9 +35,12 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models import DataAccessRequest, Transient, TransientPhotometry, TransientSpectrum
+from YSE_App.services import data_sharing
 from YSE_App.services import notify as notify_service
-from YSE_App.services.data_pis import pi_users_for
+from YSE_App.services.data_pis import ALLOCATION_PI_PATHS, pi_users_for
 from YSE_App.services.visibility import user_group_names
+
+logger = logging.getLogger("YSE_App.data_access")
 
 DATASET_MODELS = {
     DataAccessRequest.KIND_PHOTOMETRY: TransientPhotometry,
@@ -119,17 +129,24 @@ def requestable_groups(user: User, user_groups=None) -> List[Group]:
 def _owner_names_by_dataset(transient_id: int, kind: str):
     """({dataset_id: {group_id: group_name}}, {dataset_id: {PI names}}) for the restricted datasets of ``kind``.
 
-    One query: the PI names (#446) come along with the owner groups.
+    One query: the PI names (#446) come along with the owner groups, and so do the
+    allocation PIs' names, used for datasets without an explicit PI (#447 fallback).
     """
+    fallback = tuple("%s__name" % path for path in ALLOCATION_PI_PATHS)
     rows = _model(kind).objects.filter(transient_id=transient_id, groups__isnull=False).values_list(
-        "id", "groups__id", "groups__name", "pis__name",
+        "id", "groups__id", "groups__name", "pis__name", *fallback,
     )
     out: Dict[int, Dict[int, str]] = {}
     pis: Dict[int, set] = {}
-    for dataset_id, group_id, name, pi_name in rows:
+    alloc: Dict[int, set] = {}
+    for dataset_id, group_id, name, pi_name, *alloc_names in rows:
         out.setdefault(dataset_id, {})[group_id] = name
         if pi_name:
             pis.setdefault(dataset_id, set()).add(pi_name)
+        alloc.setdefault(dataset_id, set()).update(n for n in alloc_names if n)
+    for dataset_id, names in alloc.items():
+        if names and dataset_id not in pis:
+            pis[dataset_id] = names
     return out, pis
 
 
@@ -138,7 +155,8 @@ def hidden_summary(transient: Transient, user: User, kinds: Optional[Iterable[st
     """Rows for the detail-page hint: one per (kind, owner group) with hidden data.
 
     Each row: ``kind``, ``kind_label`` (pluralised), ``group`` (owner), ``count``,
-    ``pis`` (the PI names of those datasets, #446; names only),
+    ``pis`` (the PI names of those datasets, #446, with the allocation fallback of #447; names only;
+    empty means "no PI assigned": only an administrator can share that data),
     ``request`` (this user's latest request for that kind / group, or None) and
     ``can_request`` (the user has a non-Public group to be granted into).
     Nothing else about the hidden rows themselves is exposed. One query per kind
@@ -203,13 +221,11 @@ def request_datasets(request: DataAccessRequest):
 
 
 def designated_sharers_for(request: DataAccessRequest, datasets) -> List[User]:
-    """People a PI designated to share this data (#447, Stage 6c): none until that lands.
-
-    Extension point: return the sharers of the datasets' program / owner group
-    (``DataSharingPolicy.sharers``); ``named_deciders_for`` and so
-    ``deciders_for``, ``user_can_decide`` and the notifications pick them up.
-    """
-    return []
+    """Active deputies (#447) whom the datasets' PIs designated, for all their data or for one of the datasets' groups."""
+    users: List[User] = []
+    for dataset in datasets:
+        users.extend(data_sharing.delegates_for(dataset))
+    return _unique_users(users)
 
 
 def _unique_users(users: Iterable[User]) -> List[User]:
@@ -222,56 +238,94 @@ def _unique_users(users: Iterable[User]) -> List[User]:
 
 
 def named_deciders_for(request: DataAccessRequest) -> List[User]:
-    """People named on the requested data who may decide: its PIs (#446) and designated sharers (#447)."""
+    """People who may share the requested data: its PIs' accounts (#446, with the allocation fallback) and their
+    designated deputies (#447)."""
     datasets = list(request_datasets(request))
     return _unique_users(list(pi_users_for(datasets)) + list(designated_sharers_for(request, datasets)))
 
 
-def deciders_for(request) -> List[User]:
-    """Who is asked to decide a request: the data's PIs (and sharers), then the owner group's active members.
+def deciders_for(request: DataAccessRequest) -> List[User]:
+    """Who is asked to decide a request: the data's PIs and their deputies only (#447).
 
-    A ``Group`` may be passed instead of a request (the members only, the pre-#446 behaviour).
-    TODO(#447): once designated sharers exist, decide whether named deciders replace the
-    group-member fallback (the issue's "fall back to all members only when none are set").
+    Group members and group owners are not deciders. When nobody is named, only staff can decide
+    (``notify_new_request`` then tells the active staff).
     """
-    if isinstance(request, Group):
-        return list(request.user_set.filter(is_active=True).order_by("id"))
-    members = list(request.owner_group.user_set.filter(is_active=True).order_by("id"))
-    return _unique_users(named_deciders_for(request) + members)
+    return named_deciders_for(request)
+
+
+def _staff_users() -> List[User]:
+    return list(User.objects.filter(Q(is_staff=True) | Q(is_superuser=True), is_active=True).order_by("id"))
+
+
+def shareable_datasets(user: User, request: DataAccessRequest) -> List:
+    """The request's datasets ``user`` may share as a PI or a deputy (no staff override)."""
+    if not getattr(user, "is_authenticated", False):
+        return []
+    pi_ids = data_sharing.own_pi_ids(user)
+    designations = data_sharing.designations_of(user)
+    if not pi_ids and not designations:
+        return []
+    return [row for row in request_datasets(request)
+            if data_sharing.share_role(user, row, pi_ids=pi_ids, designations=designations,
+                                       staff_override=False)]
+
+
+def decider_role(user: User, request: DataAccessRequest) -> Optional[str]:
+    """``"pi"`` / ``"deputy"`` (for at least one requested dataset), ``"staff"`` (administrator override) or None."""
+    if not getattr(user, "is_authenticated", False):
+        return None
+    pi_ids = data_sharing.own_pi_ids(user)
+    designations = data_sharing.designations_of(user)
+    role = None
+    if pi_ids or designations:
+        for row in request_datasets(request):
+            got = data_sharing.share_role(user, row, pi_ids=pi_ids, designations=designations, staff_override=False)
+            if got == data_sharing.ROLE_PI:
+                return got
+            role = role or got
+    if role:
+        return role
+    if _is_staff(user):
+        return data_sharing.ROLE_STAFF
+    return None
 
 
 def user_can_decide(user: User, request: DataAccessRequest) -> bool:
-    if not user.is_authenticated:
-        return False
-    if _is_staff(user):
-        return True
-    if user.groups.filter(pk=request.owner_group_id).exists():
-        return True
-    return any(u.pk == user.pk for u in named_deciders_for(request))
+    """The data's PIs and deputies; staff as administrators (#447). Group membership or ownership is not enough."""
+    return decider_role(user, request) is not None
 
 
-def _pi_request_annotations(user: User) -> Dict[str, Exists]:
-    """Exists() annotations: the user is a linked PI of the data a request covers (per dataset kind)."""
+def _shareable_request_annotations(user: User) -> Dict[str, Exists]:
+    """Exists() annotations: the user may share (PI or deputy) data a request covers, per dataset kind."""
     out = {}
     for kind, model in DATASET_MODELS.items():
+        q = data_sharing.shareable_q(user, model)
+        if q is None:
+            continue
         base = model.objects.filter(
-            transient_id=OuterRef("transient_id"), groups=OuterRef("owner_group_id"), pis__user_id=user.pk,
-        )
-        out["_pi_any_%s" % kind] = Exists(base)
-        out["_pi_one_%s" % kind] = Exists(base.filter(pk=OuterRef("dataset_id")))
+            transient_id=OuterRef("transient_id"), groups=OuterRef("owner_group_id"),
+        ).filter(q)
+        out["_share_any_%s" % kind] = Exists(base)
+        out["_share_one_%s" % kind] = Exists(base.filter(pk=OuterRef("dataset_id")))
     return out
 
 
 def requests_to_decide(user: User, *, pending_only: bool = True):
-    """Requests addressed to groups the user belongs to or to data the user is a PI of (staff: every request)."""
+    """Requests for data the user is a PI or a deputy of (staff: every request, as administrators)."""
     qs = DataAccessRequest.objects.select_related("requester", "transient", "owner_group", "target_group", "decided_by")
+    if not getattr(user, "is_authenticated", False):
+        return qs.none()
     if not _is_staff(user):
-        # TODO(Stage 5): add program-derived PIs here too (see data_pis._program_pis).
-        qs = qs.annotate(**_pi_request_annotations(user))
-        allowed = Q(owner_group__in=user.groups.all())
+        annotations = _shareable_request_annotations(user)
+        if not annotations:
+            return qs.none()
+        qs = qs.annotate(**annotations)
+        allowed = Q(pk__in=[])
         for kind in DATASET_MODELS:
-            allowed |= Q(dataset_kind=kind, dataset_id__isnull=True, **{"_pi_any_%s" % kind: True})
-            allowed |= Q(dataset_kind=kind, **{"_pi_one_%s" % kind: True})
+            if "_share_any_%s" % kind not in annotations:
+                continue
+            allowed |= Q(dataset_kind=kind, dataset_id__isnull=True, **{"_share_any_%s" % kind: True})
+            allowed |= Q(dataset_kind=kind, **{"_share_one_%s" % kind: True})
         qs = qs.filter(allowed)
     if pending_only:
         qs = qs.filter(status=DataAccessRequest.STATUS_PENDING)
@@ -305,11 +359,11 @@ def pending_count_for(user: User) -> int:
     return int(value)
 
 
-def invalidate_pending_counts(owner_group: Group, extra_user_ids: Iterable[int] = ()) -> None:
-    """Drop the cached badge counts of everyone who may decide requests to ``owner_group`` (plus ``extra_user_ids``, the PIs)."""
+def invalidate_pending_counts(extra_user_ids: Iterable[int] = ()) -> None:
+    """Drop the cached badge counts of the deciders of a request (``extra_user_ids``: its PIs and deputies) and staff."""
     from django.core.cache import cache
 
-    ids = list(owner_group.user_set.values_list("id", flat=True)) + list(extra_user_ids)
+    ids = list(extra_user_ids)
     ids += list(User.objects.filter(Q(is_staff=True) | Q(is_superuser=True)).values_list("id", flat=True))
     cache.delete_many([_pending_cache_key(i) for i in set(ids)])
 
@@ -362,20 +416,25 @@ def request_access(
         requester=user, transient=transient, dataset_kind=kind, dataset_id=dataset_id, owner_group=owner_group,
         target_group=target_group, message=(message or "").strip(), created_by=user, modified_by=user,
     )
-    invalidate_pending_counts(owner_group, [u.pk for u in named_deciders_for(request)])
+    invalidate_pending_counts([u.pk for u in named_deciders_for(request)])
     if notify_owners:
         notify_new_request(request)
     return request
 
 
 def notify_new_request(request: DataAccessRequest):
+    """Tell the data's PIs and deputies; when there are none, the active staff (only they can decide then)."""
     owners = deciders_for(request)
+    no_pi = not owners
+    if no_pi:
+        owners = _staff_users()
     if not owners:
         return []
     n = len(hidden_datasets(request.requester, request.transient_id, request.dataset_kind))
-    text = "%s asks %s for access to %d restricted %s on %s (to be shared with %s).%s\nAccept or decline: %s" % (
-        request.requester.username, request.owner_group.name, n, KIND_LABELS[request.dataset_kind][1],
+    text = "%s asks for access to %d restricted %s of %s on %s (to be shared with %s).%s%s\nAccept or decline: %s" % (
+        request.requester.username, n, KIND_LABELS[request.dataset_kind][1], request.owner_group.name,
         request.transient.name, request.target_group.name,
+        "\nNo PI assigned (or no PI with an account): only administrators can decide this request." if no_pi else "",
         ("\n\"%s\"" % request.message) if request.message else "",
         notify_service.absolute_url(_request_url(request)),
     )
@@ -387,13 +446,12 @@ def notify_new_request(request: DataAccessRequest):
     )
 
 
-def _grant(request: DataAccessRequest) -> List[int]:
-    """Add the target group to the owner group's restricted datasets of the request's kind; return their ids."""
-    qs = restricted_datasets(request.transient_id, request.dataset_kind).filter(groups=request.owner_group)
-    if request.dataset_id is not None:
-        qs = qs.filter(pk=request.dataset_id)
+def _grant(request: DataAccessRequest, rows=None) -> List[int]:
+    """Add the target group to ``rows`` (default: every dataset the request covers); return their ids."""
+    if rows is None:
+        rows = request_datasets(request)
     granted = []
-    for row in qs.distinct():
+    for row in rows:
         if not row.groups.filter(pk=request.target_group_id).exists():
             row.groups.add(request.target_group)
         granted.append(row.pk)
@@ -402,23 +460,36 @@ def _grant(request: DataAccessRequest) -> List[int]:
 
 @transaction.atomic
 def decide(request: DataAccessRequest, user: User, accept: bool, *, note: str = "", notify_requester: bool = True):
-    """Accept (grant the target group) or decline a pending request."""
-    if not user_can_decide(user, request):
-        raise PermissionDenied({"message": "Only members of %s, the data's PIs (or staff) may decide this request."
-                                           % request.owner_group.name})
+    """Accept (grant the target group) or decline a pending request.
+
+    PIs and deputies share only the datasets they may share; staff decide as administrators (all the
+    datasets), which is recorded in ``decided_as`` and logged.
+    """
+    role = decider_role(user, request)
+    if role is None:
+        raise PermissionDenied({"message": "Only the data's PIs and the deputies they designated (or an "
+                                           "administrator) may decide this request."})
     if not request.is_pending:
         raise ValidationError({"status": "This request was already %s." % request.status})
+    rows = None if role == data_sharing.ROLE_STAFF else shareable_datasets(user, request)
     request.decided_by = user
+    request.decided_as = role
     request.decided_at = timezone.now()
     request.note = (note or "").strip()
     request.modified_by = user
     if accept:
-        request.granted_dataset_ids = _grant(request)
+        request.granted_dataset_ids = _grant(request, rows)
         request.status = DataAccessRequest.STATUS_ACCEPTED
     else:
         request.status = DataAccessRequest.STATUS_DECLINED
     request.save()
-    invalidate_pending_counts(request.owner_group, [u.pk for u in named_deciders_for(request)])
+    if role == data_sharing.ROLE_STAFF:
+        logger.warning(
+            "data access request %s %s by staff user id %s as an administrator override (transient id %s, %s, "
+            "owner group id %s, target group id %s)", request.pk, request.status, user.pk, request.transient_id,
+            request.dataset_kind, request.owner_group_id, request.target_group_id,
+        )
+    invalidate_pending_counts([u.pk for u in named_deciders_for(request)])
     if notify_requester:
         notify_decision(request)
     return request

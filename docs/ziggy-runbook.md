@@ -696,6 +696,27 @@ Expected: the same first line, then `written: N datasets`. **Check:** running th
 
 Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
+<a id="data-sharers"></a>
+### Who may share private data: PIs and their deputies (develop-direct PR; #447) nothing required, but check PI links first
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migration `0037_data_sharing_delegates` adds one new table, `YSE_App_datasharingdelegate`, and one nullable column, `YSE_App_dataaccessrequest.decided_as`. It runs automatically on deploy, writes no data, and is safe on the shared `YSE_test` database. No new dependency.
+
+**Effect on deploy (behaviour change, Ryan 2026-10-13):**
+
+* Only the data's PIs (linked accounts, see [Step A of "PIs on private data"](#data-pis)) and the deputies they designate may accept or decline data access requests, or change the groups of restricted data through the REST API. Members and owners of the owner group no longer can.
+* Data without an explicit PI uses its allocation's PI, at read time: the follow-up's ToO / classical / queued resource's allocation PI (or the resource's own PI), or the follow-up's facility request's allocation PI. Nothing is written.
+* Data with neither can only be shared by staff. Such requests notify the active staff, and the staff inbox marks them "No PI assigned". Every staff decision is recorded as an administrator override (`decided_as = staff`, shown in the inbox and the admin) and logged by the `YSE_App.data_access` logger at WARNING.
+* Pending requests filed before the deploy follow the same rule.
+* New page `/data_sharing_deputies/` (linked from the Data access requests page): a PI adds or removes deputies, for all of their data or for one group's data. Staff can manage any PI's deputies in the admin (Principal investigators > a PI > "Data sharing delegates", or Data sharing delegates).
+* TNS imports now set `reference` (`TNS <prefix> <name>`) on new photometry sets and spectra.
+* SQL Explorer shows the PI tables again (Refs #643).
+
+**Step A (recommended before or right after deploy, Ryan or David): link the PIs of private data to accounts.** Otherwise only staff can decide requests for that data. Use [Step A](#data-pis) and, if wanted, the `backfill_data_pis` [Step B](#data-pis) of "PIs on private data".
+
+**Check:** sign in as a member of a group with restricted data who is not its PI: `/data_access_requests/` says "Nothing to decide". Sign in as the linked PI: the request is listed with Accept / Decline. As staff, deciding shows "You decided request #N as an administrator; the override is logged."
+
+Production: Step A after the `develop -> master` merge (`/data/yse_pz/YSE_PZ`).
+
 <a id="self-signup"></a>
 
 ### Self-service signup and team membership requests (develop-direct PR; #448, #440 follow-up, #643) nothing required, signup off until turned on
@@ -706,7 +727,7 @@ Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merge
 
 * the login page has a "Forgot password?" link (Django's password reset, already routed);
 * the **Public** group is always offered in audience pickers: a user's hidden groups, an inactive flag and `PICKER_VISIBLE_SYSTEM_GROUPS` can no longer take it out (#440 follow-up);
-* the PrincipalInvestigator REST API returns only `url`, `id` and `name` to non-staff (staff still see email, phone and the rest; non-staff can still send those fields when they create or update a PI), and the PI table is hidden from SQL Explorer and its SQL blacklist (#643). If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_principalinvestigator`, `YSE_App_principalinvestigator_obs_group` and `YSE_App_groupmembershiprequest`.
+* the PrincipalInvestigator REST API returns only `url`, `id` and `name` to non-staff (staff still see email, phone and the rest; non-staff can still send those fields when they create or update a PI), and `YSE_App_groupmembershiprequest` is hidden from SQL Explorer and its SQL blacklist (#643). If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_groupmembershiprequest`. The PI tables (`YSE_App_principalinvestigator`, `YSE_App_principalinvestigator_obs_group`) stay visible in Explorer (Ryan, 2026-10-13; changed by the #447 PR): do not exclude them.
 
 **Before Step A:** owners should exist on the teams that will take requests ([section "Research teams"](#teams), Step B). Only active, non-system teams with at least one active owner can be requested.
 
@@ -1668,6 +1689,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-13 v34, nothing required (link PI accounts first so PIs, not only staff, can decide). Only PIs and their deputies share private data ([#447](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/447)): migration 0037 (one new table, one nullable column); allocation-PI fallback; logged staff override; `/data_sharing_deputies/`; TNS references; PI tables visible in Explorer again ([section "Who may share private data"](#data-sharers)).
 * 2026-10-13 v33, nothing required (signup off by default). Self-service signup and team membership requests ([#448](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/448)): migration 0036 (one new table); turn on with `SELF_SIGNUP_ENABLED: True` when ready; optional `purge_group_membership_requests`. Public always offered in pickers ([#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)); PI contact fields staff-only in the API and PI table hidden from Explorer ([#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)) ([section "Self-service signup"](#self-signup)).
 * 2026-10-13 v32, nothing required (PI accounts and backfill optional). PIs on private data ([#446](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/446)): migration 0035 (one nullable column, two new join tables); staff link PIs to accounts in the admin; optional `backfill_data_pis` (dry run by default) ([section "PIs on private data"](#data-pis)).
 * 2026-10-12 v31, nothing required (owners optional). Research teams, invitation links and user settings ([#445](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/445), [#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)): migrations 0033/0034 (new tables, one profile per group, no owners, all active, system groups marked); staff assign owners in Admin > Groups ([section "Research teams"](#teams)); optional `ensure_group_profiles` check, inactive flag, `purge_group_invitations` and `[groups]` keys.

@@ -391,10 +391,8 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_userpreference',
     # Self-service membership requests (#448).
     'YSE_App_groupmembershiprequest',
-    # PI contact details (#643). Explorer can only exclude whole tables, so the PI table
-    # (and, by prefix, its obs_group join table) is left out; PI names stay visible in
-    # the app and the REST API.
-    'YSE_App_principalinvestigator',
+    # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
+    # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
 EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
     'auth_',

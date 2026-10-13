@@ -70,7 +70,7 @@ def notify_data_pis(interest: TransientInterest, user: User, *, request_data: bo
     """Tell the PIs of the restricted data on the transient that ``user`` cannot see about the interest.
 
     With ``request_data``, file one access request per (kind, owner group) of that
-    data first (``data_access.request_access``, which notifies the PIs and the
+    data first (``data_access.request_access``, which notifies the PIs and their deputies, #447; not the
     group's members); PIs reached that way are not notified a second time.
     Returns ``{"requests": [...], "skipped": [reason, ...], "notified": [user ids]}``.
     """
