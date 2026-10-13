@@ -120,7 +120,7 @@ class ForcedPhot(CronJobBase):
         # created_by date is in the last day or so
         
         nowdate = datetime.datetime.utcnow()
-        logs = Log.objects.filter(created_date__gt=nowdate-datetime.timedelta(1))
+        logs = Log.objects.filter(created_date__gt=nowdate-datetime.timedelta(2))
 
         # now see which ones already have ZTF forced phot uploaded, so
         # we don't do extra work

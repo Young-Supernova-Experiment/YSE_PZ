@@ -325,7 +325,7 @@ class ForcedPhot(CronJobBase):
         # candidate transients
         min_date = datetime.datetime.utcnow() - datetime.timedelta(minutes=self.options.max_time_minutes)
         nowmjd = date_to_mjd(datetime.datetime.utcnow())
-        #transient_name='2021vrt'; self.options.max_days_yseimage = 12
+        #transient_name='2021vrt'; self.options.max_days_yseimage = 50
         if transient_name is None and not update_forced:
             transients = Transient.objects.filter(
                 created_date__gte=min_date).filter(~Q(tags__name='YSE') & ~Q(tags__name='YSE Stack')).order_by('-created_date')
@@ -602,7 +602,7 @@ class ForcedPhot(CronJobBase):
 
         phot_dict = {}
         for request_name in request_names:
-            phot_link = 'http://datastore.ipp.ifa.hawaii.edu/pstampresults/'
+            phot_link = 'http://128.171.123.254:22281/ds/pstampresults/'
             phot_results_link = '{}/{}/'.format(phot_link,request_name)
 
             phot_page = requests.get(url=phot_results_link)
@@ -686,10 +686,10 @@ class ForcedPhot(CronJobBase):
 
     def get_stamps(self,request_name,transient_list):
 
-        stamp_link = 'http://datastore.ipp.ifa.hawaii.edu/yse-pstamp-results/'
+        stamp_link = 'http://128.171.123.254:22281/ds/yse-pstamp-results/'
         stamp_results_link = '{}/{}/results.mdc'.format(stamp_link,request_name)
         stamp_fitsfile_link = '{}/{}/'.format(stamp_link,request_name)
-        
+
         stamps_page = requests.get(url=stamp_results_link)
         if stamps_page.status_code != 200:
             raise RuntimeError('results page {} does not exist'.format(stamp_results_link))
