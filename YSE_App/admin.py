@@ -1037,3 +1037,21 @@ class GroupInvitationAdmin(admin.ModelAdmin):
 
 	def has_add_permission(self, request):
 		return False
+
+
+from YSE_App.models.group_models import GroupMembershipRequest  # noqa: E402
+
+
+@admin.register(GroupMembershipRequest)
+class GroupMembershipRequestAdmin(admin.ModelAdmin):
+	"""Requests are made on /teams/ and decided by the team's owners there (#448); staff review them here."""
+	list_display = ("id", "group", "user", "status", "created_at", "decided_by", "decided_at")
+	list_filter = ("status", "group")
+	readonly_fields = ("user", "group", "message", "status", "created_at", "decided_by", "decided_at")
+	fields = readonly_fields
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False

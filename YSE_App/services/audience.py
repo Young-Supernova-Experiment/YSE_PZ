@@ -25,10 +25,18 @@ def picker_audience_groups(user: User, transient_id: int) -> List[Group]:
     """Groups offered in the comment picker (#440).
 
     ``selectable_audience_groups`` minus system groups, inactive groups and the groups the
-    user hides in /settings/ (never empty only because of those). Eligibility is unchanged:
-    the server still accepts any selectable group.
+    user hides in /settings/ (never empty only because of those). Public, when selectable, is
+    always offered (#440). Eligibility is unchanged: the server still accepts any selectable
+    group.
     """
-    return group_svc.picker_groups(user, selectable_audience_groups(user, transient_id))
+    selectable = list(selectable_audience_groups(user, transient_id))
+    shown = group_svc.picker_groups(user, selectable)
+    public_ids = group_svc.public_group_ids(user)
+    shown_ids = {g.id for g in shown}
+    missing_public = [g for g in selectable if g.id in public_ids and g.id not in shown_ids]
+    if missing_public:
+        shown = sorted(shown + missing_public, key=lambda g: g.name)
+    return shown
 
 
 def comment_picker_initial(user: User, groups: List[Group]) -> List[int]:
@@ -160,6 +168,10 @@ def build_followup_audience_choices(user: User, resource) -> List[Dict[str, Any]
     eligible_ids = {group.id for group in eligible_followup_audience_groups(user, resource)}
     resource_public = resource_is_public(resource)
     shown, more = group_svc.partition_picker_groups(user, user.groups.order_by("name"))
+    # Public is always offered and never folded away (#440), whatever the settings say.
+    public_ids = group_svc.public_group_ids(user)
+    shown = shown + [g for g in more if g.id in public_ids]
+    more = [g for g in more if g.id not in public_ids]
     default_ids = group_svc.default_group_ids(user, group_svc.KIND_FOLLOWUP)
     choices: List[Dict[str, Any]] = []
     for group, hidden in [(g, False) for g in shown] + [(g, True) for g in more]:

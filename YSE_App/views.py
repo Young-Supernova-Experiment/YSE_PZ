@@ -121,7 +121,8 @@ def auth_login(request):
         return HttpResponseRedirect(safe_next(request, next_page))
         #render(request,'YSE_App/dashboard.html')
     else:
-        return render(request, 'YSE_App/login.html')
+        from YSE_App.services.signup import signup_enabled
+        return render(request, 'YSE_App/login.html', {'signup_enabled': signup_enabled()})
 
 def auth_logout(request):
     logout(request)

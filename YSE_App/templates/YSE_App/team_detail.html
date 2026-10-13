@@ -46,7 +46,7 @@
 			<div class="box box-default box-solid">
 				<div class="box-header with-border"><strong>Invite people</strong></div>
 				<div class="box-body">
-					<p class="text-muted small">Creates a link to send to the people you invite. They sign in (or ask an administrator for an account), accept the User Agreement and complete their profile if they are new, then confirm to join. No email address is stored.</p>
+					<p class="text-muted small">Creates a link to send to the people you invite. They sign in (or create an account, or ask an administrator for one), accept the User Agreement and complete their profile if they are new, then confirm to join. No email address is stored.</p>
 					<form method="post" action="{% url 'team_invite_create' group.pk %}" class="form-inline">{% csrf_token %}
 						<label class="mr-2" for="{{ invite_form.days.id_for_label }}">{{ invite_form.days.label }}</label> {{ invite_form.days }}
 						<label class="mx-2" for="{{ invite_form.max_uses.id_for_label }}">{{ invite_form.max_uses.label }}</label> {{ invite_form.max_uses }}
@@ -73,6 +73,33 @@
 		</div>
 		{% endif %}
 	</div>
+
+	{% if can_manage and pending_requests %}
+	<div class="box box-default box-solid" id="yse-team-pending-requests">
+		<div class="box-header with-border"><strong>Membership requests</strong> ({{ pending_requests|length }})</div>
+		<div class="box-body">
+			<table class="table table-sm">
+				<thead><tr><th>Name</th><th>Username</th><th>Institution</th><th>Note</th><th>Requested</th><th></th></tr></thead>
+				<tbody>
+				{% for req in pending_requests %}
+				<tr>
+					<td>{{ req.user.researcher_profile.full_name|default:req.user.get_full_name|default:req.user.get_username }}</td>
+					<td>{{ req.user.get_username }}</td>
+					<td>{{ req.user.researcher_profile.institution|default:"" }}</td>
+					<td>{{ req.message|linebreaksbr }}</td>
+					<td>{{ req.created_at|date:"Y-m-d" }}</td>
+					<td class="text-nowrap">
+						<form method="post" action="{% url 'team_request_decide' group.pk req.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="approve"><button type="submit" class="btn btn-xs btn-success">Approve</button></form>
+						<form method="post" action="{% url 'team_request_decide' group.pk req.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="deny"><button type="submit" class="btn btn-xs btn-outline-danger">Deny</button></form>
+					</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			<p class="text-muted small mb-0">Approving adds the person to this team, so they can see the data shared with it.</p>
+		</div>
+	</div>
+	{% endif %}
 
 	{% if can_manage %}
 	<div class="box box-default box-solid">

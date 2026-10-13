@@ -11,7 +11,7 @@
 		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
 	</div></div>
 	{% endif %}
-	<p class="text-muted">See also <a href="{% url 'researcher_profile' %}">My profile</a>, <a href="{% url 'team_list' %}">My teams</a> and <a href="{% url 'notification_preferences' %}">Notification preferences</a>.</p>
+	<p class="text-muted">See also <a href="{% url 'researcher_profile' %}">My profile</a>, <a href="{% url 'team_list' %}">My teams</a> and <a href="{% url 'notification_preferences' %}">Notification preferences</a>{% if signup_enabled %}, <a href="{% url 'account_email' %}">Email address</a>{% endif %}.</p>
 	<form method="post" action="{% url 'user_settings' %}">{% csrf_token %}
 		{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
 		<div class="box box-default box-solid">

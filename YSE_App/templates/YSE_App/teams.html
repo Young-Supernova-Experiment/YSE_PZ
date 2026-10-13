@@ -33,5 +33,57 @@
 			{% endif %}
 		</div>
 	</div>
+
+	{% if requests_open %}
+	<div class="box box-default box-solid" id="yse-team-requests">
+		<div class="box-header with-border"><strong>Ask to join a team</strong></div>
+		<div class="box-body">
+			<p class="text-muted small">The team's owners decide. They see your name, username, institution and your note. If you have an invitation link, open it instead.</p>
+			{% if requestable %}
+			<table class="table table-sm">
+				<thead><tr><th>Team</th><th>Description</th><th></th></tr></thead>
+				<tbody>
+				{% for row in requestable %}
+				<tr>
+					<td>{{ row.group.name }}</td>
+					<td>{{ row.profile.description|default:""|truncatechars:160 }}</td>
+					<td>{% if row.pending %}<span class="badge badge-info">requested</span>{% else %}
+						<form method="post" action="{% url 'team_request_create' %}">{% csrf_token %}
+							<input type="hidden" name="group" value="{{ row.group.pk }}">
+							<textarea name="message" rows="1" maxlength="1000" class="form-control form-control-sm mb-1" placeholder="Note to the owners (optional)" aria-label="Note to the owners of {{ row.group.name }}"></textarea>
+							<button type="submit" class="btn btn-xs btn-primary">Request to join</button>
+						</form>{% endif %}
+					</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			{% else %}
+			<p class="mb-0">No other teams are taking requests right now.</p>
+			{% endif %}
+		</div>
+	</div>
+	{% endif %}
+
+	{% if my_requests %}
+	<div class="box box-default box-solid" id="yse-my-team-requests">
+		<div class="box-header with-border"><strong>My requests</strong></div>
+		<div class="box-body">
+			<table class="table table-sm">
+				<thead><tr><th>Team</th><th>Requested</th><th>Status</th><th></th></tr></thead>
+				<tbody>
+				{% for req in my_requests %}
+				<tr>
+					<td>{{ req.group.name }}</td>
+					<td>{{ req.created_at|date:"Y-m-d" }}</td>
+					<td>{{ req.status }}</td>
+					<td>{% if req.is_pending %}<form method="post" action="{% url 'team_request_cancel' req.pk %}">{% csrf_token %}<button type="submit" class="btn btn-xs btn-outline-secondary">Withdraw</button></form>{% endif %}</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+		</div>
+	</div>
+	{% endif %}
 </section>
 {% endblock %}

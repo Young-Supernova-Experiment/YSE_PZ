@@ -36,9 +36,9 @@ KIND_GROUPS = (
      "you submitted.",
      ("alert", "upload_error", "candidate")),
     ("collaboration", "Interests and data access",
-     "Paper interests registered on transients you work on; data access requests you can decide and "
-     "decisions on your own requests.",
-     ("interest", "data_access")),
+     "Paper interests registered on transients you work on; data access requests and team membership "
+     "requests you can decide, and decisions on your own requests.",
+     ("interest", "data_access", "team_request")),
     ("favorite", "Favorite transients",
      "Activity on transients you starred: comments, status / class / redshift changes, new spectra and "
      "photometry, follow-up requests and their status (batched per transient).",
