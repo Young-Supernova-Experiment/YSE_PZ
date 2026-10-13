@@ -1,7 +1,9 @@
 name: Promotion guard
 
-# Only `experimental` may merge into `develop` (plus same-repo `dependabot/*` branches,
-# which target `develop` directly), and only `develop` into `master`.
+# Only `experimental` may merge into `develop`, and only `develop` into `master`.
+# Exceptions into `develop` only: same-repo `dependabot/*` branches, and (#631) a
+# `develop-direct/*` branch from this repository (merged by Ryan; develop is then
+# merged back into experimental at once). Neither may ever target `master`.
 # This job fails for any other pull request into those two branches. Make it a
 # required status check ("promotion guard") on the develop and master branch
 # protection rules so the Merge button greys out; see docs/branching.md.
@@ -36,8 +38,12 @@ jobs:
             develop)
               case "$HEAD" in
                 experimental|dependabot/*) ;;
+                develop-direct/*)
+                  echo "OK: '$HEAD' is a develop-direct branch; Ryan merges it, then develop is merged back into experimental (docs/branching.md)."
+                  exit 0
+                  ;;
                 *)
-                echo "::error::Only 'experimental' (or a Dependabot branch) may be merged into 'develop' (this PR is from '$HEAD'). Merge your branch into 'experimental' first, then open experimental -> develop."
+                echo "::error::Only 'experimental' (or a Dependabot or develop-direct branch) may be merged into 'develop' (this PR is from '$HEAD'). Merge your branch into 'experimental' first, then open experimental -> develop."
                 exit 1
                 ;;
               esac

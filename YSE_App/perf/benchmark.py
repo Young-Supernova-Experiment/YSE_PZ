@@ -46,7 +46,8 @@ def _ms(elapsed_s: float) -> float:
     return elapsed_s * 1000.0
 
 
-@override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS)
+# Fixture users have not accepted the User Agreement: measure the pages, not the gate (#630).
+@override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS, ONBOARDING_GATE_ENABLED=False)
 def run_primary_pages() -> List[PageBenchmark]:
     """Run the three tracked pages with representative fixture data."""
     user = create_test_user("perf_benchmark_primary")

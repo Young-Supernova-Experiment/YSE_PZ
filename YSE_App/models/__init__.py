@@ -38,3 +38,7 @@ from YSE_App.models.annotation_models import TransientAnnotation, TransientAnnot
 from YSE_App.models.feed_models import FeedSource
 from YSE_App.models.analysis_models import AnalysisResultFile, AnalysisService
 from YSE_App.models.summary_models import TransientSummaryEmbedding, TransientSummaryHistory, TransientSummaryPreference
+from YSE_App.models.researcher_models import (
+    AffiliationHistory, AgreementAcceptance, EncryptedProfileValue, Mentorship, ProfileFieldHistory,
+    ResearcherMetrics, ResearcherProfile, UserAgreement,
+)

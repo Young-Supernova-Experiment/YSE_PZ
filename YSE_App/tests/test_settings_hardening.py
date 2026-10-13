@@ -197,3 +197,43 @@ class CacheBackendTests(SimpleTestCase):
             with self.assertLogs("yse_settings_under_test", level="WARNING"):
                 cache = _load_settings(debug="True", env={"REDIS_URL": self._URL}).CACHES["default"]
         self.assertEqual(cache["BACKEND"], self._LOCMEM)
+
+
+class CookieSettingsTests(SimpleTestCase):
+    """Per-stack session / CSRF cookie names and paths (#637)."""
+
+    def test_defaults_match_django(self):
+        mod = _load_settings(debug="True")
+        self.assertEqual(mod.SESSION_COOKIE_NAME, "sessionid")
+        self.assertEqual(mod.SESSION_COOKIE_PATH, "/")
+        self.assertEqual(mod.CSRF_COOKIE_NAME, "csrftoken")
+        self.assertEqual(mod.CSRF_COOKIE_PATH, "/")
+
+    def test_ini_values(self):
+        mod = _load_settings(debug="True", site_extra=textwrap.dedent("""\
+            SESSION_COOKIE_NAME: sessionid_synthetic_test
+            SESSION_COOKIE_PATH: /synthetic_test/
+            CSRF_COOKIE_NAME: csrftoken_synthetic_test
+            CSRF_COOKIE_PATH: /synthetic_test/
+            """))
+        self.assertEqual(mod.SESSION_COOKIE_NAME, "sessionid_synthetic_test")
+        self.assertEqual(mod.SESSION_COOKIE_PATH, "/synthetic_test/")
+        self.assertEqual(mod.CSRF_COOKIE_NAME, "csrftoken_synthetic_test")
+        self.assertEqual(mod.CSRF_COOKIE_PATH, "/synthetic_test/")
+
+    def test_env_wins_over_ini_and_empty_env_falls_back(self):
+        mod = _load_settings(
+            debug="True", site_extra="SESSION_COOKIE_NAME: from_ini\nCSRF_COOKIE_NAME: csrf_from_ini",
+            env={"YSE_SESSION_COOKIE_NAME": "from_env", "YSE_SESSION_COOKIE_PATH": "/from_env/",
+                 "YSE_CSRF_COOKIE_NAME": "  "})
+        self.assertEqual(mod.SESSION_COOKIE_NAME, "from_env")
+        self.assertEqual(mod.SESSION_COOKIE_PATH, "/from_env/")
+        self.assertEqual(mod.CSRF_COOKIE_NAME, "csrf_from_ini")
+
+    def test_two_stacks_do_not_collide(self):
+        one = _load_settings(debug="True", env={"YSE_SESSION_COOKIE_NAME": "sid_one",
+                                                 "YSE_SESSION_COOKIE_PATH": "/one/"})
+        two = _load_settings(debug="True", env={"YSE_SESSION_COOKIE_NAME": "sid_two",
+                                                 "YSE_SESSION_COOKIE_PATH": "/two/"})
+        self.assertNotEqual(one.SESSION_COOKIE_NAME, two.SESSION_COOKIE_NAME)
+        self.assertNotEqual(one.SESSION_COOKIE_PATH, two.SESSION_COOKIE_PATH)

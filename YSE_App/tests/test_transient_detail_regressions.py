@@ -126,7 +126,12 @@ class TransientDetailRegressionTests(TestCase):
 
 
 class TransientSummaryTabRegressionTests(TestCase):
-    """transient_summary_individual.html had the same li.active/a.active pair (#171)."""
+    """transient_summary_individual.html had the same li.active/a.active pair (#171).
+
+    d2f45bdf (develop) removed the per-transient tab strip from the summary page;
+    the page must still render each transient without a li.active pair, and the
+    image carousel controls must target that transient's own carousel.
+    """
 
     @classmethod
     def setUpTestData(cls):
@@ -139,18 +144,15 @@ class TransientSummaryTabRegressionTests(TestCase):
         self.client = Client()
         self.client.force_login(self.user)
 
-    def test_summary_tab_marks_active_on_the_link_only(self):
+    def test_summary_page_has_no_li_active_and_per_transient_carousel(self):
         url = reverse("transient_summary", kwargs={"status_or_query_name": "New"})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8", errors="replace")
         self.assertIn(self.transient.name, html)
-        self.assertIn(
-            f'<li class="nav-item"><a class="nav-link active" href="#summary_tab_{self.transient.id}" '
-            'data-toggle="tab">Summary</a></li>',
-            html,
-        )
         self.assertNotIn('class="nav-item active"', html)
+        self.assertIn(f'data-target="#carousel-example-generic_{self.transient.id}"', html)
+        self.assertNotIn('data-target="#carousel-example-generic"', html)
 
 
 def multiline_template_comments(root):

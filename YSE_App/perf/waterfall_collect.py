@@ -35,13 +35,15 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 UrlSpec = Tuple[str, str, str]  # url, name, resource_type
 
 
-@override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS)
+# Fixture users have not accepted the User Agreement: measure the pages, not the gate (#630).
+@override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS, ONBOARDING_GATE_ENABLED=False)
 def collect_all_waterfalls() -> Dict[str, List[ResourceTiming]]:
     timelines = collect_all_timelines()
     return {k: t.resources for k, t in timelines.items()}
 
 
-@override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS)
+# Fixture users have not accepted the User Agreement: measure the pages, not the gate (#630).
+@override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS, ONBOARDING_GATE_ENABLED=False)
 def collect_all_timelines() -> Dict[str, PageLoadTimeline]:
     return {
         "main_dashboard": _timeline_main_dashboard(),

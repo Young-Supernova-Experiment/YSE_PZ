@@ -267,6 +267,9 @@ CRON_CLASSES = [
     # (on by default) and photstat.bazin_extrapolate job (off unless
     # PHOTSTAT_BAZIN_CRON_ENABLED); see the settings below.
     'YSE_App.data_ingest.PhotStat_Jobs.PhotStatRefresh',
+    # Researcher metrics from SciX (#629): monthly; no-op unless
+    # RESEARCHER_METRICS_ENABLED ([research] in settings.ini).
+    'YSE_App.data_ingest.Researcher_Metrics.RefreshResearcherMetrics',
 ]
 
 # django_cron writes one CronJobLog row per run; `manage.py runcrons` deletes rows
@@ -329,6 +332,9 @@ MIDDLEWARE = [
     # YSE_App/login_required.py and LOGIN_REQUIRED_MIDDLEWARE below.
     'YSE_App.login_required.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    # Onboarding gate (#630): accept the User Agreement, then complete the
+    # profile. ONBOARDING_GATE_ENABLED below; exemptions in YSE_App/onboarding.py.
+    'YSE_App.onboarding.OnboardingGateMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     #'django.middleware.cache.UpdateCacheMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
@@ -769,6 +775,36 @@ EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
     'YSE_App_principalinvestigator',
     'YSE_App_externalservicerun',
 )
+
+# Researcher-profile and user-agreement tables (#627-#630) are personal data
+# (org policy, FERPA): added to the schema exclusions above and refused in
+# any Explorer SQL. Explorer's own default SQL blacklist is kept. The
+# Explorer MySQL user's grants are the hard barrier (docs/researcher-profile.md).
+_PERSONAL_DATA_TABLES = (
+    'YSE_App_researcherprofile',
+    'YSE_App_researcherprofile_observing_experience',
+    'YSE_App_encryptedprofilevalue',
+    'YSE_App_profilefieldhistory',
+    'YSE_App_mentorship',
+    'YSE_App_affiliationhistory',
+    'YSE_App_researchermetrics',
+    'YSE_App_useragreement',
+    'YSE_App_agreementacceptance',
+)
+EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES + _PERSONAL_DATA_TABLES
+EXPLORER_SQL_BLACKLIST = (
+    'ALTER',
+    'RENAME ',
+    'DROP',
+    'TRUNCATE',
+    'INSERT INTO',
+    'UPDATE',
+    'REPLACE',
+    'DELETE',
+    'CREATE TABLE',
+    'GRANT',
+    'OWNER TO',
+) + _PERSONAL_DATA_TABLES
 
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,
@@ -1211,3 +1247,62 @@ FEEDS_MPC_SCREEN_RADIUS_ARCSEC = config.getfloat('feeds', 'MPC_SCREEN_RADIUS_ARC
 FEEDS_MPC_SCREEN_SINCE_DAYS = config.getfloat('feeds', 'MPC_SCREEN_SINCE_DAYS', fallback=3.0)
 FEEDS_MPC_SCREEN_MAX_PER_RUN = config.getint('feeds', 'MPC_SCREEN_MAX_PER_RUN', fallback=50)
 FEEDS_MPC_SCREEN_OBS_CODE = config.get('feeds', 'MPC_SCREEN_OBS_CODE', fallback='500')
+
+# ---------------------------------------------------------------------------
+# Researcher profile, user agreement and onboarding gate (#627-#630;
+# docs/researcher-profile.md). All keys optional.
+#
+# Session and CSRF cookie names/paths (#637). Ziggy serves production, /yse_test/
+# and /yse_experimental/ on one host; with Django's defaults (sessionid /
+# csrftoken, path "/") signing in to one stack replaces the cookies of the
+# others. Per stack, set [site_settings] SESSION_COOKIE_NAME / SESSION_COOKIE_PATH /
+# CSRF_COOKIE_NAME / CSRF_COOKIE_PATH, or the env vars YSE_SESSION_COOKIE_NAME,
+# YSE_SESSION_COOKIE_PATH, YSE_CSRF_COOKIE_NAME, YSE_CSRF_COOKIE_PATH (env wins).
+# Unset or empty keeps Django's defaults. Changing a value logs everyone on that
+# stack out once.
+def _cookie_setting(name, default):
+    value = os.environ.get('YSE_' + name, '').strip()
+    if not value:
+        value = config.get('site_settings', name, fallback='').strip()
+    return value or default
+
+
+SESSION_COOKIE_NAME = _cookie_setting('SESSION_COOKIE_NAME', 'sessionid')
+SESSION_COOKIE_PATH = _cookie_setting('SESSION_COOKIE_PATH', '/')
+CSRF_COOKIE_NAME = _cookie_setting('CSRF_COOKIE_NAME', 'csrftoken')
+CSRF_COOKIE_PATH = _cookie_setting('CSRF_COOKIE_PATH', '/')
+
+# Onboarding gate: signed-in browser users accept the current User Agreement,
+# then complete their profile. On by default; [site_settings]
+# ONBOARDING_GATE_ENABLED: False (or env YSE_ONBOARDING_GATE=0) turns it off.
+_onboarding_env = os.environ.get('YSE_ONBOARDING_GATE', '').strip().lower()
+ONBOARDING_GATE_ENABLED = (
+    _onboarding_env not in ('0', 'false', 'no', 'off') if _onboarding_env
+    else config.getboolean('site_settings', 'ONBOARDING_GATE_ENABLED', fallback=True)
+)
+# Research PUBLIC key for the encrypted profile fields. env YSE_RESEARCH_PUBLIC_KEY
+# (PEM text or a path) or [research] public_key_path. The private key is never
+# on the server. Without a key those fields are not collected; nothing breaks.
+RESEARCH_PUBLIC_KEY = os.environ.get('YSE_RESEARCH_PUBLIC_KEY', '').strip()
+RESEARCH_PUBLIC_KEY_PATH = config.get('research', 'public_key_path', fallback='').strip()
+# Researcher metrics from SciX (formerly ADS), keyed by ORCID. Off by default.
+# The token is an EncryptedCredential with service RESEARCHER_METRICS_SCIX_SERVICE
+# and payload {"token": "..."}; never in settings.ini.
+_metrics_env = os.environ.get('YSE_RESEARCHER_METRICS', '').strip()
+RESEARCHER_METRICS_ENABLED = (
+    _metrics_env == '1' if _metrics_env in ('0', '1')
+    else config.getboolean('research', 'RESEARCHER_METRICS_ENABLED', fallback=False)
+)
+RESEARCHER_METRICS_CRON_MINUTES = config.getint('research', 'RESEARCHER_METRICS_CRON_MINUTES', fallback=43200)
+RESEARCHER_METRICS_SCIX_API_URL = config.get(
+    'research', 'SCIX_API_URL', fallback='https://api.adsabs.harvard.edu/v1').strip().rstrip('/')
+RESEARCHER_METRICS_SCIX_SERVICE = config.get('research', 'SCIX_CREDENTIAL_SERVICE', fallback='scix').strip()
+RESEARCHER_METRICS_HTTP_TIMEOUT_SECONDS = config.getint('research', 'HTTP_TIMEOUT_SECONDS', fallback=30)
+# Rate limiting: pause between users, users per run, and how recent a fetch may be before it is skipped.
+RESEARCHER_METRICS_REQUEST_INTERVAL_SECONDS = config.getfloat('research', 'REQUEST_INTERVAL_SECONDS', fallback=2.0)
+RESEARCHER_METRICS_MAX_PER_RUN = config.getint('research', 'MAX_PER_RUN', fallback=200)
+RESEARCHER_METRICS_MIN_AGE_DAYS = config.getint('research', 'MIN_AGE_DAYS', fallback=25)
+
+# The test runner turns the onboarding gate off for the existing suite (its
+# users have not accepted an agreement); the gate's own tests switch it on.
+TEST_RUNNER = 'YSE_App.test_runner.YSETestRunner'

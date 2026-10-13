@@ -377,3 +377,43 @@ class StaffMFAFlowTests(TestCase):
         response = client.get(reverse('admin:auth_user_changelist'))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'reset_two_factor')
+
+
+@_needs_mfa
+class StaffMFAWithOnboardingGateTests(TestCase):
+    """Two-factor runs before the onboarding gate (develop backport, 2026-10-12).
+
+    StaffMFAMiddleware sends unverified staff to the two-factor pages; the gate
+    must not send them on to /agreement/ (which would bounce back: a loop).
+    Once the code is entered, the gate asks for the agreement as usual.
+    """
+
+    def setUp(self):
+        from YSE_App import onboarding
+        from YSE_App.services import research_crypto
+        from YSE_App.tests.test_onboarding_gate import GATE_ON
+
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        override = override_settings(**GATE_ON)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.staff = User.objects.create_user('mfa_gate_staff', password=_PASSWORD, is_staff=True)
+        self.client = Client()
+        self.client.force_login(self.staff)
+
+    def _location(self, response):
+        self.assertEqual(response.status_code, 302)
+        return response['Location']
+
+    def test_setup_page_is_not_gated(self):
+        self.assertTrue(self._location(self.client.get(reverse('dashboard'))).startswith(reverse('staff_mfa_setup')))
+        self.assertEqual(self.client.get(reverse('staff_mfa_setup')).status_code, 200)
+
+    def test_code_page_is_not_gated_then_agreement_follows(self):
+        device = _enroll(self.staff)
+        self.assertTrue(self._location(self.client.get(reverse('dashboard'))).startswith(reverse('staff_mfa_verify')))
+        self.assertEqual(self.client.get(reverse('staff_mfa_verify')).status_code, 200)
+        self.client.post(reverse('staff_mfa_verify'), {'token': _totp_code(device)})
+        self.assertTrue(self._location(self.client.get(reverse('dashboard'))).startswith(reverse('agreement')))

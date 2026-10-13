@@ -7,6 +7,20 @@ A living checklist for David Jones, in the order things should happen. It replac
 
 **Done:** [#335](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/335) merged to `develop` (5da66de) and deployed green to yse\_test at 18:01 UTC; migrations `0010_dashboard_indexes` (18 min) through 0029 (#341 PhotStat 18:43 UTC to #386 broker streams) already applied on the shared `YSE_test` database, nothing on yse\_test to run for them; [#143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) (develop to master) is conflict-free with 8/8 checks green and its body carries all 66 `Fixes` lines.
 
+**OPTIONAL MITIGATION (2026-10-12): onboarding gate on `/yse_test/`** ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)). Ryan reported that after #633 pages on `/yse_test/` break unless you start on the dashboard. Until the fix PR for #634 is merged and deployed, you may turn the gate off on yse\_test only:
+
+```bash
+cd /data/yse_pz/YSE_PZ_test
+grep -n "ONBOARDING_GATE_ENABLED" YSE_PZ/settings.ini || echo "not set"
+```
+**Expected:** `not set` (or an existing line). Add under the existing `[site_settings]` section of `YSE_PZ/settings.ini` (do not add a second `[site_settings]` header):
+
+```ini
+ONBOARDING_GATE_ENABLED: False
+```
+(or export `YSE_ONBOARDING_GATE=0` in that stack's web environment), then `sudo systemctl restart apache2`.
+**Check:** `/data/yse_pz/yse_test_virtual/bin/python manage.py shell -c "from django.conf import settings; print(settings.ONBOARDING_GATE_ENABLED)"` prints `False`, and a signed-in user who has not accepted the agreement opens a transient page on `/yse_test/` without a redirect. After the fix deploys, delete the line and restart Apache again (the check then prints `True`).
+
 **REQUIRED NOW (2026-10-02): `/yse_test/` did not deploy [#362](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/362).** Ryan merged #362 into `develop` at 07:40 UTC, but Deploy Stack [run 36979824014](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36979824014) stopped at `git fetch` with `error: cannot open .git/FETCH_HEAD: Permission denied`. Some files in the yse_test checkout are no longer owned by `foley`, the runner user, probably from the hotfix commit made there by hand. `/yse_test/` is still on 82b2580; nothing was migrated or restarted.
 
 ```bash
@@ -502,6 +516,94 @@ DETAIL_RADIUS_ARCSEC: 5
 ```
 
 **Expected** the smoke test prints `N messages decoded, 0 saved` (dry run) with no traceback; once the consumer runs, admin > Ingest heartbeats shows a fresh row for the connection and the dashboard shows no stale-stream banner.
+
+<a id="onboarding"></a>
+
+### User agreement, researcher profile and onboarding gate (develop-direct PR; #627-#631) required key step, flags optional
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migrations `0031_researcher_profile` (new tables only) and `0032_seed_user_agreement` (loads agreement v1) run automatically on deploy and are safe on the shared `YSE_test` database. No new Python dependency (`cryptography` is already pinned).
+
+**Effect on deploy:** the onboarding gate is **on by default**. Every signed-in browser user is sent to `/agreement/` and then `/profile/edit/` on their next page view. Scripts, crons and brokers are not affected (`/api/`, Authorization headers, every `login_or_basic_auth_required` ingest view, `query_api`, Slack, callbacks, `.json` status endpoints, static/media). Superusers can always reach `/admin/`.
+
+**Step A (required for the encrypted fields): install ONLY the research public key.** Ryan generates the key pair on his own machine (`python manage.py generate_research_keypair --out-dir <DIR> --passphrase`) and sends David `research_public_key.pem` and its fingerprint. The private key never goes to Ziggy. On each stack (`<CHECKOUT>` = `/data/yse_pz/YSE_PZ_test`, `/data/yse_pz/YSE_PZ_experimental`, later production; `<PYTHON>` is that stack's Python from [section 0](#paths)):
+
+```bash
+install -m 0644 research_public_key.pem <CHECKOUT>/YSE_PZ/research_public_key.pem
+# then in <CHECKOUT>/YSE_PZ/settings.ini:
+#   [research]
+#   public_key_path: <CHECKOUT>/YSE_PZ/research_public_key.pem
+sudo systemctl restart apache2
+```
+
+**Check:**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from YSE_App.services import research_crypto as r; print(r.key_available(), r.current_fingerprint())"
+```
+
+Expected: `True <fingerprint>`, matching what Ryan sent. If it prints `False`, the admin index shows a warning to staff; the site still works and the encrypted fields (country, gender, PhD year) show "not available yet", with the PhD-year requirement waived. **Never copy a file named `research_private_key.pem` to Ziggy.**
+
+**Step B (optional): rollback flag.** To turn the gate off without a deploy, add to `<CHECKOUT>/YSE_PZ/settings.ini` and restart Apache:
+
+```ini
+[site_settings]
+ONBOARDING_GATE_ENABLED: False
+```
+
+(or export `YSE_ONBOARDING_GATE=0` in the web environment). **Check:** a signed-in user who has not accepted the agreement opens `/dashboard/` without a redirect. Remove the line (or set `True`) to turn it back on.
+
+**Step C (optional, off by default): SciX researcher metrics.** Admin > Encrypted credentials > Add: kind Generic, service `scix`, name e.g. "SciX service account", secret `{"token": "<SciX API token of the service account>"}`. Then:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py refresh_researcher_metrics --even-if-disabled --limit 1
+```
+
+Expected: `researcher metrics: fetched 1, skipped 0, failed 0` (or `fetched 0` if no profile has an ORCID yet). To run it monthly from the existing `runcrons` crontab, add to settings.ini:
+
+```ini
+[research]
+RESEARCHER_METRICS_ENABLED: True
+```
+
+Optional `[research]` keys (defaults): `RESEARCHER_METRICS_CRON_MINUTES: 43200`, `REQUEST_INTERVAL_SECONDS: 2.0`, `MAX_PER_RUN: 200`, `MIN_AGE_DAYS: 25`, `SCIX_API_URL: https://api.adsabs.harvard.edu/v1`.
+
+**Step D (optional, recommended): Explorer grants.** The new tables are hidden from SQL Explorer and refused by its SQL blacklist. The hard barrier is the Explorer MySQL user: if it has database-wide `SELECT`, consider replacing that with table-level grants that leave out `YSE_App_researcherprofile*`, `YSE_App_encryptedprofilevalue`, `YSE_App_profilefieldhistory`, `YSE_App_mentorship`, `YSE_App_affiliationhistory`, `YSE_App_researchermetrics`, `YSE_App_useragreement` and `YSE_App_agreementacceptance`. Check with `SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<host>';`.
+
+Production: the same steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
+### Per-stack session and CSRF cookies (develop-direct PR; #637) optional, recommended
+
+Ziggy serves production, `/yse_test/` and `/yse_experimental/` on one host. With Django's default cookie names (`sessionid`, `csrftoken`) and path `/`, signing in to one stack replaces the cookies of the others, so users bounce to login or lose their place. The PR makes the names and paths configurable; **defaults are unchanged**, so nothing changes until you set them. No migration, no dependency.
+
+**Effect:** setting these logs **everyone on that stack out once** (their old cookie is no longer read). Do it at a quiet time.
+
+Set, per stack, in `<CHECKOUT>/YSE_PZ/settings.ini` (or the env vars `YSE_SESSION_COOKIE_NAME`, `YSE_SESSION_COOKIE_PATH`, `YSE_CSRF_COOKIE_NAME`, `YSE_CSRF_COOKIE_PATH`, which win over the file), then `sudo systemctl restart apache2`:
+
+```ini
+# yse_test (/data/yse_pz/YSE_PZ_test)
+[site_settings]
+SESSION_COOKIE_NAME: sessionid_yse_test
+SESSION_COOKIE_PATH: /yse_test/
+CSRF_COOKIE_NAME: csrftoken_yse_test
+CSRF_COOKIE_PATH: /yse_test/
+
+# yse_experimental (/data/yse_pz/YSE_PZ_experimental)
+[site_settings]
+SESSION_COOKIE_NAME: sessionid_yse_experimental
+SESSION_COOKIE_PATH: /yse_experimental/
+CSRF_COOKIE_NAME: csrftoken_yse_experimental
+CSRF_COOKIE_PATH: /yse_experimental/
+```
+
+Production: leave these keys out (it keeps `sessionid`, `csrftoken` and `/`). Add them to the existing `[site_settings]` section rather than a second one. The path must match the URL prefix the stack is served under (with a trailing slash).
+
+**Check:**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from django.conf import settings as s; print(s.SESSION_COOKIE_NAME, s.SESSION_COOKIE_PATH, s.CSRF_COOKIE_NAME, s.CSRF_COOKIE_PATH)"
+```
+
+Expected: the values you set for that stack. Then sign in to `/yse_test/` and `/yse_experimental/` in the same browser: the browser's cookie list shows `sessionid_yse_test` (path `/yse_test/`) and `sessionid_yse_experimental` (path `/yse_experimental/`), and signing in to one no longer signs you out of the other. To undo, remove the keys and restart (one more logout).
 
 <a id="merge"></a>
 
@@ -2331,6 +2433,10 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-12 v51, **nothing new to run**. Develop backported into experimental (develop-direct PRs #633, #635, #639 and David's develop hotfixes): the three develop entries below (develop's own v28-v30) are renumbered v48-v50 in this changelog. On experimental, develop's migrations `0031_researcher_profile` and `0032_seed_user_agreement` sit beside experimental's `0031_spatial_time_indexes` / `0032_api_writer_groups`; the merge migration `0037_merge_develop_profile` (no schema change) joins the two lines. On the shared `YSE_test` database both lines are applied by whichever stack migrates first; the experimental deploy then only records 0037. The onboarding gate exempts the two-factor setup and verify pages, `/feedback/`, `/query_api/`, the API and the facility callbacks.
+* 2026-10-12 v50 (develop v30), optional (recommended). Per-stack session / CSRF cookie names and paths ([#637](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/637)): defaults unchanged; set the four `[site_settings]` keys on yse\_test and yse\_experimental (section "Per-stack session and CSRF cookies"); everyone on that stack is logged out once.
+* 2026-10-12 v49 (develop v29), optional. Onboarding gate under the `/yse_test/` prefix ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)): mitigation (turn the gate off on yse\_test) until the fix deploys; the fix itself needs no server step.
+* 2026-10-12 v48 (develop v28), **required once the develop-direct PR is merged** (develop first, then experimental). User agreement, researcher profile and onboarding gate ([#627](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/627)-[#631](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/631)): migrations 0031/0032 (new tables, agreement v1); the gate is on by default (rollback `ONBOARDING_GATE_ENABLED: False`); **required:** install only the research public key ([step A](#onboarding)); optional SciX metrics and Explorer grants.
 * 2026-10-12 v47, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0036_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
 * 2026-10-12 v46, optional. Prost scratch isolation ([#617](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/617)): each Prost run now writes to its own `prost-*` subdirectory under the scratch base and removes only that subdirectory (it used to delete the whole `[main] ghost_path`, which could break overlapping TNS crons). Nothing required: `[main] ghost_path` keeps working. Optionally add `[main] prost_path=<PROST_SCRATCH_DIR>` to the stack's `settings.ini`; when set it is used instead of `ghost_path`. Stale `prost-*` directories older than one day are cleaned up on the next run. No migration.
 * 2026-10-12 v45, **required** (credential rotation). CasJobs login moved out of the ingest code ([#626](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/626)): new section [Rotate the CasJobs password and set `[casjobs]`](#casjobs-credential). Rotate the CasJobs password and add `[casjobs] wsid` / `password` to each stack's `settings.ini` (or `CASJOBS_WSID` / `CASJOBS_PW` in the cron environment); until then only the PS1-score ingest jobs fail, with a clear message. Also: `PhotometryUploadExample.py` and `scrub_private_data.py` now read their login from the environment. A gitleaks rule now flags inline credentials in Python. No migration.
