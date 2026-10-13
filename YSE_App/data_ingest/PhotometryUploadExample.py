@@ -2,6 +2,7 @@ from django_cron import CronJobBase, Schedule
 import coreapi
 from astropy.time import Time
 import json
+import os
 import numpy as np
 import requests
 from requests.auth import HTTPBasicAuth
@@ -96,7 +97,7 @@ class PhotometryUploads(CronJobBase):
         try:
             r = requests.post(
             url = url, data = json.dumps(TransientUploadDict),
-                auth=HTTPBasicAuth('djones','BossTent1'),
+                auth=HTTPBasicAuth(os.environ['YSE_UPLOAD_USER'], os.environ['YSE_UPLOAD_PASSWORD']),  # set both in the environment
                 timeout=60)
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
             except: print(r.text)

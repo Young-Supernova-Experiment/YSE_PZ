@@ -1,4 +1,5 @@
 import requests
+from YSE_App.common.casjobs_credentials import configure_casjobs_env
 import time
 import imaplib
 import socket
@@ -108,8 +109,7 @@ def get_ps_score(RA, DEC):
     # get the WSID and password if not already defined
     # get your WSID by going to https://mastweb.stsci.edu/ps1casjobs/changedetails.aspx after you login to Casjobs.
 
-    os.environ['CASJOBS_WSID'] = str(1862226089)
-    os.environ['CASJOBS_PW'] = 'tr4nsientsP!z'
+    configure_casjobs_env()  # credentials from settings.ini [casjobs] / env; raises if missing
     query = """select top 1 p.ps_score
     from pointsource_magnitudes_view as p
     inner join fGetNearbyObjEq(%.5f, %.5f, 0.05) nb on p.objid=nb.objid
