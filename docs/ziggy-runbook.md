@@ -2308,11 +2308,31 @@ Everything still waiting on David, with its source. Rows change status here as t
 | Migration 0010 on the shared YSE\_test database | Applied by the experimental deploy of #333, 17:23-17:42 UTC | [run 36604581592](https://github.com/Young-Supernova-Experiment/YSE_PZ/actions/runs/36604581592) | done |
 | `backfill_quality_mask` dry run on YSE\_test (and `--apply` if it reports changes); production after the promotion carrying 0036 | Confirms the mask matches the DataQuality flags; rows that `develop` flags need the `--apply` until develop has this code | [#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80) · [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81) · [section](#quality-mask) | pending |
 
+<a id="casjobs-credential"></a>
+
+### Rotate the CasJobs password and set `[casjobs]` in settings.ini (#626) required
+
+The PS1 star/galaxy-score lookups in the ingest jobs no longer carry a CasJobs login in the code. They read it from settings. The old password was in git history, so rotate it.
+
+**(a) Rotate.** Sign in to MAST CasJobs with the project account and change the password. Note the account's WSID from its profile page.
+
+**(b) Set it on each stack** (`<STACK_SETTINGS_INI>` is that stack's `settings.ini`; the cron user's copy too if it differs). Add:
+```ini
+[casjobs]
+wsid=<CASJOBS_WSID>
+password=<NEW_CASJOBS_PASSWORD>
+```
+Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the environment wins over the file. Nothing needs a restart for the web app, which never reads these.
+
+**(c) Check.** Run any ingest job that calls the PS1 score lookup (for example the DECam cluster upload).
+**Expected:** it runs. If the values are missing, only that job stops, with the message "CasJobs credentials are not configured". The website is unaffected either way.
+
 <a id="changelog"></a>
 
 ## 6 · Changelog
 
-* 2026-10-12 v45, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0036_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
+* 2026-10-12 v46, one check recommended. Data-quality mask ([#80](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/80), [#81](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/81), [#82](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/82), [#480](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/480)): migration `0036_quality_mask` adds `quality_mask`, `pixel_mask` and three nullable metadata columns with MySQL defaults (instant ALTERs on MySQL 8.0.12+) and backfills the mask from the DataQuality flags. It is applied by the deploy. New section [Data-quality mask columns](#quality-mask): check the columns, then run `backfill_quality_mask` as a dry run (and with `--apply` if it reports changes; on yse\_test after `develop` flags points). The good-data filters now read the mask, with identical results. No new dependencies.
+* 2026-10-12 v45, **required** (credential rotation). CasJobs login moved out of the ingest code ([#626](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/626)): new section [Rotate the CasJobs password and set `[casjobs]`](#casjobs-credential). Rotate the CasJobs password and add `[casjobs] wsid` / `password` to each stack's `settings.ini` (or `CASJOBS_WSID` / `CASJOBS_PW` in the cron environment); until then only the PS1-score ingest jobs fail, with a clear message. Also: `PhotometryUploadExample.py` and `scrub_private_data.py` now read their login from the environment. A gitleaks rule now flags inline credentials in Python. No migration.
 * 2026-10-12 v44, optional. Requirements cleanup after GHOST ([#622](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/622)): `opencv-python`, `seaborn`, `joypy`, `imblearn`, `imbalanced-learn`, `rfpimp` and `mastcasjobs` leave `requirements.txt` and `docker/requirements.web.lock`. New optional step (e) in [GHOST removal](#ghost-removal): `pip uninstall` them. No migration.
 * 2026-10-12 v43, one check recommended, the rest optional. GHOST removal ([#613](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/613)): `UpdateGHOST`, `host_associate` and `PS1_PhotoZ` leave `CRON_CLASSES`, `astro-ghost` leaves `requirements.txt`, and `requests` goes to 2.32.4. New section [GHOST removal](#ghost-removal): check that no crontab line names a removed cron; optional pip upgrade on yse\_test\_virtual and production, `pip uninstall astro-ghost`, and deletion of the GHOST database files. No migration.
 * 2026-10-12 v42, optional (off by default). Feedback button ([#443](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/443)): new section [Feedback button](#feedback). Migration `0035_feedback` (one new table, `YSE_App_feedback`; safe on the shared database). New `[site_settings]` keys `FEEDBACK_ENABLED` (default off; env `YSE_FEEDBACK_ENABLED`), `FEEDBACK_MAX_PER_HOUR`, `FEEDBACK_GITHUB_REPO`, `FEEDBACK_GITHUB_LABEL`. The GitHub token is an encrypted credential with service `github_feedback`, never a settings.ini value. Step E's grant generator now also leaves out `YSE_App_feedback`. No new dependency.
