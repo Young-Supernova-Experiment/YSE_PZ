@@ -6,6 +6,7 @@ from YSE_App.models.followup_models import *
 from YSE_App.models.transient_models import *
 from YSE_App.models.host_models import *
 from django.contrib.auth.models import Group
+from YSE_App.common.quality_mask import HostSubtraction, WavelengthMedium, apply_wavelength_medium
 
 class Spectrum(BaseModel):
     class Meta:
@@ -35,7 +36,24 @@ class Spectrum(BaseModel):
 
     groups = models.ManyToManyField(Group, blank=True)
     reference = models.CharField(max_length=512, null=True, blank=True)
-    
+
+    # Data-quality bits, 0 = best (YSE_App/common/quality_mask.py, docs/quality-mask.md).
+    # MySQL DEFAULT 0 too (migration 0036), so code that predates the column still inserts.
+    quality_mask = models.PositiveBigIntegerField(default=0)
+    # What was done; NULL (rows from code that predates the column) counts as unknown.
+    # save() keeps WAVELENGTH_MEDIUM_UNKNOWN (bit 30) in step with it.
+    wavelength_medium = models.CharField(
+        max_length=16, choices=WavelengthMedium.choices, default=WavelengthMedium.UNKNOWN,
+        null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        self.quality_mask = apply_wavelength_medium(self.quality_mask, self.wavelength_medium)
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'wavelength_medium' in update_fields \
+                and 'quality_mask' not in update_fields:
+            kwargs['update_fields'] = list(update_fields) + ['quality_mask']
+        super().save(*args, **kwargs)
+
 class TransientSpectrum(Spectrum):
     ### Entity relationships ###
     # Required
@@ -48,6 +66,8 @@ class TransientSpectrum(Spectrum):
     # Optional
     rlap = models.FloatField(null=True, blank=True)
     snid_plot_file = models.CharField(max_length=512, null=True, blank=True)
+    host_subtraction = models.CharField(
+        max_length=16, choices=HostSubtraction.choices, null=True, blank=True)
 
     def __str__(self):
         return 'Spectrum: %s - %s' % (self.transient.name, self.obs_date.strftime('%m/%d/%Y'))
@@ -78,6 +98,8 @@ class SpecData(BaseModel):
     # Optional
     wavelength_err = models.FloatField(null=True, blank=True)
     flux_err = models.FloatField(null=True, blank=True)
+    # Pixel flags (quality_mask.PixelFlag); any set bit excludes the pixel. MySQL DEFAULT 0 (0036).
+    pixel_mask = models.PositiveSmallIntegerField(default=0)
 
 class TransientSpecData(SpecData):
     ### Entity relationships ###

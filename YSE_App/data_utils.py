@@ -49,6 +49,7 @@ from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
 from YSE_App.services import photstat
 from YSE_App.common.authz import bulk_ingest_denial, upload_denial
+from YSE_App.common.quality_mask import data_quality_mask
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -893,6 +894,9 @@ def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
                 # This row needs its primary key: write what is queued first so
                 # the ids keep the upload order.
                 flush()
+                if dq is not None:
+                    # the through row below is bulk-inserted (no m2m_changed): set the mask here (#81)
+                    e.quality_mask = data_quality_mask([dq.name], 'TransientPhotData')
                 e.save(force_insert=True)
                 if dq is not None:
                     through_rows.append(through(transientphotdata_id=e.id, dataquality_id=dq.id))

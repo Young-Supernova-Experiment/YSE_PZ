@@ -5,6 +5,7 @@ from . import view_utils
 import django_tables2 as tables
 from django_tables2 import RequestConfig
 from django.db.models import F, Q
+from YSE_App.common.quality_mask import legacy_good
 from django.db.models.functions import Length, Substr
 from django.db.models import Count, OuterRef, Prefetch, Subquery, Value, Max, Min
 from django.db.models.functions import Greatest, Coalesce
@@ -168,7 +169,7 @@ def last_phot_summary(transient_ids, stat_rows=None):
                     obs_date__gte=obs_date - datetime.timedelta(days=1))
     points = (
         TransientPhotData.objects.filter(window)
-        .exclude(data_quality__isnull=False)
+        .filter(legacy_good('TransientPhotData'))
         .values_list('photometry__transient_id', 'obs_date', 'band__name',
                      'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point')
     )

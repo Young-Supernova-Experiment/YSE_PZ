@@ -20,6 +20,8 @@ class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = TransientSpectrum
         fields = "__all__"
+        # follows the DataQuality M2M while that is in use (#81); not written through the API
+        read_only_fields = ["quality_mask"]
         extra_kwargs = {
             'url': {'view_name': 'transientspectrum-detail', 'lookup_field': 'id'}
         }
@@ -149,6 +151,8 @@ class HostSpectrumSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = HostSpectrum
         fields = "__all__"
+        # follows the DataQuality M2M while that is in use (#81); not written through the API
+        read_only_fields = ["quality_mask"]
         extra_kwargs = {
             'url': {'view_name': 'hostspectrum-detail', 'lookup_field': 'id'}
         }

@@ -24,14 +24,14 @@ from YSE_App.common.quality_mask import (
     USABLE,
 )
 
-# The v6 tables, transcribed from issue #79.
+# The v6 tables with the v7 additions (23, 41), transcribed from issue #79.
 V6_PHOT = {
     0: 'NOT_PUBLISHED', 2: 'NON_PHOTOMETRIC', 4: 'HIGH_BACKGROUND', 6: 'APERTURE',
     8: 'NOT_FORCED', 10: 'NOT_FULLY_REDUCED', 12: 'NO_SUPERCAL', 14: 'NOT_DIFFERENCED',
-    16: 'NOT_BKG_SUBTRACTED', 18: 'POOR_SEEING', 20: 'LOW_SN', 22: 'TEMPLATE_SUSPECT',
+    16: 'NOT_BKG_SUBTRACTED', 18: 'POOR_SEEING', 20: 'LOW_SN', 22: 'TEMPLATE_SUSPECT', 23: 'BAD_SUBTRACTION',
     24: 'QUICKLOOK', 26: 'BLENDED', 28: 'SHREDDED', 30: 'TRANSIENT_CONTAMINATED',
     32: 'NEAR_EDGE', 34: 'NOT_CALIBRATED', 36: 'CR', 38: 'TRAIL_GHOST', 40: 'BAD_PIXEL',
-    42: 'SATURATED', 50: 'OTHER', 51: 'REJECTED',
+    41: 'MASKED', 42: 'SATURATED', 50: 'OTHER', 51: 'REJECTED',
 }
 V6_PHOT_TRANSIENT_ONLY = {'NON_PHOTOMETRIC', 'APERTURE', 'NOT_FORCED', 'NO_SUPERCAL',
                           'NOT_DIFFERENCED', 'NOT_BKG_SUBTRACTED', 'TEMPLATE_SUSPECT'}
@@ -79,7 +79,8 @@ class SpecTablesTests(SimpleTestCase):
     def test_flags_on_even_bits_except_rejected(self):
         for cls in (PhotFlag, SpecFlag, HostSpecFlag):
             for bit, name in bits(cls).items():
-                if name != 'REJECTED':
+                # v7 put BAD_SUBTRACTION (23) and MASKED (41) on reserved odd bits
+                if name not in ('REJECTED', 'BAD_SUBTRACTION', 'MASKED'):
                     self.assertEqual(bit % 2, 0, (cls.__name__, name))
 
     def test_masks_are_javascript_safe(self):

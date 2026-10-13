@@ -61,7 +61,6 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from django.db import transaction
-from django.db.models import Count
 
 from YSE_App.models.phot_stat_models import (
     EXTRAPOLATED_FIELDS,
@@ -69,6 +68,7 @@ from YSE_App.models.phot_stat_models import (
     datetime_to_mjd,
     mjd_to_datetime,
 )
+from YSE_App.common.quality_mask import is_legacy_flagged
 from YSE_App.services import phot_points
 
 logger = logging.getLogger(__name__)
@@ -272,10 +272,9 @@ def _phot_rows(transient_ids: Sequence[int]):
 
     return (
         TransientPhotData.objects.filter(photometry__transient_id__in=list(transient_ids))
-        .annotate(n_dq=Count('data_quality'))
         .values_list(
             'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
-            'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point', 'n_dq',
+            'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point', 'quality_mask',
         )
     )
 
@@ -286,11 +285,11 @@ def points_by_transient(transient_ids: Sequence[int]) -> Dict[int, List[PhotPoin
     grouped: Dict[int, List[PhotPoint]] = {tid: [] for tid in ids}
     if not ids:
         return grouped
-    for tid, band_id, band_name, obs_date, mag, mag_err, flux, flux_err, zp, n_dq in _phot_rows(ids):
+    for tid, band_id, band_name, obs_date, mag, mag_err, flux, flux_err, zp, mask in _phot_rows(ids):
         grouped[tid].append(PhotPoint(
             mjd=datetime_to_mjd(obs_date), band_id=band_id, band_name=band_name or '',
             mag=mag, mag_err=mag_err, flux=flux, flux_err=flux_err, flux_zero_point=zp,
-            flagged=bool(n_dq),
+            flagged=is_legacy_flagged(mask, 'TransientPhotData'),
         ))
     return grouped
 
