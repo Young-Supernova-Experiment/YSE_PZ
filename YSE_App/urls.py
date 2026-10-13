@@ -17,6 +17,7 @@ from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import service_run_views
+from YSE_App import profile_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
@@ -345,6 +346,16 @@ urlpatterns = [
     re_path(r'^get_legacy_image/(?P<transient_id>[0-9]+)',
         view_utils.get_legacy_image, name='get_legacy_image'),
 
+    # User agreement, researcher profile and "My students" (#627, #628, #630)
+    re_path(r'^agreement/$', profile_views.agreement, name='agreement'),
+    re_path(r'^profile/$', profile_views.researcher_profile, name='researcher_profile'),
+    re_path(r'^profile/edit/$', profile_views.researcher_profile_edit, name='researcher_profile_edit'),
+    re_path(r'^profile/confirm/$', profile_views.researcher_profile_confirm, name='researcher_profile_confirm'),
+    re_path(r'^profile/advisor_suggest\.json$', profile_views.researcher_advisor_suggest,
+            name='researcher_advisor_suggest'),
+    re_path(r'^profile/students/add/$', profile_views.researcher_student_add, name='researcher_student_add'),
+    re_path(r'^profile/students/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_student_update,
+            name='researcher_student_update'),
     # Transient interests (#288) and data access requests (#291)
     re_path(r'^interests/(?P<interest_id>[0-9]+)/status/$', collaboration_views.interest_status,
             name='interest_status'),

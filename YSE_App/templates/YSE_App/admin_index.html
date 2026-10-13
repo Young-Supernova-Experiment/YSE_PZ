@@ -1,0 +1,9 @@
+{% extends "admin/index.html" %}
+{% load research_extras %}
+{% block content %}
+{% research_key_missing as key_missing %}
+{% if key_missing and request.user.is_staff %}
+<ul class="messagelist"><li class="warning">No research public key is installed ([research] public_key_path or YSE_RESEARCH_PUBLIC_KEY): the encrypted profile fields (country, gender, PhD year) are not being collected, and the PhD-year requirement is waived. See docs/researcher-profile.md.</li></ul>
+{% endif %}
+{{ block.super }}
+{% endblock %}

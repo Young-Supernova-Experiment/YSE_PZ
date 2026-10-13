@@ -9,7 +9,7 @@ longer part of the workflow; do not open pull requests against them.
 | Branch | Deployed to | Gets code from |
 | --- | --- | --- |
 | `experimental` | ziggy `/yse_experimental/` (automatic, Deploy Stack workflow) | feature/fix branches, by PR |
-| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR |
+| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR, or a `develop-direct/*` branch merged by Ryan (then develop is merged back into experimental at once) |
 | `master` | production (deployed by hand) | **only** `develop`, by the release PR |
 
 Details, the promotion guard, and dependency notes: [docs/branching.md](docs/branching.md).

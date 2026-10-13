@@ -1,0 +1,116 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>{% if is_new %}Set up your profile{% else %}Edit my profile{% endif %}</h1>
+</section>
+
+<section class="content" id="yse-researcher-profile-edit">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	{% if missing %}
+	<div class="alert alert-warning">Please fill in: {% for name, label in missing %}{{ label }}{% if not forloop.last %}, {% endif %}{% endfor %}.</div>
+	{% endif %}
+	<p class="text-muted small">
+		<span class="text-danger">*</span> required for everyone; other requirements depend on your career level.
+		<i class="fa fa-lock" aria-hidden="true"></i> encrypted; even administrators cannot read it. Stored encrypted values are never shown again: leave a field blank to keep it, or tick "Delete" to remove it.
+		Every change is recorded with its date. See the <a href="{% url 'agreement' %}">User Agreement</a> (section 8) for how this information is used.
+	</p>
+	<form method="post" action="{% url 'researcher_profile_edit' %}" id="yse-profile-form" class="yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
+		{% csrf_token %}
+		<input type="hidden" name="next" value="{{ next_url }}">
+		{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+		<div class="row">
+			<div class="col-lg-6 col-12">
+				<div class="box box-default box-solid">
+					<div class="box-header with-border"><strong>About you</strong></div>
+					<div class="box-body">
+						{% include 'YSE_App/partials/profile_field.html' with field=form.full_name req='all' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.preferred_name %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.pronouns note='Optional; shown to other users.' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.author_name_format %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.institution req='all' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.department req='all' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.career_level req='all' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.career_level_other req='when career level is Other' wrapper_class='yse-career-other' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.orcid req='for postdocs and above' %}
+						<div class="yse-advisor-block">
+							<div class="form-group">
+								<label for="id_advisor_name">Current advisor <span class="text-danger small">(required for students)</span></label>
+								<input type="text" class="form-control form-control-sm yse-user-picker-text" name="advisor_name" id="id_advisor_name" list="yse-advisor-options" autocomplete="off" value="{{ form.advisor_name.value|default:'' }}" placeholder="Start typing a name; pick from the list, or type a name if they are not a YSE-PZ user">
+								<datalist id="yse-advisor-options"></datalist>
+								<input type="hidden" name="advisor_user_id" class="yse-user-picker-id" value="{{ form.advisor_user_id.value|default:'' }}">
+								{% if form.advisor_name.errors %}<div class="text-danger small">{{ form.advisor_name.errors|join:" " }}</div>{% endif %}
+							</div>
+						</div>
+					</div>
+				</div>
+				<div class="box box-default box-solid">
+					<div class="box-header with-border"><strong><i class="fa fa-lock" aria-hidden="true"></i> Encrypted fields</strong></div>
+					<div class="box-body">
+						{% if not key_available %}
+						<p class="text-muted mb-2">These fields are <strong>not available yet</strong>: the research encryption key has not been installed on this server. Nothing is required here until it is.</p>
+						{% endif %}
+						{% for item in encrypted_rows %}
+						<div class="mb-2">
+							{% if item.name == 'country' %}{% include 'YSE_App/partials/profile_field.html' with field=form.country locked=1 %}{% endif %}
+							{% if item.name == 'phd_year' %}{% include 'YSE_App/partials/profile_field.html' with field=form.phd_year locked=1 req='for postdocs and above' %}{% endif %}
+							{% if item.name == 'gender' %}
+								{% include 'YSE_App/partials/profile_field.html' with field=form.gender locked=1 %}
+								{% include 'YSE_App/partials/profile_field.html' with field=form.gender_self locked=1 wrapper_class='yse-gender-self' note=' ' %}
+							{% endif %}
+							<div class="small text-muted">{% if item.row %}Stored: {{ item.row.display }}.{% elif key_available %}Nothing stored.{% endif %}
+							{% if item.row and key_available %}
+								{% if item.name == 'country' %}<label class="ml-2">{{ form.clear_country }} Delete</label>{% endif %}
+								{% if item.name == 'phd_year' %}<label class="ml-2">{{ form.clear_phd_year }} Delete</label>{% endif %}
+								{% if item.name == 'gender' %}<label class="ml-2">{{ form.clear_gender }} Delete</label>{% endif %}
+							{% endif %}</div>
+						</div>
+						{% endfor %}
+					</div>
+				</div>
+			</div>
+			<div class="col-lg-6 col-12">
+				<div class="box box-default box-solid">
+					<div class="box-header with-border"><strong>Research and papers</strong></div>
+					<div class="box-body">
+						{% include 'YSE_App/partials/profile_field.html' with field=form.research_interests %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.website %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.github_username %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.time_zone %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.observing_experience note='Instruments you have observed with (Ctrl/Cmd-click for several).' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.acknowledgment_text %}
+					</div>
+					<div class="box-footer">
+						<button type="submit" class="btn btn-primary">Save profile</button>
+						{% if not is_new %}<a class="btn btn-outline-secondary" href="{% url 'researcher_profile' %}">Cancel</a>{% endif %}
+					</div>
+				</div>
+			</div>
+		</div>
+	</form>
+</section>
+{% include 'YSE_App/partials/user_picker_script.html' %}
+<script>
+(function () {
+	var students = {{ student_levels|safe }};
+	var level = document.getElementById("{{ form.career_level.id_for_label }}");
+	var gender = document.getElementById("{{ form.gender.id_for_label }}");
+	function toggle(selector, show) {
+		document.querySelectorAll(selector).forEach(function (el) { el.style.display = show ? "" : "none"; });
+	}
+	function update() {
+		var v = level ? level.value : "";
+		toggle(".yse-career-other", v === "other");
+		toggle(".yse-advisor-block", students.indexOf(v) !== -1);
+		toggle(".yse-gender-self", gender && gender.value === "self_describe");
+	}
+	if (level) { level.addEventListener("change", update); }
+	if (gender) { gender.addEventListener("change", update); }
+	update();
+})();
+</script>
+{% endblock %}

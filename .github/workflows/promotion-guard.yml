@@ -1,6 +1,9 @@
 name: Promotion guard
 
 # Only `experimental` may merge into `develop`, and only `develop` into `master`.
+# Exception (#631): a `develop-direct/*` branch from this repository may open a
+# PR into `develop` (merged by Ryan; develop is then merged back into
+# experimental at once). It may never target `master`.
 # This job fails for any other pull request into those two branches. Make it a
 # required status check ("promotion guard") on the develop and master branch
 # protection rules so the Merge button greys out; see docs/branching.md.
@@ -30,6 +33,12 @@ jobs:
           fi
           case "$BASE" in
             develop)
+              case "$HEAD" in
+                develop-direct/*)
+                  echo "OK: '$HEAD' is a develop-direct branch; Ryan merges it, then develop is merged back into experimental (docs/branching.md)."
+                  exit 0
+                  ;;
+              esac
               if [ "$HEAD" != "experimental" ]; then
                 echo "::error::Only 'experimental' may be merged into 'develop' (this PR is from '$HEAD'). Merge your branch into 'experimental' first, then open experimental -> develop."
                 exit 1

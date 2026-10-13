@@ -759,3 +759,137 @@ class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
 	list_filter = ("ai_enabled",)
 	search_fields = ("user__username",)
 	raw_id_fields = ("user",)
+
+
+# ---------------------------------------------------------------------------
+# Researcher profile, mentorship, metrics and the user agreement (#627-#630).
+# Encrypted values are write-only: the admin shows only "(encrypted, set on <date>)".
+from YSE_App.models.researcher_models import (  # noqa: E402
+	AffiliationHistory, AgreementAcceptance, EncryptedProfileValue, Mentorship, ProfileFieldHistory,
+	ResearcherMetrics, ResearcherProfile, UserAgreement,
+)
+from YSE_App.services import researcher_profile as _rp  # noqa: E402
+
+# Staff see a warning on the admin index while no research public key is installed.
+admin.site.index_template = 'YSE_App/admin_index.html'
+
+
+class _ReadOnlyAdmin(admin.ModelAdmin):
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(ResearcherProfile)
+class ResearcherProfileAdmin(admin.ModelAdmin):
+	list_display = ("user", "career_level", "institution", "profile_completed_at", "profile_confirmed_at")
+	list_filter = ("career_level",)
+	search_fields = ("user__username", "full_name", "institution")
+	raw_id_fields = ("user",)
+	filter_horizontal = ("observing_experience",)
+	readonly_fields = ("encrypted_fields", "profile_completed_at", "created_at", "updated_at")
+
+	def encrypted_fields(self, obj):
+		if not obj or not obj.pk:
+			return "-"
+		status = _rp.encrypted_status(obj.user)
+		return "; ".join("%s: %s" % (name, row.display()) for name, row in sorted(status.items())) or "(none stored)"
+	encrypted_fields.short_description = "encrypted fields"
+
+	def save_model(self, request, obj, form, change):
+		before = {name: "" for name in _rp.PLAIN_FIELDS}
+		if change and obj.pk:
+			old = ResearcherProfile.objects.filter(pk=obj.pk).first()
+			if old is not None:
+				before = _rp.snapshot(old)
+		obj._history_before = before
+		super().save_model(request, obj, form, change)
+
+	def save_related(self, request, form, formsets, change):
+		super().save_related(request, form, formsets, change)
+		obj = form.instance
+		_rp.record_plain_changes(obj.user, getattr(obj, "_history_before", {}), _rp.snapshot(obj),
+		                         changed_by=request.user)
+
+
+@admin.register(EncryptedProfileValue)
+class EncryptedProfileValueAdmin(_ReadOnlyAdmin):
+	list_display = ("user", "field_name", "display", "key_fingerprint_short", "set_at")
+	list_filter = ("field_name",)
+	search_fields = ("user__username",)
+	fields = ("user", "field_name", "display", "key_fingerprint_short", "set_at")
+	readonly_fields = fields
+
+	def display(self, obj):
+		return obj.display()
+	display.short_description = "value"
+
+	def key_fingerprint_short(self, obj):
+		return (obj.key_fingerprint or "")[:16]
+	key_fingerprint_short.short_description = "key fingerprint"
+
+
+@admin.register(ProfileFieldHistory)
+class ProfileFieldHistoryAdmin(_ReadOnlyAdmin):
+	list_display = ("user", "field_name", "shown_value", "cleared", "changed_at", "changed_by")
+	list_filter = ("field_name", "cleared")
+	search_fields = ("user__username",)
+	fields = ("user", "field_name", "shown_value", "cleared", "changed_at", "changed_by")
+	readonly_fields = fields
+
+	def shown_value(self, obj):
+		if obj.encrypted_value_id:
+			return obj.encrypted_value.display()
+		if obj.field_name in ("country", "phd_year", "gender"):
+			return "(encrypted value deleted)" if obj.cleared else "(encrypted)"
+		return obj.value_plain
+	shown_value.short_description = "value"
+
+
+@admin.register(Mentorship)
+class MentorshipAdmin(admin.ModelAdmin):
+	list_display = ("id", "kind", "mentor_label", "mentee_label", "start_year", "end_year")
+	list_filter = ("kind",)
+	search_fields = ("mentor__username", "mentee__username", "mentor_name", "mentee_name")
+	raw_id_fields = ("mentor", "mentee", "created_by")
+
+
+@admin.register(AffiliationHistory)
+class AffiliationHistoryAdmin(admin.ModelAdmin):
+	list_display = ("user", "institution", "department", "position", "start_year", "end_year")
+	search_fields = ("user__username", "institution")
+	raw_id_fields = ("user",)
+
+
+@admin.register(ResearcherMetrics)
+class ResearcherMetricsAdmin(_ReadOnlyAdmin):
+	list_display = ("user", "source", "fetched_at", "h_index", "citation_count", "refereed_count", "first_author_count")
+	list_filter = ("source",)
+	search_fields = ("user__username",)
+
+
+@admin.register(UserAgreement)
+class UserAgreementAdmin(admin.ModelAdmin):
+	list_display = ("version", "title", "effective_date", "is_current", "acceptance_count")
+	list_filter = ("is_current",)
+	fieldsets = (
+		(None, {
+			"fields": ("version", "title", "effective_date", "is_current", "body"),
+			"description": "Saving a version as current makes every other version not current and asks every "
+			               "user to accept it on their next page view. In the body, {acknowledgements_url} "
+			               "becomes the link to this site's Acknowledgements page.",
+		}),
+	)
+
+	def acceptance_count(self, obj):
+		return obj.acceptances.count()
+	acceptance_count.short_description = "acceptances"
+
+
+@admin.register(AgreementAcceptance)
+class AgreementAcceptanceAdmin(_ReadOnlyAdmin):
+	list_display = ("user", "agreement", "accepted_at")
+	list_filter = ("agreement",)
+	search_fields = ("user__username",)

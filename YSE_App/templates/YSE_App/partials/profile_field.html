@@ -1,0 +1,7 @@
+{% load widget_tweaks %}
+<div class="form-group{% if wrapper_class %} {{ wrapper_class }}{% endif %}">
+	<label for="{{ field.id_for_label }}">{{ field.label }}{% if req == 'all' %} <span class="text-danger" title="Required">*</span>{% elif req %} <span class="text-danger small">(required {{ req }})</span>{% endif %}{% if locked %} <i class="fa fa-lock" aria-hidden="true" title="Encrypted; even administrators cannot read it"></i>{% endif %}</label>
+	{% if field.field.widget.input_type == 'checkbox' %}{% render_field field %}{% else %}{% render_field field class="form-control form-control-sm" %}{% endif %}
+	{% if field.errors %}<div class="text-danger small">{{ field.errors|join:" " }}</div>{% endif %}
+	{% if note %}<small class="form-text text-muted">{{ note }}</small>{% elif field.help_text %}<small class="form-text text-muted">{{ field.help_text }}</small>{% endif %}
+</div>
