@@ -98,6 +98,8 @@ def _marked(func):
     for f in _wrapped_chain(func):
         if getattr(f, 'login_exempt', False):
             return True
+        if getattr(f, 'login_or_basic_auth', False):
+            return True
         if _BASIC_AUTH_QUALNAME in (getattr(f, '__qualname__', '') or ''):
             return True
         if getattr(f, '__module__', None) in _FILE_SERVING_MODULES:
