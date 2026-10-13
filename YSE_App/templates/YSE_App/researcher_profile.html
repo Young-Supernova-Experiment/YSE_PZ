@@ -1,0 +1,150 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>My profile</h1>
+</section>
+
+<section class="content" id="yse-researcher-profile">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+
+	{% if not profile %}
+	<div class="alert alert-warning">You have not filled in your profile yet. <a href="{% url 'researcher_profile_edit' %}">Fill it in now</a>.</div>
+	{% else %}
+	{% if incomplete %}
+	<div class="alert alert-warning">Your profile is missing required information{% if missing %}: {% for name, label in missing %}{{ label }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}. <a href="{% url 'researcher_profile_edit' %}">Complete it</a>.</div>
+	{% elif confirm_due %}
+	<div class="alert alert-info">
+		Is your profile still current?
+		<form method="post" action="{% url 'researcher_profile_confirm' %}" class="d-inline">{% csrf_token %}<button type="submit" class="btn btn-sm btn-outline-primary ml-2">Yes, it is current</button></form>
+		<a class="btn btn-sm btn-outline-secondary ml-1" href="{% url 'researcher_profile_edit' %}">Update it</a>
+	</div>
+	{% endif %}
+
+	<div class="row">
+		<div class="col-lg-7 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Profile</strong>
+					<a class="btn btn-sm btn-primary float-right" href="{% url 'researcher_profile_edit' %}">Edit</a>
+				</div>
+				<div class="box-body">
+					<p class="text-muted small"><span class="text-danger">*</span> required &nbsp; <i class="fa fa-lock" aria-hidden="true"></i> encrypted; even administrators cannot read it</p>
+					<dl class="row mb-0">
+						<dt class="col-sm-4">Full name <span class="text-danger">*</span></dt><dd class="col-sm-8">{{ profile.full_name|default:"—" }}</dd>
+						<dt class="col-sm-4">Preferred name</dt><dd class="col-sm-8">{{ profile.preferred_name|default:"—" }}</dd>
+						<dt class="col-sm-4">Pronouns</dt><dd class="col-sm-8">{{ profile.pronouns|default:"—" }}</dd>
+						<dt class="col-sm-4">Name in author lists</dt><dd class="col-sm-8">{{ profile.author_name_format|default:"—" }}</dd>
+						<dt class="col-sm-4">Institution <span class="text-danger">*</span></dt><dd class="col-sm-8">{{ profile.institution|default:"—" }}</dd>
+						<dt class="col-sm-4">Department <span class="text-danger">*</span></dt><dd class="col-sm-8">{{ profile.department|default:"—" }}</dd>
+						<dt class="col-sm-4">Career level <span class="text-danger">*</span></dt><dd class="col-sm-8">{{ profile.get_career_level_display|default:"—" }}{% if profile.career_level == 'other' %}: {{ profile.career_level_other }}{% endif %}</dd>
+						<dt class="col-sm-4">ORCID iD{% if profile.is_postdoc_or_above %} <span class="text-danger">*</span>{% endif %}</dt><dd class="col-sm-8">{% if profile.orcid %}<a href="https://orcid.org/{{ profile.orcid }}" target="_blank" rel="noopener noreferrer">{{ profile.orcid }}</a>{% else %}—{% endif %}</dd>
+						{% for item in encrypted_rows %}
+						<dt class="col-sm-4">{{ item.label }} <i class="fa fa-lock" aria-hidden="true" title="Encrypted; even administrators cannot read it"></i>{% if item.name == 'phd_year' and profile.is_postdoc_or_above and key_available %} <span class="text-danger">*</span>{% endif %}</dt>
+						<dd class="col-sm-8">{% if not key_available and not item.row %}<span class="text-muted">not available yet</span>{% elif item.row %}{{ item.row.display }}{% else %}—{% endif %}</dd>
+						{% endfor %}
+						{% if profile.is_student %}
+						<dt class="col-sm-4">Current advisor <span class="text-danger">*</span></dt><dd class="col-sm-8">{{ advisor.mentor_label|default:"—" }}</dd>
+						{% endif %}
+						<dt class="col-sm-4">Research interests</dt><dd class="col-sm-8">{{ profile.research_interests|default:"—"|linebreaksbr }}</dd>
+						<dt class="col-sm-4">Website</dt><dd class="col-sm-8">{% if profile.website %}<a href="{{ profile.website }}" target="_blank" rel="noopener noreferrer">{{ profile.website }}</a>{% else %}—{% endif %}</dd>
+						<dt class="col-sm-4">GitHub</dt><dd class="col-sm-8">{{ profile.github_username|default:"—" }}</dd>
+						<dt class="col-sm-4">Time zone</dt><dd class="col-sm-8">{{ profile.time_zone|default:"—" }}</dd>
+						<dt class="col-sm-4">Observing experience</dt><dd class="col-sm-8">{% for i in observing %}{{ i.telescope.name }} / {{ i.name }}{% if not forloop.last %}; {% endif %}{% empty %}—{% endfor %}</dd>
+						<dt class="col-sm-4">Acknowledgment text</dt><dd class="col-sm-8">{{ profile.acknowledgment_text|default:"—"|linebreaksbr }}</dd>
+						<dt class="col-sm-4">Last confirmed</dt><dd class="col-sm-8">{{ profile.profile_confirmed_at|date:"Y-m-d"|default:"never" }}</dd>
+					</dl>
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-5 col-12">
+			{% if mentors %}
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>My advisors and supervisors</strong></div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0">
+						<thead><tr><th>Name</th><th>Kind</th><th>Years</th></tr></thead>
+						<tbody>
+						{% for m in mentors %}<tr><td>{{ m.mentor_label }}</td><td>{{ m.get_kind_display }}</td><td>{{ m.start_year|default:"?" }}–{{ m.end_year|default:"" }}</td></tr>{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+			{% endif %}
+			{% if metrics %}
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Publication metrics</strong> <span class="text-muted small">({{ metrics.get_source_display }}, {{ metrics.fetched_at|date:"Y-m-d" }})</span></div>
+				<div class="box-body">
+					<dl class="row mb-0">
+						<dt class="col-7">h-index</dt><dd class="col-5">{{ metrics.h_index|default:"—" }}</dd>
+						<dt class="col-7">Citations</dt><dd class="col-5">{{ metrics.citation_count|default:"—" }}</dd>
+						<dt class="col-7">Refereed papers</dt><dd class="col-5">{{ metrics.refereed_count|default:"—" }}</dd>
+						<dt class="col-7">First-author papers</dt><dd class="col-5">{{ metrics.first_author_count|default:"—" }}</dd>
+					</dl>
+				</div>
+			</div>
+			{% endif %}
+		</div>
+	</div>
+
+	{% if can_mentor %}
+	<div class="row" id="my-students">
+		<div class="col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>My students</strong></div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0" id="yse-my-students">
+						<thead><tr><th>Student</th><th>Kind</th><th>Start</th><th>End</th><th></th></tr></thead>
+						<tbody>
+						{% for s in students %}
+						<tr>
+							<td>{{ s.mentee_label }}{% if not s.mentee_id %} <span class="text-muted small">(not a YSE-PZ user)</span>{% endif %}</td>
+							<td>{{ s.get_kind_display }}</td>
+							<td>{{ s.start_year|default:"" }}</td>
+							<td>
+								<form method="post" action="{% url 'researcher_student_update' s.pk %}" class="form-inline">
+									{% csrf_token %}
+									<label class="sr-only" for="end-{{ s.pk }}">End year</label>
+									<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="end_year" id="end-{{ s.pk }}" value="{{ s.end_year|default:'' }}" min="1950">
+									<button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+								</form>
+							</td>
+							<td>
+								<form method="post" action="{% url 'researcher_student_update' s.pk %}">
+									{% csrf_token %}<input type="hidden" name="remove" value="1">
+									<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+								</form>
+							</td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="5" class="text-muted">No students listed yet. Students who name you as their advisor appear here automatically.</td></tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				<div class="box-footer">
+					<form method="post" action="{% url 'researcher_student_add' %}" class="form-inline yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
+						{% csrf_token %}
+						<label class="mr-1" for="id_student_name">Add a student</label>
+						<input type="text" class="form-control form-control-sm mr-1 yse-user-picker-text" name="student_name" id="id_student_name" list="yse-student-options" autocomplete="off" placeholder="Name (pick a user or type)">
+						<datalist id="yse-student-options"></datalist>
+						<input type="hidden" name="student_user_id" class="yse-user-picker-id">
+						<select name="kind" class="form-control form-control-sm mr-1" aria-label="Kind">
+							{% for value, label in kind_choices %}<option value="{{ value }}"{% if value == 'current_advisor' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+						</select>
+						<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="start_year" placeholder="Start year" aria-label="Start year" min="1950">
+						<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="end_year" placeholder="End year" aria-label="End year" min="1950">
+						<button type="submit" class="btn btn-sm btn-primary">Add</button>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
+	{% endif %}
+	{% endif %}
+</section>
+{% include 'YSE_App/partials/user_picker_script.html' %}
+{% endblock %}

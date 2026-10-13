@@ -9,7 +9,11 @@ from django.contrib.auth import authenticate, login
   
 # The basic auth decorator
 import base64
+import functools
 def login_or_basic_auth_required(view):
+	# Views wrapped here are called by ingest scripts and crons; the onboarding
+	# gate (YSE_App/onboarding.py) never redirects them (#630).
+	@functools.wraps(view)
 	def _decorator(request, *args, **kwargs):
 		if 'META' in request.__dict__.keys() and 'HTTP_AUTHORIZATION' in request.META.keys():
 			auth_method, credentials = request.META['HTTP_AUTHORIZATION'].split(' ', 1)
@@ -50,6 +54,7 @@ def login_or_basic_auth_required(view):
 				return view(request, *args, **kwargs)
 			else:
 				return HttpResponseForbidden('Incorrect user credentials')
+	_decorator.onboarding_exempt = True
 	return _decorator
 
 

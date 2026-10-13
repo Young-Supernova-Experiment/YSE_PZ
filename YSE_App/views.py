@@ -137,11 +137,10 @@ def auth_login(request):
     if user is not None:
         login(request, user)
         
-        # Redirect to requested page
-        if next_page:
-            return HttpResponseRedirect(next_page)
-        else:
-            return HttpResponseRedirect('/dashboard/')
+        # Redirect to the requested page; otherwise this stack's dashboard. The
+        # dashboard is reversed so it keeps the URL prefix (/yse_test/, #634).
+        from YSE_App.onboarding import safe_next
+        return HttpResponseRedirect(safe_next(request, next_page))
         #render(request,'YSE_App/dashboard.html')
     else:
         return render(request, 'YSE_App/login.html')

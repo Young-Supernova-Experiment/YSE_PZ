@@ -1,0 +1,50 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>YSE-PZ User Agreement</h1>
+</section>
+
+<section class="content" id="yse-agreement">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-8 col-12">
+			{% if agreement %}
+			<div class="box box-default box-solid">
+				<div class="box-header with-border">
+					<strong>{{ agreement.title }}</strong>
+					<span class="text-muted small ml-2">version {{ agreement.version }}, effective {{ agreement.effective_date|date:"Y-m-d" }}</span>
+				</div>
+				<div class="box-body yse-agreement-body">
+					{{ agreement_body|safe }}
+				</div>
+				<div class="box-footer">
+					{% if accepted %}
+					<p class="mb-0 text-success">You accepted this version on {{ accepted.accepted_at|date:"Y-m-d" }}.</p>
+					<a class="btn btn-primary mt-2" href="{{ continue_url }}" id="yse-agreement-continue">Continue</a>
+					{% else %}
+					<form method="post" action="{% url 'agreement' %}{% if next_url %}?next={{ next_url|urlencode:'' }}{% endif %}" id="yse-agreement-form">
+						{% csrf_token %}
+						{{ form.next }}
+						{% if form.agree.errors %}<div class="text-danger small">{{ form.agree.errors|join:" " }}</div>{% endif %}
+						<div class="form-group form-check">
+							<input type="checkbox" class="form-check-input" name="agree" id="id_agree" required>
+							<label class="form-check-label" for="id_agree">{{ form.agree.label }}</label>
+						</div>
+						<button type="submit" class="btn btn-primary">Accept</button>
+						<a class="btn btn-outline-secondary" href="{% url 'auth_logout' %}">Log out</a>
+					</form>
+					{% endif %}
+				</div>
+			</div>
+			{% else %}
+			<div class="alert alert-info">No user agreement is in effect.</div>
+			{% endif %}
+		</div>
+	</div>
+</section>
+{% endblock %}
