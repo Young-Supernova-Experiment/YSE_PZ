@@ -992,6 +992,27 @@ JOB_HANDLER_MODULES = [
     m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
 ]
 
+# AstroScheduler night planner (#654-#656; docs/astroscheduler.md). Off by default:
+# its pages and API endpoints return 404 until [site_settings] ASTROSCHEDULER_ENABLED
+# (or YSE_ASTROSCHEDULER_ENABLED=1) turns them on.
+ASTROSCHEDULER_ENABLED = _flag('YSE_ASTROSCHEDULER_ENABLED', 'site_settings', 'ASTROSCHEDULER_ENABLED', False)
+# Telescope -> AstroScheduler site and instrument: comma-separated
+# "<pattern>:<site id>:<instrument>" rules; the first pattern found in the telescope's
+# lower-cased name wins. Unmatched telescopes are planned as a custom site with
+# AstroScheduler's generic limits.
+ASTROSCHEDULER_SITE_MAP = _str_setting(
+    'YSE_ASTROSCHEDULER_SITE_MAP', 'site_settings', 'ASTROSCHEDULER_SITE_MAP',
+    'shane:lick:kast,lick:lick:kast,keck ii:keck2:kcwi,keck2:keck2:kcwi,keck i:keck1:lris,keck1:keck1:lris',
+)
+# Magnitude used for a target with no photometry (it gets a warning).
+ASTROSCHEDULER_DEFAULT_MAG = float(_str_setting(
+    'YSE_ASTROSCHEDULER_DEFAULT_MAG', 'site_settings', 'ASTROSCHEDULER_DEFAULT_MAG', '19.0'
+))
+# A last detection older than this many days before the night gets a warning.
+ASTROSCHEDULER_STALE_MAG_DAYS = _int_setting(
+    'YSE_ASTROSCHEDULER_STALE_MAG_DAYS', 'site_settings', 'ASTROSCHEDULER_STALE_MAG_DAYS', 7
+)
+
 # Facility APIs (#298): extra adapter modules (comma-separated) and the HTTP
 # timeout for submissions / status polls (docs/facility-apis.md).
 FACILITY_API_MODULES = [

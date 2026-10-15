@@ -1011,6 +1011,54 @@ class SummarySearchAPIView(generics.GenericAPIView):
         })
 
 
+### AstroScheduler night planner (#655, #656) ###
+def _planner_night(night_id):
+    """The classical night, or 404 (also when the planner is turned off, #654)."""
+    from YSE_App.services import night_planner
+
+    if not night_planner.enabled():
+        raise Http404("night planner is not enabled")
+    night = (
+        ClassicalObservingDate.objects
+        .select_related("resource__telescope__observatory", "night_type")
+        .filter(pk=night_id)
+        .first()
+    )
+    if night is None:
+        raise Http404("no observing night %r" % night_id)
+    return night
+
+
+class PlannerTargetsAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/<id>/planner_targets/``: the night's follow-ups that the
+    user may see, in AstroScheduler's target schema (#655)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, night_id):
+        from YSE_App.services import night_planner
+
+        night = _planner_night(night_id)
+        return Response(night_planner.night_targets(night, request.user))
+
+
+class PlannerSolveAPIView(generics.GenericAPIView):
+    """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
+    ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, night_id):
+        from YSE_App.services import night_planner
+
+        night = _planner_night(night_id)
+        try:
+            result = night_planner.solve_for_night(night, request.data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+
 ### `TransientPhotStat` (per-transient photometry statistics, #268) ###
 class TransientPhotStatFilter(django_filters.FilterSet):
     transient_name = django_filters.CharFilter(field_name="transient__name")

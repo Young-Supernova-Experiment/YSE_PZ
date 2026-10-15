@@ -12,6 +12,7 @@
 # current image until the image is rebuilt; nothing imports it. opencv-python, seaborn,
 # joypy, imblearn, imbalanced-learn, rfpimp and mastcasjobs (needed only by astro-ghost)
 # removed by hand too (#622); TensorFlow and its pins stay (#186).
+# astroscheduler added by hand (#653; same pin as requirements.txt). CI installs it too.
 absl-py==2.1.0
 alerce==1.0.1
 antares-client==1.2.0
@@ -21,6 +22,7 @@ astroplan==0.8
 astropy==5.0
 astropy-helpers==4.0.1
 astroquery==0.4.6
+astroscheduler @ https://github.com/UCSC-Transients/AstroScheduler/archive/refs/tags/v1.0.0.tar.gz
 astunparse==1.6.3
 attrs==21.2.0
 auditlog==0.0.5
