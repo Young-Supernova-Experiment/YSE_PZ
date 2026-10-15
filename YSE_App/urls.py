@@ -553,6 +553,17 @@ api_url_patterns = [
         name='api-transient-comments',
     ),
     re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
+    # AstroScheduler night planner (#655, #656); 404 unless ASTROSCHEDULER_ENABLED (#654)
+    re_path(
+        r'^api/observing_nights/(?P<night_id>[0-9]+)/planner_targets/$',
+        api_views.PlannerTargetsAPIView.as_view(),
+        name='api-planner-targets',
+    ),
+    re_path(
+        r'^api/observing_nights/(?P<night_id>[0-9]+)/planner_solve/$',
+        api_views.PlannerSolveAPIView.as_view(),
+        name='api-planner-solve',
+    ),
     re_path(r'^api/', include(router.urls)),
     re_path(r'^api/schema/$', schema_view),
     re_path(

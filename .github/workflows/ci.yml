@@ -106,6 +106,8 @@ jobs:
                    grep -i -m1 "^$p==" ../requirements.txt || { echo "::error::no $p pin in requirements.txt" >&2; exit 1; }
                  done)
           PINS="$PINS $(grep -m1 '^gunicorn==' requirements.web.lock)"
+          # AstroScheduler's solver (#653): not in the image yet; its own deps are already pinned.
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^astroscheduler ' ../requirements.txt)"
           echo "$PINS"
           docker exec ysepz_web_container pip3 install --quiet --no-deps $PINS
           docker compose restart web

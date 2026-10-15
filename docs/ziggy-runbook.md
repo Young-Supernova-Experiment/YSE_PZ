@@ -802,6 +802,37 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 (or set `YSE_LOGIN_REQUIRED_MIDDLEWARE=0` in the Apache / WSGI environment; the env var wins), then `sudo systemctl restart apache2`. **Check** the second curl above now returns `302` from the view's own login decorator, or `200` for a view without one. Views keep their own login decorators either way. Report what broke so the allowlist can be fixed, then remove the line.
 
+<a id="astroscheduler"></a>
+
+### AstroScheduler night planner, phase 2 (2026-10-15, #653-#656) required on any venv the deploy does not install; flag optional
+
+`requirements.txt` adds one package: `astroscheduler`, pinned to the v1.0.1 release tarball on GitHub (no git needed). It needs only astropy, astroplan, numpy and pytz, which are already pinned, and it supports Python 3.8. The Deploy Stack job installs it into the yse\_experimental venv by itself. It does NOT install into `yse_test_virtual` (yse\_test, and Apache for yse\_experimental per [#187](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/187)) or into production. Run this there, once the stack's checkout has this change. There is no migration.
+
+```
+# <STACK_DIR> / <STACK_PYTHON> from section 0; <VENV_OWNER>: owner of the venv directory
+sudo -u <VENV_OWNER> <STACK_PYTHON> -m pip install --no-deps "$(grep -m1 '^astroscheduler ' <STACK_DIR>/requirements.txt)"
+<STACK_PYTHON> -c "import astroscheduler, astroscheduler.api; print(astroscheduler.__version__)"
+<STACK_PYTHON> -m pip check
+sudo systemctl restart apache2
+```
+
+**Expected:**
+- the install ends with `Successfully installed astroscheduler-1.0.1`;
+- the import prints `1.0.1`;
+- `pip check` prints `No broken requirements found.` (any line it prints for another package was there before).
+
+The planner is **off** by default, and its endpoints return 404 until it is turned on. It does nothing on its own.
+
+**Optional, yse\_experimental only, when Ryan wants to try it:** add this under the existing `[site_settings]` section of that stack's `YSE_PZ/settings.ini`, then `sudo systemctl restart apache2`:
+
+```ini
+ASTROSCHEDULER_ENABLED: True
+```
+
+**Check:** logged in on `/yse_experimental/`, open `/yse_experimental/api/observing_nights/<NIGHT_ID>/planner_targets/`, where `<NIGHT_ID>` is any classical observing night's id (Admin > Classical observing dates). It returns JSON with `targets` and `observatory`. If the telescope's name does not contain "shane", "lick", "keck i" or "keck ii", `warnings` names it. In that case, report the telescope names so `ASTROSCHEDULER_SITE_MAP` can be set ([docs/astroscheduler.md](astroscheduler.md)).
+
+**Rollback:** remove the `ASTROSCHEDULER_ENABLED` line and restart Apache. The package can stay installed; nothing imports it while the flag is off.
+
 ## 2 · Before merging #143 to master David
 
 [PR #143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) promotes `develop` (5da66de, 270 commits, 341 files) to `master` (dc70630). Only David merges it. Nothing deploys automatically from that merge: `deploy.yml` covers `experimental` and `develop` only.
@@ -2609,6 +2640,7 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-15 v58, **required on venvs the deploy does not install** (yse\_test, Apache's venv for yse\_experimental, production); flag optional. AstroScheduler night planner, phase 2 ([#653](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/653)-[#656](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/656)): install the pinned `astroscheduler` 1.0.1 package (no migration). The planner targets and solve APIs stay off until `ASTROSCHEDULER_ENABLED: True` is set; enable it on yse\_experimental only when Ryan asks ([section "AstroScheduler night planner"](#astroscheduler)).
 * 2026-10-15 v57, **nothing new to run**. Develop backported into experimental again (develop-direct PRs [#641](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/641), [#642](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/642), [#644](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/644), [#649](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/649) [#651](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/651) and David's forced-phot URL update): the five develop entries below (develop's own v31-v35) are renumbered v52-v56 in this changelog. On experimental, develop's migrations `0033_group_profiles` to `0037_data_sharing_delegates` sit beside experimental's `0033_photstat_extrapolated` to `0037_merge_develop_profile`; the new no-op merge migration `0038_merge_develop_groups` joins the two lines. All of develop's migrations are already applied on the shared `YSE_test` database by the develop deploy, so the experimental deploy only records `0038`. The develop sections above (Research teams, PIs on private data, Who may share private data, Self-service signup) apply to yse\_experimental unchanged; on experimental the signup, email-confirmation and invitation-link pages are reachable signed out under the login-required default, and staff two-factor sign-in (when on) skips only the invitation and email-confirmation links, so their tokens stay out of `?next=`; `/teams/`, `/teams/join/`, `/settings/` and `/data_sharing_deputies/` ask unverified staff for the code first, then the onboarding gate applies. SQL Explorer: the PI tables are visible again on experimental too (Ryan, 2026-10-13, #643); if you limited the Explorer database user's grants ([Step E](#authz-flags)), see the note there.
 * 2026-10-15 v56 (develop v35), nothing required. Data-access requests with no PI notify superusers only, and `YSE_App_datasharingdelegate` is hidden from SQL Explorer; add it to table-level Explorer grant exclusions if you use them ([#650](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/650)).
 * 2026-10-13 v55 (develop v34), nothing required (link PI accounts first so PIs, not only staff, can decide). Only PIs and their deputies share private data ([#447](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/447)): migration 0037 (one new table, one nullable column); allocation-PI fallback; logged staff override; `/data_sharing_deputies/`; TNS references; PI tables visible in Explorer again ([section "Who may share private data"](#data-sharers)).
