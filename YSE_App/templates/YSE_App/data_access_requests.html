@@ -24,7 +24,7 @@
 						<li class="nav-item"><a class="nav-link{% if box == 'mine' %} active{% endif %}" href="{% url 'data_access_requests' %}?box=mine">Mine</a></li>
 					</ul>
 					<span class="ml-auto small text-muted">
-						{% if box == 'mine' %}Requests you sent.{% elif box == 'decided' %}Requests to your groups that were accepted or declined.{% else %}Pending requests to {% if user.is_staff %}any group (staff){% else %}your collaboration groups{% endif %}.{% endif %}
+						{% if box == 'mine' %}Requests you sent.{% elif box == 'decided' %}Requests for data you share that were accepted or declined.{% else %}Pending requests for data you are a PI or a deputy of{% if user.is_staff %}; as staff you see every request and may decide as an administrator (logged){% endif %}.{% endif %}
 					</span>
 				</div>
 				<div class="box-body p-0 table-responsive">
@@ -46,13 +46,15 @@
 								<td><small>{{ r.message|default:"-" }}</small></td>
 								<td>
 									<span class="badge {% if r.status == 'accepted' %}badge-success{% elif r.status == 'declined' %}badge-secondary{% else %}badge-info{% endif %}">{{ r.status_label }}</span>
-									{% if r.decided_by %}<br><small class="text-muted">by {{ r.decided_by.username }} {{ r.decided_at|date:"Y-m-d H:i" }}</small>{% endif %}
+									{% if r.decided_by %}<br><small class="text-muted">by {{ r.decided_by.username }}{% if r.decided_as %} ({{ r.decided_as_label }}){% endif %} {{ r.decided_at|date:"Y-m-d H:i" }}</small>{% endif %}
 									{% if r.note %}<br><small>&ldquo;{{ r.note }}&rdquo;</small>{% endif %}
 									{% if r.status == 'accepted' %}<br><small class="text-muted">{{ r.granted_count }} dataset{{ r.granted_count|pluralize }} shared</small>{% endif %}
 								</td>
 								<td><small>{{ r.created_date|date:"Y-m-d H:i" }}</small></td>
 								{% if box == 'inbox' %}
 								<td class="text-nowrap">
+									{% if r.no_named_decider %}<div class="small text-warning yse-dar-no-pi">No PI assigned: only administrators can decide.</div>{% endif %}
+									{% if r.staff_override and not r.no_named_decider %}<div class="small text-muted yse-dar-staff-override">You would decide as an administrator (logged).</div>{% endif %}
 									{% if r.can_decide %}
 									<form method="post" action="{% url 'data_access_decide' r.id %}" class="form-inline yse-dar-decide-form">
 										{% csrf_token %}
@@ -62,7 +64,7 @@
 										<button type="submit" name="decision" value="decline" class="btn btn-sm btn-outline-danger">Decline</button>
 									</form>
 									{% else %}
-									<span class="small text-muted">members of {{ r.owner_group.name }} decide</span>
+									<span class="small text-muted">the data's PIs and their deputies decide</span>
 									{% endif %}
 								</td>
 								{% endif %}
@@ -81,7 +83,8 @@
 				<div class="box-header with-border"><strong>How it works</strong></div>
 				<div class="box-body small">
 					<p class="mb-1">When a transient has photometry or spectra restricted to a collaboration group you are not in, its Spectra and Detailed Photometry tabs show how many datasets are hidden and let you ask the owner group for access.</p>
-					<p class="mb-1">Members of the owner group are notified and decide here. <strong>Accept</strong> adds the requester's chosen group to the data's collaboration groups (the same mechanism every visibility check uses); <strong>Decline</strong> records a note. The requester is notified either way.</p>
+					<p class="mb-1">The data's PIs and the deputies they designated are notified and decide here; group members and group owners do not. Data without an explicit PI takes its allocation's PI; data with neither can only be shared by an administrator, and administrators' decisions are logged. <strong>Accept</strong> adds the requester's chosen group to the datasets you may share (the same mechanism every visibility check uses); <strong>Decline</strong> records a note. The requester is notified either way.</p>
+					<p class="mb-1">PIs: <a href="{% url 'data_sharing_deputies' %}">designate deputies</a> who may share your data.</p>
 					<p class="mb-0">REST: <code>/api/dataaccessrequests/</code> with <code>accept</code> / <code>decline</code> actions.</p>
 				</div>
 			</div>

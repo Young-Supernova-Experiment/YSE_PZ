@@ -12,7 +12,8 @@ so crons, brokers and scripts are not affected; nor are non-staff users.
 For a signed-in staff or superuser session that has not entered a code:
 
 * the two-factor pages, sign-in, sign-out and the public pages of
-  ``YSE_App.login_required.PUBLIC_URL_NAMES`` are served as usual;
+  ``YSE_App.login_required.PUBLIC_URL_NAMES`` are served as usual, and so are
+  the token links of ``TOKEN_LINK_URL_NAMES`` (team invitation, email confirmation);
 * a GET or HEAD for any other page (including the admin and SQL Explorer)
   redirects to the code page, or to setup if the user has no authenticator
   yet; other methods and API views get 403;
@@ -33,6 +34,12 @@ MFA_URL_NAMES = frozenset({
     'staff_mfa_backup_codes',
 })
 SIGN_IN_OUT_URL_NAMES = frozenset({'auth_login', 'auth_logout', 'login', 'logout'})
+# Links that carry a secret token and give no data access by themselves (develop
+# backport, 2026-10-15). Sending an unverified staff session to the code page from
+# here would copy the token into ``?next=``. ``group_invite_link`` only stores the
+# token's hash in the session and redirects to the token-free ``/teams/join/``, which
+# is checked as usual; ``signup_verify_email`` confirms the address the token names.
+TOKEN_LINK_URL_NAMES = frozenset({'group_invite_link', 'signup_verify_email'})
 
 _FILE_SERVING_MODULES = frozenset({'django.views.static', 'django.contrib.staticfiles.views'})
 
@@ -51,7 +58,8 @@ def view_is_exempt(view_func, resolver_match):
             # rest_framework:login); admin:index is not the public 'index'.
             if name in ('login', 'logout'):
                 return True
-        elif name in MFA_URL_NAMES or name in SIGN_IN_OUT_URL_NAMES or name in _login_required.PUBLIC_URL_NAMES:
+        elif (name in MFA_URL_NAMES or name in SIGN_IN_OUT_URL_NAMES or name in TOKEN_LINK_URL_NAMES
+              or name in _login_required.PUBLIC_URL_NAMES):
             return True
     if _is_sign_out_view(view_func):
         return True

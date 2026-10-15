@@ -417,3 +417,89 @@ class StaffMFAWithOnboardingGateTests(TestCase):
         self.assertEqual(self.client.get(reverse('staff_mfa_verify')).status_code, 200)
         self.client.post(reverse('staff_mfa_verify'), {'token': _totp_code(device)})
         self.assertTrue(self._location(self.client.get(reverse('dashboard'))).startswith(reverse('agreement')))
+
+
+_TEAM_PAGES = ('team_list', 'group_invite_accept', 'user_settings', 'data_sharing_deputies')
+_INVITE_TOKEN = 'synthetic-invite-token-0123456789abcdefABCDEF'
+
+
+class TokenLinkExemptionTests(SimpleTestCase):
+    """Develop's token links skip the two-factor check (runs with the flag off too)."""
+
+    def test_token_links_exempt_and_team_pages_not(self):
+        from django.urls import resolve
+
+        from YSE_App.staff_mfa import middleware
+
+        for name, args in (('group_invite_link', [_INVITE_TOKEN]), ('signup_verify_email', ['x' * 40])):
+            with self.subTest(name=name):
+                match = resolve(reverse(name, args=args))
+                self.assertTrue(middleware.view_is_exempt(match.func, match), name)
+        for name in _TEAM_PAGES + ('signup', 'account_email'):
+            with self.subTest(name=name):
+                match = resolve(reverse(name))
+                self.assertFalse(middleware.view_is_exempt(match.func, match), name)
+
+
+@_needs_mfa
+class StaffMFATeamPagesTests(TestCase):
+    """Develop's team, settings and deputies pages under two-factor and the gate (backport 2026-10-15)."""
+
+    def setUp(self):
+        from YSE_App import onboarding
+        from YSE_App.services import research_crypto
+
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        self.staff = User.objects.create_user('mfa_team_staff', password=_PASSWORD, is_staff=True)
+        self.member = User.objects.create_user('mfa_team_member', password=_PASSWORD)
+
+    def _client(self, user):
+        client = Client()
+        client.force_login(user)
+        return client
+
+    def _location(self, response):
+        self.assertEqual(response.status_code, 302)
+        return response['Location']
+
+    def test_unverified_staff_sent_to_code_page_from_team_pages(self):
+        _enroll(self.staff)
+        client = self._client(self.staff)
+        for name in _TEAM_PAGES:
+            with self.subTest(name=name):
+                self.assertTrue(self._location(client.get(reverse(name))).startswith(reverse('staff_mfa_verify')))
+
+    def test_invite_link_token_stays_out_of_the_code_page_next(self):
+        _enroll(self.staff)
+        client = self._client(self.staff)
+        location = self._location(client.get(reverse('group_invite_link', args=[_INVITE_TOKEN])))
+        self.assertEqual(location, reverse('group_invite_accept'))
+        location = self._location(client.get(location))
+        self.assertTrue(location.startswith(reverse('staff_mfa_verify')), location)
+        self.assertNotIn(_INVITE_TOKEN, location)
+
+    def test_non_staff_reach_team_pages(self):
+        client = self._client(self.member)
+        for name in ('team_list', 'user_settings', 'data_sharing_deputies'):
+            with self.subTest(name=name):
+                self.assertEqual(client.get(reverse(name)).status_code, 200)
+
+    def test_with_gate_on_code_first_then_agreement(self):
+        from YSE_App.tests.test_onboarding_gate import GATE_ON
+
+        device = _enroll(self.staff)
+        client = self._client(self.staff)
+        with override_settings(**GATE_ON):
+            self.assertTrue(self._location(client.get(reverse('team_list'))).startswith(reverse('staff_mfa_verify')))
+            client.post(reverse('staff_mfa_verify'), {'token': _totp_code(device)})
+            for name in _TEAM_PAGES:
+                with self.subTest(name=name):
+                    self.assertTrue(self._location(client.get(reverse(name))).startswith(reverse('agreement')))
+            # The invite link is not gated and drops the token before the gate sees the request.
+            location = self._location(client.get(reverse('group_invite_link', args=[_INVITE_TOKEN])))
+            self.assertEqual(location, reverse('group_invite_accept'))
+            location = self._location(client.get(location))
+            self.assertTrue(location.startswith(reverse('agreement')), location)
+            self.assertNotIn(_INVITE_TOKEN, location)

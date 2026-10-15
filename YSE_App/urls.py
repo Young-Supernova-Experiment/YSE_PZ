@@ -20,6 +20,8 @@ from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
 from YSE_App import profile_views
+from YSE_App import group_views
+from YSE_App import signup_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feedback_views,
@@ -370,6 +372,30 @@ urlpatterns = [
     re_path(r'^profile/students/add/$', profile_views.researcher_student_add, name='researcher_student_add'),
     re_path(r'^profile/students/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_student_update,
             name='researcher_student_update'),
+    # Research teams, invitation links (#445) and user settings (#440)
+    re_path(r'^settings/$', group_views.user_settings, name='user_settings'),
+    re_path(r'^teams/$', group_views.team_list, name='team_list'),
+    re_path(r'^teams/join/$', group_views.group_invite_accept, name='group_invite_accept'),
+    re_path(r'^teams/join/(?P<token>[A-Za-z0-9_-]{20,128})/$', group_views.group_invite_link,
+            name='group_invite_link'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/$', group_views.team_detail, name='team_detail'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/update/$', group_views.team_update, name='team_update'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/invitations/$', group_views.team_invite_create,
+            name='team_invite_create'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/invitations/(?P<invitation_id>[0-9]+)/revoke/$',
+            group_views.team_invite_revoke, name='team_invite_revoke'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/members/(?P<user_id>[0-9]+)/remove/$',
+            group_views.team_member_remove, name='team_member_remove'),
+    # Self-service signup and membership requests (#448); 404 unless SELF_SIGNUP_ENABLED
+    re_path(r'^signup/$', signup_views.signup, name='signup'),
+    re_path(r'^signup/verify/(?P<token>[A-Za-z0-9_=-]{20,512})/$', signup_views.signup_verify_email,
+            name='signup_verify_email'),
+    re_path(r'^settings/email/$', signup_views.account_email, name='account_email'),
+    re_path(r'^teams/requests/$', signup_views.team_request_create, name='team_request_create'),
+    re_path(r'^teams/requests/(?P<request_id>[0-9]+)/cancel/$', signup_views.team_request_cancel,
+            name='team_request_cancel'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/requests/(?P<request_id>[0-9]+)/decide/$',
+            signup_views.team_request_decide, name='team_request_decide'),
     # Transient interests (#288) and data access requests (#291)
     re_path(r'^interests/(?P<interest_id>[0-9]+)/status/$', collaboration_views.interest_status,
             name='interest_status'),
@@ -388,6 +414,7 @@ urlpatterns = [
             name='data_access_pending_count'),
     re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/decide/$', collaboration_views.data_access_decide,
             name='data_access_decide'),
+    re_path(r'^data_sharing_deputies/$', collaboration_views.data_sharing_deputies, name='data_sharing_deputies'),
     # Background job queue (#263) and notifications (#266)
     re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
     re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),

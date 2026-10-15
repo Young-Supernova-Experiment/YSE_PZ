@@ -61,6 +61,8 @@ EXPECTED_PUBLIC_NAMES = {
     "login", "logout", "password_reset", "password_reset_done",
     "password_reset_confirm", "password_reset_complete",
     "slack_events", "external_service_run_callback",
+    # develop backport 2026-10-15 (#445, #448): login_exempt views from develop
+    "signup", "signup_verify_email", "group_invite_link",
 }
 
 # Views behind YSE_App.basicauth.login_or_basic_auth_required: scripts and crons
@@ -207,6 +209,53 @@ class PublicPagesStayPublicTests(TestCase):
     def test_anonymous_api_request_is_answered_by_drf_not_redirected(self):
         response = Client().get("/api/transients/")
         self.assertNotEqual(response.status_code, 302)
+
+
+class DevelopSignedOutViewsTests(TestCase):
+    """Develop's views that must work signed out (backport 2026-10-15, #445, #448)."""
+
+    def test_views_carry_the_real_login_exempt_marker(self):
+        from YSE_App import group_views, signup_views
+
+        # The shim in group_views / signup_views imports the real decorator here.
+        self.assertIs(group_views.login_exempt, lr.login_exempt)
+        self.assertIs(signup_views.login_exempt, lr.login_exempt)
+        for name, args in (("signup", []), ("signup_verify_email", ["x" * 40]),
+                           ("group_invite_link", ["x" * 43])):
+            with self.subTest(name=name):
+                match = get_resolver().resolve(reverse(name, args=args))
+                self.assertTrue(lr.view_is_public(match.func, match), name)
+
+    def test_signed_out_invite_link_uses_the_views_own_no_referrer_redirect(self):
+        link = reverse("group_invite_link", args=["x" * 43])
+        response = Client().get(link)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/login/?next="), response["Location"])
+        self.assertEqual(response["Referrer-Policy"], "no-referrer")
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+    @override_settings(SELF_SIGNUP_ENABLED=True, SELF_SIGNUP_MIN_FILL_SECONDS=0)
+    def test_signup_pages_reachable_signed_out(self):
+        self.assertEqual(Client().get(reverse("signup")).status_code, 200)
+        # A bad token is the view's own 400, not a login redirect.
+        self.assertEqual(Client().get(reverse("signup_verify_email", args=["x" * 40])).status_code, 400)
+
+    @override_settings(SELF_SIGNUP_ENABLED=False)
+    def test_signup_off_is_404_not_a_login_redirect(self):
+        self.assertEqual(Client().get(reverse("signup")).status_code, 404)
+
+    def test_password_reset_pages_reachable_signed_out(self):
+        for name in ("password_reset", "password_reset_done", "password_reset_complete"):
+            with self.subTest(name=name):
+                self.assertEqual(Client().get(reverse(name)).status_code, 200)
+
+    def test_new_signed_in_pages_still_require_login(self):
+        for name in ("team_list", "group_invite_accept", "user_settings", "account_email",
+                     "data_sharing_deputies"):
+            with self.subTest(name=name):
+                response = Client().get(reverse(name))
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(response["Location"].startswith("/login/?next="), response["Location"])
 
 
 class BasicAuthStillWorksTests(TestCase):

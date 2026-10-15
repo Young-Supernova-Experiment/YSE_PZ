@@ -18,6 +18,13 @@ from YSE_App.filters.transient_search import TransientSearchFilterSet
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
 
+
+def _truthy(value) -> bool:
+    """A JSON boolean or a form-style flag ("1", "true", "on")."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "on", "true", "yes")
+
 ### `Additional Info` ViewSets ###
 class TransientWebResourceViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = TransientWebResource.objects.all()
@@ -343,7 +350,8 @@ class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateR
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser(self.request.user)
-        return allowed_phot.prefetch_related('groups')
+        # 'pis' (#446): one query per page, not one per row (test_api_perf_auth).
+        return allowed_phot.prefetch_related('groups', 'pis')
 
 class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostPhotometrySerializer
@@ -468,7 +476,8 @@ class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
-        return allowed_spec.prefetch_related('groups', 'data_quality')
+        # 'pis' (#446): one query per page, not one per row (test_api_perf_auth).
+        return allowed_spec.prefetch_related('groups', 'data_quality', 'pis')
 
 class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpectrumSerializer
@@ -1396,6 +1405,8 @@ class TransientInterestViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
             data["transient"], self.request.user, data.get("title", ""), group=data.get("group"),
             role=data.get("role") or TransientInterest.ROLE_LEAD, description=data.get("description") or "",
             status=data.get("status") or TransientInterest.STATUS_PLANNED,
+            notify_pis=_truthy(self.request.data.get("notify_pis")),
+            request_data=_truthy(self.request.data.get("request_data")),
         )
 
     def _update(self, serializer):
@@ -1532,7 +1543,8 @@ class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixi
             qs = DataAccessRequest.objects.select_related(
                 "requester", "transient", "owner_group", "target_group", "decided_by")
             if not (user.is_staff or user.is_superuser):
-                qs = qs.filter(Q(requester=user) | Q(owner_group__in=user.groups.all()))
+                decidable = dar.requests_to_decide(user, pending_only=False).values("pk")
+                qs = qs.filter(Q(requester=user) | Q(owner_group__in=user.groups.all()) | Q(pk__in=decidable))
         return dar.filter_requests(qs, params).distinct()
 
     def perform_create(self, serializer):

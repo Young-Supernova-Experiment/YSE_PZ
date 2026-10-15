@@ -15,9 +15,10 @@ It never touches requests that crons, scripts, brokers and integrations make:
   add_transient_phot, add_transient_spec, upload_spectrum, add_gw_candidate,
   add_yse_survey_*, the downloads, query_api, ...) and the views decorated with
   ``onboarding_exempt`` below;
-* the URL names in ``EXEMPT_URL_NAMES`` (Slack events, login/logout, password
-  reset and change, the agreement, profile and acknowledgements pages, and on
-  experimental the two-factor pages and the feedback POST);
+* the URL names in ``EXEMPT_URL_NAMES`` (Slack events, login/logout, signup and
+  its email confirmation link, password reset and change, the agreement, profile
+  and acknowledgements pages, and on experimental the two-factor pages and the
+  feedback POST);
 * DRF views wherever they are routed;
 * static and media files, ``.json`` endpoints (status and health polling),
   AJAX/fetch requests and non-GET methods;
@@ -54,6 +55,8 @@ EXEMPT_URL_NAMES = frozenset({
     "auth_login", "auth_logout", "login", "logout",
     "password_change", "password_change_done",
     "password_reset", "password_reset_done", "password_reset_confirm", "password_reset_complete",
+    # self-service signup and its emailed confirmation link (#448)
+    "signup", "signup_verify_email",
     # the onboarding pages themselves and the acknowledgements page they link to
     "agreement", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
     "researcher_student_add", "researcher_student_update", "researcher_profile_confirm",

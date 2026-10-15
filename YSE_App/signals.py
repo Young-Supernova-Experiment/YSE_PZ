@@ -269,3 +269,19 @@ def favorite_activity_on_followup(sender, instance, created, **kwargs):
         return
     favorites._safely(favorites.on_followup, instance, created=created,
                       old_status=getattr(instance, '_favorite_old_status', ''))
+
+
+# ---- group profiles (#445, #440) -------------------------------------------
+# Every new auth Group gets a GroupProfile (active, no owners); system groups by
+# name (settings.YSE_SYSTEM_GROUP_NAMES) are marked is_system.
+
+from django.contrib.auth.models import Group as _AuthGroup  # noqa: E402
+
+
+@receiver(post_save, sender=_AuthGroup, dispatch_uid="yse_group_profile_on_create")
+def create_group_profile(sender, instance, created, **kwargs):
+    if not created or kwargs.get('raw'):
+        return
+    from YSE_App.services.groups import profile_for
+
+    profile_for(instance)
