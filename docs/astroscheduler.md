@@ -1,7 +1,7 @@
 # AstroScheduler night planner
 
 YSE_PZ plans classical nights with [AstroScheduler](https://github.com/UCSC-Transients/AstroScheduler),
-installed as a pinned package (`requirements.txt`, tag `v1.0.0`). AstroScheduler owns solving
+installed as a pinned package (`requirements.txt`, tag `v1.0.1`). AstroScheduler owns solving
 and scheduling. YSE_PZ owns the targets, and later the saved plans and outcomes.
 AstroScheduler also runs on its own as a standalone app.
 

@@ -291,9 +291,22 @@ class PlannerSolveTests(_PlannerFixture):
         self.assertEqual(response.status_code, 200, response.content[:300])
         result = response.json()
         self.assertEqual(result["yse_pz"]["night_id"], self.night.pk)
-        self.assertEqual(result["solver_version"], "1.0.0")
+        import astroscheduler
+        self.assertEqual(result["solver_version"], astroscheduler.__version__)
         planned = {b["external_id"] for b in result["blocks"] if b["kind"] == "science"}
         self.assertIn(str(self.open_fu.id), planned)
+
+    def test_planner_leaves_astropy_iers_settings_alone(self):
+        """A solve must not change the process-wide IERS options other code relies on
+        (AstroScheduler 1.0.0 left a stray option on astropy 5.0; fixed in 1.0.1)."""
+        from astropy.utils.iers import conf
+
+        before = (conf.auto_download, conf.auto_max_age, dict(vars(conf)))
+        with iers_offline():
+            inside = (conf.auto_download, conf.auto_max_age, dict(vars(conf)))
+            night_planner.solve_for_night(self.night, self._payload())
+            self.assertEqual((conf.auto_download, conf.auto_max_age, dict(vars(conf))), inside)
+        self.assertEqual((conf.auto_download, conf.auto_max_age, dict(vars(conf))), before)
 
     def test_bad_payloads_are_400(self):
         url = reverse("api-planner-solve", kwargs={"night_id": self.night.pk})
