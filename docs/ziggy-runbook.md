@@ -569,7 +569,7 @@ RESEARCHER_METRICS_ENABLED: True
 
 Optional `[research]` keys (defaults): `RESEARCHER_METRICS_CRON_MINUTES: 43200`, `REQUEST_INTERVAL_SECONDS: 2.0`, `MAX_PER_RUN: 200`, `MIN_AGE_DAYS: 25`, `SCIX_API_URL: https://api.adsabs.harvard.edu/v1`.
 
-**Step D (optional, recommended): Explorer grants.** The new tables are hidden from SQL Explorer and refused by its SQL blacklist. The hard barrier is the Explorer MySQL user: if it has database-wide `SELECT`, consider replacing that with table-level grants that leave out `YSE_App_researcherprofile*`, `YSE_App_encryptedprofilevalue`, `YSE_App_profilefieldhistory`, `YSE_App_mentorship`, `YSE_App_affiliationhistory`, `YSE_App_researchermetrics`, `YSE_App_useragreement` and `YSE_App_agreementacceptance`. Check with `SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<host>';`.
+**Step D (optional, recommended): Explorer grants.** The new tables are hidden from SQL Explorer and refused by its SQL blacklist. The hard barrier is the Explorer MySQL user: if it has database-wide `SELECT`, consider replacing that with table-level grants that leave out `YSE_App_researcherprofile*`, `YSE_App_encryptedprofilevalue`, `YSE_App_profilefieldhistory`, `YSE_App_mentorship`, `YSE_App_affiliationhistory`, `YSE_App_researchermetrics`, `YSE_App_useragreement`, `YSE_App_agreementacceptance` and `YSE_App_datasharingdelegate`. Check with `SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<host>';`.
 
 Production: the same steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
@@ -705,11 +705,12 @@ Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merge
 
 * Only the data's PIs (linked accounts, see [Step A of "PIs on private data"](#data-pis)) and the deputies they designate may accept or decline data access requests, or change the groups of restricted data through the REST API. Members and owners of the owner group no longer can.
 * Data without an explicit PI uses its allocation's PI, at read time: the follow-up's ToO / classical / queued resource's allocation PI (or the resource's own PI), or the follow-up's facility request's allocation PI. Nothing is written.
-* Data with neither can only be shared by staff. Such requests notify the active staff, and the staff inbox marks them "No PI assigned". Every staff decision is recorded as an administrator override (`decided_as = staff`, shown in the inbox and the admin) and logged by the `YSE_App.data_access` logger at WARNING.
+* Data with neither can only be shared by staff. Such requests notify the active superusers only (#650; staff who are not superusers can still decide, and see them in the inbox), and the staff inbox marks them "No PI assigned". Every staff decision is recorded as an administrator override (`decided_as = staff`, shown in the inbox and the admin) and logged by the `YSE_App.data_access` logger at WARNING.
 * Pending requests filed before the deploy follow the same rule.
 * New page `/data_sharing_deputies/` (linked from the Data access requests page): a PI adds or removes deputies, for all of their data or for one group's data. Staff can manage any PI's deputies in the admin (Principal investigators > a PI > "Data sharing delegates", or Data sharing delegates).
 * TNS imports now set `reference` (`TNS <prefix> <name>`) on new photometry sets and spectra.
 * SQL Explorer shows the PI tables again (Refs #643).
+* `YSE_App_datasharingdelegate` (the deputies) is hidden from SQL Explorer and its SQL blacklist (#650). If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_datasharingdelegate`.
 
 **Step A (recommended before or right after deploy, Ryan or David): link the PIs of private data to accounts.** Otherwise only staff can decide requests for that data. Use [Step A](#data-pis) and, if wanted, the `backfill_data_pis` [Step B](#data-pis) of "PIs on private data".
 
@@ -1689,6 +1690,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-15 v35, nothing required. Data-access requests with no PI notify superusers only, and `YSE_App_datasharingdelegate` is hidden from SQL Explorer; add it to table-level Explorer grant exclusions if you use them ([#650](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/650)).
 * 2026-10-13 v34, nothing required (link PI accounts first so PIs, not only staff, can decide). Only PIs and their deputies share private data ([#447](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/447)): migration 0037 (one new table, one nullable column); allocation-PI fallback; logged staff override; `/data_sharing_deputies/`; TNS references; PI tables visible in Explorer again ([section "Who may share private data"](#data-sharers)).
 * 2026-10-13 v33, nothing required (signup off by default). Self-service signup and team membership requests ([#448](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/448)): migration 0036 (one new table); turn on with `SELF_SIGNUP_ENABLED: True` when ready; optional `purge_group_membership_requests`. Public always offered in pickers ([#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)); PI contact fields staff-only in the API and PI table hidden from Explorer ([#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)) ([section "Self-service signup"](#self-signup)).
 * 2026-10-13 v32, nothing required (PI accounts and backfill optional). PIs on private data ([#446](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/446)): migration 0035 (one nullable column, two new join tables); staff link PIs to accounts in the admin; optional `backfill_data_pis` (dry run by default) ([section "PIs on private data"](#data-pis)).
