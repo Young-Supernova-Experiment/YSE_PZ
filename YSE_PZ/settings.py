@@ -391,6 +391,8 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_userpreference',
     # Self-service membership requests (#448).
     'YSE_App_groupmembershiprequest',
+    # Data-sharing deputies: who a PI designated to share their data (#650).
+    'YSE_App_datasharingdelegate',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
