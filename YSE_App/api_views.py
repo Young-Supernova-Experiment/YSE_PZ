@@ -350,7 +350,8 @@ class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateR
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser(self.request.user)
-        return allowed_phot.prefetch_related('groups')
+        # 'pis' (#446): one query per page, not one per row (test_api_perf_auth).
+        return allowed_phot.prefetch_related('groups', 'pis')
 
 class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostPhotometrySerializer
@@ -475,7 +476,8 @@ class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
-        return allowed_spec.prefetch_related('groups', 'data_quality')
+        # 'pis' (#446): one query per page, not one per row (test_api_perf_auth).
+        return allowed_spec.prefetch_related('groups', 'data_quality', 'pis')
 
 class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpectrumSerializer

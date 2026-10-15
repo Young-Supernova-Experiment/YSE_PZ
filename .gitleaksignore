@@ -1,0 +1,3 @@
+# gitleaks findings reviewed and accepted (one fingerprint per line: commit:path:rule:line).
+# Synthetic throwaway password in a test fixture (develop #644, backported 2026-10-15).
+e2269de49993842ebb56651d7ccbb0fe0b5a013b:YSE_App/tests/test_self_signup.py:generic-api-key:36
