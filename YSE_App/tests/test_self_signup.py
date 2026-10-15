@@ -502,6 +502,9 @@ class PrincipalInvestigatorApiTests(TestCase):
     def test_explorer_excludes_the_request_table_but_not_the_pi_tables(self):
         self.assertIn("YSE_App_groupmembershiprequest", settings.EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES)
         self.assertIn("YSE_App_groupmembershiprequest", settings.EXPLORER_SQL_BLACKLIST)
+        # the data-sharing deputies table is hidden too (#650)
+        self.assertIn("YSE_App_datasharingdelegate", settings.EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES)
+        self.assertIn("YSE_App_datasharingdelegate", settings.EXPLORER_SQL_BLACKLIST)
         # Ryan (2026-10-13): the PI tables are visible in SQL Explorer again
         for name in ("YSE_App_principalinvestigator", "YSE_App_principalinvestigator_obs_group"):
             self.assertFalse(any(name.startswith(prefix) for prefix in settings.EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES),

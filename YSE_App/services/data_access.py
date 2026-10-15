@@ -248,13 +248,14 @@ def deciders_for(request: DataAccessRequest) -> List[User]:
     """Who is asked to decide a request: the data's PIs and their deputies only (#447).
 
     Group members and group owners are not deciders. When nobody is named, only staff can decide
-    (``notify_new_request`` then tells the active staff).
+    (``notify_new_request`` then tells the active superusers).
     """
     return named_deciders_for(request)
 
 
-def _staff_users() -> List[User]:
-    return list(User.objects.filter(Q(is_staff=True) | Q(is_superuser=True), is_active=True).order_by("id"))
+def _superusers() -> List[User]:
+    """Active superusers: the only people told about a request nobody but an administrator can decide (#650)."""
+    return list(User.objects.filter(is_superuser=True, is_active=True).order_by("id"))
 
 
 def shareable_datasets(user: User, request: DataAccessRequest) -> List:
@@ -427,11 +428,11 @@ def request_access(
 
 
 def notify_new_request(request: DataAccessRequest):
-    """Tell the data's PIs and deputies; when there are none, the active staff (only they can decide then)."""
+    """Tell the data's PIs and deputies; when there are none, the active superusers (staff can still decide)."""
     owners = deciders_for(request)
     no_pi = not owners
     if no_pi:
-        owners = _staff_users()
+        owners = _superusers()
     if not owners:
         return []
     n = len(hidden_datasets(request.requester, request.transient_id, request.dataset_kind))

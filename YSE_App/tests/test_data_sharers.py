@@ -28,7 +28,12 @@ from YSE_App.services import data_access as dar
 from YSE_App.services import data_pis
 from YSE_App.services import data_sharing
 from YSE_App.services import groups as group_svc
-from YSE_App.tests.fixtures_minimal import attach_synthetic_photometry, attach_synthetic_spectrum, audit_fields
+from YSE_App.tests.fixtures_minimal import (
+    attach_synthetic_photometry,
+    attach_synthetic_spectrum,
+    audit_fields,
+    create_test_user,
+)
 from YSE_App.tests.test_data_pis import PiBase, _member, _pi
 
 
@@ -157,6 +162,16 @@ class DeciderRuleTests(SharerBase):
 
 
 class NoPiTests(SharerBase):
+    def test_without_pi_only_superusers_are_notified(self):
+        staff_only = create_test_user("pi_staff_only", is_staff=True, is_superuser=False)
+        inactive_super = create_test_user("pi_inactive_super", is_staff=True, is_superuser=True)
+        inactive_super.is_active = False
+        inactive_super.save()
+        req = dar.request_access(self.requester, self.transient, "spectrum", self.owners)
+        self.assertTrue(dar.user_can_decide(staff_only, req))  # staff may still decide
+        notes = Notification.objects.filter(kind="data_access")
+        self.assertEqual(set(notes.values_list("recipient__username", flat=True)), {"pi_admin"})
+
     def test_without_pi_only_staff_decide_and_are_notified(self):
         req = dar.request_access(self.requester, self.transient, "spectrum", self.owners)
         self.assertEqual(dar.deciders_for(req), [])
