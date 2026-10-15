@@ -10,6 +10,13 @@ class ToOResourceSerializer(serializers.HyperlinkedModelSerializer):
 
 	created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 	modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
+	# Facility binding and usage accounting (#304); the credential itself is never exposed.
+	allocation = serializers.HyperlinkedRelatedField(queryset=Allocation.objects.all(), allow_null=True, required=False, view_name='allocation-detail')
+	facility_api = serializers.CharField(read_only=True)
+	has_credential = serializers.BooleanField(read_only=True)
+	default_request_params = serializers.JSONField(read_only=True)
+	remaining_hours = serializers.FloatField(read_only=True)
+	remaining_triggers = serializers.FloatField(read_only=True)
 
 	class Meta:
 		model = ToOResource
@@ -50,9 +57,11 @@ class ToOResourceSerializer(serializers.HyperlinkedModelSerializer):
 		instance.end_date_valid = validated_data.get('end_date_valid', instance.end_date_valid)
 		instance.awarded_too_hours = validated_data.get('awarded_too_hours', instance.awarded_too_hours)
 		instance.used_too_hours = validated_data.get('used_too_hours', instance.used_too_hours)
-		instance.awarded_too_triggers = validated_data.get('awarded_too_hours', instance.awarded_too_triggers)
-		instance.used_too_triggers = validated_data.get('used_too_hours', instance.used_too_triggers)
+		instance.awarded_too_triggers = validated_data.get('awarded_too_triggers', instance.awarded_too_triggers)
+		instance.used_too_triggers = validated_data.get('used_too_triggers', instance.used_too_triggers)
 		instance.description = validated_data.get('description', instance.description)
+		if 'allocation' in validated_data:
+			instance.allocation = validated_data.get('allocation')
 
 		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by)
 
@@ -102,6 +111,12 @@ class QueuedResourceSerializer(serializers.HyperlinkedModelSerializer):
 
 	created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 	modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
+	# Facility binding and usage accounting (#304); the credential itself is never exposed.
+	allocation = serializers.HyperlinkedRelatedField(queryset=Allocation.objects.all(), allow_null=True, required=False, view_name='allocation-detail')
+	facility_api = serializers.CharField(read_only=True)
+	has_credential = serializers.BooleanField(read_only=True)
+	default_request_params = serializers.JSONField(read_only=True)
+	remaining_hours = serializers.FloatField(read_only=True)
 
 	class Meta:
 		model = QueuedResource
@@ -144,6 +159,8 @@ class QueuedResourceSerializer(serializers.HyperlinkedModelSerializer):
 		instance.awarded_hours = validated_data.get('awarded_hours', instance.awarded_hours)
 		instance.used_hours = validated_data.get('used_hours', instance.used_hours)
 		instance.description = validated_data.get('description', instance.description)
+		if 'allocation' in validated_data:
+			instance.allocation = validated_data.get('allocation')
 
 		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by)
 
@@ -193,6 +210,11 @@ class ClassicalResourceSerializer(serializers.HyperlinkedModelSerializer):
 
 	created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 	modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
+	# Facility binding and usage accounting (#304); the credential itself is never exposed.
+	allocation = serializers.HyperlinkedRelatedField(queryset=Allocation.objects.all(), allow_null=True, required=False, view_name='allocation-detail')
+	facility_api = serializers.CharField(read_only=True)
+	has_credential = serializers.BooleanField(read_only=True)
+	default_request_params = serializers.JSONField(read_only=True)
 
 	class Meta:
 		model = ClassicalResource
@@ -235,6 +257,8 @@ class ClassicalResourceSerializer(serializers.HyperlinkedModelSerializer):
 		instance.begin_date_valid = validated_data.get('begin_date_valid', instance.begin_date_valid)
 		instance.end_date_valid = validated_data.get('end_date_valid', instance.end_date_valid)
 		instance.description = validated_data.get('description', instance.description)
+		if 'allocation' in validated_data:
+			instance.allocation = validated_data.get('allocation')
 
 		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by)
 

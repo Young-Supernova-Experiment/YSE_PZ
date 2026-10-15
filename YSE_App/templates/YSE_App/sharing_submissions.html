@@ -1,0 +1,104 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>TNS reports <small class="text-muted">sharing submissions</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	{% for value, label, n in counts %}
+	<div class="col-md-2 col-6">
+		<div class="small-box yse-sharing-count" data-status="{{ value }}">
+			<div class="inner p-2"><h3 class="mb-0">{{ n }}</h3><p class="mb-0">{{ label }}</p></div>
+		</div>
+	</div>
+	{% endfor %}
+</div>
+<div class="row">
+	<div class="col-12">
+		<div class="card">
+			<div class="card-header">
+				<form class="form-inline" method="get" action="{% url 'sharing_submissions' %}">
+					<label class="mr-2" for="sh-filter-service">Service</label>
+					<select class="form-control form-control-sm mr-3" id="sh-filter-service" name="service">
+						<option value="">all</option>
+						{% for s in services %}
+						<option value="{{ s.slug }}"{% if s.slug == selected_service %} selected{% endif %}>{{ s.name }}{% if s.testing %} (sandbox){% endif %}</option>
+						{% endfor %}
+					</select>
+					<label class="mr-2" for="sh-filter-kind">Report</label>
+					<select class="form-control form-control-sm mr-3" id="sh-filter-kind" name="kind">
+						<option value="">all</option>
+						{% for value, label in kinds %}
+						<option value="{{ value }}"{% if value == selected_kind %} selected{% endif %}>{{ label }}</option>
+						{% endfor %}
+					</select>
+					<label class="mr-2" for="sh-filter-status">Status</label>
+					<select class="form-control form-control-sm mr-3" id="sh-filter-status" name="status">
+						<option value="">all</option>
+						{% for value, label in statuses %}
+						<option value="{{ value }}"{% if value == selected_status %} selected{% endif %}>{{ label }}</option>
+						{% endfor %}
+					</select>
+					<input class="form-control form-control-sm mr-3" type="text" name="q" value="{{ query }}" placeholder="transient or TNS name">
+					<button class="btn btn-sm btn-primary" type="submit">Filter</button>
+					<a class="btn btn-sm btn-outline-secondary ml-2" href="{% url 'sharing_services' %}">Services and rules</a>
+				</form>
+			</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-hover table-sm" id="sharing_submissions_tbl">
+					<thead>
+						<tr>
+							<th>#</th>
+							<th>Transient</th>
+							<th>Report</th>
+							<th>Service</th>
+							<th>Status</th>
+							<th>TNS name</th>
+							<th>Report id</th>
+							<th>Requested by</th>
+							<th>Created</th>
+							<th>Finished</th>
+							<th>Error</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for sub in submissions %}
+						<tr data-status="{{ sub.status }}">
+							<td><a href="{% url 'sharing_submission_detail' sub.pk %}">{{ sub.pk }}</a></td>
+							<td><a href="{% url 'transient_detail' sub.transient.slug %}">{{ sub.transient.name }}</a></td>
+							<td>{{ sub.get_kind_display }}{% if sub.auto_publisher %} <span class="badge badge-light" title="auto-publisher rule">auto</span>{% endif %}</td>
+							<td>{{ sub.service.name }}{% if sub.service.testing %} <span class="badge badge-secondary">sandbox</span>{% endif %}</td>
+							<td><span class="badge badge-{% if sub.status == 'accepted' %}success{% elif sub.status == 'rejected' or sub.status == 'failed' %}danger{% elif sub.status == 'submitted' %}info{% else %}warning{% endif %}">{{ sub.get_status_display }}</span></td>
+							<td>{% if sub.tns_name %}<a href="{{ sub.tns_object_url }}" target="_blank" rel="noopener noreferrer">{{ sub.tns_name }}</a>{% else %}-{% endif %}</td>
+							<td>{% if sub.external_id %}<code>{{ sub.external_id }}</code>{% else %}-{% endif %}</td>
+							<td>{{ sub.created_by.username }}</td>
+							<td class="text-nowrap">{{ sub.created_date|date:"Y-m-d H:i" }}</td>
+							<td class="text-nowrap">{% if sub.finished_at %}{{ sub.finished_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+							<td class="small text-danger">{{ sub.error_summary }}</td>
+							<td>
+								{% if sub.can_retry %}
+								<form method="post" action="{% url 'sharing_submission_retry' sub.pk %}" class="d-inline">
+									{% csrf_token %}
+									<input type="hidden" name="next" value="{{ request.get_full_path }}">
+									<button class="btn btn-xs btn-outline-primary yse-sharing-retry" type="submit">Retry</button>
+								</form>
+								{% endif %}
+							</td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="12" class="text-muted">No submissions{% if selected_service or selected_status or selected_kind or query %} for this filter{% endif %}. Reports are started from the "Report to TNS" button on a transient page.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			<div class="card-footer text-muted">
+				Newest {{ page_size }} submissions. A pending report is sent by the background job queue; "Submitted" means TNS has the report and the reply is being polled.
+				{% if user.is_staff %}Services are configured in the <a href="{% url 'admin:YSE_App_sharingservice_changelist' %}">admin</a>.{% endif %}
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}

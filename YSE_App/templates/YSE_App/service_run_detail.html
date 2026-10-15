@@ -1,0 +1,48 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Run <code>{{ run.uuid }}</code> <small class="text-muted">{{ run.service.name }}</small></h1>
+<a href="{% url 'external_service_runs' %}">&larr; all runs</a>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-md-5">
+		<div class="card">
+			<div class="card-header"><h3 class="card-title">Summary</h3></div>
+			<div class="card-body p-0">
+				<table class="table table-sm mb-0">
+					<tr><th>Status</th><td data-status="{{ run.status }}">{{ run.get_status_display }}</td></tr>
+					<tr><th>Service</th><td>{{ run.service.name }} <code>{{ run.service.slug }}</code> ({{ run.service.get_kind_display }})</td></tr>
+					<tr><th>Target</th><td>{% if run.transient %}<a href="{% url 'transient_detail' run.transient.slug %}">{{ run.transient.name }}</a>{% else %}{{ run.target_display }}{% endif %}</td></tr>
+					<tr><th>Requested by</th><td>{{ run.created_by.username }}</td></tr>
+					<tr><th>Created</th><td>{{ run.created_date|date:"Y-m-d H:i:s" }} UTC</td></tr>
+					<tr><th>Started</th><td>{% if run.started_at %}{{ run.started_at|date:"Y-m-d H:i:s" }} UTC{% else %}-{% endif %}</td></tr>
+					<tr><th>Finished</th><td>{% if run.finished_at %}{{ run.finished_at|date:"Y-m-d H:i:s" }} UTC{% if run.duration %} ({{ run.duration }}){% endif %}{% else %}-{% endif %}</td></tr>
+					<tr><th>Attempts</th><td>{{ run.attempts }}</td></tr>
+					<tr><th>External id</th><td>{{ run.external_id|default:"-" }}</td></tr>
+					<tr><th>Artifact</th><td>{% if run.artifact_link %}<a href="{{ run.artifact_link }}" target="_blank" rel="noopener noreferrer">{{ run.artifact_link }}</a>{% else %}-{% endif %}</td></tr>
+					<tr><th>Callback URL</th><td><code>{{ callback_url }}</code><br><small class="text-muted">POST with the run token (shown once when the run was started).</small></td></tr>
+				</table>
+			</div>
+		</div>
+		{% if run.error %}
+		<div class="card card-danger card-outline">
+			<div class="card-header"><h3 class="card-title">Error</h3></div>
+			<div class="card-body"><pre class="mb-0">{{ run.error }}</pre></div>
+		</div>
+		{% endif %}
+	</div>
+	<div class="col-md-7">
+		<div class="card">
+			<div class="card-header"><h3 class="card-title">Request payload</h3></div>
+			<div class="card-body"><pre class="mb-0">{{ request_json }}</pre></div>
+		</div>
+		<div class="card">
+			<div class="card-header"><h3 class="card-title">Result</h3></div>
+			<div class="card-body"><pre class="mb-0">{{ result_json }}</pre></div>
+		</div>
+	</div>
+</div>
+{% endblock %}

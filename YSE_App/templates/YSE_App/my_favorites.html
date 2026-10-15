@@ -1,0 +1,46 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+{% load render_table from django_tables2 %}
+
+{% block content %}
+<section class="content-header">
+	<h1>My favorites <small class="text-muted">transients you starred</small></h1>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid yse-my-favorites" data-count="{{ count }}">
+				<div class="box-header with-border d-flex align-items-center">
+					<strong>{{ count }} favorite{{ count|pluralize }}</strong>
+					<div class="ml-auto">
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'search' %}?favorites=true">Search within favorites</a>
+						<a class="btn btn-sm btn-outline-secondary" href="{% url 'notification_list' %}?kind=favorite_activity">Activity notifications</a>
+					</div>
+				</div>
+				<div class="box-body p-0 table-responsive">
+					{% if count %}
+					{% render_table table %}
+					{% else %}
+					<p class="p-3 mb-0 text-muted yse-favorites-empty">You have not starred a transient yet. Use the <i class="fa fa-star-o"></i> star next to a transient's name on its page, or in the Fav. column of the dashboard and search tables.</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-3 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>What this is</strong></div>
+				<div class="box-body small">
+					<p class="mb-1">Starring a transient is personal: nobody else sees it. Activity on a starred transient (new comments, status / class / redshift changes, new spectra and photometry, follow-up requests and their status) reaches you as a <em>Favorite activity</em> notification{% if batch_minutes %}, batched per transient over {{ batch_minutes }} minutes{% endif %}; email and Slack follow your <a href="{% url 'notification_preferences' %}">preferences</a>.</p>
+					<p class="mb-0">The search page has a <em>My favorites only</em> filter. REST: <code>/api/favorites/</code>.</p>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+{% endblock %}

@@ -1,0 +1,73 @@
+{% comment %}Brokers tab fragment (#275): nearest alerts per enabled provider, cutouts, class, import / link actions.{% endcomment %}
+<div id="yse_brokers_tab_body" class="yse-brokers-tab" data-import-url="{% url 'transient_broker_import' transient.id %}" data-radius="{{ radius }}">
+	<p class="small text-muted mb-2">
+		Alerts within {{ radius|floatformat:1 }}&Prime; of {{ transient.name }} on each enabled broker
+		(<a href="{% url 'broker_search' %}?ra={{ transient.ra }}&amp;dec={{ transient.dec }}&amp;radius={{ radius }}">open in Broker Search</a>).
+		{% if linked %}Linked candidates: {% for oid, c in linked.items %}<span class="badge badge-success mr-1" title="{{ c.broker }}">{{ oid }}</span>{% endfor %}{% endif %}
+	</p>
+	{% if not any_provider %}
+	<p class="text-muted">No broker with a cone search is enabled (<code>[brokers] enabled</code>).</p>
+	{% endif %}
+	{% for s in sections %}
+	<div class="box box-default box-solid yse-broker-section" data-broker="{{ s.slug }}" data-error="{% if s.error %}1{% else %}0{% endif %}">
+		<div class="box-header with-border py-1">
+			<strong>{{ s.name }}</strong>
+			<span class="small text-muted ml-2">{% for c in s.provider.capabilities %}<span class="badge badge-light border mr-1">{{ c }}</span>{% endfor %}</span>
+			<span class="float-right small text-muted">{{ s.alerts|length }} match{{ s.alerts|length|pluralize:"es" }}</span>
+		</div>
+		<div class="box-body p-0">
+			{% if s.error %}
+			<div class="alert alert-warning mb-0 py-1 small yse-broker-error"><i class="fa fa-exclamation-triangle"></i> {{ s.name }}: {{ s.error }}</div>
+			{% elif not s.alerts %}
+			<p class="text-muted small p-2 mb-0">No alert within {{ s.radius|floatformat:1 }}&Prime;.</p>
+			{% else %}
+			<table class="table table-sm mb-0 yse-broker-matches">
+				<thead><tr><th>Object</th><th>Sep.</th><th>Last det.</th><th>Mag</th><th>RB</th><th>Class</th>{% if s.has_cutouts %}<th>Cutouts</th>{% endif %}<th></th></tr></thead>
+				<tbody>
+				{% for r in s.alerts %}{% with a=r.alert %}
+				<tr class="yse-broker-match" data-object-id="{{ a.object_id }}">
+					<td class="text-nowrap">{% if a.url %}<a href="{{ a.url }}" target="_blank" rel="noopener noreferrer">{{ a.object_id }}</a>{% else %}{{ a.object_id }}{% endif %}
+						{% if r.known %}<br><a class="small" href="{% url 'transient_detail' r.known.slug %}">= {{ r.known.name }}</a>{% endif %}</td>
+					<td class="text-nowrap small">{% if r.sep != None %}{{ r.sep|floatformat:2 }}&Prime;{% endif %}</td>
+					<td class="text-nowrap small">{% if a.mjd %}MJD {{ a.mjd|floatformat:2 }}{% endif %}{% if a.discovery_mjd %}<br><span class="text-muted">first {{ a.discovery_mjd|floatformat:2 }}</span>{% endif %}</td>
+					<td>{% if a.mag != None %}{{ a.mag|floatformat:2 }} {{ a.band }}{% endif %}</td>
+					<td>{% if a.rb != None %}{{ a.rb|floatformat:2 }}{% elif a.drb != None %}{{ a.drb|floatformat:2 }}{% endif %}</td>
+					<td class="small">{{ a.classification }}{% for label, p in a.class_probabilities.items %}<br><span class="text-muted">{{ label }} {{ p|floatformat:2 }}</span>{% endfor %}</td>
+					{% if s.has_cutouts %}<td class="text-nowrap">{% for kind, url in r.cutouts.items %}<a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="mr-1" title="{{ kind }}"><img src="{{ url }}" alt="{{ kind }}" class="yse-broker-cutout" style="height:64px;width:64px;object-fit:cover;" loading="lazy"></a>{% endfor %}</td>{% endif %}
+					<td class="text-nowrap">
+						{% if s.has_photometry %}
+						<button type="button" class="btn btn-xs btn-sm btn-outline-primary yse-broker-import" data-broker="{{ s.slug }}" data-object-id="{{ a.object_id }}" data-instrument="{{ a.instrument }}" data-obs-group="{{ a.obs_group }}" title="Queue a photometry import from {{ s.name }} onto this transient (adds the broker name as an alias)">Import photometry</button>
+						{% endif %}
+					</td>
+				</tr>
+				{% endwith %}{% endfor %}
+				</tbody>
+			</table>
+			{% endif %}
+		</div>
+	</div>
+	{% endfor %}
+	<p class="small text-muted mb-0" id="yse_broker_import_status"></p>
+</div>
+<script>
+(function() {
+	var $body = $('#yse_brokers_tab_body');
+	$body.off('click.ysebroker').on('click.ysebroker', '.yse-broker-import', function() {
+		var $btn = $(this);
+		var $status = $('#yse_broker_import_status');
+		$btn.prop('disabled', true).text('Queued…');
+		$.post($body.data('import-url'), {
+			broker: $btn.data('broker'), object_id: $btn.data('object-id'), instrument: $btn.data('instrument'),
+			obs_group: $btn.data('obs-group'), alias: '1',
+			csrfmiddlewaretoken: (document.querySelector('input[name=csrfmiddlewaretoken]') || {}).value || $.cookie && $.cookie('csrftoken') || ''
+		}).done(function(json) {
+			$status.text('Import job ' + json.job + ' queued for ' + json.object_id + '; photometry appears when the job runner has processed it.');
+			$btn.text('Queued');
+		}).fail(function(xhr) {
+			var msg = (xhr.responseJSON && xhr.responseJSON.error) || ('HTTP ' + xhr.status);
+			$status.text('Import failed: ' + msg);
+			$btn.prop('disabled', false).text('Import photometry');
+		});
+	});
+})();
+</script>

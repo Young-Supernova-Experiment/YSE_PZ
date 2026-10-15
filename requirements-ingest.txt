@@ -1,0 +1,20 @@
+# YSE_PZ machine-learning / ingest extras, layered on the web runtime set.
+# Nothing the web server or the django_cron jobs import needs these; they are the
+# leftovers of the RAPID classifier (keras-tcn, TensorFlow-addons) and photo-z
+# model work. Install into a cron / analysis environment only:
+#
+#     pip install -r requirements-ingest.txt
+#
+# astrorapid itself is dropped: the RAPID cron is no longer in CRON_CLASSES and
+# its extinction==0.4 pin conflicted with sncosmo (#186). keras-nightly installs a
+# `keras` package that shadows keras 2.13.1 (TensorFlow 2.13.1's); it is kept
+# only because it was in the previous frozen set and is a candidate to drop.
+-r requirements.txt
+
+Keras-Applications==1.0.8
+keras-nightly==2.15.0.dev2023092207
+Keras-Preprocessing==1.1.2
+keras-tcn==3.4.0
+tensorboard-plugin-wit==1.8.0
+tensorflow-addons==0.13.0
+typeguard==2.12.1

@@ -3,8 +3,10 @@ services:
     web:
         container_name: ysepz_web_container
         build:
-          context: ""
+          context: .
           dockerfile: Dockerfile.web.dev
+          args:
+            YSE_BASE_IMAGE: ${YSE_BASE_IMAGE:-ghcr.io/davecoulter/yse_pz:latest}
         image: "local/yse_pz_web:dev"
         volumes:
             - ${VOL}:/app
@@ -16,17 +18,12 @@ services:
         - "8000:8000"
         environment:
           CONDA_DEFAULT_ENV: base
-          _: /opt/conda/bin/python
-          CONDA_EXE: /opt/conda/bin/conda
-          SHLVL: 1
-          CONDA_PYTHON_EXE: /opt/conda/bin/python
-          CONDA_SHLVL: 1
-          CONDA_PROMPT_MODIFIER: (base)
           PROJ_LIB: /opt/conda/share/proj
           CONDA_PREFIX: /opt/conda
           DB_CONFIG: /opt/project/db_configuration
         env_file:
           - ".env"
+          - ".env.secrets"
     yse_db:
       container_name: ysepz_db_container
       image: "mysql:8.0.25"
@@ -42,10 +39,15 @@ services:
         - ./db_init/YSE_rest_of_tables_insert.sql:/docker-entrypoint-initdb.d/4.sql
         - ./db_init/YSE_django_migrations_insert.sql:/docker-entrypoint-initdb.d/5.sql
         - ./db_init/YSE_create_users.sql:/docker-entrypoint-initdb.d/6.sql
-        - ${VOL_DB_LOG}:/var/log/mysql
         - ${VOL_GHOST}:/app/ghost_logs
       environment:
         MYSQL_ROOT_PASSWORD: ${DB_PWD}
+      healthcheck:
+        test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+        interval: 5s
+        timeout: 20s
+        retries: 10
+        start_period: 60s
     yse_nginx:
       container_name: ysepz_web_nginx_container
       image: "nginx:1.21-alpine"

@@ -1,0 +1,45 @@
+{% comment %}
+Summary-tab NGSF line (#315): the last successful NGSF classification, a Run NGSF button and the
+pending / failed / not-installed state. Loaded into #ngsf_status by the page's yseFitStatus driver.
+{% endcomment %}
+<div class="yse-fit-status yse-ngsf-status small" id="yse_ngsf_body"
+     data-kind="ngsf" data-service="{{ ngsf_service.slug }}"
+     data-run-url="{% url 'transient_analysis_run' transient.id %}"
+     data-fragment-url="{% url 'transient_detail_ngsf_fragment' transient.id %}"
+     data-active="{% if ngsf_active %}1{% else %}0{% endif %}"
+     {% if ngsf_active %}data-status-url="{% url 'analysis_run_status' ngsf_active.uuid %}"{% endif %}
+     data-poll-seconds="{{ analysis_poll_seconds }}">
+    <strong>NGSF classification:</strong>
+    {% if ngsf_fit %}
+        <span class="badge badge-primary yse-ngsf-type">{{ ngsf_fit.best.type }}</span>
+        {% if ngsf_fit.best.template %}<span class="text-nowrap">{{ ngsf_fit.best.template }}</span>{% endif %}
+        {% if ngsf_fit.best.phase is not None %}<span class="text-nowrap">phase {{ ngsf_fit.best.phase|floatformat:0 }} d</span>,{% endif %}
+        {% if ngsf_fit.best.z is not None %}<span class="text-nowrap">z = {{ ngsf_fit.best.z|floatformat:3 }}</span>,{% endif %}
+        {% if ngsf_fit.best.chi2_dof is not None %}<span class="text-nowrap">chi2/dof {{ ngsf_fit.best.chi2_dof|floatformat:2 }}</span>{% endif %}
+        {% if ngsf_fit.votes %}<span class="text-muted">(top matches: {% for t, n in ngsf_fit.votes %}{{ t }} &times;{{ n }}{% if not forloop.last %}, {% endif %}{% endfor %})</span>{% endif %}
+        <span class="text-muted">&mdash; spectrum {{ ngsf_fit.spectrum_id }}{% if ngsf_fit.spectrum_mjd %} (MJD {{ ngsf_fit.spectrum_mjd|floatformat:1 }}){% endif %}, {{ ngsf_fit.when|date:"Y-m-d H:i" }} UTC{% if ngsf_fit.user %} by {{ ngsf_fit.user }}{% endif %}</span>
+        <a href="#analysis_tab" class="yse-fit-analysis-link" title="The ranked matches, comparison plots and CSV on the Analysis tab">details</a>
+    {% elif not ngsf_service.registered %}
+        <span class="text-muted">not available on this server{% if user.is_staff %} &mdash; install NGSF (docs/ngsf.md) and register it with <code>manage.py register_analysis_service --builtin ngsf</code>{% endif %}.</span>
+    {% elif not ngsf_available %}
+        <span class="text-muted yse-ngsf-not-installed"{% if user.is_staff %} title="{{ ngsf_reason }}"{% endif %}><i class="fa fa-plug"></i> NGSF is not installed on this server{% if user.is_staff %}: {{ ngsf_reason }} See docs/ngsf.md.{% endif %}</span>
+    {% elif not ngsf_service.enabled %}
+        <span class="text-muted">the NGSF service is disabled.</span>
+    {% else %}
+        <span class="text-muted">none yet.</span>
+    {% endif %}
+    {% if ngsf_active %}
+        <span class="badge badge-info yse-fit-active"><i class="fa fa-spinner fa-spin"></i> {% if ngsf_active.status == 'running' %}NGSF running{% else %}NGSF queued{% endif %}</span>
+    {% elif ngsf_failed %}
+        <span class="text-danger yse-fit-failed" title="{{ ngsf_failed.error }}"><i class="fa fa-exclamation-triangle"></i> last run failed: {{ ngsf_failed.error|truncatechars:90 }}</span>
+    {% endif %}
+    {% if ngsf_service.slug and ngsf_available %}
+        <button type="button" class="btn btn-xs btn-outline-primary yse-fit-run-btn" data-fit-action="run"
+                {% if not ngsf_can_run %}disabled{% endif %}
+                title="{% if ngsf_service.cap and ngsf_service.cap.remaining == 0 %}Daily limit reached ({{ ngsf_service.cap.limit }} runs per user per day){% else %}Classify the most recent spectrum with NGSF on the job queue{% endif %}">
+            <i class="fa fa-play"></i> Run NGSF</button>
+    {% elif ngsf_service.enabled and ngsf_available %}
+        <span class="text-muted">(your groups may not run it)</span>
+    {% endif %}
+    <span class="text-danger yse-fit-error"></span>
+</div>

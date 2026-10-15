@@ -1,0 +1,93 @@
+{% for f in followups %}
+    <div class="col-12">
+        {% if forloop.counter <= 1 %}
+            <div class="followupbox box box-primary">
+        {% else %}
+            <div class="followupbox box box-primary collapsed-box">
+        {% endif %}
+                <div class="box-header">
+                    <div class="col-4">
+                        <h3 class="box-title">Follow-up (id: {{f.id}})</h3>
+                    </div>
+                    <div class="col-4">
+                        <h3 class="box-title">Valid: {{ f.valid_start|date:"SHORT_DATE_FORMAT" }} - {{ f.valid_stop|date:"SHORT_DATE_FORMAT" }}</h3>
+                    </div>
+                    <div class="col-4">
+                        <h3 style="float:right;padding-right:10px" class="box-title">Requestors: {{f.requestors}}</h3>
+                    </div>
+                    <div class="box-tools float-right">
+                        {% if forloop.counter <= 1 %}
+                            <button type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-minus"></i></button>
+                        {% else %}
+                            <button type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-plus"></i></button>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="box-body">
+                    <table id="tbl_followup_{{f.id}}" class="table table-bordered table-striped">
+                        <thead>
+                            <tr>
+                                <th>Priority</th>
+                                <th>Attached Resource</th>
+                                <th>Status</th>
+                                <th>Requestors</th>
+                                <th>Action</th>
+                                <th>Delete</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>{{ f.priority }}</td>
+                                <td>
+                                    {% if f.too_resource %}{{ f.too_resource }}<br>{% endif %}
+                                    {% if f.classical_resource %}{{ f.classical_resource }}<br>{% endif %}
+                                    {% if f.queued_resource %}{{ f.queued_resource }}{% endif %}
+                                </td>
+                                <td>{{ f.status }}
+                                    {% for fr in f.facility_requests.all %}<br><span class="badge badge-{% if fr.state == 'complete' %}success{% elif fr.state == 'failed' or fr.state == 'cancelled' %}danger{% else %}info{% endif %} facility-followup-badge" title="{{ fr.state_detail }}">{{ fr.allocation.facility }}: {{ fr.get_state_display }}{% if fr.external_id %} {{ fr.external_id|truncatechars:20 }}{% endif %}</span>{% endfor %}
+                                </td>
+                                <td>{{ f.requestors }}</td>
+                                <td><a target='_blank' href="{% url 'admin:YSE_App_transientfollowup_change' f.id %}">Edit</a></td>
+                                <td>
+                                    {% if f.can_delete %}
+                                        <a href="{% url 'delete_followup' f.id %}">Delete</a>
+                                    {% else %}
+                                        <span class="text-muted" title="Other people have requested this follow-up; delete your own request below.">&mdash;</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    {# One row per request: several people can request the same object with their own priority and comment. #}
+                    <table id="tbl_followup_requests_{{f.id}}" class="table table-bordered table-condensed followup-requests">
+                        <thead>
+                            <tr>
+                                <th>Requested By</th>
+                                <th>Requested</th>
+                                <th>Priority</th>
+                                <th>Comment</th>
+                                <th>Delete</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in f.request_rows %}
+                            <tr class="followup-request-row" data-request-id="{{ r.id }}">
+                                <td>{{ r.requestor }}</td>
+                                <td>{{ r.requested_at|date:"SHORT_DATETIME_FORMAT" }}</td>
+                                <td>{{ r.priority }}</td>
+                                <td>{{ r.comment }}</td>
+                                <td>
+                                    {% if r.can_delete %}
+                                        <a href="{% url 'delete_followup_request' r.id %}">Delete</a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-muted">No individual requests recorded. {% if f.comment %}Comment: {{ f.comment }}{% endif %}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+    </div>
+{% endfor %}

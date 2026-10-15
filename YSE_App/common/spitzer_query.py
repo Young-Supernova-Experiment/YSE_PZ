@@ -6,7 +6,7 @@ from astropy import utils
 from astropy.table import Table
 from astropy import units as u
 
-uri = 'http://sha.ipac.caltech.edu/applications/Spitzer/SHA/servlet/DataService'
+uri = 'https://sha.ipac.caltech.edu/applications/Spitzer/SHA/servlet/DataService'
 outrootdir = '/data2/Spitzer/IRAC/rawdata_orig/ut191115_16/'
 
 # Color strings for download messages

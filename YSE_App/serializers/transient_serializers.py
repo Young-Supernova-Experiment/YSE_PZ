@@ -23,6 +23,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = Transient
         fields = "__all__"
+        # Edits go through PATCH /api/transients/<id>/summary/ (audited history, #295).
+        read_only_fields = ("summary", "summary_modified")
         
     def create(self, validated_data):
 
@@ -80,21 +82,23 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         instance.TNS_spec_class = validated_data.get('TNS_spec_class', instance.TNS_spec_class)
 
         instance.has_hst = validated_data.get('has_hst', instance.has_hst)
+        instance.has_jwst = validated_data.get('has_jwst', instance.has_jwst)
         instance.has_chandra = validated_data.get('has_chandra', instance.has_chandra)
         instance.has_spitzer = validated_data.get('has_spitzer', instance.has_spitzer)
 
         if 'tags' in validated_data.keys():
-            # Disassociate existing `Transient Tags`
-            transient_tags = instance.tags.all()
-            for tag in transient_tags:
-                instance.tags.remove(tag)
-
-            transient_tags = validated_data.pop('tags')
-            for tag in transient_tags:
-                tag_result = TransientTag.objects.filter(pk=tag.id)
-                if tag_result.exists():
-                    t = tag_result.first()
-                    instance.tags.add(t)
+            requested_tags = validated_data.pop('tags')
+            requested_ids = {tag.id for tag in requested_tags}
+            existing_ids = set(instance.tags.values_list('id', flat=True))
+            if requested_ids == existing_ids:
+                pass
+            else:
+                for tag in instance.tags.all():
+                    instance.tags.remove(tag)
+                for tag in requested_tags:
+                    tag_result = TransientTag.objects.filter(pk=tag.id)
+                    if tag_result.exists():
+                        instance.tags.add(tag_result.first())
 
         instance.save()
 

@@ -1,0 +1,128 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>{{ group.name }}{% if not profile.is_active %} <span class="badge badge-secondary">inactive</span>{% endif %}</h1>
+</section>
+
+<section class="content" id="yse-team-detail">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+
+	{% if new_link %}
+	<div class="alert alert-success" id="yse-new-invite-link">
+		<strong>New invitation link</strong> (shown only once; anyone with it can join while it is valid):
+		<input type="text" class="form-control mt-2" readonly value="{{ new_link }}" aria-label="Invitation link">
+	</div>
+	{% endif %}
+
+	<div class="row">
+		<div class="col-lg-6 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>About this team</strong></div>
+				<div class="box-body">
+					<p>{{ profile.description|default:"No description yet."|linebreaksbr }}</p>
+					<p class="mb-0"><strong>Owners:</strong>
+						{% for owner in owners %}{{ owner.researcher_profile.full_name|default:owner.get_full_name|default:owner.get_username }}{% if not forloop.last %}, {% endif %}{% empty %}none yet (staff assign owners in the admin){% endfor %}
+					</p>
+					{% if can_manage %}
+					<hr>
+					<form method="post" action="{% url 'team_update' group.pk %}">{% csrf_token %}
+						<div class="form-group">{{ profile_form.description.label_tag }} {{ profile_form.description }}</div>
+						<div class="form-check mb-2">{{ profile_form.is_active }} <label class="form-check-label" for="{{ profile_form.is_active.id_for_label }}">{{ profile_form.is_active.label }}</label>
+							<small class="form-text text-muted">An inactive team is hidden from group pickers and default audiences. Its members, data and who can see that data do not change.</small></div>
+						<button type="submit" class="btn btn-sm btn-primary">Save</button>
+					</form>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+
+		{% if can_manage %}
+		<div class="col-lg-6 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Invite people</strong></div>
+				<div class="box-body">
+					<p class="text-muted small">Creates a link to send to the people you invite. They sign in (or create an account, or ask an administrator for one), accept the User Agreement and complete their profile if they are new, then confirm to join. No email address is stored.</p>
+					<form method="post" action="{% url 'team_invite_create' group.pk %}" class="form-inline">{% csrf_token %}
+						<label class="mr-2" for="{{ invite_form.days.id_for_label }}">{{ invite_form.days.label }}</label> {{ invite_form.days }}
+						<label class="mx-2" for="{{ invite_form.max_uses.id_for_label }}">{{ invite_form.max_uses.label }}</label> {{ invite_form.max_uses }}
+						<button type="submit" class="btn btn-sm btn-primary ml-2">Create link</button>
+					</form>
+					{% if invitations %}
+					<table class="table table-sm mt-3">
+						<thead><tr><th>Created</th><th>Expires</th><th>Used</th><th>Status</th><th></th></tr></thead>
+						<tbody>
+						{% for inv in invitations %}
+						<tr>
+							<td>{{ inv.created_at|date:"Y-m-d" }}</td>
+							<td>{{ inv.expires_at|date:"Y-m-d H:i" }}</td>
+							<td>{{ inv.use_count }} / {{ inv.max_uses }}</td>
+							<td>{{ inv.status }}</td>
+							<td>{% if inv.status == "open" %}<form method="post" action="{% url 'team_invite_revoke' group.pk inv.pk %}">{% csrf_token %}<button type="submit" class="btn btn-xs btn-outline-danger">Revoke</button></form>{% endif %}</td>
+						</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		{% endif %}
+	</div>
+
+	{% if can_manage and pending_requests %}
+	<div class="box box-default box-solid" id="yse-team-pending-requests">
+		<div class="box-header with-border"><strong>Membership requests</strong> ({{ pending_requests|length }})</div>
+		<div class="box-body">
+			<table class="table table-sm">
+				<thead><tr><th>Name</th><th>Username</th><th>Institution</th><th>Note</th><th>Requested</th><th></th></tr></thead>
+				<tbody>
+				{% for req in pending_requests %}
+				<tr>
+					<td>{{ req.user.researcher_profile.full_name|default:req.user.get_full_name|default:req.user.get_username }}</td>
+					<td>{{ req.user.get_username }}</td>
+					<td>{{ req.user.researcher_profile.institution|default:"" }}</td>
+					<td>{{ req.message|linebreaksbr }}</td>
+					<td>{{ req.created_at|date:"Y-m-d" }}</td>
+					<td class="text-nowrap">
+						<form method="post" action="{% url 'team_request_decide' group.pk req.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="approve"><button type="submit" class="btn btn-xs btn-success">Approve</button></form>
+						<form method="post" action="{% url 'team_request_decide' group.pk req.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="deny"><button type="submit" class="btn btn-xs btn-outline-danger">Deny</button></form>
+					</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			<p class="text-muted small mb-0">Approving adds the person to this team, so they can see the data shared with it.</p>
+		</div>
+	</div>
+	{% endif %}
+
+	{% if can_manage %}
+	<div class="box box-default box-solid">
+		<div class="box-header with-border"><strong>Members</strong> ({{ members|length }})</div>
+		<div class="box-body">
+			<table class="table table-sm">
+				<thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead>
+				<tbody>
+				{% for row in members %}
+				<tr>
+					<td>{{ row.name }}</td>
+					<td>{{ row.user.get_username }}</td>
+					<td>{% if row.is_owner %}Owner{% else %}Member{% endif %}</td>
+					<td>{% if not row.is_owner %}<form method="post" action="{% url 'team_member_remove' group.pk row.user.pk %}">{% csrf_token %}<button type="submit" class="btn btn-xs btn-outline-danger">Remove</button></form>{% endif %}</td>
+				</tr>
+				{% empty %}
+				<tr><td colspan="4">No members.</td></tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			<p class="text-muted small mb-0">Removing a member takes away the access this team gives them; their own comments and requests stay. Owners are changed by staff in the admin.</p>
+		</div>
+	</div>
+	{% endif %}
+</section>
+{% endblock %}

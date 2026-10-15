@@ -53,7 +53,7 @@ class YSE(CronJobBase):
     RUN_EVERY_MINS = 240
 
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
-    code = 'YSE_App.data_ingest.Photo_Z.YSE'
+    code = 'YSE_App.data_ingest.SDSS_Photo_Z.YSE'
 
     def do(self,user='awe2',password='StandardPassword',search=1,path_to_model='YSE_DNN_photoZ_model_315.hdf5',debug=True):
         """

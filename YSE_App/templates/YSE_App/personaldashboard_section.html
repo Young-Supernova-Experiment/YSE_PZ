@@ -1,0 +1,9 @@
+{% load render_table from django_tables2 %}
+{% load bootstrap3 %}
+<div class="box-body">
+  {% if transient_cat %}
+  {% render_table transient_cat.0 %}
+  {% else %}
+  <p class="text-muted pdash-section-unsupported">This saved query cannot be shown on the dashboard: {{ unsupported_reason }}. It must be a single SELECT (comments and a WITH clause are fine) that reads YSE_App_transient and returns the name column.</p>
+  {% endif %}
+</div>

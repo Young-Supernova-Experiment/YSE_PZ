@@ -1,6 +1,30 @@
-import requests,re
+import hashlib
+import logging
+import re
+
+import requests
+from django.core.cache import cache
+
+_TESS_CACHE_TTL = 60 * 60 * 24 * 7  # 7 days
+logger = logging.getLogger(__name__)
+
+
+def _tess_cache_key(ra, dec, discovery_jd):
+	raw = f"{round(float(ra), 5)}:{round(float(dec), 5)}:{round(float(discovery_jd), 2)}"
+	return "tess_obs:" + hashlib.sha256(raw.encode()).hexdigest()
+
 
 def tess_obs(ra, dec, discovery_jd):
+	"""Return True if TESS likely observed this sky position near discovery_jd.
+
+	Network / HEASARC failures must not raise: transient post_save (and CI)
+	call this on every create. Soft-fail to False without caching so a later
+	save can retry when the service recovers.
+	"""
+	key = _tess_cache_key(ra, dec, discovery_jd)
+	cached = cache.get(key)
+	if cached is not None:
+		return cached
 
 	before_leeway = 10	 # Days of leeway before date
 	after_leeway = 10	 # Days of leeway after date
@@ -19,12 +43,17 @@ def tess_obs(ra, dec, discovery_jd):
 		2460068.5,2460097.5,2460126.5,2460154.5,2460181.5,2460207.5]
 	url = 'https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/'
 	url += 'wtv.py?Entry={ra}%2C{dec}'
-	r = requests.get(url.format(ra=str(ra), dec=str(dec)))
-	if r.status_code!=200:
-		print('status message:',r.text)
-		error = 'ERROR: could not get {url}, status code {code}'
-		raise RuntimeError(error.format(url=url, code=r.status_code))
-		return(None)
+	try:
+		r = requests.get(url.format(ra=str(ra), dec=str(dec)), timeout=15)
+	except requests.RequestException as exc:
+		logger.warning("TESS footprint query failed (%s); skipping tag", exc)
+		return False
+	if r.status_code != 200:
+		logger.warning(
+			"TESS footprint query returned HTTP %s; skipping tag",
+			r.status_code,
+		)
+		return False
 
 	reg = r"observed in camera \w+.\nSector \w+"
 	info = re.findall(reg, r.content.decode())
@@ -37,17 +66,7 @@ def tess_obs(ra, dec, discovery_jd):
 			if int(sector)<len(tess_date):
 				if (discovery_jd > tess_date[int(sector)-1]-before_leeway and
 					discovery_jd < tess_date[int(sector)]+after_leeway):
-					return(True)
-	return(False)
-
-# These should be false
-#print("Should be false:")
-#print tess_obs(94.1105250, -21.3756833, 2458481.52282)
-#print tess_obs(202.884383, -12.4804833, 2458526.52282)
-#print tess_obs(308.684333, +60.1933063, 2458526.52282)
-
-# These should be true
-#print "Should be true:"
-#print tess_obs(64.46742, -63.67525, 2458345.52282) # 2018fhw
-#print tess_obs(65.13394, -38.96065, 2458440.52282) # 2018ioa
-#print tess_obs(98.38955, -61.00797, 2458509.52282) # 2019aeg
+					cache.set(key, True, _TESS_CACHE_TTL)
+					return True
+	cache.set(key, False, _TESS_CACHE_TTL)
+	return False

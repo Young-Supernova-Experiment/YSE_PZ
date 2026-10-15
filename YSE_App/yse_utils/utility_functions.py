@@ -1,4 +1,4 @@
-import os,shutil,pdb,subprocess,shlex
+import os,shutil,subprocess,shlex
 import json,datetime,time,string,random,logging
 import numpy as np
 import healpy as hp

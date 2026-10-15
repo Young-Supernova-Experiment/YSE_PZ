@@ -1,0 +1,63 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+    <h1>
+        Summary Search
+        <small>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% else %}{{ summary_count }} transient{{ summary_count|pluralize }} with a summary{% endif %}</small>
+    </h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item active">Summary search</li>
+    </ol>
+{% endblock %}
+
+{% block styles %}
+<style>
+  .yse-summary-search-form .form-control { max-width: 40rem; }
+  .yse-summary-result { padding: .6rem 0; border-bottom: 1px solid rgba(128,128,128,.25); }
+  .yse-summary-result:last-child { border-bottom: 0; }
+  .yse-summary-result .yse-summary-score { font-variant-numeric: tabular-nums; }
+  .yse-summary-snippet { margin: .25rem 0 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="box" id="summary-search-box">
+  <div class="box-body">
+    <form class="form-inline yse-summary-search-form" action="{% url 'summary_search' %}" method="get" role="search" id="summary-search-form">
+      <label class="sr-only" for="summary-search-q">Describe the transients you are looking for</label>
+      <input id="summary-search-q" class="form-control mr-2 mb-1" name="q" type="search" value="{{ query }}" placeholder="e.g. young Type II with a spectrum from Keck" aria-label="Summary search" autofocus>
+      <button type="submit" class="btn btn-primary mb-1"><i class="fa fa-search"></i> Search</button>
+    </form>
+    <p class="small text-muted mb-0">
+      Ranks transients by how well their summary matches your words
+      {% if search_mode == 'embedding' %}(cosine similarity of <code>{{ embedder }}</code> embeddings){% else %}(text match; no embeddings are stored yet){% endif %}.
+      Only transients you can see are listed. Summaries are written on each transient's Summary tab.
+    </p>
+  </div>
+</div>
+
+{% if query %}
+<div class="box" id="summary-search-results">
+  <div class="box-body">
+    {% if results %}
+    {% for r in results %}
+    <div class="yse-summary-result" data-transient="{{ r.transient.name }}" data-score="{{ r.score }}">
+      <div>
+        <a href="{% url 'transient_detail' r.transient.slug %}"><strong>{{ r.transient.name }}</strong></a>
+        <span class="badge badge-light">{{ r.transient.status }}</span>
+        {% if r.transient.best_spec_class %}<span class="badge badge-info">{{ r.transient.best_spec_class }}</span>{% endif %}
+        {% if r.transient.redshift %}<span class="small text-muted">z = {{ r.transient.redshift|floatformat:4 }}</span>{% endif %}
+        {% if search_mode == 'embedding' %}<span class="small text-muted yse-summary-score float-right pull-right" title="cosine similarity">{{ r.score|floatformat:3 }}</span>{% endif %}
+      </div>
+      <p class="yse-summary-snippet">{{ r.snippet }}</p>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="text-muted mb-0" id="summary-search-empty">No summary matches <em>{{ query }}</em>.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
