@@ -72,6 +72,16 @@ interests_show_withdrawn. Withdrawn rows are hidden unless ?interests=all.
                         <label for="yse-interest-description" class="small mb-0">Description <span class="text-muted">(optional)</span></label>
                         <textarea class="form-control form-control-sm" id="yse-interest-description" name="description" rows="2" placeholder="Scope, data you need, timeline">{{ interest_form_values.description|default:'' }}</textarea>
                     </div>
+                    <div class="form-group col-12 mb-1">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="yse-interest-notify-pis" name="notify_pis" value="1">
+                            <label class="form-check-label small" for="yse-interest-notify-pis">Tell the PIs of private data on this transient that I cannot see (they learn your name and the title)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="yse-interest-request-data" name="request_data" value="1">
+                            <label class="form-check-label small" for="yse-interest-request-data">Also request access to that data (for the group chosen above)</label>
+                        </div>
+                    </div>
                 </div>
                 <p class="small text-muted mb-1">Registering posts a comment "&lt;you&gt; registered an interest: &lt;title&gt;" (visible to the chosen collaboration, or to your default comment audience) and notifies the other people working on this transient.</p>
                 <button type="submit" class="btn btn-sm btn-primary">Register</button>

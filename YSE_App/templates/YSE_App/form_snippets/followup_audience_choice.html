@@ -1,0 +1,15 @@
+<div class="checkbox yse-followup-audience-choice" data-group-id="{{ choice.group.pk }}">
+	<label class="yse-followup-audience-label{% if not choice.enabled %} text-muted{% endif %}">
+		<input type="checkbox"
+			name="audience_groups"
+			value="{{ choice.group.pk }}"
+			class="yse-followup-audience-group"
+			{% if choice.checked %}checked{% endif %}
+			{% if not choice.enabled %}disabled{% endif %}
+			data-resource-eligible="{{ choice.enabled|yesno:'true,false' }}"
+			data-is-public-group="{{ choice.is_public_group|yesno:'true,false' }}"
+			data-default="{{ choice.is_default|yesno:'true,false' }}"
+			data-hidden-group="{{ choice.hidden|yesno:'true,false' }}">
+		{{ choice.group.name }}
+	</label>
+</div>

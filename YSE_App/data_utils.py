@@ -50,6 +50,7 @@ from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
 from YSE_App.services import photstat
 from YSE_App.common.authz import bulk_ingest_denial, upload_denial
 from YSE_App.common.quality_mask import data_quality_mask
+from YSE_App.services.data_pis import apply_upload_pis
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -940,6 +941,7 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
         if not len(transientphot):
             transientphot = TransientPhotometry( #.objects.create
                 instrument=instrument, obs_group=obs_group, transient=transient,
+                reference=(photometry.get('reference') or None),  # #447: e.g. the TNS object of TNS imports
                 created_by_id=user.id, modified_by_id=user.id)
             transientphot_entries += [transientphot]
         else: transientphot = transientphot[0]
@@ -967,6 +969,8 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
         group_names = collaboration_groups_from_photometry_upload(photometry)
         if transientphot.pk:
             apply_collaboration_groups_to_photometry(transientphot, group_names)
+            # optional ``pis``: PrincipalInvestigator ids (#446)
+            apply_upload_pis(transientphot, photometry.get('pis'))
 
     return_dict = {"message":"successfully added phot data"}
     return JsonResponse(return_dict),transientphot_entries
@@ -1017,6 +1021,7 @@ def add_transient_spec_util(specdict,transient,user):
         spectrum_copy = spectrum.copy()
         del spectrum_copy['specdata']
         spectrum_copy.pop('groups', None)
+        upload_pis = spectrum_copy.pop('pis', None)
 
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(**spectrum_copy)
@@ -1041,6 +1046,8 @@ def add_transient_spec_util(specdict,transient,user):
                 if group not in transientspec.groups.all():
                     transientspec.groups.add(group)
                     transientspec.save()
+        # optional ``pis``: PrincipalInvestigator ids (#446)
+        apply_upload_pis(transientspec, upload_pis)
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
@@ -1151,6 +1158,8 @@ def add_transient_phot(request):
             if group not in transientphot.groups.all():
                 transientphot.groups.add(group)
                 transientphot.save()
+    # optional ``pis`` in the photheader: PrincipalInvestigator ids (#446)
+    apply_upload_pis(transientphot, ph.get('pis'))
 
     existingphot = TransientPhotData.objects.filter(photometry=transientphot)
 
@@ -1284,6 +1293,8 @@ def add_transient_spec(request):
                 if group not in transientspec.groups.all():
                     transientspec.groups.add(group)
                     transientspec.save()
+        # optional ``pis`` in the header: PrincipalInvestigator ids (#446)
+        apply_upload_pis(transientspec, hd.get('pis'))
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)

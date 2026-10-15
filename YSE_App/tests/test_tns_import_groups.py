@@ -199,3 +199,71 @@ class TnsImportGroupsPersistTests(TestCase):
             set(spec.groups.values_list("name", flat=True)),
             {PUBLIC_COLLABORATION_GROUP_NAME},
         )
+
+
+class TnsReferenceTests(TestCase):
+    """#447: TNS data is public and carries its reference instead of a PI."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = create_test_user("tns_ref_admin", is_staff=True)
+        ensure_transient_statuses(cls.admin)
+        Group.objects.get_or_create(name=PUBLIC_COLLABORATION_GROUP_NAME)
+        cls.transient = create_minimal_transient(cls.admin, name="2026tref", obs_group_name="tns-ref-survey")
+        cls.obs_group, cls.instrument, cls.band = create_instrument_stack(cls.admin, obs_group_name="ZTF")
+
+    def test_tns_reference_string(self):
+        from YSE_App.common.data_references import tns_reference
+
+        self.assertEqual(tns_reference({"objname": "2026xyz", "name_prefix": "SN"}), "TNS SN 2026xyz")
+        self.assertEqual(tns_reference({"objname": "2026xyz"}), "TNS 2026xyz")
+        self.assertEqual(tns_reference({}), "")
+        self.assertEqual(tns_reference(None), "")
+
+    def test_get_tns_photometry_sets_reference_on_each_header(self):
+        proc = processTNS()
+        proc.clobber = True
+        jd = _sample_tns_photometry_json()
+        jd.update({"objname": "2026tref", "name_prefix": "AT"})
+        phot, *_ = proc.getTNSPhotometry(jd)
+        headers = [block for block in phot.values() if isinstance(block, dict) and "photdata" in block]
+        self.assertTrue(headers)
+        for block in headers:
+            self.assertEqual(block.get("reference"), "TNS AT 2026tref")
+
+    def test_new_photometry_header_and_spectrum_store_the_reference(self):
+        photdict = {
+            "mjdmatchmin": 0.01, "clobber": True,
+            0: {
+                "instrument": self.instrument.name, "obs_group": self.obs_group.name,
+                "groups": list(TNS_IMPORT_COLLABORATION_GROUPS), "reference": "TNS AT 2026tref",
+                "photdata": {"pt1": {
+                    "obs_date": "2026-06-01T12:00:00", "band": self.band.name, "mag": 18.5, "mag_err": 0.1,
+                    "flux": None, "flux_err": None, "forced": None, "diffim": None, "flux_zero_point": None,
+                    "data_quality": 0, "discovery_point": 1,
+                }},
+            },
+        }
+        _, entries = add_transient_phot_util(photdict, self.transient, self.admin, do_photdata=False)
+        TransientPhotometry.objects.bulk_create(entries)
+        self.assertEqual(TransientPhotometry.objects.get(transient=self.transient).reference, "TNS AT 2026tref")
+        specdict = {
+            "clobber": True,
+            "spec1": {
+                "instrument": self.instrument.name, "obs_group": self.obs_group.name,
+                "obs_date": "2026-06-01T12:00:00", "ra": self.transient.ra, "dec": self.transient.dec,
+                "groups": PUBLIC_COLLABORATION_GROUP_NAME, "reference": "TNS AT 2026tref",
+                "specdata": {5000.0: {"wavelength": 5000.0, "flux": 1.0, "flux_err": 0.1}},
+            },
+        }
+        add_transient_spec_util(specdict, self.transient, self.admin)
+        self.assertEqual(TransientSpectrum.objects.get(transient=self.transient).reference, "TNS AT 2026tref")
+
+    def test_photometry_without_reference_stays_null(self):
+        photdict = {
+            "mjdmatchmin": 0.01, "clobber": True,
+            0: {"instrument": self.instrument.name, "obs_group": self.obs_group.name, "photdata": {}},
+        }
+        _, entries = add_transient_phot_util(photdict, self.transient, self.admin, do_photdata=False)
+        TransientPhotometry.objects.bulk_create(entries)
+        self.assertIsNone(TransientPhotometry.objects.get(transient=self.transient).reference)

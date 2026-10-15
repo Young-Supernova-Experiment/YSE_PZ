@@ -32,6 +32,7 @@ from YSE_App.models.interest_models import SourceInterest, TransientInterest
 from YSE_App.models.favorite_models import UserFavoriteTransient
 from YSE_App.models.feedback_models import Feedback
 from YSE_App.models.data_access_models import DataAccessRequest
+from YSE_App.models.data_sharing_models import DataSharingDelegate
 from YSE_App.models.sharing_models import SharingService, SharingSubmission, AutoPublisher
 from YSE_App.models.instrument_log_models import InstrumentLog
 from YSE_App.models.annotation_models import TransientAnnotation, TransientAnnotationValue
@@ -42,3 +43,5 @@ from YSE_App.models.researcher_models import (
     AffiliationHistory, AgreementAcceptance, EncryptedProfileValue, Mentorship, ProfileFieldHistory,
     ResearcherMetrics, ResearcherProfile, UserAgreement,
 )
+from YSE_App.models.group_models import (GroupInvitation, GroupInvitationUse, GroupMembershipRequest, GroupProfile,
+                                         UserPreference)

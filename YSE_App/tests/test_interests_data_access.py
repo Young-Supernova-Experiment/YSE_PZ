@@ -14,6 +14,7 @@ from YSE_App.models import (
     Log,
     Notification,
     NotificationPreference,
+    PrincipalInvestigator,
     SourceInterest,
     TransientInterest,
     TransientPhotometry,
@@ -331,6 +332,13 @@ class DataAccessBase(TestCase):
                                 instrument=self.instrument)
         self.spec2 = _restricted(self.admin, self.transient, self.owners, spectrum=True, obs_group=self.obs_group,
                                  instrument=self.instrument)
+        # #447: only the data's PIs (and their deputies) decide, so "owner" and "owner2" are the PIs here
+        for user in (self.owner, self.owner2):
+            pi = PrincipalInvestigator.objects.create(
+                name="Synthetic PI %s" % user.username, email="pi@example.com", phone="000",
+                institution="Synthetic U", user=user, created_by=self.admin, modified_by=self.admin)
+            for row in (self.phot, self.spec, self.spec2):
+                row.pis.add(pi)
 
     def _visible_spectra(self, user):
         return set(SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, self.transient.id)
@@ -369,7 +377,7 @@ class DataAccessServiceTests(DataAccessBase):
         self.assertEqual(req.requester, req.created_by)
         rows = Notification.objects.filter(kind="data_access").order_by("recipient__username")
         self.assertEqual([n.recipient.username for n in rows], ["owner", "owner2"])
-        self.assertIn("req asks DEBASS for access to 2 restricted spectra on 2026dar", rows[0].text)
+        self.assertIn("req asks for access to 2 restricted spectra of DEBASS on 2026dar", rows[0].text)
         self.assertIn("For a host paper", rows[0].text)
         self.assertIn("/data_access_requests/?request=%s" % req.pk, rows[0].text)
         self.assertEqual(rows[0].url, "/data_access_requests/?request=%s" % req.pk)
@@ -545,7 +553,8 @@ class DataAccessPageTests(DataAccessBase):
         req = DataAccessRequest.objects.get()
         self.assertEqual(req.message, "please")
         response = self.client.get(self.detail)
-        self.assertContains(response, "Access request #%d sent to DEBASS" % req.pk)
+        self.assertContains(response, "Access request #%d sent:" % req.pk)
+        self.assertContains(response, "PIs and their deputies were notified")
         response = self.client.get(self.spectra_fragment)
         self.assertContains(response, "Access request pending")
         self.assertContains(response, 'data-status="pending"')

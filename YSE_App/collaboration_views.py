@@ -12,10 +12,10 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models import DataAccessRequest, Transient, TransientInterest
 from YSE_App.services import data_access as dar
 from YSE_App.services import interests as svc
+from YSE_App.services.groups import picker_groups
 
 
 def _safe_next(request, fallback):
@@ -42,7 +42,7 @@ def interests_context(request, transient, user_groups=None):
         user_groups = svc.selectable_groups(request.user)
     return {
         "interests": list(svc.interest_queryset(transient.id, include_withdrawn=show_withdrawn)),
-        "interest_groups": list(user_groups),
+        "interest_groups": picker_groups(request.user, user_groups),
         "interest_roles": TransientInterest.ROLE_CHOICES,
         "interest_statuses": TransientInterest.STATUS_CHOICES,
         "interests_show_withdrawn": show_withdrawn,
@@ -63,7 +63,7 @@ def data_access_context(request, transient, kinds=None, user_groups=None):
         "hidden_rows": rows,
         "hidden_rows_spectrum": [r for r in rows if r["kind"] == "spectrum"],
         "hidden_rows_photometry": [r for r in rows if r["kind"] == "photometry"],
-        "access_target_groups": [g for g in user_groups if g.name != PUBLIC_COLLABORATION_GROUP_NAME],
+        "access_target_groups": dar.requestable_groups(request.user, user_groups=user_groups),
     }
 
 
@@ -91,12 +91,25 @@ def interest_register(request, transient_id):
             transient, request.user, request.POST.get("title", ""), group=group,
             role=request.POST.get("role") or TransientInterest.ROLE_LEAD,
             description=(request.POST.get("description") or "").strip(),
+            notify_pis=_checked(request.POST.get("notify_pis")),
+            request_data=_checked(request.POST.get("request_data")),
         )
     except (ValidationError, PermissionDenied) as exc:
         messages.error(request, "Interest not registered: %s" % _error_text(exc))
     else:
         messages.success(request, "Interest registered: %s." % interest.title)
+        outcome = getattr(interest, "pi_outcome", None)
+        if outcome:
+            if outcome["requests"]:
+                messages.success(request, "Data access requested from %s; the PIs and group members were notified." % (
+                    ", ".join(sorted({r.owner_group.name for r in outcome["requests"]}))))
+            for reason in outcome["skipped"]:
+                messages.warning(request, "No access request for %s" % reason)
     return redirect(_safe_next(request, fallback))
+
+
+def _checked(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "on", "true", "yes")
 
 
 @login_required
@@ -149,7 +162,8 @@ def data_access_request_create(request, transient_id):
         messages.error(request, "Access request not sent: %s" % _error_text(exc))
     else:
         messages.success(
-            request, "Access request #%d sent to %s; its members were notified." % (req.pk, owner_group.name),
+            request, "Access request #%d sent: the data's PIs and their deputies were notified%s." % (
+                req.pk, "" if dar.named_deciders_for(req) else " (no PI assigned, so an administrator decides)"),
         )
     return redirect(_safe_next(request, fallback))
 
@@ -167,8 +181,13 @@ def data_access_requests(request):
         qs = dar.requests_to_decide(request.user)
     qs = dar.filter_requests(qs, request.GET)
     rows = list(qs[:500])
+    staff = request.user.is_staff or request.user.is_superuser
     for row in rows:
-        row.can_decide = row.is_pending and dar.user_can_decide(request.user, row)
+        row.decider_role = dar.decider_role(request.user, row) if row.is_pending and box != "mine" else None
+        row.can_decide = row.decider_role is not None
+        row.staff_override = row.decider_role == "staff"
+        # #447: requests whose data has no PI (with an account) and no deputy can only be decided by staff
+        row.no_named_decider = bool(staff and row.is_pending and box == "inbox" and not dar.named_deciders_for(row))
     highlight = request.GET.get("request") or ""
     return render(request, "YSE_App/data_access_requests.html", {
         "rows": rows,
@@ -205,4 +224,59 @@ def data_access_decide(request, request_id):
                 "" if req.granted_count == 1 else "s", req.transient.name))
         else:
             messages.success(request, "Request #%d declined." % req.pk)
+        if req.is_staff_override:
+            messages.warning(request, "You decided request #%d as an administrator; the override is logged." % req.pk)
     return redirect(_safe_next(request, fallback))
+
+
+# --- data sharing deputies (#447) -----------------------------------------------
+
+@login_required
+def data_sharing_deputies(request):
+    """A PI's deputies: who may share the PI's private data, for all of it or for one group's data.
+
+    Lists the PI records linked to the signed-in account; POST ``action=add`` (``pi``, ``username``,
+    optional ``group`` / ``note``) or ``action=remove`` (``delegate_id``). Staff manage any PI in the admin.
+    """
+    from django.contrib.auth.models import User
+
+    from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
+    from YSE_App.models import DataSharingDelegate, PrincipalInvestigator
+    from YSE_App.services import data_sharing
+
+    page = reverse("data_sharing_deputies")
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        try:
+            if action == "add":
+                pi = get_object_or_404(PrincipalInvestigator, pk=request.POST.get("pi") or 0)
+                username = (request.POST.get("username") or "").strip()
+                delegate = User.objects.filter(username=username, is_active=True).first() if username else None
+                if delegate is None:
+                    raise ValidationError({"username": "No active account with that username."})
+                group_id = (request.POST.get("group") or "").strip()
+                group = get_object_or_404(Group, pk=group_id) if group_id else None
+                row = data_sharing.add_delegate(request.user, pi, delegate, group, note=request.POST.get("note", ""))
+                messages.success(request, "%s may now share %s's data%s." % (
+                    row.delegate.username, pi.name, " restricted to %s" % group.name if group else ""))
+            elif action == "remove":
+                row = get_object_or_404(DataSharingDelegate.objects.select_related("pi", "delegate"),
+                                        pk=request.POST.get("delegate_id") or 0)
+                data_sharing.remove_delegate(request.user, row)
+                messages.success(request, "%s no longer shares %s's data." % (row.delegate.username, row.pi.name))
+            else:
+                messages.error(request, "Unknown action.")
+        except (ValidationError, PermissionDenied) as exc:
+            messages.error(request, "Not changed: %s" % _error_text(exc))
+        return redirect(page)
+    pis = data_sharing.managed_pis(request.user)
+    rows = DataSharingDelegate.objects.filter(pi__in=pis).select_related("pi", "delegate", "group")
+    by_pi = {pi.pk: [] for pi in pis}
+    for row in rows:
+        by_pi.setdefault(row.pi_id, []).append(row)
+    deputy_for = DataSharingDelegate.objects.filter(delegate=request.user).select_related("pi", "group")
+    return render(request, "YSE_App/data_sharing_deputies.html", {
+        "pis": [(pi, by_pi.get(pi.pk, [])) for pi in pis],
+        "deputy_for": list(deputy_for),
+        "groups": list(Group.objects.exclude(name=PUBLIC_COLLABORATION_GROUP_NAME).order_by("name")),
+    })

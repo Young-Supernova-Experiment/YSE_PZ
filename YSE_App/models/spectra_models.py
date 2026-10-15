@@ -69,6 +69,11 @@ class TransientSpectrum(Spectrum):
     host_subtraction = models.CharField(
         max_length=16, choices=HostSubtraction.choices, null=True, blank=True)
 
+    # PIs of this dataset (#446); several are allowed. See YSE_App.services.data_pis.
+    pis = models.ManyToManyField(
+        'YSE_App.PrincipalInvestigator', blank=True, related_name='transient_spectra',
+        help_text='Principal investigator(s) of this spectrum.')
+
     def __str__(self):
         return 'Spectrum: %s - %s' % (self.transient.name, self.obs_date.strftime('%m/%d/%Y'))
 

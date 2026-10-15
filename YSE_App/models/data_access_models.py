@@ -20,7 +20,10 @@ datasets were granted (``granted_dataset_ids``) and to which group, so the
 grant is auditable and reversible, and the ``Public`` group is never a valid
 target so a grant cannot make data world-readable by accident.
 
-Who may decide: active members of ``owner_group`` and staff. Follows
+Who may decide (#447): the data's PIs (``services.data_pis.pis_for``, with
+the allocation fallback) and the deputies they designated
+(``DataSharingDelegate``); staff only as a logged administrator override
+(``decided_as``). Members and owners of ``owner_group`` do not decide. Follows
 SkyPortal's ``DataAccessRequest`` (BSD-3-Clause) in spirit; no code is copied.
 """
 
@@ -64,7 +67,7 @@ class DataAccessRequest(BaseModel):
     )
     owner_group = models.ForeignKey(
         Group, on_delete=models.CASCADE, related_name="data_access_requests_owned",
-        help_text="Group that owns the restricted data; its members decide.",
+        help_text="Group the restricted data is restricted to; the data's PIs and their deputies decide.",
     )
     target_group = models.ForeignKey(
         Group, on_delete=models.CASCADE, related_name="data_access_requests_granted",
@@ -76,6 +79,17 @@ class DataAccessRequest(BaseModel):
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="data_access_decisions",
     )
     decided_at = models.DateTimeField(null=True, blank=True)
+    # In what capacity ``decided_by`` decided (#447): as a PI, as a PI's deputy, or as an administrator
+    # (the logged staff override). Nullable: rows decided before #447 have none.
+    DECIDED_AS_PI = "pi"
+    DECIDED_AS_DEPUTY = "deputy"
+    DECIDED_AS_STAFF = "staff"
+    DECIDED_AS_CHOICES = (
+        (DECIDED_AS_PI, "PI"),
+        (DECIDED_AS_DEPUTY, "PI's deputy"),
+        (DECIDED_AS_STAFF, "Administrator override"),
+    )
+    decided_as = models.CharField(max_length=8, choices=DECIDED_AS_CHOICES, null=True, blank=True)
     note = models.TextField(blank=True, default="", help_text="Decision note shown to the requester.")
     granted_dataset_ids = JSONTextField(
         null=True, blank=True,
@@ -107,6 +121,14 @@ class DataAccessRequest(BaseModel):
     @property
     def kind_label(self):
         return dict(self.KIND_CHOICES).get(self.dataset_kind, self.dataset_kind)
+
+    @property
+    def decided_as_label(self):
+        return dict(self.DECIDED_AS_CHOICES).get(self.decided_as, "") if self.decided_as else ""
+
+    @property
+    def is_staff_override(self):
+        return self.decided_as == self.DECIDED_AS_STAFF
 
     @property
     def granted_count(self):

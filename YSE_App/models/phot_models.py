@@ -30,6 +30,10 @@ class TransientPhotometry(Photometry):
     # Optional
     host = models.ForeignKey(Host, null=True, blank=True, on_delete=models.SET_NULL)
     followup = models.ForeignKey(TransientFollowup, null=True, blank=True, on_delete=models.SET_NULL) # Can by null if data is from external source
+    # PIs of this dataset (#446); several are allowed. See YSE_App.services.data_pis.
+    pis = models.ManyToManyField(
+        'YSE_App.PrincipalInvestigator', blank=True, related_name='transient_photometry',
+        help_text='Principal investigator(s) of this photometry set.')
 
     def __str__(self):
         return 'Transient Phot: %s' % (self.transient.name)

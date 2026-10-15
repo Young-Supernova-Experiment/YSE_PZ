@@ -605,6 +605,179 @@ cd <CHECKOUT> && <PYTHON> manage.py shell -c "from django.conf import settings a
 
 Expected: the values you set for that stack. Then sign in to `/yse_test/` and `/yse_experimental/` in the same browser: the browser's cookie list shows `sessionid_yse_test` (path `/yse_test/`) and `sessionid_yse_experimental` (path `/yse_experimental/`), and signing in to one no longer signs you out of the other. To undo, remove the keys and restart (one more logout).
 
+<a id="teams"></a>
+
+### Research teams: group owners, invitation links and user settings (develop-direct PR; #445, #440) nothing required, owners optional
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migrations `0033_group_profiles` (new tables only: `YSE_App_groupprofile` with its owners table, `YSE_App_groupinvitation`, `YSE_App_groupinvitationuse`, `YSE_App_userpreference` with three group tables) and `0034_seed_group_profiles` (one profile per existing group, **no owners**, every group active; Public, `api_writers`, `explorer_users` and any group holding model permissions marked *system*) run automatically on deploy and are safe on the shared `YSE_test` database. No new dependency.
+
+**Effect on deploy:** nothing changes for users until owners are assigned. New pages: `/teams/` (My teams), `/teams/<id>/` (team page), `/teams/join/...` (invitation links) and `/settings/` (group pickers and defaults), linked from the user menu and from My profile. Audience pickers stop offering `api_writers` / `explorer_users` (Public stays).
+
+**Step A (optional): check the seed.**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py ensure_group_profiles
+```
+
+Expected: `group profiles: created 0, marked system 0` (the migration already did it). A non-zero `created` only means groups were added by code that predates group profiles; running it again prints zeros.
+
+**Step B (David or Ryan, in the admin): assign owners.** Owners are data, not code (Ryan, 2026-10-11).
+
+1. Admin > Authentication and Authorization > Groups > click the team.
+2. In the **Group profile** box at the bottom: move one or more users into **Owners**, optionally add a **Description**, leave **Is active** ticked, leave **Is system** unticked. Save.
+3. The admin refuses owners on a system group ("System groups cannot have owners"). Public, `api_writers`, `explorer_users` and permission groups keep staff-only membership, edited on the same Group page as before.
+
+**Check:** the owner signs in, opens User menu > My teams, and sees the team with role "Owner"; its page shows Members, "Invite people" and the invitation list.
+
+**Step C (optional): mark a group inactive.** Undecided which groups start inactive, so all start active. Staff: the same Group page, untick **Is active**; or an owner on `/teams/<id>/`. Inactive groups disappear from pickers and default audiences only: members, data and who can see existing data are unchanged. Tick it again to undo.
+
+**Invite flow (for owners; nothing to run on the server):**
+
+1. On `/teams/<id>/`, "Invite people": choose the expiry (default 14 days, at most 60) and how many people may use the link (default 1). Click "Create link" and copy the link: it is shown **once** and only its hash is stored. Send it yourself (email, Slack). No email address is stored.
+2. The invitee opens the link. Signed out: they sign in and come back to it (or create an account at `/signup/` when self-signup is on, [section "Self-service signup"](#self-signup)). Signed in: they land on `/teams/join/`.
+3. A new user is first sent to the User Agreement and the profile (the onboarding gate), then back to `/teams/join/`. They click "Join <team>" and become a member; owners get a notification.
+4. Owners can revoke an open link, and remove members (not owners) on the team page.
+
+**Step D (optional): purge old links.** Expired, revoked or used-up invitations older than 90 days can be deleted (open links and memberships are never touched):
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_invitations --dry-run
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_invitations
+```
+
+Expected: `group invitations: would delete N ...` then `deleted N`.
+
+**Optional settings** (`<CHECKOUT>/YSE_PZ/settings.ini`, restart Apache), defaults shown:
+
+```ini
+[groups]
+SYSTEM_GROUP_NAMES: Public, api_writers, explorer_users
+PICKER_VISIBLE_SYSTEM_GROUPS: Public
+INVITE_DEFAULT_DAYS: 14
+INVITE_MAX_DAYS: 60
+INVITE_MAX_USES_LIMIT: 50
+INVITE_PURGE_DAYS: 90
+```
+
+**Explorer:** `YSE_App_groupinvitation*` and `YSE_App_userpreference*` are hidden from SQL Explorer and its SQL blacklist; add them to the table-level grant exclusions of [step D above](#onboarding) if you set those up.
+
+Production: steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
+<a id="data-pis"></a>
+
+### PIs on private data (develop-direct PR; #446) nothing required, PI accounts and backfill optional
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migration `0035_data_pis` adds one nullable column, `YSE_App_principalinvestigator.user_id`, and two new join tables, `YSE_App_transientphotometry_pis` and `YSE_App_transientspectrum_pis`. It runs automatically on deploy, writes no data, and is safe on the shared `YSE_test` database. No new dependency.
+
+**Effect on deploy:** nothing changes until PIs are set. The upload-spectrum form, the `add_transient_spec` / `add_transient_phot` upload APIs (`"pis": [<PrincipalInvestigator id>, ...]`), the REST API and the admin can set PIs on a spectrum or photometry set. The spectra and photometry tables show the PI names, and the "restricted data" hint shows the PI names of hidden data. The "Register interest" form has two opt-in boxes: "Tell the PIs" and "Also request access".
+
+**Step A (optional, David or Ryan, in the admin): link PIs to their accounts.** Only a linked PI is notified or can accept and decline requests.
+
+1. Admin > YSE_App > Principal investigators > click the PI.
+2. Set **User** to the PI's YSE-PZ account (the magnifier opens a user search). Save.
+
+**Check:** on a transient with private data that has this PI, a second user who cannot see the data registers an interest with both boxes ticked. The PI gets one "Data access request" notification, and the request is in the PI's Data access requests inbox.
+
+**Step B (optional): backfill PIs on existing data.** This fills only datasets that have no PI yet, from an allocation that covers the spectrum (same instrument, or same telescope, with the observation date inside its dates) or from the PIs linked to the dataset's observation group. Anything ambiguous or unmatched stays blank. By default it is a dry run on restricted data only.
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py backfill_data_pis
+```
+
+Expected: `datasets to fill: N (allocation A, obs_group O); ambiguous X; unmatched U` then `dry run: nothing written (pass --apply to write)`. If the numbers look right:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py backfill_data_pis --apply
+```
+
+Expected: the same first line, then `written: N datasets`. **Check:** running the dry run again prints `datasets to fill: 0`. Options: `--include-public` also fills public data, `--max-pis 2` accepts up to two PIs per dataset, and `--source obs_group` uses one source only. The command only adds PIs and never removes any. To undo, remove PIs per dataset in the admin.
+
+Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
+<a id="data-sharers"></a>
+### Who may share private data: PIs and their deputies (develop-direct PR; #447) nothing required, but check PI links first
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migration `0037_data_sharing_delegates` adds one new table, `YSE_App_datasharingdelegate`, and one nullable column, `YSE_App_dataaccessrequest.decided_as`. It runs automatically on deploy, writes no data, and is safe on the shared `YSE_test` database. No new dependency.
+
+**Effect on deploy (behaviour change, Ryan 2026-10-13):**
+
+* Only the data's PIs (linked accounts, see [Step A of "PIs on private data"](#data-pis)) and the deputies they designate may accept or decline data access requests, or change the groups of restricted data through the REST API. Members and owners of the owner group no longer can.
+* Data without an explicit PI uses its allocation's PI, at read time: the follow-up's ToO / classical / queued resource's allocation PI (or the resource's own PI), or the follow-up's facility request's allocation PI. Nothing is written.
+* Data with neither can only be shared by staff. Such requests notify the active staff, and the staff inbox marks them "No PI assigned". Every staff decision is recorded as an administrator override (`decided_as = staff`, shown in the inbox and the admin) and logged by the `YSE_App.data_access` logger at WARNING.
+* Pending requests filed before the deploy follow the same rule.
+* New page `/data_sharing_deputies/` (linked from the Data access requests page): a PI adds or removes deputies, for all of their data or for one group's data. Staff can manage any PI's deputies in the admin (Principal investigators > a PI > "Data sharing delegates", or Data sharing delegates).
+* TNS imports now set `reference` (`TNS <prefix> <name>`) on new photometry sets and spectra.
+* SQL Explorer shows the PI tables again (Refs #643).
+
+**Step A (recommended before or right after deploy, Ryan or David): link the PIs of private data to accounts.** Otherwise only staff can decide requests for that data. Use [Step A](#data-pis) and, if wanted, the `backfill_data_pis` [Step B](#data-pis) of "PIs on private data".
+
+**Check:** sign in as a member of a group with restricted data who is not its PI: `/data_access_requests/` says "Nothing to decide". Sign in as the linked PI: the request is listed with Accept / Decline. As staff, deciding shows "You decided request #N as an administrator; the override is logged."
+
+Production: Step A after the `develop -> master` merge (`/data/yse_pz/YSE_PZ`).
+
+<a id="self-signup"></a>
+
+### Self-service signup and team membership requests (develop-direct PR; #448, #440 follow-up, #643) nothing required, signup off until turned on
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Migration `0036_group_membership_requests` adds one new table, `YSE_App_groupmembershiprequest`, runs automatically on deploy, writes no data, and is safe on the shared `YSE_test` database. No new dependency (plain `django.contrib.auth`; no allauth, no CAPTCHA service).
+
+**Effect on deploy (flag off):** nothing opens. `/signup/`, `/signup/verify/...`, `/settings/email/` and new membership requests return 404, and the login page shows no "Create an account" link. Always on after deploy:
+
+* the login page has a "Forgot password?" link (Django's password reset, already routed);
+* the **Public** group is always offered in audience pickers: a user's hidden groups, an inactive flag and `PICKER_VISIBLE_SYSTEM_GROUPS` can no longer take it out (#440 follow-up);
+* the PrincipalInvestigator REST API returns only `url`, `id` and `name` to non-staff (staff still see email, phone and the rest; non-staff can still send those fields when they create or update a PI), and `YSE_App_groupmembershiprequest` is hidden from SQL Explorer and its SQL blacklist (#643). If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_groupmembershiprequest`. The PI tables (`YSE_App_principalinvestigator`, `YSE_App_principalinvestigator_obs_group`) stay visible in Explorer (Ryan, 2026-10-13; changed by the #447 PR): do not exclude them.
+
+**Before Step A:** owners should exist on the teams that will take requests ([section "Research teams"](#teams), Step B). Only active, non-system teams with at least one active owner can be requested.
+
+**Step A (Ryan or David): turn signup on**, on one stack at a time (yse\_test first). In `<CHECKOUT>/YSE_PZ/settings.ini`:
+
+```ini
+[site_settings]
+SELF_SIGNUP_ENABLED: True
+```
+
+Then restart Apache (or the stack's WSGI process) as for any settings change. **Check:**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://<STACK_URL>/signup/
+```
+
+Expected: `200` (it was `404` before). The login page now shows "Create an account". Rollback: set `SELF_SIGNUP_ENABLED: False` (or env `YSE_SELF_SIGNUP=0`) and restart; existing accounts and pending requests stay, and owners can still decide pending requests.
+
+**What a new user sees:** `/signup/` asks for a username, an email address and a password (Django's password validators). The account is **active at once** (no staff approval, Ryan 2026-10-13) and only in Public. They are signed in and sent through the User Agreement and the researcher profile (the onboarding gate), then land on `/teams/`, where "Ask to join a team" lists the requestable teams. The owners get a notification (in-app, email and Slack by default: "Interests and data access" preference group) and approve or deny on the team page; the requester is notified of the decision.
+
+**Email verification** (on by default when email delivery is on, `NOTIFICATION_EMAIL_ENABLED`): the address is not stored on the account until its owner opens the emailed link and presses Confirm (the link holds the address encrypted with a key derived from `SECRET_KEY`, expires after 72 hours and works once). Until then the account gets no email and cannot reset its password by email; the user can resend the link from `/settings/email/`. If the server cannot send mail, signup still works and the page says so. **Check:** sign up with a test address you control on yse\_test, receive the email, confirm, and see the address under `/settings/email/` ("has a confirmed email address").
+
+**Spam guard** (no external service): a hidden honeypot field, a minimum fill time, and hourly limits kept in the cache (per client IP, hashed, and site-wide). Behind Apache's reverse proxy every request may come from the proxy address, so the per-IP limit then acts site-wide; to count real client addresses set `SELF_SIGNUP_CLIENT_IP_HEADER: HTTP_X_FORWARDED_FOR` (only if the proxy always sets that header). Without Redis (`REDIS_URL`) the counters are per WSGI process.
+
+**Step B (optional): purge old requests.** Approved, denied and withdrawn requests decided more than 90 days ago (pending ones and memberships are never touched):
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_membership_requests --dry-run
+cd <CHECKOUT> && <PYTHON> manage.py purge_group_membership_requests
+```
+
+Expected: `group membership requests: would delete N ...` then `deleted N`.
+
+**Optional settings** (`<CHECKOUT>/YSE_PZ/settings.ini`, restart), defaults shown:
+
+```ini
+[site_settings]
+SELF_SIGNUP_ENABLED: False
+SELF_SIGNUP_EMAIL_VERIFICATION: <same as NOTIFICATION_EMAIL_ENABLED>
+SELF_SIGNUP_VERIFY_HOURS: 72
+SELF_SIGNUP_ATTEMPTS_PER_IP_PER_HOUR: 10
+SELF_SIGNUP_ACCOUNTS_PER_HOUR: 30
+SELF_SIGNUP_MIN_FILL_SECONDS: 3
+SELF_SIGNUP_CLIENT_IP_HEADER:
+
+[groups]
+REQUEST_PURGE_DAYS: 90
+REQUESTS_PER_USER_PER_DAY: 10
+```
+
+Production: Step A only when Ryan decides, after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
+
 <a id="merge"></a>
 
 ### Login required on every page (#496): verify, rollback switch only if needed
@@ -1802,9 +1975,11 @@ SELECT CONCAT('GRANT SELECT ON \`', table_schema, '\`.\`', table_name, '\` TO ''
 FROM information_schema.tables WHERE table_schema='<DB>'
 AND table_name NOT LIKE 'auth\_%' AND table_name NOT LIKE 'authtoken\_%' AND table_name NOT LIKE 'axes\_%'
 AND table_name NOT LIKE 'auditlog\_%' AND table_name NOT LIKE 'otp\_%' AND table_name NOT IN ('django_session','django_admin_log',
-'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_principalinvestigator','YSE_App_externalservicerun','YSE_App_feedback');" > /tmp/explorer_grants.sql
+'YSE_App_encryptedcredential','YSE_App_profile','YSE_App_externalservicerun','YSE_App_feedback');" > /tmp/explorer_grants.sql
 wc -l /tmp/explorer_grants.sql
 ```
+
+The PI tables (`YSE_App_principalinvestigator` and its `_obs_group` join table) are **not** excluded any more (Ryan, 2026-10-13, [#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)). If you ran this step before 2026-10-15, grant them: `GRANT SELECT ON \`<DB>\`.\`YSE_App_principalinvestigator\` TO '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';` (and the same for `YSE_App_principalinvestigator_obs_group`). The personal-data tables of the onboarding and teams sections (`YSE_App_researcherprofile*`, `YSE_App_groupinvitation*`, `YSE_App_userpreference*`, `YSE_App_groupmembershiprequest`, ...) stay excluded as those sections say.
 
 Saved queries often join `auth_user` for names. Keep that working with a column grant. Append it to the file, then swap the grants:
 
@@ -2433,6 +2608,11 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-15 v56, **nothing new to run**. Develop backported into experimental again (develop-direct PRs [#641](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/641), [#642](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/642), [#644](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/644), [#649](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/649) and David's forced-phot URL update): the four develop entries below (develop's own v31-v34) are renumbered v52-v55 in this changelog. On experimental, develop's migrations `0033_group_profiles` to `0037_data_sharing_delegates` sit beside experimental's `0033_photstat_extrapolated` to `0037_merge_develop_profile`; the new no-op merge migration `0038_merge_develop_groups` joins the two lines. All of develop's migrations are already applied on the shared `YSE_test` database by the develop deploy, so the experimental deploy only records `0038`. The develop sections above (Research teams, PIs on private data, Who may share private data, Self-service signup) apply to yse\_experimental unchanged; on experimental the signup, email-confirmation and invitation-link pages are reachable signed out under the login-required default.
+* 2026-10-13 v55 (develop v34), nothing required (link PI accounts first so PIs, not only staff, can decide). Only PIs and their deputies share private data ([#447](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/447)): migration 0037 (one new table, one nullable column); allocation-PI fallback; logged staff override; `/data_sharing_deputies/`; TNS references; PI tables visible in Explorer again ([section "Who may share private data"](#data-sharers)).
+* 2026-10-13 v54 (develop v33), nothing required (signup off by default). Self-service signup and team membership requests ([#448](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/448)): migration 0036 (one new table); turn on with `SELF_SIGNUP_ENABLED: True` when ready; optional `purge_group_membership_requests`. Public always offered in pickers ([#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)); PI contact fields staff-only in the API and PI table hidden from Explorer ([#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)) ([section "Self-service signup"](#self-signup)).
+* 2026-10-13 v53 (develop v32), nothing required (PI accounts and backfill optional). PIs on private data ([#446](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/446)): migration 0035 (one nullable column, two new join tables); staff link PIs to accounts in the admin; optional `backfill_data_pis` (dry run by default) ([section "PIs on private data"](#data-pis)).
+* 2026-10-12 v52 (develop v31), nothing required (owners optional). Research teams, invitation links and user settings ([#445](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/445), [#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)): migrations 0033/0034 (new tables, one profile per group, no owners, all active, system groups marked); staff assign owners in Admin > Groups ([section "Research teams"](#teams)); optional `ensure_group_profiles` check, inactive flag, `purge_group_invitations` and `[groups]` keys.
 * 2026-10-12 v51, **nothing new to run**. Develop backported into experimental (develop-direct PRs #633, #635, #639 and David's develop hotfixes): the three develop entries below (develop's own v28-v30) are renumbered v48-v50 in this changelog. On experimental, develop's migrations `0031_researcher_profile` and `0032_seed_user_agreement` sit beside experimental's `0031_spatial_time_indexes` / `0032_api_writer_groups`; the merge migration `0037_merge_develop_profile` (no schema change) joins the two lines. On the shared `YSE_test` database both lines are applied by whichever stack migrates first; the experimental deploy then only records 0037. The onboarding gate exempts the two-factor setup and verify pages, `/feedback/`, `/query_api/`, the API and the facility callbacks.
 * 2026-10-12 v50 (develop v30), optional (recommended). Per-stack session / CSRF cookie names and paths ([#637](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/637)): defaults unchanged; set the four `[site_settings]` keys on yse\_test and yse\_experimental (section "Per-stack session and CSRF cookies"); everyone on that stack is logged out once.
 * 2026-10-12 v49 (develop v29), optional. Onboarding gate under the `/yse_test/` prefix ([#634](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/634)): mitigation (turn the gate off on yse\_test) until the fix deploys; the fix itself needs no server step.
