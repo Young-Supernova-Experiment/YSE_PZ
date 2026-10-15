@@ -8,7 +8,9 @@ Invite flow (and why it is safe with the onboarding gate):
    visitor is sent to the login page and comes back to the link. A signed-in visitor's
    session remembers the token's hash and is redirected to the token-free
    ``/teams/join/``. This view is ``onboarding_exempt`` only so the token is not copied
-   into the gate's ``?next=`` URLs.
+   into the gate's ``?next=`` URLs. For the same reason it is ``login_exempt`` (on
+   experimental, so the login redirect is the view's own, with ``no-referrer``) and
+   skipped by experimental's staff two-factor check (``/teams/join/`` is not).
 3. ``group_invite_accept`` (``/teams/join/``) is an ordinary, gated page. A brand-new user
    is therefore sent through the User Agreement and the profile first, and comes back
    to ``/teams/join/``; only then can they confirm, and only a POST adds them to the
@@ -36,6 +38,13 @@ from YSE_App.onboarding import onboarding_exempt
 from YSE_App.services import groups as group_svc
 from YSE_App.services import membership
 from YSE_App.signup_forms import MembershipRequestForm
+
+try:  # experimental (#548): deny-by-default login middleware
+    from YSE_App.login_required import login_exempt
+except ImportError:  # develop: no such middleware; keep the marker for the backport
+    def login_exempt(view):
+        view.login_exempt = True
+        return view
 
 INVITE_SESSION_KEY = "_yse_group_invite"
 NEW_LINK_SESSION_KEY = "_yse_group_invite_new_link"
@@ -183,6 +192,7 @@ def team_member_remove(request, group_id, user_id):
     return redirect("team_detail", group.pk)
 
 
+@login_exempt  # signed out: the view's own login redirect keeps Referrer-Policy: no-referrer
 @onboarding_exempt
 @require_GET
 def group_invite_link(request, token):
