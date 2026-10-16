@@ -802,6 +802,18 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 (or set `YSE_LOGIN_REQUIRED_MIDDLEWARE=0` in the Apache / WSGI environment; the env var wins), then `sudo systemctl restart apache2`. **Check** the second curl above now returns `302` from the view's own login decorator, or `200` for a view without one. Views keep their own login decorators either way. Report what broke so the allowlist can be fixed, then remove the line.
 
+<a id="astroscheduler-130"></a>
+
+### AstroScheduler 1.3.0 (2026-10-16, #678) required on any venv the deploy does not install
+
+`requirements.txt` moves `astroscheduler` from v1.2.0 to v1.3.0. The new version adds a checklist of several reasons for Failed/Punted in the planner, and a solver about 3x faster with identical schedules. The planner's JavaScript changed, so `collectstatic` must run after the install. The Deploy Stack job does both on the yse\_experimental venv. On `yse_test_virtual` (yse\_test, and Apache for yse\_experimental per [#187](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/187)) and on production, repeat the [planner page](#astroscheduler-page) commands. There is no migration.
+
+**Expected:**
+- the import prints `1.3.0`;
+- `collectstatic` reports `app.js` and `index`-related files copied.
+
+**Check, with the flag on:** in the planner's Real-Time Mode, the Failed/Punted reasons are checkboxes.
+
 <a id="astroscheduler-observations"></a>
 
 ### AstroScheduler execution feedback, phase 5 (2026-10-16, #666-#668) migration applied by the deploy; nothing else required
@@ -2715,6 +2727,7 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-16 v64, **required on venvs the deploy does not install**: install `astroscheduler` 1.3.0, then `collectstatic` ([#678](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/678); [section "AstroScheduler 1.3.0"](#astroscheduler-130)). No migration.
 * 2026-10-16 v63, **nothing new to run**. AstroScheduler planner: end-to-end smoke test ([#35](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/35)); the plans list and the target-list export now use a fixed number of queries ([#675](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/675)); observer guide and performance notes in `docs/astroscheduler.md` ([#676](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/676)). No migration, no new package.
 * 2026-10-16 v62, **migration applied by the deploy; nothing else required (expiry optional, off)**. AstroScheduler outcomes and request status ([#670](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/670), [#672](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/672)-[#674](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/674)): migration `0041_observed_block_outcomes` only changes choices and help text (no SQL). Completed records "Data taken"; a good judgement or an uploaded spectrum/photometry set makes the request Successful; the new daily `ExpireFollowupRequests` cron (already in `CRON_CLASSES`, run by the existing `runcrons`) fails ended classical requests without good data, but only once `ASTROSCHEDULER_EXPIRE_AFTER` is set ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).
 * 2026-10-16 v61, **migration applied by the deploy; nothing else required**. AstroScheduler execution feedback ([#666](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/666)-[#668](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/668)): migration `0040_observed_blocks` (two new tables and 12 seeded outcome reasons, safe on the shared database); the planner's Start/Completed/Failed/Punted are recorded and update follow-up statuses, behind `ASTROSCHEDULER_ENABLED` ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).

@@ -1,7 +1,7 @@
 # AstroScheduler night planner
 
 YSE_PZ plans classical nights with [AstroScheduler](https://github.com/UCSC-Transients/AstroScheduler),
-installed as a pinned package (`requirements.txt`, tag `v1.2.0`). AstroScheduler owns solving
+installed as a pinned package (`requirements.txt`, tag `v1.3.0`). AstroScheduler owns solving
 and scheduling. YSE_PZ owns the targets, the saved plans and the outcomes. AstroScheduler also
 runs on its own as a standalone app, and can import a YSE_PZ night with an API token.
 
@@ -36,7 +36,8 @@ Contents: [Observer guide](#observer-guide) · [Execution feedback](#execution-f
    - **Failed** when you tried and missed it, the S/N was bad, and so on;
    - **Punted** when you went to it but got no usable data, or stopped too early.
 
-   Failed and Punted need a reason, and the comment box is the note.
+   Failed and Punted need at least one reason; tick every one that applies. The comment box
+   is the note.
 4. Everything is recorded in YSE_PZ. Tonight's observing log appears below the plans.
 5. Press **Recalculate Schedule Starting Now** to re-plan the rest of the night. Finished targets
    are left out, even after a page reload.
@@ -250,7 +251,7 @@ returns `can_approve`.
 version. The body:
 
 ```json
-{"result": {"blocks": [...], "solver_version": "1.2.0"}, "targets": [...],
+{"result": {"blocks": [...], "solver_version": "1.3.0"}, "targets": [...],
  "parent": null, "notes": "optional"}
 ```
 
@@ -316,8 +317,8 @@ pins, at Lick, with random synthetic targets, on one laptop (Ziggy may differ):
 
 | Follow-ups | 10 | 20 | 40 | 60 | 100 |
 | --- | --- | --- | --- | --- | --- |
-| AstroScheduler 1.2.0 (pinned now), s | 3.3 | 4.9 | 21 | 45 | 107 |
-| Next release ([AstroScheduler#110](https://github.com/UCSC-Transients/AstroScheduler/issues/110)), s | 3.2 | 3.6 | 7.2 | 13 | 23 |
+| AstroScheduler 1.2.0, s | 3.3 | 4.9 | 21 | 45 | 107 |
+| AstroScheduler 1.3.0 (pinned; [#110](https://github.com/UCSC-Transients/AstroScheduler/issues/110)), s | 3.2 | 3.6 | 7.2 | 13 | 23 |
 
 The next release gives identical schedules. About 1 s of each solve is the night's twilight
 calculation, which is cached per site and night for later solves in the same process. A
