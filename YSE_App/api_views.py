@@ -1070,6 +1070,53 @@ class PlannerNightsAPIView(generics.GenericAPIView):
         return Response({"nights": nights})
 
 
+class NightPlansAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/<id>/plans/``: the night's saved plan versions;
+    ``POST``: save the planner's current schedule as a new version (#662)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, night_id):
+        from YSE_App.services import night_plans
+
+        night = _planner_night(night_id)
+        return Response({
+            "plans": night_plans.plan_summaries(night, request.user),
+            "can_approve": night_plans.can_approve(night, request.user),
+        })
+
+    def post(self, request, night_id):
+        from YSE_App.services import night_plans
+
+        night = _planner_night(night_id)
+        try:
+            plan = night_plans.save_plan(night, request.user, request.data)
+        except night_plans.PlanError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"id": plan.id, "version": plan.version, "state": plan.state,
+                         "blocks": plan.blocks.count()}, status=status.HTTP_201_CREATED)
+
+
+class NightPlanApproveAPIView(generics.GenericAPIView):
+    """``POST /api/night_plans/<id>/approve/``: the night's PI or staff approve a version (#663)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, plan_id):
+        from YSE_App.services import night_plans
+
+        plan = NightPlan.objects.select_related("night__resource__principal_investigator").filter(pk=plan_id).first()
+        if plan is None:
+            raise Http404("no night plan %r" % plan_id)
+        _planner_night(plan.night_id)
+        try:
+            night_plans.approve_plan(plan, request.user)
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"id": plan.id, "version": plan.version, "state": plan.state,
+                         "approved_at": plan.approved_at})
+
+
 class PlannerSolveAPIView(generics.GenericAPIView):
     """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
     ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""

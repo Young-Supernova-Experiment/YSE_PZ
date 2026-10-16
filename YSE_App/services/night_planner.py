@@ -305,9 +305,20 @@ def planner_nights(user, days_back: int = 7, days_ahead: int = 60, now=None) -> 
     return out
 
 
-def frame_config(night, user, *, api_base: str, csrf_token: str, url_for=None) -> Dict[str, Any]:
-    """``window.ASTROSCHEDULER_CONFIG`` for the embedded planner of ``night`` (#659)."""
+def frame_config(night, user, *, api_base: str, csrf_token: str, url_for=None, plan=None) -> Dict[str, Any]:
+    """``window.ASTROSCHEDULER_CONFIG`` for the embedded planner of ``night`` (#659).
+
+    With a saved ``plan`` (#664): the night's current targets get the plan's saved edits back,
+    and the first solve starts from the plan's blocks (``previous_schedule``).
+    """
     data = night_targets(night, user, url_for=url_for)
+    targets, previous = data["targets"], []
+    if plan is not None:
+        from YSE_App.services import night_plans
+
+        reopened = night_plans.reopen_data(plan, user)
+        targets = night_plans.apply_edits(targets, reopened["edits"])
+        previous = reopened["previous_schedule"]
     return {
         "mode": "embedded",
         "apiBase": api_base,
@@ -316,8 +327,9 @@ def frame_config(night, user, *, api_base: str, csrf_token: str, url_for=None) -
         "initial": {
             "date": data["night"]["date"],
             "instrument": data["instrument"],
-            "targets": data["targets"],
+            "targets": targets,
             "result": None,
+            "previous_schedule": previous,
         },
     }
 

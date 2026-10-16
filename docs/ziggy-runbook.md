@@ -802,6 +802,21 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 (or set `YSE_LOGIN_REQUIRED_MIDDLEWARE=0` in the Apache / WSGI environment; the env var wins), then `sudo systemctl restart apache2`. **Check** the second curl above now returns `302` from the view's own login decorator, or `200` for a view without one. Views keep their own login decorators either way. Report what broke so the allowlist can be fixed, then remove the line.
 
+<a id="astroscheduler-plans"></a>
+
+### AstroScheduler saved plans, phase 4 (2026-10-16, #661-#664, #77) migration applied by the deploy; package install required on venvs the deploy does not install
+
+- **Migration:** `0039_night_plans` adds two new tables, `YSE_App_nightplan` and `YSE_App_plannedblock`, and changes no existing table. It is safe on the shared `YSE_test` database, and the deploy applies it.
+- **Package:** `requirements.txt` moves `astroscheduler` to v1.2.0, so re-opened plans re-solve stably. On venvs the deploy does not install, repeat the [planner page](#astroscheduler-page) commands: install, check that the import prints `1.2.0`, run `collectstatic`, restart Apache.
+
+**Check, once the flag is on (yse\_experimental):**
+1. Open a night's planner, press **Recalculate Schedule**, then **Save plan**. The page reloads with "Opened v1" and the version is listed under "Saved plans".
+2. **Target list** downloads a text file.
+3. Staff or the night's PI see **Approve**.
+4. Admin > Night plans lists the version, read-only.
+
+**Rollback:** the flag hides everything. The tables can stay: nothing reads them while the flag is off.
+
 <a id="astroscheduler-page"></a>
 
 ### AstroScheduler planner page, phase 3 (2026-10-16, #658, #659) required on any venv the deploy does not install; flag optional
@@ -2670,6 +2685,7 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-16 v60, **migration applied by the deploy; required on venvs the deploy does not install** (install `astroscheduler` 1.2.0, then `collectstatic`). AstroScheduler saved plans ([#661](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/661)-[#664](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/664), [#77](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/77)): migration `0039_night_plans` (two new tables, safe on the shared database); save, approve, re-open and export from the planner page, all behind `ASTROSCHEDULER_ENABLED` ([section "AstroScheduler saved plans"](#astroscheduler-plans)).
 * 2026-10-16 v59, **required on venvs the deploy does not install** (yse\_test, Apache's venv for yse\_experimental, production): install `astroscheduler` 1.1.0, then `collectstatic`; flag optional. AstroScheduler planner page and nights list ([#658](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/658), [#659](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/659)): no migration; the "Plan this night" button and `/night_planner/<id>/` appear only with `ASTROSCHEDULER_ENABLED: True` ([section "AstroScheduler planner page"](#astroscheduler-page)).
 * 2026-10-15 v58, **required on venvs the deploy does not install** (yse\_test, Apache's venv for yse\_experimental, production); flag optional. AstroScheduler night planner, phase 2 ([#653](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/653)-[#656](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/656)): install the pinned `astroscheduler` 1.0.1 package (no migration). The planner targets and solve APIs stay off until `ASTROSCHEDULER_ENABLED: True` is set; enable it on yse\_experimental only when Ryan asks ([section "AstroScheduler night planner"](#astroscheduler)).
 * 2026-10-15 v57, **nothing new to run**. Develop backported into experimental again (develop-direct PRs [#641](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/641), [#642](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/642), [#644](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/644), [#649](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/649) [#651](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/651) and David's forced-phot URL update): the five develop entries below (develop's own v31-v35) are renumbered v52-v56 in this changelog. On experimental, develop's migrations `0033_group_profiles` to `0037_data_sharing_delegates` sit beside experimental's `0033_photstat_extrapolated` to `0037_merge_develop_profile`; the new no-op merge migration `0038_merge_develop_groups` joins the two lines. All of develop's migrations are already applied on the shared `YSE_test` database by the develop deploy, so the experimental deploy only records `0038`. The develop sections above (Research teams, PIs on private data, Who may share private data, Self-service signup) apply to yse\_experimental unchanged; on experimental the signup, email-confirmation and invitation-link pages are reachable signed out under the login-required default, and staff two-factor sign-in (when on) skips only the invitation and email-confirmation links, so their tokens stay out of `?next=`; `/teams/`, `/teams/join/`, `/settings/` and `/data_sharing_deputies/` ask unverified staff for the code first, then the onboarding gate applies. SQL Explorer: the PI tables are visible again on experimental too (Ryan, 2026-10-13, #643); if you limited the Explorer database user's grants ([Step E](#authz-flags)), see the note there.
