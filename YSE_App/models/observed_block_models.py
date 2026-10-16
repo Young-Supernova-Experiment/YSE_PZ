@@ -61,10 +61,14 @@ class ObservedBlock(BaseModel):
         CALIBRATION = "calibration", "Calibration"
 
     class Outcome(models.TextChoices):
-        SUCCESS = "success", "Success"
+        # Outcomes of one observation, not of the follow-up request (#670): the request's own
+        # status (InProcess / Successful / Failed) is judged across nights.
+        SUCCESS = "success", "Success"  # judged good: the request becomes Successful
+        OBSERVED = "observed", "Data taken"  # data in hand, not yet judged
         PARTIAL = "partial", "Partial"
-        FAILED = "failed", "Failed"
-        SKIPPED = "skipped", "Skipped"
+        FAILED = "failed", "Failed"  # tried, but missed the target, bad S/N, ...
+        PUNTED = "punted", "Punted"  # went to the object, no usable data (or ended too early)
+        SKIPPED = "skipped", "Skipped"  # planned, never attempted
 
     class Source(models.TextChoices):
         TONIGHT = "tonight", "Tonight page"
@@ -100,7 +104,12 @@ class ObservedBlock(BaseModel):
     outcome = models.CharField(max_length=8, choices=Outcome.choices)
     reason = models.ForeignKey(
         OutcomeReason, null=True, blank=True, on_delete=models.PROTECT, related_name="observed_blocks",
-        help_text="Required unless the outcome is success",
+        help_text="Required for failed, punted and skipped",
+    )
+    # Several reasons may apply (Ryan, 2026-10-16); ``reason`` keeps the first, as in the draft.
+    reasons = models.ManyToManyField(
+        OutcomeReason, blank=True, related_name="observed_blocks_any",
+        help_text="Every reason given; the first is also in reason",
     )
     achieved_sn = models.FloatField(null=True, blank=True)
     seeing = models.FloatField(null=True, blank=True, help_text="arcsec")
@@ -113,9 +122,12 @@ class ObservedBlock(BaseModel):
     class Meta:
         ordering = ("night", "end_ut", "id")
 
+    # Outcomes that say why there are no usable data, so they need a reason.
+    NEEDS_REASON = (Outcome.FAILED, Outcome.PUNTED, Outcome.SKIPPED)
+
     def clean(self):
-        if self.outcome != self.Outcome.SUCCESS and self.reason_id is None:
-            raise ValidationError({"reason": "A reason is required unless the outcome is success."})
+        if self.outcome in self.NEEDS_REASON and self.reason_id is None:
+            raise ValidationError({"reason": "A reason is required for a failed, punted or skipped observation."})
 
     def __str__(self):
         return "%s %s: %s" % (self.night, self.target_name, self.outcome)

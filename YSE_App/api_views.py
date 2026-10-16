@@ -1140,6 +1140,26 @@ class NightObservationsAPIView(generics.GenericAPIView):
         return Response(result, status=status.HTTP_201_CREATED)
 
 
+class ObservedBlockAssessAPIView(generics.GenericAPIView):
+    """``POST /api/observed_blocks/<id>/assess/``: judge an observation (#672): ``success`` makes
+    the request Successful; ``failed`` / ``punted`` (with a reason) leave it alone."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, block_id):
+        from YSE_App.services import observations
+
+        block = ObservedBlock.objects.select_related("night__resource", "followup").filter(pk=block_id).first()
+        if block is None:
+            raise Http404("no observed block %r" % block_id)
+        _planner_night(block.night_id)
+        try:
+            result = observations.assess_block(block, request.user, request.data)
+        except observations.ObservationError as exc:
+            return Response({"detail": str(exc)}, status=exc.status)
+        return Response(result)
+
+
 class PlannerSolveAPIView(generics.GenericAPIView):
     """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
     ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""

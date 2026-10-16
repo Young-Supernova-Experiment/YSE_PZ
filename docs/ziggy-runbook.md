@@ -811,7 +811,24 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 **Check:**
 1. On the stack's database, run `SELECT code FROM YSE_App_outcomereason ORDER BY code;`. **Expected:** 12 rows, from `classified_elsewhere` to `wrong_object`.
 2. With the flag on, in the planner's Real-Time Mode, mark a target **Completed**.
-3. The row appears under "Tonight's observing log", and the follow-up's status on the observing-night page becomes Successful.
+3. The row appears under "Tonight's observing log" as "Data taken", and the follow-up's status on the observing-night page becomes InProcess.
+4. **Good** on that row makes the request Successful. So does uploading a spectrum for it.
+
+**Optional, only when Ryan asks: closing ended requests.** The daily `ExpireFollowupRequests` cron is a no-op until a start date is set. A date in the future is the safe choice: only requests whose window ends on or after it are ever touched.
+
+1. Dry run, to see which requests the date would affect:
+
+```
+cd <STACK_DIR> && <STACK_PYTHON> manage.py expire_followup_requests --since <YYYY-MM-DD>
+```
+
+2. Then set the date under `[site_settings]` in that stack's `YSE_PZ/settings.ini`:
+
+```ini
+ASTROSCHEDULER_EXPIRE_AFTER: <YYYY-MM-DD>
+```
+
+**Expected:** the dry run prints "Would change: N to Failed, M to Successful; K left for a judgement" and changes nothing. After the setting is in place, the cron log line (`runcrons`) reads "follow-up expiry cron: ...". **Rollback:** remove the line. Statuses already changed stay changed; set them back in the admin if needed.
 
 **Rollback:** turn the flag off. The tables can stay.
 
@@ -2698,6 +2715,7 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-16 v62, **migration applied by the deploy; nothing else required (expiry optional, off)**. AstroScheduler outcomes and request status ([#670](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/670), [#672](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/672)-[#674](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/674)): migration `0041_observed_block_outcomes` only changes choices and help text (no SQL). Completed records "Data taken"; a good judgement or an uploaded spectrum/photometry set makes the request Successful; the new daily `ExpireFollowupRequests` cron (already in `CRON_CLASSES`, run by the existing `runcrons`) fails ended classical requests without good data, but only once `ASTROSCHEDULER_EXPIRE_AFTER` is set ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).
 * 2026-10-16 v61, **migration applied by the deploy; nothing else required**. AstroScheduler execution feedback ([#666](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/666)-[#668](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/668)): migration `0040_observed_blocks` (two new tables and 12 seeded outcome reasons, safe on the shared database); the planner's Start/Completed/Failed/Punted are recorded and update follow-up statuses, behind `ASTROSCHEDULER_ENABLED` ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).
 * 2026-10-16 v60, **migration applied by the deploy; required on venvs the deploy does not install** (install `astroscheduler` 1.2.0, then `collectstatic`). AstroScheduler saved plans ([#661](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/661)-[#664](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/664), [#77](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/77)): migration `0039_night_plans` (two new tables, safe on the shared database); save, approve, re-open and export from the planner page, all behind `ASTROSCHEDULER_ENABLED` ([section "AstroScheduler saved plans"](#astroscheduler-plans)).
 * 2026-10-16 v59, **required on venvs the deploy does not install** (yse\_test, Apache's venv for yse\_experimental, production): install `astroscheduler` 1.1.0, then `collectstatic`; flag optional. AstroScheduler planner page and nights list ([#658](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/658), [#659](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/659)): no migration; the "Plan this night" button and `/night_planner/<id>/` appear only with `ASTROSCHEDULER_ENABLED: True` ([section "AstroScheduler planner page"](#astroscheduler-page)).

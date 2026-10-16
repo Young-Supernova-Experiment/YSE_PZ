@@ -285,3 +285,32 @@ def create_group_profile(sender, instance, created, **kwargs):
     from YSE_App.services.groups import profile_for
 
     profile_for(instance)
+
+
+# ---- AstroScheduler execution feedback (#674) -------------------------------
+# New data prove the observation: the matching data-taken observation becomes a success and
+# its classical request Successful. Never fails the upload (errors are only logged).
+
+def _data_uploaded(instance, obs_date):
+    import logging
+
+    from YSE_App.services.observations import data_uploaded
+
+    try:
+        data_uploaded(instance.transient_id, instance.followup_id, obs_date,
+                      getattr(instance, "created_by", None))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("observation success from uploaded data failed")
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_observation_success_spectrum")
+def observation_success_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get('raw'):
+        _data_uploaded(instance, instance.obs_date)
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_observation_success_photometry")
+def observation_success_on_photometry(sender, instance, created, **kwargs):
+    # A photometry set has no date of its own: only an upload naming its request counts.
+    if created and not kwargs.get('raw') and instance.followup_id:
+        _data_uploaded(instance, None)
