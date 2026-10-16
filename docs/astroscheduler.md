@@ -5,9 +5,38 @@ installed as a pinned package (`requirements.txt`, tag `v1.2.0`). AstroScheduler
 and scheduling. YSE_PZ owns the targets, and later the saved plans and outcomes.
 AstroScheduler also runs on its own as a standalone app.
 
-Status (2026-10-16): the targets feed, the server-side solve, the planner page and saved
-plans (versions, approval, re-opening, target-list export) are in place. Execution feedback
-comes in a later PR.
+Status (2026-10-16): the targets feed, the server-side solve, the planner page, saved plans
+(versions, approval, re-opening, target-list export) and execution feedback are in place.
+
+## Execution feedback
+
+The planner's Real-Time Mode buttons are recorded in YSE_PZ (migration `0040_observed_blocks`:
+the draft's `ObservedBlock` and `OutcomeReason`).
+
+| Planner action | Follow-up status | Observed block |
+| --- | --- | --- |
+| Start Observation | InProcess | none; its time becomes the block's start |
+| Completed | Successful | outcome `success` |
+| Failed (reason required) | Failed | outcome `failed` |
+| Punted (reason required) | unchanged | outcome `skipped` |
+
+**What a block records:** the note, the planned and actual times, and who recorded it.
+
+**Linking to a plan:**
+- A block links to the matching planned block, either of the plan that is open or of the
+  night's approved plan.
+- The first outcome moves the approved plan to `executing`.
+
+**Who may record:** staff, the night's PI, or users authorised for the night's resource. In
+every case the follow-up must be one they can see. If YSE_PZ refuses, the action is cancelled
+in the planner too.
+
+**Reasons:** they are a lookup table (Admin > Outcome reasons). The seed codes match the
+planner's reason menu.
+
+**After a reload:** targets finished tonight carry the status the solver skips (`Observed`,
+`Failed` or `Punted`). "Recalculate Schedule Starting Now" therefore re-plans only what's left.
+The planner page shows tonight's observing log.
 
 ## Saved plans
 
@@ -153,6 +182,20 @@ version. The body:
 ```
 
 Limits: at most 400 blocks and 300 targets.
+
+### `GET` / `POST /api/observing_nights/<night id>/observations/`
+
+**GET** returns tonight's observed blocks, newest first.
+
+**POST** records one planner action (the AstroScheduler event):
+
+```json
+{"action": "complete", "external_id": "<follow-up id>", "reason": null, "note": "",
+ "time_utc": "...", "started_utc": "...", "plan": <open plan id or null>}
+```
+
+`action` is `start`, `complete`, `fail` or `punt`. `reason` is an OutcomeReason code, required
+for `fail` and `punt`.
 
 ### `POST /api/night_plans/<plan id>/approve/`
 

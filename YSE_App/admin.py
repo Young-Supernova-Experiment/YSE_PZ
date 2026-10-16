@@ -1157,3 +1157,39 @@ class NightPlanAdmin(admin.ModelAdmin):
 
 	def has_change_permission(self, request, obj=None):
 		return False
+
+
+from YSE_App.models.observed_block_models import ObservedBlock, OutcomeReason  # noqa: E402
+
+
+@admin.register(OutcomeReason)
+class OutcomeReasonAdmin(admin.ModelAdmin):
+	"""Reasons are a lookup table (#666): add or retire them here; codes stay stable."""
+	list_display = ("code", "label", "category", "active")
+	list_filter = ("category", "active")
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(ObservedBlock)
+class ObservedBlockAdmin(admin.ModelAdmin):
+	"""Observed blocks are recorded from the planner (#667); read-only here."""
+	list_display = ("id", "night", "target_name", "outcome", "reason", "end_ut", "recorded_by", "source")
+	list_filter = ("outcome", "source")
+	readonly_fields = ("night", "target_name", "followup", "planned_block", "outcome", "reason", "start_ut",
+	                   "end_ut", "comments", "recorded_by", "source", "created_date")
+	fields = readonly_fields
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False

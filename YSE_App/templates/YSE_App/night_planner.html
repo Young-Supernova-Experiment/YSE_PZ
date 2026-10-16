@@ -61,6 +61,30 @@
     </div>
   </div>
 
+  <div class="card card-outline card-secondary" id="observing-log-card">
+    <div class="card-header"><h3 class="card-title">Tonight's observing log</h3></div>
+    <div class="card-body">
+      <p class="text-muted small">
+        Real-Time Mode in the planner records Start, Completed, Failed and Punted here and updates each
+        follow-up's status. Finished targets are left out of the next solve; use
+        "Recalculate Schedule Starting Now" to re-plan the rest of the night.
+      </p>
+      <table class="table table-sm table-striped mb-0" id="observing-log-table">
+        <thead><tr><th>End (UTC)</th><th>Target</th><th>Outcome</th><th>Reason</th><th>Note</th><th>Recorded by</th></tr></thead>
+        <tbody>
+        {% for o in observing_log %}
+          <tr data-outcome="{{ o.outcome }}">
+            <td>{{ o.end_ut|slice:"11:16" }}</td><td>{{ o.target_name }}</td><td>{{ o.outcome }}</td>
+            <td>{{ o.reason|default:"" }}</td><td>{{ o.note|default:"" }}</td><td>{{ o.recorded_by }}</td>
+          </tr>
+        {% empty %}
+          <tr class="observing-log-empty"><td colspan="6" class="text-muted small">Nothing recorded yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <p class="text-muted small">The planner solves only when you press Recalculate.</p>
   <iframe id="night-planner-frame" src="{{ frame_url }}" title="Night planner"
           style="width: 100%; height: calc(100vh - 220px); min-height: 720px; border: 0; border-radius: 6px;"></iframe>
@@ -72,6 +96,7 @@
 <script>
 (function () {
   const plansApi = "{{ plans_api|escapejs }}";
+  const observationsApi = "{{ observations_api|escapejs }}";
   const plannerUrl = "{{ planner_url|escapejs }}";
   const approveBase = "{% url 'api-night-plan-approve' 0 %}".replace("/0/approve/", "/");
   const csrf = "{{ csrf_token|escapejs }}";
@@ -101,6 +126,31 @@
         notes: document.getElementById("plan-notes").value.trim() || null});
       window.location.href = plannerUrl + "?plan=" + saved.id;
     } catch (e) { say("Not saved: " + e.message, true); }
+  });
+
+  // Planner actions are recorded in YSE_PZ; if YSE_PZ refuses, the planner cancels the action.
+  const frame = document.getElementById("night-planner-frame");
+  frame.addEventListener("load", function () {
+    const planner = frame.contentWindow.AstroScheduler;
+    if (!planner) return;
+    planner.hooks.onObservationEvent = async function (event) {
+      let started = null;
+      if (event.action !== "start") {
+        planner.getObservationLog().forEach(function (e) {
+          if (e.action === "start" && e.target_name === event.target_name) started = e.time_utc;
+        });
+      }
+      const saved = await post(observationsApi, Object.assign({}, event, {started_utc: started, plan: parentPlan}));
+      if (saved.observed_block) {
+        const tbody = document.querySelector("#observing-log-table tbody");
+        const empty = tbody.querySelector(".observing-log-empty");
+        if (empty) empty.remove();
+        const row = tbody.insertRow(0);
+        row.dataset.outcome = saved.outcome;
+        [event.time_utc.slice(11, 16), event.target_name, saved.outcome, event.reason || "", event.note || "", "you"]
+          .forEach(function (text) { row.insertCell().textContent = text; });
+      }
+    };
   });
 
   document.querySelectorAll(".approve-plan-btn").forEach(function (btn) {
