@@ -77,6 +77,13 @@ class ObservationError(ValueError):
         self.status = status
 
 
+def active_reasons(user) -> List[OutcomeReason]:
+    """The reasons offered in the night log's checklist."""
+    if not OutcomeReason.objects.exists():
+        ensure_reasons(user)
+    return list(OutcomeReason.objects.filter(active=True).order_by("label"))
+
+
 def ensure_reasons(user) -> None:
     """Seed the draft's reasons if missing (migration 0040 skips databases without users)."""
     existing = set(OutcomeReason.objects.values_list("code", flat=True))
@@ -138,12 +145,8 @@ def record_event(night, user, payload: Any) -> Dict[str, Any]:
         raise ObservationError("That follow-up is not one of this night's follow-ups you can see", 403)
 
     outcome, status_name = ACTIONS[action]
-    reason = None
-    if outcome in ObservedBlock.NEEDS_REASON:
-        ensure_reasons(user)
-        reason = OutcomeReason.objects.filter(code=payload.get("reason") or "", active=True).first()
-        if reason is None:
-            raise ObservationError("Choose a reason for %s" % ("a failure" if action == "fail" else "a punt"))
+    reasons = _reasons(payload, user, required=outcome in ObservedBlock.NEEDS_REASON) if outcome else []
+    reason = reasons[0] if reasons else None
     note = _note(payload)
     at = _when(payload.get("time_utc")) or timezone.now()
 
@@ -166,6 +169,8 @@ def record_event(night, user, payload: Any) -> Dict[str, Any]:
                 recorded_by=user, source=ObservedBlock.Source.ASTROSCHEDULER,
                 created_by=user, modified_by=user,
             )
+            if reasons:
+                observed.reasons.set(reasons)
             if plan is not None and plan.state == NightPlan.State.APPROVED:
                 plan.state = NightPlan.State.EXECUTING
                 plan.modified_by = user
@@ -178,6 +183,26 @@ def record_event(night, user, payload: Any) -> Dict[str, Any]:
         "observed_block": observed.id if observed else None,
         "outcome": outcome,
     }
+
+
+def _reasons(payload: Dict[str, Any], user, required: bool) -> List[OutcomeReason]:
+    """The reasons given as ``reasons`` (a list of codes) or ``reason`` (one code), in order."""
+    raw = payload.get("reasons")
+    if raw in (None, "", []):
+        raw = [payload.get("reason")] if payload.get("reason") else []
+    if not isinstance(raw, list) or not all(isinstance(c, str) for c in raw) or len(raw) > 12:
+        raise ObservationError("'reasons' must be a list of reason codes")
+    codes = list(dict.fromkeys(c.strip() for c in raw if c.strip()))
+    if not codes:
+        if required:
+            raise ObservationError("Choose at least one reason")
+        return []
+    ensure_reasons(user)
+    found = {r.code: r for r in OutcomeReason.objects.filter(code__in=codes, active=True)}
+    unknown = [c for c in codes if c not in found]
+    if unknown:
+        raise ObservationError("Unknown reason: %s" % ", ".join(unknown))
+    return [found[c] for c in codes]
 
 
 def _note(payload: Dict[str, Any]) -> str:
@@ -219,12 +244,8 @@ def assess_block(block: ObservedBlock, user, payload: Any) -> Dict[str, Any]:
         raise ObservationError("You may not judge observations for this night", 403)
     if block.followup_id is None or block.followup_id not in visible_followup_ids(night, user):
         raise ObservationError("That observation's follow-up is not one you can see", 403)
-    reason = None
-    if outcome in ObservedBlock.NEEDS_REASON:
-        ensure_reasons(user)
-        reason = OutcomeReason.objects.filter(code=payload.get("reason") or "", active=True).first()
-        if reason is None:
-            raise ObservationError("Choose a reason")
+    reasons = _reasons(payload, user, required=outcome in ObservedBlock.NEEDS_REASON)
+    reason = reasons[0] if reasons else None
     note = _note(payload)
     with transaction.atomic():
         block = ObservedBlock.objects.select_for_update().select_related("followup__status").get(pk=block.pk)
@@ -234,6 +255,7 @@ def assess_block(block: ObservedBlock, user, payload: Any) -> Dict[str, Any]:
             block.comments = ("%s\n%s" % (block.comments, note)).strip() if block.comments else note
         block.modified_by = user
         block.save(update_fields=["outcome", "reason", "comments", "modified_by", "modified_date"])
+        block.reasons.set(reasons)
         if outcome == ObservedBlock.Outcome.SUCCESS:
             _set_status(block.followup, "Successful", user)
     block.followup.refresh_from_db()
@@ -355,7 +377,7 @@ def tonight_log(night, user) -> List[Dict[str, Any]]:
     from YSE_App.services.night_plans import visible_followup_ids
 
     blocks = (ObservedBlock.objects.filter(night=night).select_related("reason", "recorded_by")
-              .order_by("-end_ut", "-id"))
+              .prefetch_related("reasons").order_by("-end_ut", "-id"))
     if not (user.is_staff or user.is_superuser):
         visible = visible_followup_ids(night, user)
         blocks = [b for b in blocks if b.followup_id is None or b.followup_id in visible or b.recorded_by_id == user.id]
@@ -364,7 +386,8 @@ def tonight_log(night, user) -> List[Dict[str, Any]]:
         "target_name": b.target_name,
         "outcome": b.outcome,
         "outcome_label": b.get_outcome_display(),
-        "reason": b.reason.label if b.reason_id else None,
+        "reason": ", ".join(r.label for r in sorted(b.reasons.all(), key=lambda r: r.label))
+                  or (b.reason.label if b.reason_id else None),
         "note": b.comments,
         "start_ut": b.start_ut.isoformat() if b.start_ut else None,
         "end_ut": b.end_ut.isoformat() if b.end_ut else None,

@@ -78,6 +78,7 @@ def night_planner_page(request, night_id):
         "plans_api": reverse("api-night-plans", kwargs={"night_id": night.id}),
         "observations_api": reverse("api-night-observations", kwargs={"night_id": night.id}),
         "observing_log": observations.tonight_log(night, request.user),
+        "outcome_reasons": observations.active_reasons(request.user),
         "planner_url": reverse("night_planner", kwargs={"night_id": night.id}),
     })
 

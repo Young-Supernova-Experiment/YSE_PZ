@@ -24,7 +24,7 @@ Two different things are recorded.
 | Planner: Failed (reason required): tried and missed, bad S/N... | `failed` | unchanged |
 | Planner: Punted (reason required): went to it, no usable data or stopped too early | `punted` | unchanged |
 | Night log: **Good** | `success` | **Successful** |
-| Night log: Failed / Punted (reason required) | `failed` / `punted` | unchanged |
+| Night log: Failed / Punted (at least one reason) | `failed` / `punted` | unchanged |
 | A spectrum or photometry set is uploaded (see below) | `success` | **Successful** |
 | The request's window ends without good data (see below) | (none) | **Failed** |
 
@@ -231,7 +231,10 @@ for `fail` and `punt`.
 
 ### `POST /api/observed_blocks/<id>/assess/`
 
-Judges a recorded observation: `{"outcome": "success" | "failed" | "punted", "reason": "<code>", "note": "..."}`.
+Judges a recorded observation:
+`{"outcome": "success" | "failed" | "punted", "reasons": ["<code>", ...], "note": "..."}`.
+On the planner page this is the **Judge** form on each "Data taken" row of the night log:
+the outcome, a checklist of reasons (several may apply) and a comment.
 `success` makes the request Successful. `failed` and `punted` need a reason and leave the request
 alone.
 

@@ -106,6 +106,11 @@ class ObservedBlock(BaseModel):
         OutcomeReason, null=True, blank=True, on_delete=models.PROTECT, related_name="observed_blocks",
         help_text="Required for failed, punted and skipped",
     )
+    # Several reasons may apply (Ryan, 2026-10-16); ``reason`` keeps the first, as in the draft.
+    reasons = models.ManyToManyField(
+        OutcomeReason, blank=True, related_name="observed_blocks_any",
+        help_text="Every reason given; the first is also in reason",
+    )
     achieved_sn = models.FloatField(null=True, blank=True)
     seeing = models.FloatField(null=True, blank=True, help_text="arcsec")
     facility_request = models.ForeignKey(

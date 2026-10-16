@@ -150,6 +150,12 @@ class RecordEventTests(_ObservationsFixture):
         with override_settings(ASTROSCHEDULER_ENABLED=False):
             self.assertEqual(self._post(self.staff, self._event("complete")).status_code, 404)
 
+    def test_planner_failure_with_several_reasons(self):
+        response = self._post(self.staff, self._event("fail", reasons=["telescope", "ran_out_of_time"]))
+        self.assertEqual(response.status_code, 201, response.content[:300])
+        block = ObservedBlock.objects.get(pk=response.json()["observed_block"])
+        self.assertEqual(set(block.reasons.values_list("code", flat=True)), {"telescope", "ran_out_of_time"})
+
     def test_reasons_are_seeded_on_first_use(self):
         OutcomeReason.objects.all().delete()
         self._post(self.staff, self._event("punt", reason="too_faint"))
@@ -229,11 +235,34 @@ class AssessTests(_ObservationsFixture):
         with override_settings(ASTROSCHEDULER_ENABLED=False):
             self.assertEqual(self._assess(self.staff, block_id, outcome="success").status_code, 404)
 
-    def test_page_offers_judgement_for_data_taken_rows(self):
-        self._taken()
+    def test_page_offers_a_judge_form_with_reasons_and_comment(self):
+        block_id = self._taken()
         with mock.patch(BAZIN, return_value={}):
             page = self._client(self.staff).get(reverse("night_planner", kwargs={"night_id": self.night.pk}))
-        self.assertContains(page, 'class="btn btn-success btn-xs assess-btn"')
+        self.assertContains(page, 'class="btn btn-default btn-xs judge-toggle" data-block="%d"' % block_id)
+        self.assertContains(page, 'id="judge-%d"' % block_id)
+        self.assertContains(page, '<input type="checkbox" name="reasons" value="low_sn">')
+        self.assertContains(page, '<input type="checkbox" name="reasons" value="weather">')
+        self.assertContains(page, 'name="note"')
+
+    def test_several_reasons_and_a_comment(self):
+        block_id = self._taken()
+        response = self._assess(self.staff, block_id, outcome="failed", reasons=["low_sn", "weather"],
+                                note="clouds came in, S/N 3")
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        block = ObservedBlock.objects.get(pk=block_id)
+        self.assertEqual(block.reason.code, "low_sn")  # the first, as the draft's single reason
+        self.assertEqual(set(block.reasons.values_list("code", flat=True)), {"low_sn", "weather"})
+        self.assertIn("clouds came in", block.comments)
+        log = self._client(self.staff).get(reverse("api-night-observations", kwargs={"night_id": self.night.pk}))
+        self.assertEqual(log.json()["observations"][0]["reason"], "Low S/N, Weather")
+
+    def test_unknown_reason_in_the_list_is_refused(self):
+        block_id = self._taken()
+        response = self._assess(self.staff, block_id, outcome="punted", reasons=["weather", "made_up"])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("made_up", response.json()["detail"])
+        self.assertEqual(ObservedBlock.objects.get(pk=block_id).outcome, "observed")
 
 
 class ExpiryTests(_ObservationsFixture):

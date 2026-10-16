@@ -1,7 +1,10 @@
-"""Observed blocks (#670, #672): the ``observed`` ("Data taken") and ``punted`` outcomes.
+"""Observed blocks (#670, #672): the ``observed`` ("Data taken") and ``punted`` outcomes, and
+several reasons per observation.
 
-Choices and help text only: no SQL change (``outcome`` stays varchar(8)). Safe on the shared
-database.
+* ``outcome`` / ``reason``: choices and help text only, no SQL change.
+* ``reasons``: a new many-to-many join table, ``YSE_App_observedblock_reasons``.
+
+Safe on the shared database: no existing column changes.
 """
 
 from django.db import migrations, models
@@ -22,6 +25,13 @@ class Migration(migrations.Migration):
                 choices=[('success', 'Success'), ('observed', 'Data taken'), ('partial', 'Partial'),
                          ('failed', 'Failed'), ('punted', 'Punted'), ('skipped', 'Skipped')],
                 max_length=8),
+        ),
+        migrations.AddField(
+            model_name='observedblock',
+            name='reasons',
+            field=models.ManyToManyField(
+                blank=True, help_text='Every reason given; the first is also in reason',
+                related_name='observed_blocks_any', to='YSE_App.outcomereason'),
         ),
         migrations.AlterField(
             model_name='observedblock',

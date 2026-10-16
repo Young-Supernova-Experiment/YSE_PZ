@@ -78,11 +78,33 @@
             <td>{{ o.end_ut|slice:"11:16" }}</td><td>{{ o.target_name }}</td><td>{{ o.outcome_label }}</td>
             <td>{{ o.reason|default:"" }}</td><td>{{ o.note|default:"" }}</td><td>{{ o.recorded_by }}</td>
             <td class="text-nowrap">{% if o.outcome == "observed" %}
-              <button type="button" class="btn btn-success btn-xs assess-btn" data-block="{{ o.id }}" data-outcome="success">Good</button>
-              <button type="button" class="btn btn-default btn-xs assess-btn" data-block="{{ o.id }}" data-outcome="failed">Failed</button>
-              <button type="button" class="btn btn-default btn-xs assess-btn" data-block="{{ o.id }}" data-outcome="punted">Punted</button>
+              <button type="button" class="btn btn-default btn-xs judge-toggle" data-block="{{ o.id }}">Judge</button>
             {% endif %}</td>
           </tr>
+          {% if o.outcome == "observed" %}
+          <tr class="judge-row" id="judge-{{ o.id }}" style="display: none;">
+            <td colspan="7">
+              <form class="judge-form" data-block="{{ o.id }}" onsubmit="return false;">
+                <div class="mb-1">
+                  <label class="mr-3"><input type="radio" name="outcome" value="success" checked> Good data</label>
+                  <label class="mr-3"><input type="radio" name="outcome" value="failed"> Failed (missed it, bad S/N...)</label>
+                  <label class="mr-3"><input type="radio" name="outcome" value="punted"> Punted (no usable data)</label>
+                </div>
+                <fieldset class="judge-reasons mb-1">
+                  <legend class="small mb-0">Reasons (at least one for Failed or Punted)</legend>
+                  {% for r in outcome_reasons %}
+                  <label class="mr-3 small"><input type="checkbox" name="reasons" value="{{ r.code }}"> {{ r.label }}</label>
+                  {% endfor %}
+                </fieldset>
+                <textarea class="form-control form-control-sm mb-1" name="note" rows="2" maxlength="2000"
+                          placeholder="Comment (optional)"></textarea>
+                <button type="button" class="btn btn-primary btn-xs judge-save">Save</button>
+                <button type="button" class="btn btn-default btn-xs judge-cancel">Cancel</button>
+                <span class="small text-danger judge-error"></span>
+              </form>
+            </td>
+          </tr>
+          {% endif %}
         {% empty %}
           <tr class="observing-log-empty"><td colspan="7" class="text-muted small">Nothing recorded yet.</td></tr>
         {% endfor %}
@@ -160,22 +182,30 @@
     };
   });
 
-  // Judge a data-taken observation (#672); Failed and Punted ask for a reason code.
+  // Judge a data-taken observation (#672): outcome, any number of reasons, a comment.
   const assessBase = "{% url 'api-observed-block-assess' 0 %}".replace("/0/assess/", "/");
-  const reasonCodes = "weather, instrument, telescope, ran_out_of_time, deprioritized, low_sn, wrong_object, not_visible, too_faint, other";
   document.getElementById("observing-log-table").addEventListener("click", async function (ev) {
-    const btn = ev.target.closest(".assess-btn");
-    if (!btn) return;
-    const body = {outcome: btn.dataset.outcome};
-    if (body.outcome !== "success") {
-      const code = window.prompt("Reason code (" + reasonCodes + "):", "low_sn");
-      if (!code) return;
-      body.reason = code.trim();
+    const toggle = ev.target.closest(".judge-toggle");
+    if (toggle) {
+      const row = document.getElementById("judge-" + toggle.dataset.block);
+      row.style.display = row.style.display === "none" ? "" : "none";
+      return;
     }
+    const form = ev.target.closest(".judge-form");
+    if (!form) return;
+    if (ev.target.closest(".judge-cancel")) { form.closest("tr").style.display = "none"; return; }
+    if (!ev.target.closest(".judge-save")) return;
+    const error = form.querySelector(".judge-error");
+    const body = {
+      outcome: form.querySelector("input[name=outcome]:checked").value,
+      reasons: Array.from(form.querySelectorAll("input[name=reasons]:checked")).map(function (c) { return c.value; }),
+      note: form.querySelector("textarea[name=note]").value.trim(),
+    };
+    if (body.outcome !== "success" && !body.reasons.length) { error.textContent = "Tick at least one reason."; return; }
     try {
-      await post(assessBase + btn.dataset.block + "/assess/", body);
+      await post(assessBase + form.dataset.block + "/assess/", body);
       window.location.reload();
-    } catch (e) { say("Not recorded: " + e.message, true); }
+    } catch (e) { error.textContent = "Not saved: " + e.message; }
   });
 
   document.querySelectorAll(".approve-plan-btn").forEach(function (btn) {
