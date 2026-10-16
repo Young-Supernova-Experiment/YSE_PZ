@@ -810,7 +810,7 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Expected:**
 - the import prints `1.3.0`;
-- `collectstatic` reports `app.js` and `index`-related files copied.
+- `collectstatic` reports at least one file copied (the planner's `app.js` changed).
 
 **Check, with the flag on:** in the planner's Real-Time Mode, the Failed/Punted reasons are checkboxes.
 

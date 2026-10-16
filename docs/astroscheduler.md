@@ -320,7 +320,7 @@ pins, at Lick, with random synthetic targets, on one laptop (Ziggy may differ):
 | AstroScheduler 1.2.0, s | 3.3 | 4.9 | 21 | 45 | 107 |
 | AstroScheduler 1.3.0 (pinned; [#110](https://github.com/UCSC-Transients/AstroScheduler/issues/110)), s | 3.2 | 3.6 | 7.2 | 13 | 23 |
 
-The next release gives identical schedules. About 1 s of each solve is the night's twilight
+1.3.0 gives the same schedules as 1.2.0, only faster. About 1 s of each solve is the night's twilight
 calculation, which is cached per site and night for later solves in the same process. A
 typical classical night of 10-40 follow-ups stays well inside a request's time budget, so
 the job queue isn't used. Each response reports `yse_pz.solve_seconds`, which shows when that
