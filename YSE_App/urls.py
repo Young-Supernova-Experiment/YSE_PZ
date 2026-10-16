@@ -564,6 +564,8 @@ api_url_patterns = [
             name='api-night-plans'),
     re_path(r'^api/night_plans/(?P<plan_id>[0-9]+)/approve/$', api_views.NightPlanApproveAPIView.as_view(),
             name='api-night-plan-approve'),
+    re_path(r'^api/observing_nights/(?P<night_id>[0-9]+)/observations/$',
+            api_views.NightObservationsAPIView.as_view(), name='api-night-observations'),
     # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
     re_path(
         r'^night_planner/(?P<night_id>[0-9]+)/api/schedule$',

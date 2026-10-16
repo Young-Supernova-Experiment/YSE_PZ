@@ -1117,6 +1117,29 @@ class NightPlanApproveAPIView(generics.GenericAPIView):
                          "approved_at": plan.approved_at})
 
 
+class NightObservationsAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/<id>/observations/``: tonight's observed blocks;
+    ``POST``: record a planner Start / Completed / Failed / Punted (#667, #668)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, night_id):
+        from YSE_App.services import observations
+
+        night = _planner_night(night_id)
+        return Response({"observations": observations.tonight_log(night, request.user)})
+
+    def post(self, request, night_id):
+        from YSE_App.services import observations
+
+        night = _planner_night(night_id)
+        try:
+            result = observations.record_event(night, request.user, request.data)
+        except observations.ObservationError as exc:
+            return Response({"detail": str(exc)}, status=exc.status)
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
 class PlannerSolveAPIView(generics.GenericAPIView):
     """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
     ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""

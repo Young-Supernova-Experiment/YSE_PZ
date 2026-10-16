@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 
 from YSE_App.models import ClassicalObservingDate, NightPlan
-from YSE_App.services import night_planner, night_plans
+from YSE_App.services import night_planner, night_plans, observations
 
 
 def _night(night_id):
@@ -76,6 +76,8 @@ def night_planner_page(request, night_id):
         "plans": night_plans.plan_summaries(night, request.user),
         "can_approve": night_plans.can_approve(night, request.user),
         "plans_api": reverse("api-night-plans", kwargs={"night_id": night.id}),
+        "observations_api": reverse("api-night-observations", kwargs={"night_id": night.id}),
+        "observing_log": observations.tonight_log(night, request.user),
         "planner_url": reverse("night_planner", kwargs={"night_id": night.id}),
     })
 

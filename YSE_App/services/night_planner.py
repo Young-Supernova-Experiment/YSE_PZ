@@ -319,6 +319,11 @@ def frame_config(night, user, *, api_base: str, csrf_token: str, url_for=None, p
         reopened = night_plans.reopen_data(plan, user)
         targets = night_plans.apply_edits(targets, reopened["edits"])
         previous = reopened["previous_schedule"]
+    # Targets finished tonight carry the status the solver skips (#668).
+    from YSE_App.services.observations import planner_statuses
+
+    done = planner_statuses(night)
+    targets = [dict(t, status=done[t["external_id"]]) if t.get("external_id") in done else t for t in targets]
     return {
         "mode": "embedded",
         "apiBase": api_base,
