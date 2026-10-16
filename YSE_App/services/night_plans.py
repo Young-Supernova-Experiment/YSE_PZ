@@ -130,12 +130,12 @@ def visible_blocks(plan: NightPlan, user, followup_ids: Optional[set] = None) ->
 # ------------------------------------------------------------------ save
 
 
-def _clean_targets(targets: Any) -> List[Dict[str, Any]]:
+def _target_list(targets: Any) -> List[Dict[str, Any]]:
     if targets is None:
         return []
     if not isinstance(targets, list) or len(targets) > MAX_TARGETS:
         raise PlanError("'targets' must be a list of at most %d targets" % MAX_TARGETS)
-    return [{k: t.get(k) for k in TARGET_INPUT_KEYS if k in t} for t in targets if isinstance(t, dict)]
+    return [t for t in targets if isinstance(t, dict)]
 
 
 def save_plan(night, user, payload: Any) -> NightPlan:
@@ -156,7 +156,9 @@ def save_plan(night, user, payload: Any) -> NightPlan:
         raise PlanError("The schedule has no blocks to save")
     if len(blocks) > MAX_BLOCKS:
         raise PlanError("Too many blocks (at most %d)" % MAX_BLOCKS)
-    targets = _clean_targets(payload.get("targets"))
+    # All submitted fields serve the blocks (warnings, magnitudes); solver_inputs keeps only
+    # what reproduces the solve and the observer's edits.
+    targets = _target_list(payload.get("targets"))
     notes = payload.get("notes") or None
     if notes is not None and (not isinstance(notes, str) or len(notes) > MAX_NOTES):
         raise PlanError("'notes' must be text of at most %d characters" % MAX_NOTES)
@@ -173,7 +175,7 @@ def save_plan(night, user, payload: Any) -> NightPlan:
         "date": night_planner.night_date(night).isoformat(),
         "observatory": site,
         "instrument": instrument,
-        "targets": targets,
+        "targets": [{k: t.get(k) for k in TARGET_INPUT_KEYS if k in t} for t in targets],
     }
     inputs["input_hash"] = hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()
     solver_version = str(result.get("solver_version") or "")[:40]
