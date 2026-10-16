@@ -1004,6 +1004,15 @@ ASTROSCHEDULER_SITE_MAP = _str_setting(
     'YSE_ASTROSCHEDULER_SITE_MAP', 'site_settings', 'ASTROSCHEDULER_SITE_MAP',
     'shane:lick:kast,lick:lick:kast,keck ii:keck2:kcwi,keck2:keck2:kcwi,keck i:keck1:lris,keck1:keck1:lris',
 )
+# The planner's front-end files ship inside the astroscheduler package; serve them as
+# <STATIC_URL>astroscheduler/ (collectstatic picks them up). Skipped if not installed.
+try:
+    from astroscheduler import frontend as _astroscheduler_frontend
+    STATICFILES_DIRS = list(globals().get('STATICFILES_DIRS', [])) + [
+        ('astroscheduler', _astroscheduler_frontend.STATIC_DIR),
+    ]
+except ImportError:
+    pass
 # Magnitude used for a target with no photometry (it gets a warning).
 ASTROSCHEDULER_DEFAULT_MAG = float(_str_setting(
     'YSE_ASTROSCHEDULER_DEFAULT_MAG', 'site_settings', 'ASTROSCHEDULER_DEFAULT_MAG', '19.0'

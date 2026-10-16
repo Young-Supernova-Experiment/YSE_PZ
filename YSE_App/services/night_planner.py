@@ -195,8 +195,12 @@ def _offset_star(followup) -> Optional[Dict[str, float]]:
     }
 
 
-def night_targets(night, user) -> Dict[str, Any]:
-    """The night's follow-ups that ``user`` may see, in AstroScheduler's target schema."""
+def night_targets(night, user, url_for=None) -> Dict[str, Any]:
+    """The night's follow-ups that ``user`` may see, in AstroScheduler's target schema.
+
+    ``url_for(transient)`` gives each target's ``url`` (its YSE_PZ page, which the planner
+    links target names to); without it, ``url`` is None.
+    """
     from YSE_App.services.classical_nights import night_followups
     from YSE_App.services.followup_requests import effective_priority, format_comments, requests_prefetch
 
@@ -250,6 +254,7 @@ def night_targets(night, user) -> Dict[str, Any]:
             "valid_start": fu.valid_start.isoformat() if fu.valid_start else None,
             "valid_stop": fu.valid_stop.isoformat() if fu.valid_stop else None,
             "offset_star": _offset_star(fu),
+            "url": url_for(transient) if url_for else None,
             "warnings": target_warnings,
         })
         warnings.extend("%s: %s" % (transient.name, w) for w in target_warnings)
@@ -267,6 +272,53 @@ def night_targets(night, user) -> Dict[str, Any]:
         "instrument": instrument,
         "targets": targets,
         "warnings": warnings,
+    }
+
+
+def planner_nights(user, days_back: int = 7, days_ahead: int = 60, now=None) -> List[Dict[str, Any]]:
+    """Classical nights ``user`` is authorised for, from ``days_back`` days ago to ``days_ahead``
+    days ahead (#658): the same set as the home page's upcoming nights."""
+    from django.utils import timezone
+
+    from YSE_App.data import ObservingResourceService
+
+    now = now or timezone.now()
+    today = datetime.datetime.combine(now.date(), datetime.time(0, 0), tzinfo=datetime.timezone.utc)
+    nights = (
+        ObservingResourceService.GetAuthorizedClassicalObservingDate_ByUser(user)
+        .filter(obs_date__gte=today - datetime.timedelta(days=days_back),
+                obs_date__lt=today + datetime.timedelta(days=days_ahead + 1))
+        .select_related("resource__telescope", "night_type")
+        .order_by("obs_date", "resource__telescope__name", "pk")
+    )
+    out = []
+    for night in nights:
+        site_id, instrument, _mapped = site_for_telescope(night.resource.telescope)
+        out.append({
+            "id": night.id,
+            "date": night_date(night).isoformat(),
+            "telescope": night.resource.telescope.name,
+            "night_type": night.night_type.name if night.night_type_id else None,
+            "site": site_id,
+            "instrument": instrument,
+        })
+    return out
+
+
+def frame_config(night, user, *, api_base: str, csrf_token: str, url_for=None) -> Dict[str, Any]:
+    """``window.ASTROSCHEDULER_CONFIG`` for the embedded planner of ``night`` (#659)."""
+    data = night_targets(night, user, url_for=url_for)
+    return {
+        "mode": "embedded",
+        "apiBase": api_base,
+        "headers": {"X-CSRFToken": csrf_token},
+        "site": data["observatory"],
+        "initial": {
+            "date": data["night"]["date"],
+            "instrument": data["instrument"],
+            "targets": data["targets"],
+            "result": None,
+        },
     }
 
 

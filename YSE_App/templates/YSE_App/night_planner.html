@@ -1,0 +1,28 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+  <h1>Plan {{ telescope.name }}, night of {{ night_info.date }}</h1>
+  <p class="text-muted" style="margin-bottom: 0;">
+    {{ instrument|upper }}{% if night_info.night_type %} · {{ night_info.night_type }}{% endif %}
+    · {{ n_targets }} follow-up{{ n_targets|pluralize }}
+    · <a href="{{ observing_night_url }}">Back to the observing night</a>
+  </p>
+</section>
+
+<section class="content yse-page-night-planner">
+  {% if warnings %}
+  <div class="alert alert-warning" role="alert">
+    <strong>Check before planning:</strong>
+    <ul style="margin-bottom: 0;">
+      {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  <p class="text-muted small">
+    The planner solves only when you press Recalculate. Plans are not saved in YSE_PZ yet.
+  </p>
+  <iframe id="night-planner-frame" src="{{ frame_url }}" title="Night planner"
+          style="width: 100%; height: calc(100vh - 220px); min-height: 720px; border: 0; border-radius: 6px;"></iframe>
+</section>
+{% endblock %}

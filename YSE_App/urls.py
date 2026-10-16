@@ -8,7 +8,7 @@ from rest_framework import permissions as rf_permissions, routers as rf_routers
 from rest_framework.schemas import get_schema_view
 from django.urls import re_path, include
 
-from . import views, view_utils, data_utils, table_utils, yse_views
+from . import views, view_utils, data_utils, table_utils, yse_views, planner_views
 from . import api_views
 from .form_views import *
 from .yse_utils.yse_forms import MoveYSEFormView
@@ -214,6 +214,9 @@ urlpatterns = [
 
     re_path(r'^yse_oncall_calendar/$', views.yse_oncall_calendar, name='yse_oncall_calendar'),
     re_path(r'^observing_night/(?P<telescope>.*)/(?P<obs_date>[a-zA-Z0-9_-]+)/(?P<pi_name>.*)$', views.observing_night, name='observing_night'),
+    # AstroScheduler night planner (#659); 404 unless ASTROSCHEDULER_ENABLED
+    re_path(r'^night_planner/(?P<night_id>[0-9]+)/$', planner_views.night_planner_page, name='night_planner'),
+    re_path(r'^night_planner/(?P<night_id>[0-9]+)/frame/$', planner_views.night_planner_frame, name='night_planner_frame'),
     re_path(r'^too_requests/(?P<telescope>.*)/(?P<pi_name>.*)/$', views.too_requests, name='too_requests'),
     #re_path(r'^survey_observing_calendar/$', views.survey_observing_calendar, name='survey_observing_calendar'),
     re_path(r'^yse_observing_night/(?P<obs_date>[a-zA-Z0-9_-]+)/$', views.yse_observing_night, name='yse_observing_night'),
@@ -553,7 +556,14 @@ api_url_patterns = [
         name='api-transient-comments',
     ),
     re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
-    # AstroScheduler night planner (#655, #656); 404 unless ASTROSCHEDULER_ENABLED (#654)
+    # AstroScheduler night planner (#655, #656, #658); 404 unless ASTROSCHEDULER_ENABLED (#654)
+    re_path(r'^api/observing_nights/$', api_views.PlannerNightsAPIView.as_view(), name='api-planner-nights'),
+    # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
+    re_path(
+        r'^night_planner/(?P<night_id>[0-9]+)/api/schedule$',
+        api_views.PlannerSolveAPIView.as_view(),
+        name='night-planner-solve',
+    ),
     re_path(
         r'^api/observing_nights/(?P<night_id>[0-9]+)/planner_targets/$',
         api_views.PlannerTargetsAPIView.as_view(),
