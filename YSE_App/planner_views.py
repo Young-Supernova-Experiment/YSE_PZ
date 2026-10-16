@@ -13,8 +13,8 @@ from django.templatetags.static import static
 from django.urls import reverse
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 
-from YSE_App.models import ClassicalObservingDate
-from YSE_App.services import night_planner
+from YSE_App.models import ClassicalObservingDate, NightPlan
+from YSE_App.services import night_planner, night_plans
 
 
 def _night(night_id):
@@ -31,6 +31,17 @@ def _night(night_id):
     return night
 
 
+def _plan_for(night, request):
+    """The saved version named by ``?plan=`` (404 if it is not a plan of this night)."""
+    raw = request.GET.get("plan")
+    if not raw:
+        return None
+    plan = NightPlan.objects.filter(pk=raw if str(raw).isdigit() else 0, night=night).first()
+    if plan is None:
+        raise Http404("no such plan for this night")
+    return plan
+
+
 def _transient_url(request):
     def url_for(transient):
         return request.build_absolute_uri(
@@ -42,6 +53,7 @@ def _transient_url(request):
 @login_required
 def night_planner_page(request, night_id):
     night = _night(night_id)
+    plan = _plan_for(night, request)
     telescope = night.resource.telescope
     data = night_planner.night_targets(night, request.user)
     pi = night.resource.principal_investigator
@@ -57,8 +69,14 @@ def night_planner_page(request, night_id):
         "instrument": data["instrument"],
         "n_targets": len(data["targets"]),
         "warnings": data["warnings"],
-        "frame_url": reverse("night_planner_frame", kwargs={"night_id": night.id}),
+        "frame_url": reverse("night_planner_frame", kwargs={"night_id": night.id})
+                     + ("?plan=%d" % plan.id if plan else ""),
         "observing_night_url": observing_night_url,
+        "plan": plan,
+        "plans": night_plans.plan_summaries(night, request.user),
+        "can_approve": night_plans.can_approve(night, request.user),
+        "plans_api": reverse("api-night-plans", kwargs={"night_id": night.id}),
+        "planner_url": reverse("night_planner", kwargs={"night_id": night.id}),
     })
 
 
@@ -68,9 +86,26 @@ def night_planner_frame(request, night_id):
     from astroscheduler import frontend
 
     night = _night(night_id)
+    plan = _plan_for(night, request)
     api_base = reverse("night_planner", kwargs={"night_id": night.id}).rstrip("/")
     config = night_planner.frame_config(
         night, request.user, api_base=api_base, csrf_token=get_token(request),
-        url_for=_transient_url(request),
+        url_for=_transient_url(request), plan=plan,
     )
     return HttpResponse(frontend.render_page(static("astroscheduler"), config))
+
+
+@login_required
+def night_plan_target_list(request, plan_id):
+    """A saved plan in the observing target-list format, in planned order (#77)."""
+    plan = (NightPlan.objects.select_related("night__resource__telescope", "night__night_type")
+            .filter(pk=plan_id).first())
+    if plan is None:
+        raise Http404("no night plan %r" % plan_id)
+    _night(plan.night_id)
+    text = night_plans.export_target_list(plan, request.user, finders=request.GET.get("finders") == "1")
+    response = HttpResponse(text, content_type="text/plain")
+    filename = "%s_%s_plan-v%d.txt" % (plan.night.resource.telescope.name.replace(" ", "_"),
+                                       night_planner.night_date(plan.night).isoformat(), plan.version)
+    response["Content-Disposition"] = "attachment; filename=%s" % filename
+    return response

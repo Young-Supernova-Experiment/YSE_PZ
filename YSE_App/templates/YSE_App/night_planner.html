@@ -19,10 +19,98 @@
     </ul>
   </div>
   {% endif %}
-  <p class="text-muted small">
-    The planner solves only when you press Recalculate. Plans are not saved in YSE_PZ yet.
-  </p>
+
+  <div class="card card-outline card-secondary" id="night-plans-card">
+    <div class="card-header">
+      <h3 class="card-title">Saved plans</h3>
+      {% if plan %}<span class="badge badge-info ml-2" id="current-plan">Opened v{{ plan.version }} ({{ plan.state }})</span>{% endif %}
+    </div>
+    <div class="card-body">
+      <form class="form-inline mb-2" onsubmit="return false;">
+        <input type="text" class="form-control form-control-sm mr-2" id="plan-notes" maxlength="5000"
+               placeholder="Notes for this version (optional)" style="min-width: 320px;">
+        <button type="button" class="btn btn-primary btn-sm" id="save-plan-btn">Save plan</button>
+        <span class="ml-2 small" id="plan-status"></span>
+      </form>
+      {% if plans %}
+      <table class="table table-sm table-striped mb-0" id="night-plans-table">
+        <thead><tr><th>Version</th><th>State</th><th>Author</th><th>Saved (UTC)</th><th>Blocks</th><th>Notes</th><th></th></tr></thead>
+        <tbody>
+        {% for p in plans %}
+          <tr data-plan="{{ p.id }}">
+            <td>v{{ p.version }}{% if p.parent %} <span class="text-muted small">(from #{{ p.parent }})</span>{% endif %}</td>
+            <td>{{ p.state }}{% if p.approved_by %} <span class="text-muted small">by {{ p.approved_by }}</span>{% endif %}</td>
+            <td>{{ p.author }}</td>
+            <td>{{ p.created|slice:":16" }}</td>
+            <td>{{ p.blocks }}</td>
+            <td>{{ p.notes|default:"" }}</td>
+            <td class="text-nowrap">
+              <a class="btn btn-default btn-xs" href="{{ planner_url }}?plan={{ p.id }}">Open</a>
+              <a class="btn btn-default btn-xs" href="{% url 'night_plan_target_list' p.id %}">Target list</a>
+              {% if can_approve and p.state != 'approved' %}
+              <button type="button" class="btn btn-success btn-xs approve-plan-btn" data-plan="{{ p.id }}">Approve</button>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-muted small mb-0">No saved plans yet. Recalculate, adjust, then Save plan.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <p class="text-muted small">The planner solves only when you press Recalculate.</p>
   <iframe id="night-planner-frame" src="{{ frame_url }}" title="Night planner"
           style="width: 100%; height: calc(100vh - 220px); min-height: 720px; border: 0; border-radius: 6px;"></iframe>
 </section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+<script>
+(function () {
+  const plansApi = "{{ plans_api|escapejs }}";
+  const plannerUrl = "{{ planner_url|escapejs }}";
+  const approveBase = "{% url 'api-night-plan-approve' 0 %}".replace("/0/approve/", "/");
+  const csrf = "{{ csrf_token|escapejs }}";
+  const parentPlan = {% if plan %}{{ plan.id }}{% else %}null{% endif %};
+  const status = document.getElementById("plan-status");
+
+  function say(msg, bad) { status.textContent = msg; status.className = "ml-2 small " + (bad ? "text-danger" : "text-muted"); }
+
+  async function post(url, body) {
+    const r = await fetch(url, {method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json", "X-CSRFToken": csrf}, body: JSON.stringify(body || {})});
+    let data = {};
+    try { data = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(data.detail || ("HTTP " + r.status));
+    return data;
+  }
+
+  document.getElementById("save-plan-btn").addEventListener("click", async function () {
+    const planner = document.getElementById("night-planner-frame").contentWindow.AstroScheduler;
+    const result = planner && planner.getResult();
+    if (!result || !result.blocks || !result.blocks.length) { say("Recalculate first: there is no schedule to save.", true); return; }
+    say("Saving…");
+    try {
+      const saved = await post(plansApi, {
+        result: {blocks: result.blocks, solver_version: result.solver_version},
+        targets: planner.getTargets(), parent: parentPlan,
+        notes: document.getElementById("plan-notes").value.trim() || null});
+      window.location.href = plannerUrl + "?plan=" + saved.id;
+    } catch (e) { say("Not saved: " + e.message, true); }
+  });
+
+  document.querySelectorAll(".approve-plan-btn").forEach(function (btn) {
+    btn.addEventListener("click", async function () {
+      try {
+        await post(approveBase + btn.dataset.plan + "/approve/");
+        window.location.reload();
+      } catch (e) { say("Not approved: " + e.message, true); }
+    });
+  });
+})();
+</script>
 {% endblock %}

@@ -45,3 +45,4 @@ from YSE_App.models.researcher_models import (
 )
 from YSE_App.models.group_models import (GroupInvitation, GroupInvitationUse, GroupMembershipRequest, GroupProfile,
                                          UserPreference)
+from YSE_App.models.night_plan_models import NightPlan, PlannedBlock

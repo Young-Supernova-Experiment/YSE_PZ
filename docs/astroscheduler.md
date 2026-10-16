@@ -1,12 +1,45 @@
 # AstroScheduler night planner
 
 YSE_PZ plans classical nights with [AstroScheduler](https://github.com/UCSC-Transients/AstroScheduler),
-installed as a pinned package (`requirements.txt`, tag `v1.1.0`). AstroScheduler owns solving
+installed as a pinned package (`requirements.txt`, tag `v1.2.0`). AstroScheduler owns solving
 and scheduling. YSE_PZ owns the targets, and later the saved plans and outcomes.
 AstroScheduler also runs on its own as a standalone app.
 
-Status (2026-10-16): the targets feed, the server-side solve and the planner page are in
-place. Saved plans, export and execution feedback come in later PRs.
+Status (2026-10-16): the targets feed, the server-side solve, the planner page and saved
+plans (versions, approval, re-opening, target-list export) are in place. Execution feedback
+comes in a later PR.
+
+## Saved plans
+
+Plans use the `NightPlan` and `PlannedBlock` tables from the decision-trail schema draft
+(migration `0039_night_plans`).
+
+**Saving:**
+- **Save plan** on the planner page stores the planner's current schedule, including the
+  observer's manual moves and edits, as a new version of the night's plan. The new version is
+  in state `draft`, with the saver as author.
+- `solver_inputs` keeps the targets with their edits, the site, the instrument and a SHA-256
+  hash.
+- Blocks link to their follow-up only when the saver can see that follow-up.
+- Standards get their coordinates from AstroScheduler's standards list.
+
+**Opening and approving:**
+- **Open** re-opens a version: the night's current follow-ups get the saved edits back, and
+  the first solve starts from the version's blocks. A save from there records the opened
+  version as its `parent`.
+- **Approve** is for the night resource's PI (through the PI's linked account) or staff. The
+  approved version becomes `approved`, and the previously approved one `superseded`.
+
+**Target list:** **Target list** downloads a version in the `download_target_list` star-list
+format, in planned order.
+- Each comment carries the order, the UT window, the exposure sequence (`B 1x1237 R 2x600`)
+  and the requestors' comments.
+- A follow-up's own offset star follows its target, with `raoffset`/`decoffset`.
+- `?finders=1` adds finder-chart offsets for targets without one. This is slow, because it
+  builds the finder charts.
+
+**Visibility:** a plan holds the blocks its author could see. Other users see a science block
+only if they can see its follow-up on the night page; standards are visible to everyone.
 
 ## The planner page
 
@@ -104,6 +137,30 @@ and visibility rules as the observing-night page.
 - **Offset star:** `offset_star` (from the follow-up's offset-star fields), or null.
 - **Link:** `url`, the transient's YSE_PZ page.
 - **Warnings:** `warnings`.
+
+### `GET` / `POST /api/observing_nights/<night id>/plans/`
+
+**GET** lists the night's versions, newest first: id, version, state, parent, author, created,
+approved by and at, solver, notes, and the number of blocks the requester can see. It also
+returns `can_approve`.
+
+**POST** saves the current schedule as a new version and returns 201 with the new id and
+version. The body:
+
+```json
+{"result": {"blocks": [...], "solver_version": "1.2.0"}, "targets": [...],
+ "parent": null, "notes": "optional"}
+```
+
+Limits: at most 400 blocks and 300 targets.
+
+### `POST /api/night_plans/<plan id>/approve/`
+
+Approves a version; returns 403 unless the requester is the night's PI or staff.
+
+### `GET /night_plans/<plan id>/target_list.txt`
+
+The version as a star list, as described above (`?finders=1` for finder offsets).
 
 ### `POST /api/observing_nights/<night id>/planner_solve/`
 

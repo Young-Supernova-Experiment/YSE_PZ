@@ -1126,3 +1126,34 @@ class GroupMembershipRequestAdmin(admin.ModelAdmin):
 
 	def has_change_permission(self, request, obj=None):
 		return False
+
+
+from YSE_App.models.night_plan_models import NightPlan, PlannedBlock  # noqa: E402
+
+
+class _PlannedBlockInline(admin.TabularInline):
+	model = PlannedBlock
+	fields = ("order", "kind", "target_name", "start_ut", "end_ut", "followup", "priority_at_plan")
+	readonly_fields = fields
+	extra = 0
+	can_delete = False
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(NightPlan)
+class NightPlanAdmin(admin.ModelAdmin):
+	"""Night plans are saved and approved from the planner (#662, #663); read-only here."""
+	list_display = ("id", "night", "version", "state", "author", "approved_by", "approved_at", "created_date")
+	list_filter = ("state",)
+	readonly_fields = ("night", "version", "parent", "state", "author", "approved_by", "approved_at",
+	                   "solver", "solver_inputs", "notes", "created_by", "created_date")
+	fields = readonly_fields
+	inlines = (_PlannedBlockInline,)
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False

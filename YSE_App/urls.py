@@ -217,6 +217,8 @@ urlpatterns = [
     # AstroScheduler night planner (#659); 404 unless ASTROSCHEDULER_ENABLED
     re_path(r'^night_planner/(?P<night_id>[0-9]+)/$', planner_views.night_planner_page, name='night_planner'),
     re_path(r'^night_planner/(?P<night_id>[0-9]+)/frame/$', planner_views.night_planner_frame, name='night_planner_frame'),
+    re_path(r'^night_plans/(?P<plan_id>[0-9]+)/target_list\.txt$', planner_views.night_plan_target_list,
+            name='night_plan_target_list'),
     re_path(r'^too_requests/(?P<telescope>.*)/(?P<pi_name>.*)/$', views.too_requests, name='too_requests'),
     #re_path(r'^survey_observing_calendar/$', views.survey_observing_calendar, name='survey_observing_calendar'),
     re_path(r'^yse_observing_night/(?P<obs_date>[a-zA-Z0-9_-]+)/$', views.yse_observing_night, name='yse_observing_night'),
@@ -558,6 +560,10 @@ api_url_patterns = [
     re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
     # AstroScheduler night planner (#655, #656, #658); 404 unless ASTROSCHEDULER_ENABLED (#654)
     re_path(r'^api/observing_nights/$', api_views.PlannerNightsAPIView.as_view(), name='api-planner-nights'),
+    re_path(r'^api/observing_nights/(?P<night_id>[0-9]+)/plans/$', api_views.NightPlansAPIView.as_view(),
+            name='api-night-plans'),
+    re_path(r'^api/night_plans/(?P<plan_id>[0-9]+)/approve/$', api_views.NightPlanApproveAPIView.as_view(),
+            name='api-night-plan-approve'),
     # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
     re_path(
         r'^night_planner/(?P<night_id>[0-9]+)/api/schedule$',
