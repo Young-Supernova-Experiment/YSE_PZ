@@ -73,7 +73,8 @@ class RecordEventTests(_ObservationsFixture):
         self.assertEqual(block.end_ut.isoformat(), "2026-10-16T05:31:00+00:00")
         self.assertEqual((block.comments, block.recorded_by), ("good", self.staff))
         self.assertEqual(block.settings["planned_start"], "2026-10-16T05:00:00+00:00")
-        self.assertEqual(self._status(), "Successful")
+        # Data taken: the request stays InProcess until someone judges it (#670).
+        self.assertEqual(self._status(), "InProcess")
 
     def test_fail_and_punt_need_a_reason(self):
         for action in ("fail", "punt"):
@@ -83,13 +84,25 @@ class RecordEventTests(_ObservationsFixture):
             self.assertEqual(response.status_code, 400, action)
         self.assertFalse(ObservedBlock.objects.exists())
 
+        # Failed and Punted are outcomes of the observation; the request status is unchanged (#670).
         punted = self._post(self.staff, self._event("punt", reason="deprioritized"))
         self.assertEqual(punted.status_code, 201)
-        self.assertEqual(self._status(), "Requested")  # a punt keeps the request open
+        self.assertEqual(ObservedBlock.objects.get(pk=punted.json()["observed_block"]).outcome, "punted")
+        self.assertEqual(self._status(), "Requested")
         failed = self._post(self.staff, self._event("fail", reason="weather", note="clouds"))
         block = ObservedBlock.objects.get(pk=failed.json()["observed_block"])
         self.assertEqual((block.outcome, block.reason.code), ("failed", "weather"))
-        self.assertEqual(self._status(), "Failed")
+        self.assertEqual(self._status(), "Requested")
+
+    def test_failed_observation_leaves_an_in_process_request_in_process(self):
+        self._post(self.staff, self._event("start"))
+        self._post(self.staff, self._event("fail", reason="low_sn"))
+        self.assertEqual(self._status(), "InProcess")
+
+    def test_planner_never_decides_the_request(self):
+        for action, reason in (("start", None), ("complete", None), ("fail", "weather"), ("punt", "other")):
+            self._post(self.staff, self._event(action, reason=reason))
+            self.assertNotIn(self._status(), ("Successful", "Failed"), action)
 
     def test_reason_rule_on_the_model(self):
         block = ObservedBlock(night=self.night, kind="science", target_name="x", outcome="failed",

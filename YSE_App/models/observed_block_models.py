@@ -61,10 +61,13 @@ class ObservedBlock(BaseModel):
         CALIBRATION = "calibration", "Calibration"
 
     class Outcome(models.TextChoices):
-        SUCCESS = "success", "Success"
+        # Outcomes of one observation, not of the follow-up request (#670): the request's own
+        # status (InProcess / Successful / Failed) is judged across nights.
+        SUCCESS = "success", "Success"  # data taken
         PARTIAL = "partial", "Partial"
-        FAILED = "failed", "Failed"
-        SKIPPED = "skipped", "Skipped"
+        FAILED = "failed", "Failed"  # tried, but missed the target, bad S/N, ...
+        PUNTED = "punted", "Punted"  # went to the object, no usable data (or ended too early)
+        SKIPPED = "skipped", "Skipped"  # planned, never attempted
 
     class Source(models.TextChoices):
         TONIGHT = "tonight", "Tonight page"

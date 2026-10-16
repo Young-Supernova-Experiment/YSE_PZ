@@ -1,15 +1,21 @@
 """Execution feedback from the planner (#667, #668).
 
 The embedded planner's Start / Completed / Failed / Punted actions reach YSE_PZ through
-AstroScheduler's ``onObservationEvent`` hook (set by the planner page). Each one:
+AstroScheduler's ``onObservationEvent`` hook (set by the planner page).
+
+Two different things are recorded (#670). The observation's outcome belongs to one attempt on
+one night: Failed means we tried and missed the target or the S/N was bad; Punted means we went
+to the object but got no usable data (or stopped too early). The follow-up *request's* status
+is judged across nights: InProcess while it is scheduled or its data are taken but not yet
+judged; Successful or Failed only when someone decides. The planner never sets those two.
 
 ==========  ====================  ==========================================
-action      follow-up status      observed block
+action      request status        observed block
 ==========  ====================  ==========================================
 start       InProcess             none (its time becomes the block's start)
-complete    Successful            outcome ``success``
-fail        Failed                outcome ``failed`` (reason required)
-punt        unchanged             outcome ``skipped`` (reason required)
+complete    InProcess             outcome ``success`` (data taken)
+fail        unchanged             outcome ``failed`` (reason required)
+punt        unchanged             outcome ``punted`` (reason required)
 ==========  ====================  ==========================================
 
 Status changes use the normal save, so the follow-up notifications apply. The first outcome
@@ -42,18 +48,19 @@ REASONS = [
     ("other", "Other", "other", ["block", "consideration", "event"]),
 ]
 
-# action -> (observed-block outcome, follow-up status name)
+# action -> (observed-block outcome, request status to set or None to leave it)
 ACTIONS = {
     "start": (None, "InProcess"),
-    "complete": (ObservedBlock.Outcome.SUCCESS, "Successful"),
-    "fail": (ObservedBlock.Outcome.FAILED, "Failed"),
-    "punt": (ObservedBlock.Outcome.SKIPPED, None),
+    "complete": (ObservedBlock.Outcome.SUCCESS, "InProcess"),
+    "fail": (ObservedBlock.Outcome.FAILED, None),
+    "punt": (ObservedBlock.Outcome.PUNTED, None),
 }
 # Outcome -> the status AstroScheduler's solver skips (#668).
 PLANNER_STATUS = {
     ObservedBlock.Outcome.SUCCESS: "Observed",
     ObservedBlock.Outcome.PARTIAL: "Observed",
     ObservedBlock.Outcome.FAILED: "Failed",
+    ObservedBlock.Outcome.PUNTED: "Punted",
     ObservedBlock.Outcome.SKIPPED: "Punted",
 }
 MAX_NOTE = 2000

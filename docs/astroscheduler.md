@@ -13,12 +13,19 @@ Status (2026-10-16): the targets feed, the server-side solve, the planner page, 
 The planner's Real-Time Mode buttons are recorded in YSE_PZ (migration `0040_observed_blocks`:
 the draft's `ObservedBlock` and `OutcomeReason`).
 
-| Planner action | Follow-up status | Observed block |
+Two different things are recorded. The **observation's outcome** belongs to one attempt on one
+night. The **request's status** is judged across nights: `InProcess` while the request is
+scheduled, or while its data are taken but not yet judged. The planner never sets a request
+to `Successful` or `Failed`; someone decides that.
+
+| Planner action | Observation outcome | Request status |
 | --- | --- | --- |
-| Start Observation | InProcess | none; its time becomes the block's start |
-| Completed | Successful | outcome `success` |
-| Failed (reason required) | Failed | outcome `failed` |
-| Punted (reason required) | unchanged | outcome `skipped` |
+| Start Observation | none yet; its time becomes the block's start | InProcess |
+| Completed (data taken) | `success` | InProcess |
+| Failed (reason required): tried and missed, bad S/N... | `failed` | unchanged |
+| Punted (reason required): went to it, no usable data or stopped too early | `punted` | unchanged |
+
+The draft's `skipped` outcome is kept for a planned block that was never attempted.
 
 **What a block records:** the note, the planned and actual times, and who recorded it.
 

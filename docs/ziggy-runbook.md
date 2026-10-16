@@ -811,7 +811,7 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 **Check:**
 1. On the stack's database, run `SELECT code FROM YSE_App_outcomereason ORDER BY code;`. **Expected:** 12 rows, from `classified_elsewhere` to `wrong_object`.
 2. With the flag on, in the planner's Real-Time Mode, mark a target **Completed**.
-3. The row appears under "Tonight's observing log", and the follow-up's status on the observing-night page becomes Successful.
+3. The row appears under "Tonight's observing log", and the follow-up's status on the observing-night page becomes InProcess. The planner never sets Successful or Failed on a request.
 
 **Rollback:** turn the flag off. The tables can stay.
 
@@ -2698,6 +2698,7 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 
 ## 6 · Changelog
 
+* 2026-10-16 v62, **migration applied by the deploy; nothing else required**. AstroScheduler outcomes ([#670](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/670)): migration `0041_observed_block_punted` only adds the `punted` choice (no SQL change). The planner no longer sets a follow-up request to Successful or Failed: Completed leaves it InProcess, and Failed/Punted are outcomes of the observation only ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).
 * 2026-10-16 v61, **migration applied by the deploy; nothing else required**. AstroScheduler execution feedback ([#666](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/666)-[#668](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/668)): migration `0040_observed_blocks` (two new tables and 12 seeded outcome reasons, safe on the shared database); the planner's Start/Completed/Failed/Punted are recorded and update follow-up statuses, behind `ASTROSCHEDULER_ENABLED` ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).
 * 2026-10-16 v60, **migration applied by the deploy; required on venvs the deploy does not install** (install `astroscheduler` 1.2.0, then `collectstatic`). AstroScheduler saved plans ([#661](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/661)-[#664](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/664), [#77](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/77)): migration `0039_night_plans` (two new tables, safe on the shared database); save, approve, re-open and export from the planner page, all behind `ASTROSCHEDULER_ENABLED` ([section "AstroScheduler saved plans"](#astroscheduler-plans)).
 * 2026-10-16 v59, **required on venvs the deploy does not install** (yse\_test, Apache's venv for yse\_experimental, production): install `astroscheduler` 1.1.0, then `collectstatic`; flag optional. AstroScheduler planner page and nights list ([#658](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/658), [#659](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/659)): no migration; the "Plan this night" button and `/night_planner/<id>/` appear only with `ASTROSCHEDULER_ENABLED: True` ([section "AstroScheduler planner page"](#astroscheduler-page)).
