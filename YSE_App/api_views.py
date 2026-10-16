@@ -1038,8 +1038,36 @@ class PlannerTargetsAPIView(generics.GenericAPIView):
     def get(self, request, night_id):
         from YSE_App.services import night_planner
 
+        from YSE_App.planner_views import _transient_url
+
         night = _planner_night(night_id)
-        return Response(night_planner.night_targets(night, request.user))
+        return Response(night_planner.night_targets(night, request.user, url_for=_transient_url(request)))
+
+
+class PlannerNightsAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/?days_back=7&days_ahead=60``: classical nights the user is
+    authorised for, to choose one to plan (#658)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        from YSE_App.services import night_planner
+
+        if not night_planner.enabled():
+            raise Http404("night planner is not enabled")
+
+        def bounded(name, default, top):
+            value = positive_int_or_none(request.GET.get(name))
+            return default if value is None else min(value, top)
+
+        nights = night_planner.planner_nights(
+            request.user, days_back=bounded("days_back", 7, 60), days_ahead=bounded("days_ahead", 60, 366),
+        )
+        for n in nights:
+            n["planner_targets_url"] = request.build_absolute_uri(
+                reverse("api-planner-targets", kwargs={"night_id": n["id"]}))
+            n["planner_url"] = request.build_absolute_uri(reverse("night_planner", kwargs={"night_id": n["id"]}))
+        return Response({"nights": nights})
 
 
 class PlannerSolveAPIView(generics.GenericAPIView):

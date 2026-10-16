@@ -1,12 +1,40 @@
 # AstroScheduler night planner
 
 YSE_PZ plans classical nights with [AstroScheduler](https://github.com/UCSC-Transients/AstroScheduler),
-installed as a pinned package (`requirements.txt`, tag `v1.0.1`). AstroScheduler owns solving
+installed as a pinned package (`requirements.txt`, tag `v1.1.0`). AstroScheduler owns solving
 and scheduling. YSE_PZ owns the targets, and later the saved plans and outcomes.
 AstroScheduler also runs on its own as a standalone app.
 
-Status (2026-10-15): the targets feed and the server-side solve are in place. The embedded
-planner page, saved plans, export and execution feedback come in later PRs.
+Status (2026-10-16): the targets feed, the server-side solve and the planner page are in
+place. Saved plans, export and execution feedback come in later PRs.
+
+## The planner page
+
+With the flag on, each observing-night page has a **Plan this night** button. It opens
+`/night_planner/<night id>/`.
+
+**What the page shows:**
+- It sits inside the YSE_PZ shell (same login, navigation and header).
+- It lists the feed's warnings.
+- It embeds AstroScheduler's planner in a same-origin frame, `/night_planner/<night id>/frame/`.
+  The frame is needed because AstroScheduler's stylesheet resets selectors (`body`, `.card`,
+  `.btn`) that YSE_PZ's own CSS uses.
+
+**What the planner starts with:**
+- the night's date, site and instrument (fixed: the controls are disabled);
+- the targets the user may see;
+- target names linked to their YSE_PZ pages.
+
+**Solving:** it solves only when the user presses Recalculate, through
+`/night_planner/<night id>/api/schedule` (the same solve view as below, with the CSRF token
+from the frame). Nothing is saved yet.
+
+**Static files:** the planner's files are served from the installed package as
+`<STATIC_URL>astroscheduler/`, through `STATICFILES_DIRS`, so `collectstatic` must run after
+the package is installed or upgraded.
+
+**Standalone import:** standalone AstroScheduler (1.1.0+) can import a night through
+**Import from YSE_PZ**, with a user's API token. It uses the two GET endpoints below.
 
 ## Turning it on
 
@@ -38,6 +66,15 @@ warns about it.
 Both endpoints are DRF views. They need an authenticated user, by session or by
 `Authorization: Token <key>`. Session POSTs also need the CSRF token.
 
+### `GET /api/observing_nights/?days_back=7&days_ahead=60`
+
+**What it returns:** the classical nights the user is authorised for, the same set as the home
+page's upcoming nights. The window runs from `days_back` days ago (at most 60) to `days_ahead`
+days ahead (at most 366).
+
+**Fields per night:** `id`, `date`, `telescope`, `night_type`, `site`, `instrument`,
+`planner_targets_url` and `planner_url`.
+
 ### `GET /api/observing_nights/<night id>/planner_targets/`
 
 **What it returns:** the night's follow-ups that the requesting user may see, in
@@ -65,6 +102,7 @@ and visibility rules as the observing-night page.
 - **Comment:** `comment`, the requestors' comments.
 - **Status and window:** `followup_status`, `valid_start` and `valid_stop`.
 - **Offset star:** `offset_star` (from the follow-up's offset-star fields), or null.
+- **Link:** `url`, the transient's YSE_PZ page.
 - **Warnings:** `warnings`.
 
 ### `POST /api/observing_nights/<night id>/planner_solve/`

@@ -1314,6 +1314,8 @@ def observing_night(request, telescope, obs_date, pi_name):
         'classical_obs_date':classical_obs_date,
         'sunriseset':(sunset,night_start_12,night_start_18,night_end_18,night_end_12,sunrise)
     }
+    from YSE_App.services import night_planner
+    context['planner_enabled'] = night_planner.enabled()
     context.update(_telescope_widgets_context(classical_obs_date.resource.telescope, request.user))
     return render(request, 'YSE_App/observing_night.html', context)
 
