@@ -13,19 +13,43 @@ Status (2026-10-16): the targets feed, the server-side solve, the planner page, 
 The planner's Real-Time Mode buttons are recorded in YSE_PZ (migration `0040_observed_blocks`:
 the draft's `ObservedBlock` and `OutcomeReason`).
 
-Two different things are recorded. The **observation's outcome** belongs to one attempt on one
-night. The **request's status** is judged across nights: `InProcess` while the request is
-scheduled, or while its data are taken but not yet judged. The planner never sets a request
-to `Successful` or `Failed`; someone decides that.
+Two different things are recorded.
+- The **observation's outcome** belongs to one attempt on one night.
+- The **request's status** covers one or more nights.
 
-| Planner action | Observation outcome | Request status |
+| Action | Observation outcome | Request status |
 | --- | --- | --- |
-| Start Observation | none yet; its time becomes the block's start | InProcess |
-| Completed (data taken) | `success` | InProcess |
-| Failed (reason required): tried and missed, bad S/N... | `failed` | unchanged |
-| Punted (reason required): went to it, no usable data or stopped too early | `punted` | unchanged |
+| Planner: Start Observation | none yet; its time becomes the block's start | InProcess |
+| Planner: Completed | `observed`, shown as "Data taken" | InProcess |
+| Planner: Failed (reason required): tried and missed, bad S/N... | `failed` | unchanged |
+| Planner: Punted (reason required): went to it, no usable data or stopped too early | `punted` | unchanged |
+| Night log: **Good** | `success` | **Successful** |
+| Night log: Failed / Punted (reason required) | `failed` / `punted` | unchanged |
+| A spectrum or photometry set is uploaded (see below) | `success` | **Successful** |
+| The request's window ends without good data (see below) | (none) | **Failed** |
 
 The draft's `skipped` outcome is kept for a planned block that was never attempted.
+
+**Uploaded data:** while the planner is enabled, a new spectrum or photometry set proves the
+observation.
+- A spectrum or photometry set that names a follow-up request (its `followup` field) matches
+  that request's data-taken observations.
+- A spectrum that names no request matches the same transient's data-taken observations from
+  the night of its `obs_date`.
+
+Matching observations become `success`, and their classical requests (and the request the
+upload names, even with no observation recorded) become Successful while still open.
+
+**End of the request period:** the daily `ExpireFollowupRequests` cron, or
+`manage.py expire_followup_requests [--apply]`, closes classical requests that are still
+Requested or InProcess after their window (`valid_stop`) has ended.
+- No observations, or only failed/punted/skipped ones: the request becomes Failed.
+- A good observation: it becomes Successful.
+- Data taken but not yet judged: left alone for someone to judge.
+
+Only requests whose window ended on or after `ASTROSCHEDULER_EXPIRE_AFTER` (a date) are
+touched. It is empty by default, which turns expiry off, so requests from before the planner
+was in use are never failed. ToO and queue requests are never touched.
 
 **What a block records:** the note, the planned and actual times, and who recorded it.
 
@@ -123,6 +147,7 @@ Optional keys, with their defaults:
 | `ASTROSCHEDULER_SITE_MAP` | `shane:lick:kast,lick:lick:kast,keck ii:keck2:kcwi,keck2:keck2:kcwi,keck i:keck1:lris,keck1:keck1:lris` | `pattern:site:instrument` rules. The first pattern found in the lower-cased telescope name wins. |
 | `ASTROSCHEDULER_DEFAULT_MAG` | `19.0` | Magnitude assumed for a target with no photometry. The target gets a warning. |
 | `ASTROSCHEDULER_STALE_MAG_DAYS` | `7` | A last detection older than this before the night gets a warning. |
+| `ASTROSCHEDULER_EXPIRE_AFTER` | empty (off) | `YYYY-MM-DD`: classical requests whose window ends on or after this date and that get no good data are closed as Failed by the daily cron. |
 
 **Site, coordinates and time zone.** The site's coordinates always come from the YSE_PZ
 `Telescope`, and its time zone from the `Observatory`'s `tz_name`. The site map only picks
@@ -203,6 +228,12 @@ Limits: at most 400 blocks and 300 targets.
 
 `action` is `start`, `complete`, `fail` or `punt`. `reason` is an OutcomeReason code, required
 for `fail` and `punt`.
+
+### `POST /api/observed_blocks/<id>/assess/`
+
+Judges a recorded observation: `{"outcome": "success" | "failed" | "punted", "reason": "<code>", "note": "..."}`.
+`success` makes the request Successful. `failed` and `punted` need a reason and leave the request
+alone.
 
 ### `POST /api/night_plans/<plan id>/approve/`
 

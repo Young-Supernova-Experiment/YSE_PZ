@@ -65,20 +65,26 @@
     <div class="card-header"><h3 class="card-title">Tonight's observing log</h3></div>
     <div class="card-body">
       <p class="text-muted small">
-        Real-Time Mode in the planner records Start, Completed, Failed and Punted here and updates each
-        follow-up's status. Finished targets are left out of the next solve; use
-        "Recalculate Schedule Starting Now" to re-plan the rest of the night.
+        Real-Time Mode in the planner records Start, Completed (data taken), Failed and Punted here.
+        Judge data-taken observations with Good / Failed / Punted: a good one marks the request
+        Successful. Finished targets are left out of the next solve; use "Recalculate Schedule
+        Starting Now" to re-plan the rest of the night.
       </p>
       <table class="table table-sm table-striped mb-0" id="observing-log-table">
-        <thead><tr><th>End (UTC)</th><th>Target</th><th>Outcome</th><th>Reason</th><th>Note</th><th>Recorded by</th></tr></thead>
+        <thead><tr><th>End (UTC)</th><th>Target</th><th>Outcome</th><th>Reason</th><th>Note</th><th>Recorded by</th><th></th></tr></thead>
         <tbody>
         {% for o in observing_log %}
-          <tr data-outcome="{{ o.outcome }}">
-            <td>{{ o.end_ut|slice:"11:16" }}</td><td>{{ o.target_name }}</td><td>{{ o.outcome }}</td>
+          <tr data-outcome="{{ o.outcome }}" data-block="{{ o.id }}">
+            <td>{{ o.end_ut|slice:"11:16" }}</td><td>{{ o.target_name }}</td><td>{{ o.outcome_label }}</td>
             <td>{{ o.reason|default:"" }}</td><td>{{ o.note|default:"" }}</td><td>{{ o.recorded_by }}</td>
+            <td class="text-nowrap">{% if o.outcome == "observed" %}
+              <button type="button" class="btn btn-success btn-xs assess-btn" data-block="{{ o.id }}" data-outcome="success">Good</button>
+              <button type="button" class="btn btn-default btn-xs assess-btn" data-block="{{ o.id }}" data-outcome="failed">Failed</button>
+              <button type="button" class="btn btn-default btn-xs assess-btn" data-block="{{ o.id }}" data-outcome="punted">Punted</button>
+            {% endif %}</td>
           </tr>
         {% empty %}
-          <tr class="observing-log-empty"><td colspan="6" class="text-muted small">Nothing recorded yet.</td></tr>
+          <tr class="observing-log-empty"><td colspan="7" class="text-muted small">Nothing recorded yet.</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -147,10 +153,29 @@
         if (empty) empty.remove();
         const row = tbody.insertRow(0);
         row.dataset.outcome = saved.outcome;
-        [event.time_utc.slice(11, 16), event.target_name, saved.outcome, event.reason || "", event.note || "", "you"]
+        [event.time_utc.slice(11, 16), event.target_name, saved.outcome === "observed" ? "Data taken" : saved.outcome,
+         event.reason || "", event.note || "", "you", ""]
           .forEach(function (text) { row.insertCell().textContent = text; });
       }
     };
+  });
+
+  // Judge a data-taken observation (#672); Failed and Punted ask for a reason code.
+  const assessBase = "{% url 'api-observed-block-assess' 0 %}".replace("/0/assess/", "/");
+  const reasonCodes = "weather, instrument, telescope, ran_out_of_time, deprioritized, low_sn, wrong_object, not_visible, too_faint, other";
+  document.getElementById("observing-log-table").addEventListener("click", async function (ev) {
+    const btn = ev.target.closest(".assess-btn");
+    if (!btn) return;
+    const body = {outcome: btn.dataset.outcome};
+    if (body.outcome !== "success") {
+      const code = window.prompt("Reason code (" + reasonCodes + "):", "low_sn");
+      if (!code) return;
+      body.reason = code.trim();
+    }
+    try {
+      await post(assessBase + btn.dataset.block + "/assess/", body);
+      window.location.reload();
+    } catch (e) { say("Not recorded: " + e.message, true); }
   });
 
   document.querySelectorAll(".approve-plan-btn").forEach(function (btn) {

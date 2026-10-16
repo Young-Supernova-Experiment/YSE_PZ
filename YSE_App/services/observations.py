@@ -3,17 +3,19 @@
 The embedded planner's Start / Completed / Failed / Punted actions reach YSE_PZ through
 AstroScheduler's ``onObservationEvent`` hook (set by the planner page).
 
-Two different things are recorded (#670). The observation's outcome belongs to one attempt on
-one night: Failed means we tried and missed the target or the S/N was bad; Punted means we went
-to the object but got no usable data (or stopped too early). The follow-up *request's* status
-is judged across nights: InProcess while it is scheduled or its data are taken but not yet
-judged; Successful or Failed only when someone decides. The planner never sets those two.
+Two different things are recorded (#670, #672, #673). The observation's outcome belongs to
+one attempt on one night: Data taken (``observed``) until someone judges it; Success when it is
+good; Failed when we tried and missed the target or the S/N was bad; Punted when we went to the
+object but got no usable data (or stopped too early). The follow-up *request's* status covers
+one or more nights: InProcess while it is scheduled or has data waiting to be judged;
+Successful as soon as one observation is judged good (``assess_block``); Failed when its
+window ends without good data (``expire_requests``).
 
 ==========  ====================  ==========================================
 action      request status        observed block
 ==========  ====================  ==========================================
 start       InProcess             none (its time becomes the block's start)
-complete    InProcess             outcome ``success`` (data taken)
+complete    InProcess             outcome ``observed`` (Data taken)
 fail        unchanged             outcome ``failed`` (reason required)
 punt        unchanged             outcome ``punted`` (reason required)
 ==========  ====================  ==========================================
@@ -51,13 +53,14 @@ REASONS = [
 # action -> (observed-block outcome, request status to set or None to leave it)
 ACTIONS = {
     "start": (None, "InProcess"),
-    "complete": (ObservedBlock.Outcome.SUCCESS, "InProcess"),
+    "complete": (ObservedBlock.Outcome.OBSERVED, "InProcess"),
     "fail": (ObservedBlock.Outcome.FAILED, None),
     "punt": (ObservedBlock.Outcome.PUNTED, None),
 }
 # Outcome -> the status AstroScheduler's solver skips (#668).
 PLANNER_STATUS = {
     ObservedBlock.Outcome.SUCCESS: "Observed",
+    ObservedBlock.Outcome.OBSERVED: "Observed",
     ObservedBlock.Outcome.PARTIAL: "Observed",
     ObservedBlock.Outcome.FAILED: "Failed",
     ObservedBlock.Outcome.PUNTED: "Punted",
@@ -136,14 +139,12 @@ def record_event(night, user, payload: Any) -> Dict[str, Any]:
 
     outcome, status_name = ACTIONS[action]
     reason = None
-    if outcome is not None and outcome != ObservedBlock.Outcome.SUCCESS:
+    if outcome in ObservedBlock.NEEDS_REASON:
         ensure_reasons(user)
         reason = OutcomeReason.objects.filter(code=payload.get("reason") or "", active=True).first()
         if reason is None:
             raise ObservationError("Choose a reason for %s" % ("a failure" if action == "fail" else "a punt"))
-    note = payload.get("note") or ""
-    if not isinstance(note, str) or len(note) > MAX_NOTE:
-        raise ObservationError("The note must be text of at most %d characters" % MAX_NOTE)
+    note = _note(payload)
     at = _when(payload.get("time_utc")) or timezone.now()
 
     from YSE_App.models import TransientFollowup
@@ -169,19 +170,175 @@ def record_event(night, user, payload: Any) -> Dict[str, Any]:
                 plan.state = NightPlan.State.EXECUTING
                 plan.modified_by = user
                 plan.save(update_fields=["state", "modified_by", "modified_date"])
-        if status_name and (followup.status is None or followup.status.name != status_name):
-            status = FollowupStatus.objects.filter(name=status_name).first()
-            if status is None:
-                status = FollowupStatus.objects.create(name=status_name, created_by=user, modified_by=user)
-            followup.status = status
-            followup.modified_by = user
-            followup.save(update_fields=["status", "modified_by", "modified_date"])
+        if status_name:
+            _set_status(followup, status_name, user)
     return {
         "action": action,
         "followup_status": followup.status.name if followup.status_id else None,
         "observed_block": observed.id if observed else None,
         "outcome": outcome,
     }
+
+
+def _note(payload: Dict[str, Any]) -> str:
+    note = payload.get("note") or ""
+    if not isinstance(note, str) or len(note) > MAX_NOTE:
+        raise ObservationError("The note must be text of at most %d characters" % MAX_NOTE)
+    return note
+
+
+def _set_status(followup, name: str, user) -> bool:
+    """Set the request's status through the normal save (notifications apply); True if changed."""
+    if followup.status_id and followup.status.name == name:
+        return False
+    status = FollowupStatus.objects.filter(name=name).first()
+    if status is None:
+        status = FollowupStatus.objects.create(name=name, created_by=user, modified_by=user)
+    followup.status = status
+    followup.modified_by = user
+    followup.save(update_fields=["status", "modified_by", "modified_date"])
+    return True
+
+
+# Judgements allowed on a recorded observation (#672).
+ASSESSMENTS = (ObservedBlock.Outcome.SUCCESS, ObservedBlock.Outcome.FAILED, ObservedBlock.Outcome.PUNTED)
+
+
+def assess_block(block: ObservedBlock, user, payload: Any) -> Dict[str, Any]:
+    """Judge a recorded observation (#672). A good one makes the request Successful at once;
+    Failed or Punted (reason required) leave the request's status alone."""
+    from YSE_App.services.night_plans import visible_followup_ids
+
+    if not isinstance(payload, dict):
+        raise ObservationError("Expected a JSON object")
+    outcome = payload.get("outcome")
+    if outcome not in ASSESSMENTS:
+        raise ObservationError("The outcome must be one of: %s" % ", ".join(ASSESSMENTS))
+    night = block.night
+    if not can_record(night, user):
+        raise ObservationError("You may not judge observations for this night", 403)
+    if block.followup_id is None or block.followup_id not in visible_followup_ids(night, user):
+        raise ObservationError("That observation's follow-up is not one you can see", 403)
+    reason = None
+    if outcome in ObservedBlock.NEEDS_REASON:
+        ensure_reasons(user)
+        reason = OutcomeReason.objects.filter(code=payload.get("reason") or "", active=True).first()
+        if reason is None:
+            raise ObservationError("Choose a reason")
+    note = _note(payload)
+    with transaction.atomic():
+        block = ObservedBlock.objects.select_for_update().select_related("followup__status").get(pk=block.pk)
+        block.outcome = outcome
+        block.reason = reason
+        if note:
+            block.comments = ("%s\n%s" % (block.comments, note)).strip() if block.comments else note
+        block.modified_by = user
+        block.save(update_fields=["outcome", "reason", "comments", "modified_by", "modified_date"])
+        if outcome == ObservedBlock.Outcome.SUCCESS:
+            _set_status(block.followup, "Successful", user)
+    block.followup.refresh_from_db()
+    return {"observed_block": block.id, "outcome": block.outcome,
+            "followup_status": block.followup.status.name if block.followup.status_id else None}
+
+
+def data_uploaded(transient_id, followup_id=None, obs_date=None, user=None) -> Dict[str, Any]:
+    """New data (a spectrum or photometry set) prove the observation (#674).
+
+    The data-taken observations of the upload's follow-up request (or, without one, of the same
+    transient on the night of ``obs_date``) become ``success``, and their classical requests,
+    and the upload's own classical request, become Successful while still open. Only while the
+    planner is enabled; ToO and queue requests are left to their facility integrations.
+    """
+    from YSE_App.models import TransientFollowup
+    from YSE_App.services.night_planner import enabled
+
+    result = {"observations": [], "requests": []}
+    if not enabled() or not transient_id:
+        return result
+    pending = ObservedBlock.objects.filter(outcome__in=PENDING_OUTCOMES).select_related("followup__status")
+    if followup_id:
+        pending = pending.filter(followup_id=followup_id)
+    elif obs_date is not None:
+        # A night dated D is observed in the UT hours after D (evening local time).
+        pending = pending.filter(transient_id=transient_id,
+                                 night__obs_date__gt=obs_date - datetime.timedelta(days=2),
+                                 night__obs_date__lte=obs_date)
+    else:
+        return result
+    requests = {}
+    with transaction.atomic():
+        for block in pending:
+            block.outcome = ObservedBlock.Outcome.SUCCESS
+            block.modified_by = user or block.modified_by
+            block.save(update_fields=["outcome", "modified_by", "modified_date"])
+            result["observations"].append(block.id)
+            if block.followup_id:
+                requests[block.followup_id] = block.followup
+        if followup_id and followup_id not in requests:
+            followup = TransientFollowup.objects.select_related("status").filter(pk=followup_id).first()
+            if followup is not None:
+                requests[followup_id] = followup
+        for followup in requests.values():
+            if (followup.classical_resource_id and followup.status_id
+                    and followup.status.name in OPEN_STATUSES
+                    and _set_status(followup, "Successful", user or followup.modified_by)):
+                result["requests"].append(followup.id)
+    return result
+
+
+# Expiry (#673): outcomes that mean the request did get data (judged good, or still to judge).
+GOOD_OUTCOMES = (ObservedBlock.Outcome.SUCCESS,)
+PENDING_OUTCOMES = (ObservedBlock.Outcome.OBSERVED, ObservedBlock.Outcome.PARTIAL)
+OPEN_STATUSES = ("Requested", "InProcess")
+
+
+def expire_after() -> Optional[datetime.datetime]:
+    """``ASTROSCHEDULER_EXPIRE_AFTER`` as a UTC datetime, or None (expiry off)."""
+    from django.conf import settings
+
+    raw = (getattr(settings, "ASTROSCHEDULER_EXPIRE_AFTER", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        day = datetime.date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    return datetime.datetime.combine(day, datetime.time(0, 0), tzinfo=datetime.timezone.utc)
+
+
+def expire_requests(now=None, *, apply: bool = False, since=None, actor=None) -> Dict[str, Any]:
+    """Close classical requests whose window has ended (#673).
+
+    Only follow-ups on a classical resource, still Requested or InProcess, whose ``valid_stop``
+    is before ``now`` and on or after ``since`` (default ``ASTROSCHEDULER_EXPIRE_AFTER``; None
+    = do nothing). Without a good or pending observation they become Failed; with a good one,
+    Successful; with data still to judge they are left alone. Changes only with ``apply``.
+    """
+    from YSE_App.models import TransientFollowup
+
+    now = now or timezone.now()
+    since = since or expire_after()
+    result = {"failed": [], "successful": [], "pending": [], "applied": apply, "since": since}
+    if since is None:
+        return result
+    candidates = (TransientFollowup.objects
+                  .filter(classical_resource__isnull=False, valid_stop__lt=now, valid_stop__gte=since,
+                          status__name__in=OPEN_STATUSES)
+                  .select_related("status").order_by("valid_stop", "id"))
+    for followup in candidates:
+        outcomes = set(ObservedBlock.objects.filter(followup=followup).values_list("outcome", flat=True))
+        if outcomes & set(GOOD_OUTCOMES):
+            result["successful"].append(followup.id)
+            target = "Successful"
+        elif outcomes & set(PENDING_OUTCOMES):
+            result["pending"].append(followup.id)
+            continue
+        else:
+            result["failed"].append(followup.id)
+            target = "Failed"
+        if apply:
+            _set_status(followup, target, actor or followup.modified_by)
+    return result
 
 
 def planner_statuses(night) -> Dict[str, str]:
@@ -206,6 +363,7 @@ def tonight_log(night, user) -> List[Dict[str, Any]]:
         "id": b.id,
         "target_name": b.target_name,
         "outcome": b.outcome,
+        "outcome_label": b.get_outcome_display(),
         "reason": b.reason.label if b.reason_id else None,
         "note": b.comments,
         "start_ut": b.start_ut.isoformat() if b.start_ut else None,

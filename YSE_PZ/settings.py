@@ -242,6 +242,9 @@ CRON_CLASSES = [
     # Daily retention of notification and finished-job rows (#320); no-op when
     # NOTIFICATION_PRUNE_CRON_ENABLED is False.
     'YSE_App.data_ingest.Job_Queue.PruneNotifications',
+    # Daily: close classical follow-up requests that ended without good data (#673);
+    # no-op unless ASTROSCHEDULER_EXPIRE_AFTER is set.
+    'YSE_App.data_ingest.Job_Queue.ExpireFollowupRequests',
     # Broker polling ingest to candidates (#276): enqueues brokers.ingest jobs;
     # no-op unless BROKER_INGEST_CRON_ENABLED is set ([brokers] in settings.ini).
     'YSE_App.data_ingest.Broker_Ingest.BrokerPoll',
@@ -1013,6 +1016,11 @@ try:
     ]
 except ImportError:
     pass
+# Classical follow-up requests whose window ended on or after this date (YYYY-MM-DD) and
+# that got no good data are closed as Failed by the daily ExpireFollowupRequests cron (#673).
+# Empty = off: requests that ended before the planner was in use are never touched.
+ASTROSCHEDULER_EXPIRE_AFTER = _str_setting(
+    'YSE_ASTROSCHEDULER_EXPIRE_AFTER', 'site_settings', 'ASTROSCHEDULER_EXPIRE_AFTER', '')
 # Magnitude used for a target with no photometry (it gets a warning).
 ASTROSCHEDULER_DEFAULT_MAG = float(_str_setting(
     'YSE_ASTROSCHEDULER_DEFAULT_MAG', 'site_settings', 'ASTROSCHEDULER_DEFAULT_MAG', '19.0'
