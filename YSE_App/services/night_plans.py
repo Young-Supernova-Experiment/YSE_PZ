@@ -116,15 +116,33 @@ def visible_followup_ids(night, user) -> set:
     return set(night_followups(night, user).values_list("id", flat=True))
 
 
-def visible_blocks(plan: NightPlan, user, followup_ids: Optional[set] = None) -> List[PlannedBlock]:
+def _block_visible(user, plan_author_id, kind, followup_id, followup_ids) -> bool:
+    if user.is_staff or user.id == plan_author_id:
+        return True
+    return kind != PlannedBlock.Kind.SCIENCE or followup_id in followup_ids
+
+
+def visible_blocks(plan: NightPlan, user, followup_ids: Optional[set] = None,
+                   with_requests: bool = False) -> List[PlannedBlock]:
     """The plan's blocks ``user`` may see: all for staff and the author; otherwise standards and
-    science blocks whose follow-up the user can see on the night page."""
-    blocks = list(plan.blocks.select_related("followup", "transient").order_by("order"))
+    science blocks whose follow-up the user can see on the night page. ``with_requests``
+    prefetches the follow-ups' requests and requestors (for the export's comments)."""
+    blocks = plan.blocks.select_related("followup", "transient").order_by("order")
+    if with_requests:
+        from django.db.models import Prefetch
+
+        from YSE_App.models import TransientFollowupRequest
+
+        blocks = blocks.prefetch_related(Prefetch(
+            "followup__requests",
+            queryset=TransientFollowupRequest.objects.select_related("requestor").order_by("requested_at", "id"),
+        ))
+    blocks = list(blocks)
     if user.is_staff or user.id == plan.author_id:
         return blocks
     if followup_ids is None:
         followup_ids = visible_followup_ids(plan.night, user)
-    return [b for b in blocks if b.kind != PlannedBlock.Kind.SCIENCE or b.followup_id in followup_ids]
+    return [b for b in blocks if _block_visible(user, plan.author_id, b.kind, b.followup_id, followup_ids)]
 
 
 # ------------------------------------------------------------------ save
@@ -260,8 +278,16 @@ def can_approve(night, user) -> bool:
 
 def plan_summaries(night, user) -> List[Dict[str, Any]]:
     followup_ids = visible_followup_ids(night, user)
+    plans = list(night.plans.select_related("author", "approved_by").order_by("-version"))
+    # Visible block counts for every plan from one query (#675).
+    authors = {p.id: p.author_id for p in plans}
+    counts: Dict[int, int] = {}
+    for plan_id, kind, followup_id in (PlannedBlock.objects.filter(plan__night=night)
+                                       .values_list("plan_id", "kind", "followup_id")):
+        if _block_visible(user, authors.get(plan_id), kind, followup_id, followup_ids):
+            counts[plan_id] = counts.get(plan_id, 0) + 1
     out = []
-    for plan in night.plans.select_related("author", "approved_by").order_by("-version"):
+    for plan in plans:
         out.append({
             "id": plan.id,
             "version": plan.version,
@@ -273,7 +299,7 @@ def plan_summaries(night, user) -> List[Dict[str, Any]]:
             "approved_at": plan.approved_at.isoformat() if plan.approved_at else None,
             "solver": plan.solver,
             "notes": plan.notes,
-            "blocks": len(visible_blocks(plan, user, followup_ids)),
+            "blocks": counts.get(plan.id, 0),
         })
     return out
 
@@ -342,7 +368,7 @@ def export_target_list(plan: NightPlan, user, finders: bool = False) -> str:
 
     lines = ["!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}"]
     finder = None
-    for block in visible_blocks(plan, user):
+    for block in visible_blocks(plan, user, with_requests=True):
         if block.ra is None or block.dec is None:
             continue
         ra, dec = sexagesimal(block.ra, block.dec)

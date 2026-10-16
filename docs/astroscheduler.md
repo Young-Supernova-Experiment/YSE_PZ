@@ -2,11 +2,52 @@
 
 YSE_PZ plans classical nights with [AstroScheduler](https://github.com/UCSC-Transients/AstroScheduler),
 installed as a pinned package (`requirements.txt`, tag `v1.2.0`). AstroScheduler owns solving
-and scheduling. YSE_PZ owns the targets, and later the saved plans and outcomes.
-AstroScheduler also runs on its own as a standalone app.
+and scheduling. YSE_PZ owns the targets, the saved plans and the outcomes. AstroScheduler also
+runs on its own as a standalone app, and can import a YSE_PZ night with an API token.
 
 Status (2026-10-16): the targets feed, the server-side solve, the planner page, saved plans
-(versions, approval, re-opening, target-list export) and execution feedback are in place.
+(versions, approval, re-opening, target-list export) and execution feedback are in place, behind
+the `ASTROSCHEDULER_ENABLED` flag (see [Turning it on](#turning-it-on)).
+
+Contents: [Observer guide](#observer-guide) · [Execution feedback](#execution-feedback) ·
+[Saved plans](#saved-plans) · [The planner page](#the-planner-page) ·
+[Turning it on](#turning-it-on) · [API](#api) · [Performance](#performance) · [Notes](#notes)
+
+## Observer guide
+
+**Before the night**
+1. Open the classical night (Observing calendar, or "Next Telescope Nights" on the home page)
+   and press **Plan this night**.
+2. The planner opens inside YSE_PZ with the night's date, telescope, instrument and the
+   follow-ups you may see. Warnings above it name targets without photometry or with a stale
+   last detection.
+3. Press **Recalculate Schedule**. Move blocks by hand if needed: lock a start time, drag to
+   reorder, change exposures. The planner re-solves only when you press Recalculate.
+4. **Save plan**, with an optional note. Each save is a new version under "Saved plans".
+   **Open** continues a version: your edits come back and the blocks keep their places.
+5. The night's PI (or staff) presses **Approve** on the version to observe. **Target list**
+   downloads it for the telescope, in planned order, with UT windows, exposures and offset stars.
+
+**At the telescope**
+1. In the planner, switch to **Real-Time Mode**.
+2. Pick the target, then press **Start Observation** when you start it.
+3. When the target is finished, press one of:
+   - **Completed** when data were taken ("Data taken");
+   - **Failed** when you tried and missed it, the S/N was bad, and so on;
+   - **Punted** when you went to it but got no usable data, or stopped too early.
+
+   Failed and Punted need a reason, and the comment box is the note.
+4. Everything is recorded in YSE_PZ. Tonight's observing log appears below the plans.
+5. Press **Recalculate Schedule Starting Now** to re-plan the rest of the night. Finished targets
+   are left out, even after a page reload.
+
+**After the night**
+- **Judge** each "Data taken" row in the night log: Good, Failed or Punted, with any number of
+  reasons and a comment. A good observation makes the request **Successful**.
+- **Uploading** the spectrum (or photometry) for that request or night does the same,
+  automatically.
+- A request whose window ends with no good data becomes **Failed** (daily, once
+  `ASTROSCHEDULER_EXPIRE_AFTER` is set).
 
 ## Execution feedback
 
@@ -157,7 +198,7 @@ warns about it.
 
 ## API
 
-Both endpoints are DRF views. They need an authenticated user, by session or by
+All endpoints are DRF views. They need an authenticated user, by session or by
 `Authorization: Token <key>`. Session POSTs also need the CSRF token.
 
 ### `GET /api/observing_nights/?days_back=7&days_ahead=60`
@@ -268,9 +309,33 @@ and a narrower night window. Everything else under "observatory" is ignored.
 A typical night solves in 1-2 s, plus about 1 s the first time that night is solved in a
 process.
 
+## Performance
+
+**Solves run inside the web request.** Solve time is measured on Python 3.8 with YSE_PZ's
+pins, at Lick, with random synthetic targets, on one laptop (Ziggy may differ):
+
+| Follow-ups | 10 | 20 | 40 | 60 | 100 |
+| --- | --- | --- | --- | --- | --- |
+| AstroScheduler 1.2.0 (pinned now), s | 3.3 | 4.9 | 21 | 45 | 107 |
+| Next release ([AstroScheduler#110](https://github.com/UCSC-Transients/AstroScheduler/issues/110)), s | 3.2 | 3.6 | 7.2 | 13 | 23 |
+
+The next release gives identical schedules. About 1 s of each solve is the night's twilight
+calculation, which is cached per site and night for later solves in the same process. A
+typical classical night of 10-40 follow-ups stays well inside a request's time budget, so
+the job queue isn't used. Each response reports `yse_pz.solve_seconds`, which shows when that
+assumption needs revisiting.
+
+**Queries:** the planner page and frame, the targets feed, the plans list, the export and
+the observing log each make a fixed number of queries, however many follow-ups, plans or
+observations there are. `YSE_App/tests/test_planner_smoke.py` checks this.
+
 ## Notes
 
-- `astroscheduler` is imported only when a planner endpoint runs. Importing it turns off
-  astropy's IERS auto-download for the process, so pages that never plan are unaffected.
-- Tests: `YSE_App/tests/test_night_planner.py`. They use synthetic data, mock the Bazin fits,
-  and solve with the installed package without HTTP.
+- `astroscheduler` is imported only when a planner endpoint runs. Since 1.0.1 importing it
+  changes no astropy setting: its offline IERS options apply only inside each solve.
+- Tests (synthetic data; Bazin fits mocked; the installed solver runs without HTTP):
+  - `test_night_planner.py`: feed and solve.
+  - `test_night_planner_page.py`: page, frame and nights list.
+  - `test_night_plans.py`: saved plans.
+  - `test_night_observations.py`: execution feedback.
+  - `test_planner_smoke.py`: the end-to-end smoke test (#35) and query counts.
