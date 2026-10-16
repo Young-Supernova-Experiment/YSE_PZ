@@ -43,7 +43,7 @@ async-timeout==4.0.3
 astroquery==0.4.6
 # AstroScheduler's night-planner solver (#653), pinned to a release tag. It needs only
 # astropy, astroplan, numpy and pytz (pinned here); its CI tests Python 3.8 with these pins.
-astroscheduler @ https://github.com/UCSC-Transients/AstroScheduler/archive/refs/tags/v1.2.0.tar.gz
+astroscheduler @ https://github.com/UCSC-Transients/AstroScheduler/archive/refs/tags/v1.3.0.tar.gz
 astunparse==1.6.3
 attrs==21.2.0
 backcall==0.2.0
