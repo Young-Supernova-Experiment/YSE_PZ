@@ -1727,6 +1727,23 @@ def _clean_dq(value):
     return value if value in ('good', 'flagged') else 'all'
 
 
+def _visible_diff_images(user, transient_id):
+    """Diff / forced-photometry images of a transient, only for points whose set ``user`` may see."""
+    from YSE_App.services.visibility import visible_photometry_ids_q
+
+    qs = TransientDiffImage.objects.filter(
+        phot_data__photometry__transient_id=transient_id
+    )
+    visible = visible_photometry_ids_q(user, prefix='phot_data__photometry_id')
+    if visible is not None:
+        qs = qs.filter(visible)
+    return qs.select_related(
+        'phot_data',
+        'phot_data__photometry',
+        'phot_data__band',
+    )
+
+
 @login_required
 def transient_detail_photometry_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
@@ -1740,13 +1757,7 @@ def transient_detail_photometry_fragment(request, transient_id):
         )
         .prefetch_related('data_quality', 'photometry__pis')
     )
-    diff_images = TransientDiffImage.objects.filter(
-        phot_data__photometry__transient_id=transient_id
-    ).select_related(
-        'phot_data',
-        'phot_data__photometry',
-        'phot_data__band',
-    )
+    diff_images = _visible_diff_images(request.user, transient_id)
     from YSE_App.collaboration_views import data_access_context
 
     dq = _clean_dq(request.GET.get('dq'))
@@ -1866,10 +1877,10 @@ def transient_detail(request, slug):
         if hostphotdata: transient_obj.hostphotdata = hostphotdata
 
         if defer_detail:
-            from YSE_App.models import TransientPhotData
-
-            good_photdata = TransientPhotData.objects.filter(
-                photometry__transient_id=transient_id,
+            # Only photometry this user may see (same rule as the full branch).
+            good_photdata = view_utils.get_all_phot_for_transient(
+                request.user, transient_id
+            ).filter(
                 mag__isnull=False,
             ).filter(legacy_good('TransientPhotData')).select_related('band')
             lastphotdata = good_photdata.order_by('-obs_date').first()
@@ -1902,13 +1913,7 @@ def transient_detail(request, slug):
             ).select_related('instrument', 'instrument__telescope').prefetch_related(
                 'data_quality', 'pis'
             )
-            diff_images_qs = TransientDiffImage.objects.filter(
-                phot_data__photometry__transient_id=transient_id
-            ).select_related(
-                'phot_data',
-                'phot_data__photometry',
-                'phot_data__band',
-            )
+            diff_images_qs = _visible_diff_images(request.user, transient_id)
 
         comment_cutoff = timezone.now() - datetime.timedelta(1)
         has_new_comment = any(
