@@ -44,7 +44,12 @@ from itertools import islice
 from astropy.cosmology import FlatLambdaCDM
 import sys
 from YSE_App.common import mast_query,chandra_query,spitzer_query
-from YSE_App.common.data_references import tns_reference
+from YSE_App.common.data_references import (
+    TNS_PHOTOMETRY_REPORT_KEYS,
+    TNS_SPECTRUM_REPORT_KEYS,
+    tns_reference_with_reports,
+    tns_report_id,
+)
 from YSE_App.common.collaboration_groups import (
     PUBLIC_COLLABORATION_GROUP_NAME,
     TNS_IMPORT_COLLABORATION_GROUPS,
@@ -445,7 +450,8 @@ class processTNS:
             np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
 
         nondetectmaglim,nondetectdate,nondetectfilt,nondetectins = "","","",""
-        from YSE_App.common.tns_photometry_map import resolve_tns_photometry
+        report_ids = np.array([], dtype=object)
+        from YSE_App.common.tns_photometry_map import TNS_OBS_GROUP_NAME, resolve_tns_photometry
 
         for p in jd['photometry']:
             resolved = resolve_tns_photometry(
@@ -474,6 +480,7 @@ class processTNS:
             obsgroups = np.append(obsgroups, observer)
             tinst = np.append(tinst, yse_instrument)
             tfilt = np.append(tfilt, yse_band)
+            report_ids = np.append(report_ids, tns_report_id(p, TNS_PHOTOMETRY_REPORT_KEYS))
 
         disc_flag = np.zeros(len(tmag))
         iMag = np.where((tmag != -99) & (tmag != None))[0]
@@ -483,15 +490,12 @@ class processTNS:
         photometrycount = 0
         for ins in np.unique(tinst):
 
-            if np.array(obsgroups)[np.array(tinst) == ins][0] is None:
-                obsgroup = None
-            else:
-                obsgroup = re.sub(r'[^\x00-\x7f]',r'',np.array(obsgroups)[np.array(tinst) == ins][0])
-            
+            # #645: TNS-reported points get their own header (a dedicated TNS obs_group), so they are
+            # never mixed with the same survey's forced photometry; the reference says where they came from.
             photometrydict = {'instrument':ins,
-                              'obs_group':obsgroup,
+                              'obs_group':TNS_OBS_GROUP_NAME,
                               'groups': list(TNS_IMPORT_COLLABORATION_GROUPS),
-                              'reference': tns_reference(jd),  # #447: public data carries its reference
+                              'reference': tns_reference_with_reports(jd, report_ids[tinst == ins]),
                               'photdata':{}}
 
             for f,k in zip(np.unique(tfilt),range(len(np.unique(tfilt)))):
@@ -527,6 +531,7 @@ class processTNS:
     def getTNSSpectra(self,jd,sc):
         specinst,specobsdate,specobsgroup,specfiles = \
             np.array([]),np.array([]),np.array([]),np.array([])
+        specreports = np.array([], dtype=object)
 
         SpecDictAll = {'clobber':self.clobber}
         keyslist = ['ra','dec','instrument','rlap','obs_date','redshift',
@@ -545,8 +550,9 @@ class processTNS:
             else:
                 specobsgroup = np.append(specobsgroup,'Unknown')
             specfiles = np.append(specfiles,spec['asciifile'])
+            specreports = np.append(specreports,tns_report_id(spec, TNS_SPECTRUM_REPORT_KEYS))
         
-        for s,si,so,sog in zip(specfiles,specinst,specobsdate,specobsgroup):
+        for s,si,so,sog,srid in zip(specfiles,specinst,specobsdate,specobsgroup,specreports):
             Spectrum = {}
             SpecData = {}
             _remove_quietly('spec_tns_upload.txt')
@@ -625,7 +631,7 @@ class processTNS:
             Spectrum['obs_date'] = so
             Spectrum['obs_group'] = re.sub(r'[^\x00-\x7f]',r'',sog)
             Spectrum['groups'] = PUBLIC_COLLABORATION_GROUP_NAME
-            Spectrum['reference'] = tns_reference(jd)  # #447: public data carries its reference
+            Spectrum['reference'] = tns_reference_with_reports(jd, [srid])  # #447/#645: object plus the TNS report id, when sent
             SpecDictAll[s] = Spectrum
 
         return SpecDictAll
