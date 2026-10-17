@@ -665,7 +665,11 @@ class FlaggedSeriesRenderTests(TestCase):
         flagged_x, good_x = set(), set()
         for renderer, glyph, data in self._marker_renderers(doc):
             target = flagged_x if renderer.get("muted") else good_x
-            target.update(round(float(x), 6) for x in data["x"])
+            # bands share epochs, so a point is (mjd, telescope, filter)
+            target.update(
+                (round(float(x), 6), tel, flt)
+                for x, tel, flt in zip(data["x"], data["telescope"], data["filter"])
+            )
             if renderer.get("muted"):
                 self.assertEqual(glyph["fill_alpha"]["value"], 0.0)
                 self.assertTrue(all(dq == "Bad" for dq in data["data_quality"]))
@@ -673,9 +677,11 @@ class FlaggedSeriesRenderTests(TestCase):
                 self.assertTrue(all(dq == "Good" for dq in data["data_quality"]))
         from YSE_App.common.utilities import date_to_mjd
 
-        expected = {round(float(date_to_mjd(r.obs_date)), 6) for r in (self.flagged_det, self.flagged_ulim)}
-        self.assertEqual(flagged_x, expected)
-        self.assertIn(round(float(date_to_mjd(self.unpublished.obs_date)), 6), good_x)
+        def point(row, tel, flt):
+            return (round(float(date_to_mjd(row.obs_date)), 6), tel, flt)
+
+        self.assertEqual(flagged_x, {point(self.flagged_det, "PS1", "g"), point(self.flagged_ulim, "ZTF", "g")})
+        self.assertIn(point(self.unpublished, "PS1", "r"), good_x)
         self.assertFalse(flagged_x & good_x)
         refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
         roots = [refs[root_id] for root_id in doc["roots"]["root_ids"]]
