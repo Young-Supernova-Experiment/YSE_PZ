@@ -1423,9 +1423,6 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibil
         self._set_bazin_epoch(local_midnight_mjd(
             classical_obs_date.obs_date, observatory.utc_offset if observatory else 0))
 
-    def render_airmass(self, value):
-        from astroplan.plots import plot_airmass
-
     def render_requestors(self, value, record):
         from YSE_App.services.followup_requests import format_requestors
 
@@ -1517,9 +1514,6 @@ class ToOFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMi
         self._set_observer(too_resource.telescope, now)
         self._set_bazin_epoch(datetime_to_mjd(datetime.datetime.now(datetime.timezone.utc)))
 
-    def render_airmass(self, value):
-        from astroplan.plots import plot_airmass
-
     def render_requestors(self, value, record):
         from YSE_App.services.followup_requests import format_requestors
 
@@ -1588,9 +1582,6 @@ class YSEObsNightTable(TargetVisibilityMixin, tables.Table):
         if telescope is None:  # the view already has it; look it up only when called bare
             telescope = Telescope.objects.get(name='Pan-STARRS1')
         self._set_observer(telescope, obs_date)
-
-    def render_airmass(self, value):
-        from astroplan.plots import plot_airmass
 
     class Meta:
         model = SurveyObservation
