@@ -194,6 +194,12 @@ class DataAccessRule(models.Model):
             self.photometry_id = None
             self.transient_id = self.transient_spectrum.transient_id
 
+    def clean_fields(self, exclude=None):
+        # The copies are derived from the target, so fill them before the field checks.
+        if bool(self.transient_phot_data_id) != bool(self.transient_spectrum_id):
+            self.fill_copies()
+        super().clean_fields(exclude=exclude)
+
     def clean(self):
         errors = []
         _clean_grantee(self, errors)
