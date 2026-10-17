@@ -1727,18 +1727,16 @@ def _clean_dq(value):
     return value if value in ('good', 'flagged') else 'all'
 
 
-def _visible_diff_images(user, transient_id):
-    """Diff / forced-photometry images of a transient, only for points in sets ``user`` may see.
+def _visible_diff_images(visible_photdata, transient_id):
+    """Diff / forced-photometry images of a transient, only for the points in ``visible_photdata``.
 
-    Same sets as the photometry table beside it (``PhotometryService``), so the
-    two never disagree for a given viewer.
+    ``visible_photdata`` is the viewer's authorised photometry queryset
+    (``view_utils.get_all_phot_for_transient``), so the images always match the
+    photometry table beside them, with no second visibility lookup.
     """
-    visible_sets = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(
-        user, transient_id
-    ).values('id')
     return TransientDiffImage.objects.filter(
         phot_data__photometry__transient_id=transient_id,
-        phot_data__photometry_id__in=visible_sets,
+        phot_data__in=visible_photdata.values('pk'),
     ).select_related(
         'phot_data',
         'phot_data__photometry',
@@ -1749,8 +1747,9 @@ def _visible_diff_images(user, transient_id):
 @login_required
 def transient_detail_photometry_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
+    visible_photdata = view_utils.get_all_phot_for_transient(request.user, transient_id)
     allphotdata = (
-        view_utils.get_all_phot_for_transient(request.user, transient_id)
+        visible_photdata
         .select_related(
             'band',
             'photometry',
@@ -1759,7 +1758,7 @@ def transient_detail_photometry_fragment(request, transient_id):
         )
         .prefetch_related('data_quality', 'photometry__pis')
     )
-    diff_images = _visible_diff_images(request.user, transient_id)
+    diff_images = _visible_diff_images(visible_photdata, transient_id)
     from YSE_App.collaboration_views import data_access_context
 
     dq = _clean_dq(request.GET.get('dq'))
@@ -1893,8 +1892,9 @@ def transient_detail(request, slug):
             spectra = TransientSpectrum.objects.none()
             diff_images_qs = TransientDiffImage.objects.none()
         else:
+            visible_photdata = view_utils.get_all_phot_for_transient(request.user, transient_id)
             allphotdata = (
-                view_utils.get_all_phot_for_transient(request.user, transient_id)
+                visible_photdata
                 .select_related(
                     'band',
                     'photometry',
@@ -1915,7 +1915,7 @@ def transient_detail(request, slug):
             ).select_related('instrument', 'instrument__telescope').prefetch_related(
                 'data_quality', 'pis'
             )
-            diff_images_qs = _visible_diff_images(request.user, transient_id)
+            diff_images_qs = _visible_diff_images(visible_photdata, transient_id)
 
         comment_cutoff = timezone.now() - datetime.timedelta(1)
         has_new_comment = any(
