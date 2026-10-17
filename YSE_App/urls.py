@@ -328,6 +328,8 @@ urlpatterns = [
     re_path(r'^sharing/submissions/(?P<submission_id>[0-9]+)/retry/$', sharing_views.sharing_submission_retry,
             name='sharing_submission_retry'),
     re_path(r'^sharing/services/$', sharing_views.sharing_services, name='sharing_services'),
+    re_path(r'^sharing/autopublish_optin/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/$',
+            sharing_views.autopublish_optin, name='sharing_autopublish_optin'),
     re_path(r'^sharing/services/(?P<service_id>[0-9]+)/rules/(?P<rule_id>[0-9]+)/dry_run\.json$',
             sharing_views.autopublisher_dry_run, name='sharing_autopublisher_dry_run'),
     re_path(r'^add_dashboard_query/', AddDashboardQueryFormView.as_view(), name='add_dashboard_query'),

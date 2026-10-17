@@ -805,6 +805,8 @@ _PERSONAL_DATA_TABLES = (
     # Read-time access grants and program deputies (#648): who may see which program's data.
     'YSE_App_dataaccessgrant',
     'YSE_App_allocationdelegate',
+    # Which restricted datasets a PI opted in to automatic TNS / Hermes publishing (#691).
+    'YSE_App_autopublishoptin',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
