@@ -29,11 +29,11 @@ def is_opted_in(dataset) -> bool:
 def set_opt_in(user, dataset, enabled: bool) -> bool:
     """Opt ``dataset`` in (or out) of automatic publishing; returns the new state."""
     field = _field(dataset)
+    if enabled and data_sharing.is_public_dataset(dataset):
+        raise ValidationError({"dataset": "Public data are always published; no opt-in is needed."})
     if data_sharing.share_role(user, dataset) is None:
         raise PermissionDenied({"message": "Only the data's PIs and their designated deputies (or an administrator) "
                                            "may allow automatic publishing of restricted data."})
-    if enabled and data_sharing.is_public_dataset(dataset):
-        raise ValidationError({"dataset": "Public data are always published; no opt-in is needed."})
     rows = AutopublishOptIn.objects.filter(**{field: dataset})
     if enabled:
         if not rows.exists():
