@@ -823,9 +823,35 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="access-rules-per-point"></a>
+
+### Per-point access rules and access history, schema revision (2026-10-17, #648 PR 1b) migration applied by the deploy; nothing else required (flag stays off)
+
+**What changes.** Nothing visible to users yet. Ryan revised the design of [#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648): access rules are stored **per photometry point and per spectrum**, and program, night and dataset become actions that write those rules. This replaces the PR 1 rule table below (it was always empty). Once a point is shared it stays shared; only staff may delete a rule, to fix a mistake, and the deletion is logged. A program or night action taken before the data exist is kept as a standing grant and applied to new points; stopping it affects only points that arrive later. Admin pages for staff: Data access rules, Standing access grants (with a "Stop" action, no delete), and two read-only history lists.
+
+**History is recorded from now on, flag or not:** every change of a user's groups opens or closes a dated membership period, and adding a group to a photometry set's or spectrum's own groups records when. The engine (a later PR) uses this so that someone who leaves a group keeps what was shared with it while they were a member. Memberships that exist when the migration runs are recorded as "since before tracking".
+
+**Migration:** `0044_per_point_access_rules` drops the empty `YSE_App_dataaccessgrant` table (only experimental code knew it) and adds five tables: `YSE_App_dataaccessrule`, `YSE_App_standingaccessgrant`, `YSE_App_groupmembershipperiod`, `YSE_App_datasetgroupshare` and `YSE_App_accessrulesversion`. It writes rows only into the new tables: one version row, and one membership row per current user-group membership. Safe on the shared `YSE_test` database. `YSE_App_allocationdelegate` and the `allocation_id` columns from 0043 are unchanged. The deploy applies it. **No new package.**
+
+**Shared database note:** group changes made through yse\_test (develop code) are not recorded in the history until this code reaches develop. That only affects test accounts.
+
+**Flag, leave it off:** `DATA_ACCESS_GRANTS_ENABLED` stays `False`.
+
+**Explorer:** the new tables say who may see which data and when people were in which group, so they are hidden from SQL Explorer and refused by its SQL blacklist. If you limited the Explorer MySQL user to table-level grants ([Step E](#authz-flags)), do **not** grant `SELECT` on them.
+
+**Check (optional), on either stack after the deploy:**
+
+```
+<PYTHON> manage.py showmigrations YSE_App | tail -2
+```
+
+**Expected:** `[X] 0044_per_point_access_rules`.
+
 <a id="access-grants-schema"></a>
 
 ### Access grants and program deputies, schema only (2026-10-17, #648 PR 1) migration applied by the deploy; nothing else required (flag stays off)
+
+**Superseded by [PR 1b](#access-rules-per-point):** its rule table `YSE_App_dataaccessgrant` is dropped by migration 0044; program deputies and the `allocation_id` columns stay as described here.
 
 **What changes.** Nothing visible to users yet. This is the storage for PI-controlled access rules ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648)): a rule allows or restricts one group or one user on a program (an `Allocation`), one night of a program, one photometry set or spectrum, or one night of a photometry set. Revoking a rule never deletes it. Program deputies are a separate list from the PIs' data-sharing deputies. Staff can view rules and deputies in the admin (Data access grants, Allocation delegates, and an inline on each Allocation), add a rule as an administrator, and revoke rules; rules cannot be deleted. No page, API or export reads the rules: the read path ignores them until a later PR adds the precedence engine **and** the flag below is turned on.
 
@@ -2782,6 +2808,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-17 v68, **migration applied by the deploy; nothing else required** (flag stays off). Per-point access rules ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1b): migration `0044_per_point_access_rules` drops the empty PR 1 rule table and adds five tables (per-point rules, standing grants, dated group membership seeded from current memberships, dataset group share times, a version counter; safe on the shared database); group and dataset-share history is recorded from now on; admin pages for staff; all new tables hidden from SQL Explorer ([section "Per-point access rules"](#access-rules-per-point)). No new package.
 * 2026-10-17 v67, **migration applied by the deploy; nothing else required** (flag stays off). Access grants schema ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1): migration `0043_data_access_grants` (two new tables, a nullable `allocation_id` column on transient photometry and spectra; safe on the shared database); admin pages for staff; `DATA_ACCESS_GRANTS_ENABLED` defaults off and nothing reads the rules yet; both tables hidden from SQL Explorer, leave them out of table-level Explorer grants ([section "Access grants and program deputies"](#access-grants-schema)). No new package.
 * 2026-10-16 v66, **migration applied by the deploy; one backfill required per database** (`manage.py backfill_photstat_scopes --apply`, dry run by default). One visibility policy for transient lists ([#607](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/607)): migration `0042_transient_photstat_scope` (one new table, safe on the shared database); non-staff users see TNS-named objects plus the objects whose data they may see, everywhere, and derived photometry values only from photometry they may see ([section "One visibility policy"](#transient-visibility)). Explorer grant note for table-level grants. No new package.
 * 2026-10-16 v65, optional (backfill). TNS references ([#645](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/645)): TNS-reported photometry now goes in its own `TNS` header with the TNS reference (and report ids when sent); `mark_tns_imports_public` is a dry run by default (`--apply` writes; `--dry-run` still accepted) and also tags ZTF/ATLAS forced photometry Public and sets TNS references on old imports ([section](#tns-references)). No migration.

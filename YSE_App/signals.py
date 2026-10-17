@@ -330,3 +330,44 @@ def observation_success_on_photometry(sender, instance, created, **kwargs):
     # A photometry set has no date of its own: only an upload naming its request counts.
     if created and not kwargs.get('raw') and instance.followup_id:
         _data_uploaded(instance, None)
+
+
+# ---- Access history for read-time rules (#648, PR 1b) ------------------------
+# Dated group membership and the time each group was added to a dataset's own
+# groups, recorded whether or not DATA_ACCESS_GRANTS_ENABLED is on
+# (services.access_history). A failure is logged and never blocks the change.
+
+def _record_access_history(fn, *args):
+    import logging
+
+    from django.db import transaction
+
+    try:
+        with transaction.atomic():  # a savepoint: a failure never breaks the caller's transaction
+            fn(*args)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("access history not recorded")
+
+
+@receiver(m2m_changed, sender=get_user_model().groups.through, dispatch_uid="yse_access_history_membership")
+def record_group_membership(sender, instance, action, reverse, **kwargs):
+    from YSE_App.services import access_history
+
+    _record_access_history(access_history.record_membership_change, instance, action, reverse,
+                           kwargs.get("pk_set"))
+
+
+@receiver(m2m_changed, sender=TransientPhotometry.groups.through, dispatch_uid="yse_access_history_phot_groups")
+def record_photometry_group_share(sender, instance, action, reverse, **kwargs):
+    from YSE_App.services import access_history
+
+    _record_access_history(access_history.record_dataset_share_change, TransientPhotometry, instance, action,
+                           reverse, kwargs.get("pk_set"))
+
+
+@receiver(m2m_changed, sender=TransientSpectrum.groups.through, dispatch_uid="yse_access_history_spec_groups")
+def record_spectrum_group_share(sender, instance, action, reverse, **kwargs):
+    from YSE_App.services import access_history
+
+    _record_access_history(access_history.record_dataset_share_change, TransientSpectrum, instance, action,
+                           reverse, kwargs.get("pk_set"))
