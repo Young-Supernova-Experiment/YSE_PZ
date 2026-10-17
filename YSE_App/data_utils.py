@@ -913,6 +913,23 @@ def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
                 photstat.schedule_recompute(transientphot.transient_id, photometry_id=transientphot.id)
 
 
+def clean_upload_reference(value):
+    """Optional ``reference`` of an upload (#646): an ADS bibcode (19 characters) or free text
+    such as a TNS reference. Blank is None; nothing is rejected, only trimmed to the column."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value[:512] or None
+
+
+def apply_upload_reference(dataset, reference):
+    """Set ``reference`` on a photometry set or spectrum that has none; never overwrite one (#646)."""
+    reference = clean_upload_reference(reference)
+    if reference and not dataset.reference:
+        dataset.reference = reference
+        dataset.save(update_fields=['reference'])
+
+
 def add_transient_phot_util(photdict,transient,user,do_photdata=True):
 
     transientphot_entries = []
@@ -941,10 +958,12 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
         if not len(transientphot):
             transientphot = TransientPhotometry( #.objects.create
                 instrument=instrument, obs_group=obs_group, transient=transient,
-                reference=(photometry.get('reference') or None),  # #447: e.g. the TNS object of TNS imports
+                reference=clean_upload_reference(photometry.get('reference')),  # #447: e.g. the TNS object of TNS imports
                 created_by_id=user.id, modified_by_id=user.id)
             transientphot_entries += [transientphot]
-        else: transientphot = transientphot[0]
+        else:
+            transientphot = transientphot[0]
+            apply_upload_reference(transientphot, photometry.get('reference'))
         existingphot = TransientPhotData.objects.filter(photometry=transientphot)
         if do_photdata:
             band_cache = {}
@@ -1022,6 +1041,9 @@ def add_transient_spec_util(specdict,transient,user):
         del spectrum_copy['specdata']
         spectrum_copy.pop('groups', None)
         upload_pis = spectrum_copy.pop('pis', None)
+        upload_reference = clean_upload_reference(spectrum_copy.pop('reference', None))
+        if upload_reference:
+            spectrum_copy['reference'] = upload_reference  # only used on create; see below
 
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(**spectrum_copy)
@@ -1037,9 +1059,11 @@ def add_transient_spec_util(specdict,transient,user):
                     transientspec.data_quality.remove(_dq)
                 transientspec.data_quality.add(dq)
 
+                spectrum_copy.pop('reference', None)  # never overwrite an existing reference (#646)
                 transientspec.update(**spectrum_copy)
                 #transientspec.save()
             transientspec = transientspec[0]
+            apply_upload_reference(transientspec, upload_reference)
 
         if len(allgroups):
             for group in allgroups:
@@ -1144,9 +1168,11 @@ def add_transient_phot(request):
     if not len(transientphot):
         transientphot = TransientPhotometry.objects.create(
             instrument=instrument,obs_group=obs_group,transient=transient,
+            reference=clean_upload_reference(ph.get('reference')),
             created_by_id=user.id,modified_by_id=user.id)
     else:
         transientphot = transientphot[0]
+        apply_upload_reference(transientphot, ph.get('reference'))
         if hd['clobber']:
             transientphot.instrument = instrument
             transientphot.obs_group = obs_group
@@ -1263,6 +1289,7 @@ def add_transient_spec(request):
                 rlap=hd['rlap'],redshift=hd['redshift'],redshift_err=hd['redshift_err'],
                 redshift_quality=hd['redshift_quality'],spectrum_notes=hd['spectrum_notes'],
                 spec_phase=hd['spec_phase'],obs_date=hd['obs_date'],
+                reference=clean_upload_reference(hd.get('reference')),
                 created_by_id=user.id,modified_by_id=user.id)
             if dq is not None:
                 # set takes an enumerable
@@ -1270,6 +1297,7 @@ def add_transient_spec(request):
                 transientspec.save()
         else:
             transientspec = transientspec[0]
+            apply_upload_reference(transientspec, hd.get('reference'))
             if hd['clobber']:
                 if dq is not None:
                     # If dq flag exists and this is an existing spectrum, we need to remove the old DQ and add the new DQ

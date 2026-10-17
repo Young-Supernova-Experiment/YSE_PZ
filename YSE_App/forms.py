@@ -472,6 +472,9 @@ class SpectrumUploadForm(ModelForm):
     pis = forms.ModelMultipleChoiceField(
         PrincipalInvestigator.objects.order_by('name'), required=False, label='PI(s)')
 
+    # Optional reference (#646): an ADS bibcode (19 characters) or free text such as a TNS reference.
+    reference = forms.CharField(max_length=512, required=False, label='Reference')
+
     spec_instruments = [
         'SED-Machine','P200-TSPEC','SPRAT',
         'LFC','DBSP','MIKE','LDSS-3',
