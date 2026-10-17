@@ -31,8 +31,11 @@ and API (PR 5) call these functions; the admin (staff) writes rows directly.
 * A program or night action is also saved as a ``StandingAccessGrant``, so
   points that arrive later get the rule at ingest (:func:`apply_standing_grants_to_set`,
   :func:`apply_standing_grants_to_spectrum`, called by the upload paths and
-  signals). Stopping it (:func:`stop_standing_grant`) affects only later
-  points.
+  signals). Stopping it (:func:`stop_standing_grant`) applies going forward
+  in time: points taken (``obs_date``) after the stop are not covered, points
+  taken before it still are, also when they are uploaded or linked to the
+  program later. A night grant covers only its night, whenever the points
+  arrive.
 
 Every write bumps the rules version (``access_rules.bump_version``) and, for
 a group grantee with the flag on, removes the affected PhotStat scope rows and
@@ -331,6 +334,10 @@ def _grant_targets(grant, *, created_since=None, photometry_id=None, spectrum_id
         _night_q("obs_date", grant.night_start, grant.night_end))
     spectra = TransientSpectrum.objects.filter(allocation_id=grant.allocation_id).filter(
         _night_q("obs_date", grant.night_start, grant.night_end))
+    if grant.stopped_at is not None:
+        # Stopping applies going forward in time (Ryan): data taken before the stop stay covered.
+        points = points.filter(obs_date__lt=grant.stopped_at)
+        spectra = spectra.filter(obs_date__lt=grant.stopped_at)
     if created_since is not None:
         points = points.filter(created_date__gte=created_since)
         spectra = spectra.filter(created_date__gte=created_since)
@@ -375,7 +382,10 @@ def program_action(actor, allocation, *, effect: str, grantee_group=None, grante
 
 
 def stop_standing_grant(actor, grant) -> None:
-    """Stop a standing grant: points that arrive later are no longer covered; rules already written stay."""
+    """Stop a standing grant: points taken after now are no longer covered; rules already written stay.
+
+    Points taken before the stop are still covered when they arrive or are linked to the program later.
+    """
     if program_role(actor, grant.allocation) is None:
         raise PermissionDenied({"message": "Only the program's PI, its program deputies or an administrator may "
                                            "stop this."})
@@ -468,12 +478,13 @@ def delete_rule(actor, rule) -> None:
 # ---------------------------------------------------------------- at ingest
 
 
-def _active_grants(allocation_id):
+def _program_grants(allocation_id):
+    """The program's standing grants, active and stopped (a stopped one still covers data taken before its stop)."""
     from YSE_App.models import StandingAccessGrant
 
     # Night grants first: at ingest the first rule for a grantee wins, so the
     # more specific night action beats the program-wide one.
-    grants = list(StandingAccessGrant.objects.filter(allocation_id=allocation_id, stopped_at__isnull=True)
+    grants = list(StandingAccessGrant.objects.filter(allocation_id=allocation_id)
                   .select_related("grantee_group", "grantee_user", "created_by"))
     grants.sort(key=lambda g: (g.night_start is None, g.created_at, g.pk))
     return grants
@@ -511,7 +522,7 @@ def apply_standing_grants_to_set(photometry, *, linked: bool = False) -> WriteRe
     allocation_id = getattr(photometry, "allocation_id", None)
     if not allocation_id:
         return WriteResult()
-    grants = _active_grants(allocation_id)
+    grants = _program_grants(allocation_id)
     if not grants:
         return WriteResult()
     return _apply(grants, linked=linked, photometry_id=photometry.pk)
@@ -521,7 +532,7 @@ def apply_standing_grants_to_spectrum(spectrum, *, linked: bool = False) -> Writ
     allocation_id = getattr(spectrum, "allocation_id", None)
     if not allocation_id:
         return WriteResult()
-    grants = _active_grants(allocation_id)
+    grants = _program_grants(allocation_id)
     if not grants:
         return WriteResult()
     return _apply(grants, linked=linked, spectrum_id=spectrum.pk)
@@ -536,6 +547,6 @@ def on_point_created(point) -> None:
         photometry = TransientPhotometry.objects.filter(pk=point.photometry_id).only("pk", "allocation_id").first()
     if photometry is None or not photometry.allocation_id:
         return
-    grants = _active_grants(photometry.allocation_id)
+    grants = _program_grants(photometry.allocation_id)
     if grants:
         _apply(grants, point_id=point.pk)

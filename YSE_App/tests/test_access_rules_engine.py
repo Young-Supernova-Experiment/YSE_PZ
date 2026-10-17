@@ -512,9 +512,15 @@ class ActionTests(_Fixture):
         spec.groups.add(self.o)
         self.assertTrue(R.objects.filter(transient_spectrum=spec, grantee_user=self.outsider).exists())
         access_actions.stop_standing_grant(self.pi_user, grant)
-        later = TransientPhotData.objects.create(photometry=self.sets["o"], band=self.band, mag=20.0, mag_err=0.1,
-                                                 obs_date=self.now, **audit_fields(self.staff))
-        self.assertFalse(R.objects.filter(transient_phot_data=later).exists())
+        grant.refresh_from_db()
+        later = TransientPhotData.objects.create(
+            photometry=self.sets["o"], band=self.band, mag=20.0, mag_err=0.1,
+            obs_date=grant.stopped_at + datetime.timedelta(hours=1), **audit_fields(self.staff))
+        self.assertFalse(R.objects.filter(transient_phot_data=later).exists())  # taken after the stop
+        late_upload = TransientPhotData.objects.create(
+            photometry=self.sets["o"], band=self.band, mag=20.0, mag_err=0.1,
+            obs_date=grant.stopped_at - datetime.timedelta(hours=1), **audit_fields(self.staff))
+        self.assertTrue(R.objects.filter(transient_phot_data=late_upload, standing_grant=grant).exists())
         self.assertTrue(R.objects.filter(transient_phot_data=new).exists())  # already shared: stays
 
     def test_night_deny_at_ingest_beats_the_datasets_group(self):
