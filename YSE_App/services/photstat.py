@@ -364,7 +364,9 @@ def recompute(transient_id: int, *, create: bool = True) -> Optional[TransientPh
             _announce_new_photometry(stat, (stat.num_det_global or 0) - old_num_det)
     # A group change moves points between scopes without changing the
     # all-data row, so the scopes are synced even when ``stat`` was unchanged.
-    sync_scopes([transient_id], {transient_id: points})
+    # ``create=False`` (a delete, maybe inside a Transient cascade): update or
+    # delete scope rows, never insert one.
+    sync_scopes([transient_id], {transient_id: points}, create=create)
     return stat
 
 
@@ -542,12 +544,13 @@ def scope_point_sets(points: Sequence[PhotPoint], groups_by_photometry: Dict[int
 
 
 def sync_scopes(transient_ids: Sequence[int], grouped_points: Optional[Dict[int, List[PhotPoint]]] = None,
-                *, dry_run: bool = False) -> ScopeResult:
+                *, dry_run: bool = False, create: bool = True) -> ScopeResult:
     """Write the scope rows of ``transient_ids`` (insert, update or delete; unchanged rows are not written).
 
     Three queries for the batch (photometry when ``grouped_points`` is not
     given, the set groups, the existing scope rows) plus the writes.
-    ``dry_run`` counts what would change and writes nothing.
+    ``dry_run`` counts what would change and writes nothing; ``create=False``
+    never inserts a row (see ``recompute``).
     """
     from YSE_App.models.phot_stat_models import TransientPhotStatScope, scope_key_for_group
 
@@ -574,6 +577,8 @@ def sync_scopes(transient_ids: Sequence[int], grouped_points: Optional[Dict[int,
             row = existing.pop((tid, key), None)
             values = compute_stats(pts)
             if row is None:
+                if not create:
+                    continue
                 row = TransientPhotStatScope(transient_id=tid, group_id=gid, scope_key=key)
                 apply_values(row, values)
                 to_create.append(row)
