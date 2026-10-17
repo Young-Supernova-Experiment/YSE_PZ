@@ -815,6 +815,8 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_groupmembershipperiod',
     'YSE_App_datasetgroupshare',
     'YSE_App_accessrulesversion',
+    # Which restricted datasets a PI opted in to automatic TNS / Hermes publishing (#691).
+    'YSE_App_autopublishoptin',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )

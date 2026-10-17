@@ -287,7 +287,7 @@ class MembershipHistoryTests(_Fixture):
     def test_seed_from_current_memberships(self):
         GroupMembershipPeriod.objects.all().delete()
         AccessRulesVersion.objects.all().delete()
-        migration = import_module("YSE_App.migrations.0044_per_point_access_rules")
+        migration = import_module("YSE_App.migrations.0045_per_point_access_rules")
         migration.seed(apps, SimpleNamespace(connection=connection))
         expected = set(User.groups.through.objects.values_list("user_id", "group_id"))
         rows = GroupMembershipPeriod.objects.values_list("user_id", "group_id", "joined_at", "left_at")
