@@ -802,6 +802,9 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_groupmembershiprequest',
     # Data-sharing deputies: who a PI designated to share their data (#650).
     'YSE_App_datasharingdelegate',
+    # Read-time access grants and program deputies (#648): who may see which program's data.
+    'YSE_App_dataaccessgrant',
+    'YSE_App_allocationdelegate',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
@@ -999,6 +1002,13 @@ JOB_HANDLER_MODULES = [
 # its pages and API endpoints return 404 until [site_settings] ASTROSCHEDULER_ENABLED
 # (or YSE_ASTROSCHEDULER_ENABLED=1) turns them on.
 ASTROSCHEDULER_ENABLED = _flag('YSE_ASTROSCHEDULER_ENABLED', 'site_settings', 'ASTROSCHEDULER_ENABLED', False)
+
+# Read-time access grants and restrictions (#648; YSE_App.models.data_access_grant_models).
+# Off by default: the tables exist (staff can view them in the admin) but no read path
+# consults them until [site_settings] DATA_ACCESS_GRANTS_ENABLED (or
+# YSE_DATA_ACCESS_GRANTS_ENABLED=1) is set, and not before the precedence engine lands.
+DATA_ACCESS_GRANTS_ENABLED = _flag(
+    'YSE_DATA_ACCESS_GRANTS_ENABLED', 'site_settings', 'DATA_ACCESS_GRANTS_ENABLED', False)
 # Telescope -> AstroScheduler site and instrument: comma-separated
 # "<pattern>:<site id>:<instrument>" rules; the first pattern found in the telescope's
 # lower-cased name wins. Unmatched telescopes are planned as a custom site with

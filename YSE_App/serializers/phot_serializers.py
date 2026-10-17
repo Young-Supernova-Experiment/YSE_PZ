@@ -21,7 +21,8 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = TransientPhotometry
-        fields = "__all__"
+        # Every field except the program link (#648), which only a data sharer may set (PR 3).
+        exclude = ("allocation",)
         extra_kwargs = {
             'url': {'view_name': 'transientphotometry-detail', 'lookup_field': 'id'}
         }

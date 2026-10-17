@@ -597,6 +597,17 @@ class CandidateAdmin(admin.ModelAdmin):
 
 # --- Allocations and facility requests (#303, #298) -----------------------------
 from YSE_App.models.allocation_models import Allocation, FacilityRequest  # noqa: E402
+from YSE_App.models.data_access_grant_models import AllocationDelegate, DataAccessGrant  # noqa: E402
+
+
+class AllocationDelegateInline(admin.TabularInline):
+	"""Program deputies (#648): may set access rules for this allocation's data, like its PI."""
+	model = AllocationDelegate
+	fk_name = "allocation"
+	extra = 0
+	raw_id_fields = ("user",)
+	fields = ("user", "note", "added_by", "created_at")
+	readonly_fields = ("added_by", "created_at")
 
 
 @admin.register(Allocation)
@@ -608,6 +619,7 @@ class AllocationAdmin(admin.ModelAdmin):
 	filter_horizontal = ("groups",)
 	raw_id_fields = ("credential",)
 	readonly_fields = ("service", "created_by", "created_date", "modified_by", "modified_date")
+	inlines = [AllocationDelegateInline]
 
 	def save_model(self, request, obj, form, change):
 		if not change or not obj.created_by_id:
@@ -617,6 +629,83 @@ class AllocationAdmin(admin.ModelAdmin):
 		from YSE_App.services.allocations import ensure_service
 
 		ensure_service(obj, request.user)
+
+	def save_formset(self, request, form, formset, change):
+		instances = formset.save(commit=False)
+		for obj in instances:
+			if isinstance(obj, AllocationDelegate) and not obj.added_by_id:
+				obj.added_by = request.user
+			obj.save()
+		for obj in formset.deleted_objects:
+			obj.delete()
+		formset.save_m2m()
+
+
+@admin.register(AllocationDelegate)
+class AllocationDelegateAdmin(admin.ModelAdmin):
+	"""Program deputies (#648), separate from the PIs' data-sharing deputies (DataSharingDelegate)."""
+	list_display = ("allocation", "user", "added_by", "created_at")
+	search_fields = ("allocation__name", "user__username")
+	raw_id_fields = ("allocation", "user")
+	readonly_fields = ("added_by", "created_at", "modified_at")
+
+	def save_model(self, request, obj, form, change):
+		if not obj.added_by_id:
+			obj.added_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+# Read-time access grants and restrictions (#648). Read-mostly: staff may add a rule
+# (recorded as an administrator action) and revoke rules; the target, grantee and
+# provenance never change after creation, and rows are never deleted (soft revoke
+# keeps the history). django-auditlog records creation and revocation.
+@admin.register(DataAccessGrant)
+class DataAccessGrantAdmin(admin.ModelAdmin):
+	list_display = ("id", "effect", "level", "grantee_group", "grantee_user", "allocation", "night_start",
+	                "transient_photometry", "transient_spectrum", "granted_by", "granted_as", "created_at",
+	                "revoked_at", "revoke_retroactive")
+	list_filter = ("effect", "level", "granted_as", ("revoked_at", admin.EmptyFieldListFilter))
+	search_fields = ("grantee_group__name", "grantee_user__username", "allocation__name", "note")
+	raw_id_fields = ("allocation", "classical_night", "transient_photometry", "transient_spectrum",
+	                 "grantee_user", "grantee_group")
+	list_select_related = ("grantee_group", "grantee_user", "allocation", "granted_by")
+	actions = ("revoke_default", "revoke_retroactively")
+	_ADD_FIELDS = ("effect", "allocation", "night_start", "night_end", "classical_night", "transient_photometry",
+	               "transient_spectrum", "grantee_group", "grantee_user", "note")
+	_PROVENANCE = ("level", "granted_by", "granted_as", "created_at", "revoked_at", "revoked_by",
+	               "revoke_retroactive")
+
+	def get_fields(self, request, obj=None):
+		return self._ADD_FIELDS if obj is None else self._ADD_FIELDS + self._PROVENANCE
+
+	def get_readonly_fields(self, request, obj=None):
+		if obj is None:
+			return ()
+		return tuple(f for f in self._ADD_FIELDS if f != "note") + self._PROVENANCE
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.granted_by = request.user
+			obj.granted_as = DataAccessGrant.AS_STAFF
+		super().save_model(request, obj, form, change)
+
+	def _revoke(self, request, queryset, retroactive):
+		n = 0
+		for grant in queryset.filter(revoked_at__isnull=True):
+			grant.revoke(request.user, retroactive=retroactive)
+			n += 1
+		self.message_user(request, "%d rule(s) revoked." % n)
+
+	def revoke_default(self, request, queryset):
+		self._revoke(request, queryset, None)
+	revoke_default.short_description = "Revoke (program/night allows going forward, other rules fully)"
+
+	def revoke_retroactively(self, request, queryset):
+		self._revoke(request, queryset, True)
+	revoke_retroactively.short_description = "Revoke fully, including data taken before now"
 
 
 @admin.register(FacilityRequest)
