@@ -823,6 +823,22 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="access-rules-engine"></a>
+
+### Per-point access rules engine (2026-10-17, #648 PR 2) nothing required (flag stays off)
+
+**What changes with the flag off (now):** nothing users see, no migration. Every page, API, export and plot keeps today's rule with the same SQL. New photometry points and spectra of a program (an `Allocation`) that has a standing grant get their per-point rule at ingest, so they are ready when the flag is turned on.
+
+**What the flag will turn on (a later #648 PR adds the step to enable it on yse\_experimental):**
+- Per-point allow and restrict rules for groups and single users. Precedence: a rule for the person beats a rule for their groups, a restriction beats an allow, and either beats the dataset's own groups. Public data is never hidden.
+- Someone who leaves a group keeps the points shared with it before they left.
+- Plot caches are keyed by the rules version, so they never cross users with different access.
+- PhotStat: list columns and sorting use the best stored summary. Table cells and the detail page are exact for people with rules.
+
+**When the flag is turned on (not yet):** run `<PYTHON> manage.py backfill_photstat_scopes --apply` once per database, so the stored group summaries include existing group rules. After that, every rule change rebuilds them through the job queue (the `photstat.sync_scopes` job, run by the existing job runner).
+
+**Cost with the flag on:** one small read of `YSE_App_accessrulesversion` per request. Users without rules get today's SQL.
+
 <a id="access-rules-per-point"></a>
 
 ### Per-point access rules and access history, schema revision (2026-10-17, #648 PR 1b) migration applied by the deploy; nothing else required (flag stays off)
@@ -2829,6 +2845,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-17 v70, **nothing required** (flag stays off; no migration). Per-point access rules engine ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 2): precedence, dated-membership rule, rules-version cache keys, PhotStat scope handling and the actions service; with `DATA_ACCESS_GRANTS_ENABLED` off every read is unchanged; standing grants are applied to new points at ingest ([section "Per-point access rules engine"](#access-rules-engine)). No new package.
 * 2026-10-17 v69, **migration applied by the deploy; nothing else required** (flag stays off). Per-point access rules ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1b): migration `0044_per_point_access_rules` drops the empty PR 1 rule table and adds five tables (per-point rules, standing grants, dated group membership seeded from current memberships, dataset group share times, a version counter; safe on the shared database); group and dataset-share history is recorded from now on; admin pages for staff; all new tables hidden from SQL Explorer ([section "Per-point access rules"](#access-rules-per-point)). No new package.
 * 2026-10-17 v68, **David: confirm the cron accounts are staff, superusers or in `api_writers` (otherwise their uploads get 403); no migration**. Upload group checks are now on by default ([#697](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/697)); Ryan overrode the usual "flags default to today's behaviour" rule for this flag. `add_transient` is limited to staff, superusers and `api_writers`; `add_transient_phot` / `add_transient_spec` / the spectrum form apply the group and ownership rules. Turn off temporarily with `UPLOAD_GROUP_CHECKS_ENFORCED: False` (or `YSE_UPLOAD_GROUP_CHECKS_ENFORCED=0`) and restart ([section](#upload-checks-default-on)).
 * 2026-10-17 v67, **migration applied by the deploy; nothing else required** (flag stays off). Access grants schema ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1): migration `0043_data_access_grants` (two new tables, a nullable `allocation_id` column on transient photometry and spectra; safe on the shared database); admin pages for staff; `DATA_ACCESS_GRANTS_ENABLED` defaults off and nothing reads the rules yet; both tables hidden from SQL Explorer, leave them out of table-level Explorer grants ([section "Access grants and program deputies"](#access-grants-schema)). No new package.
