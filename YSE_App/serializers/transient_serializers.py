@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from YSE_App.models import *
-from .related_fields import IdHyperlinkedRelatedField
+from .related_fields import IdHyperlinkedRelatedField, VisibleSpectrumOutputField
 from django.contrib.auth.models import User
 
 class TransientSerializer(serializers.HyperlinkedModelSerializer):
@@ -11,7 +11,7 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
     best_spec_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
     photo_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
     context_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    best_spectrum = IdHyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
+    best_spectrum = VisibleSpectrumOutputField(dataset_kind='spectrum', queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
     host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
     abs_mag_peak_band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
     antares_classification = serializers.HyperlinkedRelatedField(queryset=AntaresClassification.objects.all(), allow_null=True, required=False, view_name='antaresclassification-detail')
