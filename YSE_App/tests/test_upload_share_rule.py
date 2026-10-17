@@ -109,7 +109,7 @@ class UploadShareRuleTests(PiBase):
     # helpers
 
     def test_uploader_must_belong_to_groups_added_to_public_data(self):
-        public = Group.objects.create(name="Public")
+        public, _ = Group.objects.get_or_create(name="Public")
         self.spec.groups.set([public])
         allowed, skipped = data_sharing.groups_allowed_for_upload(self.requester, self.spec, [self.mine, self.owners])
         self.assertEqual(allowed, [self.mine])
