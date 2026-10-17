@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from YSE_App.models import *
-from .related_fields import IdHyperlinkedRelatedField
+from .related_fields import IdHyperlinkedRelatedField, VisibleDatasetIdRelatedField
 from django.contrib.auth.models import User
 from rest_framework.exceptions import PermissionDenied
 from .auth_helpers import NotAuthorizedToAccessParent
@@ -283,7 +283,7 @@ class HostSpectrumSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientSpecDataSerializer(serializers.HyperlinkedModelSerializer):
-    spectrum = IdHyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), view_name='transientspectrum-detail', lookup_field="id")
+    spectrum = VisibleDatasetIdRelatedField(dataset_kind='spectrum', queryset=TransientSpectrum.objects.all(), view_name='transientspectrum-detail', lookup_field="id")
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')

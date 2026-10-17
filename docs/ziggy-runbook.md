@@ -2040,14 +2040,14 @@ awk '{print $NF, $7}' ${APACHE_LOG_DIR}/<SITE>_timed.log | sort -rn | head -20
 
 <a id="authz-flags"></a>
 
-### Write authorization and Explorer access (optional, per stack; #520-#527) nothing required
+### Write authorization and Explorer access (per stack; #520-#527, #697) upload checks are ON by default
 
-Migration `0032_api_writer_groups` is data only. It creates two groups, `api_writers` and `explorer_users`. It gives `api_writers` the add and change permissions on the models the ingest crons and scripts write. It adds the `[main] dblogin` account to `api_writers` if that account exists. Three flags in `settings.ini` `[site_settings]` stay **off** by default, so behaviour is unchanged until you turn them on. Each flag can be turned on per stack. yse\_test and yse\_experimental share `YSE_test`, so group membership is shared, but each stack reads its own `settings.ini`.
+Migration `0032_api_writer_groups` is data only. It creates two groups, `api_writers` and `explorer_users`. It gives `api_writers` the add and change permissions on the models the ingest crons and scripts write. It adds the `[main] dblogin` account to `api_writers` if that account exists. Three flags in `settings.ini` `[site_settings]` control it. `UPLOAD_GROUP_CHECKS_ENFORCED` is **on by default since changelog v68 ([#697](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/697))**; `API_WRITE_PERMISSIONS_ENFORCED` and `EXPLORER_RESTRICTED_ACCESS` stay **off** until you turn them on. Each flag can be turned on per stack. yse\_test and yse\_experimental share `YSE_test`, so group membership is shared, but each stack reads its own `settings.ini`.
 
 | Flag (`[site_settings]`, or the env var `=1`) | When on |
 | --- | --- |
 | `API_WRITE_PERMISSIONS_ENFORCED` (`YSE_API_WRITE_PERMISSIONS_ENFORCED`) | `POST`/`PUT`/`PATCH` on the older `/api/` resources needs one of: staff, superuser, or the model permission (members of `api_writers`). Status and tag buttons, follow-up status, survey scheduling and "new tag" stay open to every signed-in user. Reads are unchanged. |
-| `UPLOAD_GROUP_CHECKS_ENFORCED` (`YSE_UPLOAD_GROUP_CHECKS_ENFORCED`) | `add_transient` is limited to staff, superusers and `api_writers`. `add_transient_phot`, `add_transient_spec` and the spectrum upload form are open to those accounts as well as other collaboration-group members, with two limits: a member may share only with their own groups, and may replace or re-share only rows they created. |
+| `UPLOAD_GROUP_CHECKS_ENFORCED` (`YSE_UPLOAD_GROUP_CHECKS_ENFORCED`), **default on** | `add_transient` is limited to staff, superusers and `api_writers`. `add_transient_phot`, `add_transient_spec` and the spectrum upload form are open to those accounts as well as other collaboration-group members, with two limits: a member may share only with their own groups, and may replace or re-share only rows they created. |
 | `EXPLORER_RESTRICTED_ACCESS` (`YSE_EXPLORER_RESTRICTED_ACCESS`) | `/explorer/` is limited to superusers and members of `explorer_users`. While it is off, all staff have access, as today. Dashboards are not affected. |
 
 The group names can be changed with `API_WRITERS_GROUP` and `EXPLORER_ACCESS_GROUP` in `[site_settings]`. `<STACK>` is the checkout and `<STACK_PYTHON>` its interpreter, both from section 0.
@@ -2092,7 +2092,7 @@ for m in (Transient, TransientPhotData, TransientSpectrum, SurveyObservation, Su
 
 **Expected:** each model prints `[]` once every cron or script account is in the group. Some rows are fine to leave: accounts listed there because of browser uploads (the photometry or spectrum form) need nothing. Accounts behind a script or cron should be added with the previous command.
 
-**Step C: turn the flags on, one at a time.** In `<STACK>/YSE_PZ/settings.ini`:
+**Step C: turn the flags on, one at a time.** `UPLOAD_GROUP_CHECKS_ENFORCED` needs no line, because it is already on; write it only to turn it off (see "Upload checks on by default" below). In `<STACK>/YSE_PZ/settings.ini`:
 
 ```
 [site_settings]
@@ -2108,6 +2108,27 @@ Then `sudo systemctl restart apache2`. Do this for production; for yse\_test and
 - A status change on a transient page still works for a non-staff member.
 
 **Rollback:** set the flag to `False` and restart.
+
+<a id="upload-checks-default-on"></a>
+
+**Upload checks on by default ([#697](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/697)).** From changelog v68 a stack with no `UPLOAD_GROUP_CHECKS_ENFORCED` line in `settings.ini` and no `YSE_UPLOAD_GROUP_CHECKS_ENFORCED` env var enforces the upload checks. Ryan chose this on 2026-10-17, overriding the usual rule that new flags default to today's behaviour.
+
+*What changes on deploy.* `POST /add_transient/` returns 403 for accounts that are not staff, superusers or in `api_writers`. `add_transient_phot`, `add_transient_spec` and the spectrum upload form return 403 for a non-trusted account that is in no collaboration group (Public does not count), that shares with a group it is not in, or that replaces or re-shares rows another user created. Browser uploads by ordinary members who share only with their own groups keep working.
+
+*What the cron and script audit found (code only; David confirms the accounts).* Everything below posts to the HTTP endpoints with Basic auth and passes if the account is staff, a superuser or in `api_writers`. Trusted accounts skip the group and ownership checks entirely, so the groups they send do not matter.
+
+| Caller | Endpoint | Account | Passes when |
+| --- | --- | --- | --- |
+| `data_ingest/DECam_upload.py`, `DECam_upload_clusters.py`, `QUB_data.py`, `YSE_Forced_Phot.py`, `Gaia_LC.py`, `TNS_uploads.py`, `Query_ZTF.py` | `/add_transient/` | `--dblogin`, default `[main] dblogin` | that account is staff, superuser or in `api_writers` (migration 0032 adds `[main] dblogin` to `api_writers` if it existed then) |
+| `util/uploadTransientData.py`, `util/TNS_Synopsis/TNS_Synopsis_coreapi.py` | `/add_transient_phot/`, `/add_transient_spec/` | `--dblogin` | the account is trusted, or is a member of a collaboration group and shares only with its own groups and replaces only its own rows |
+| Broker ingest (`brokers/ingest.py`) | none: calls the save code in-process | the audit user | not affected; the checks live in the HTTP views only |
+| Facility results ingest | no call to the upload endpoints found in the code | n/a | not affected |
+
+Two cases to watch. (1) The QUB script logs in to QUB with its own credentials, but it posts to YSE-PZ as `--dblogin`; only that account matters. (2) The checks recognise staff, superusers and `api_writers` only; a PI or deputy account that is not staff is not trusted, so an ordinary member's own rules apply to it.
+
+*David: confirm the cron accounts first.* Run Step B's second command (the 30-day listing of non-staff, non-`api_writers` writers) and add any script account it shows to `api_writers`. Then check the cron logs after the next TNS, QUB and forced-phot runs: no `403` and no `Bulk transient ingest is limited`.
+
+*Turn it off temporarily.* Either set `UPLOAD_GROUP_CHECKS_ENFORCED: False` under `[site_settings]` in `<STACK>/YSE_PZ/settings.ini`, or set the env var `YSE_UPLOAD_GROUP_CHECKS_ENFORCED=0` for the web process, then restart (`sudo systemctl restart apache2` for production). **Check:** `<STACK_PYTHON> manage.py shell -c "from django.conf import settings; print(settings.UPLOAD_GROUP_CHECKS_ENFORCED)"` prints `False`.
 
 **Step D (Explorer): give `explorer_users` to the staff who should keep `/explorer/`, then turn on the restriction.**
 
@@ -2782,7 +2803,8 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
-* 2026-10-17 v68, **migration applied by the deploy; nothing else required**. TNS and Hermes reports send only data the sender may see and share ([#691](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/691)): migration `0044_autopublish_optin` (one new table, no change to existing tables; safe on the shared database). The report dialog, preview and submit include public data plus restricted data the submitter can see and may share as a PI, deputy or staff, and the dialog says how many restricted datasets were left out; automatic publishing sends public data only until a PI opts a dataset in (`POST /sharing/autopublish_optin/<photometry|spectrum>/<id>/`, logged). `YSE_App_autopublishoptin` is hidden from SQL Explorer; leave it out of table-level Explorer grants. No new package.
+* 2026-10-17 v69, **migration applied by the deploy; nothing else required**. TNS and Hermes reports send only data the sender may see and share ([#691](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/691)): migration `0044_autopublish_optin` (one new table, no change to existing tables; safe on the shared database). The report dialog, preview and submit include public data plus restricted data the submitter can see and may share as a PI, deputy or staff, and the dialog says how many restricted datasets were left out; automatic publishing sends public data only until a PI opts a dataset in (`POST /sharing/autopublish_optin/<photometry|spectrum>/<id>/`, logged). `YSE_App_autopublishoptin` is hidden from SQL Explorer; leave it out of table-level Explorer grants. No new package.
+* 2026-10-17 v68, **David: confirm the cron accounts are staff, superusers or in `api_writers` (otherwise their uploads get 403); no migration**. Upload group checks are now on by default ([#697](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/697)); Ryan overrode the usual "flags default to today's behaviour" rule for this flag. `add_transient` is limited to staff, superusers and `api_writers`; `add_transient_phot` / `add_transient_spec` / the spectrum form apply the group and ownership rules. Turn off temporarily with `UPLOAD_GROUP_CHECKS_ENFORCED: False` (or `YSE_UPLOAD_GROUP_CHECKS_ENFORCED=0`) and restart ([section](#upload-checks-default-on)).
 * 2026-10-17 v67, **migration applied by the deploy; nothing else required** (flag stays off). Access grants schema ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1): migration `0043_data_access_grants` (two new tables, a nullable `allocation_id` column on transient photometry and spectra; safe on the shared database); admin pages for staff; `DATA_ACCESS_GRANTS_ENABLED` defaults off and nothing reads the rules yet; both tables hidden from SQL Explorer, leave them out of table-level Explorer grants ([section "Access grants and program deputies"](#access-grants-schema)). No new package.
 * 2026-10-16 v66, **migration applied by the deploy; one backfill required per database** (`manage.py backfill_photstat_scopes --apply`, dry run by default). One visibility policy for transient lists ([#607](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/607)): migration `0042_transient_photstat_scope` (one new table, safe on the shared database); non-staff users see TNS-named objects plus the objects whose data they may see, everywhere, and derived photometry values only from photometry they may see ([section "One visibility policy"](#transient-visibility)). Explorer grant note for table-level grants. No new package.
 * 2026-10-16 v65, optional (backfill). TNS references ([#645](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/645)): TNS-reported photometry now goes in its own `TNS` header with the TNS reference (and report ids when sent); `mark_tns_imports_public` is a dry run by default (`--apply` writes; `--dry-run` still accepted) and also tags ZTF/ATLAS forced photometry Public and sets TNS references on old imports ([section](#tns-references)). No migration.
