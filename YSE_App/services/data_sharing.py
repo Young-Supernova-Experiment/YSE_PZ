@@ -214,3 +214,33 @@ def check_group_change(user, dataset, new_groups) -> None:
     if share_role(user, dataset) is None:
         raise PermissionDenied({"message": "Only the data's PIs and their designated deputies (or an administrator) "
                                            "may change the groups of restricted data."})
+
+
+def groups_allowed_for_upload(user, dataset, groups) -> Tuple[list, list]:
+    """Split the ``groups`` an upload wants to add to an existing dataset into ``(allowed, skipped)`` (#647).
+
+    The upload helpers use this instead of failing: a skipped group change is reported in the response.
+
+    * Groups already on the dataset, and datasets with no groups yet (new rows), are unaffected.
+    * A PI, deputy or staff account (:func:`share_role`) may add any group.
+    * Anyone else may not widen restricted data at all, and may add to public-only data only groups they belong to.
+    """
+    groups = list(groups)
+    if not groups or not getattr(dataset, "pk", None):
+        return groups, []
+    current = _group_ids(dataset)
+    new = [g for g in groups if g.pk not in current]
+    if not current or not new:
+        return groups, []
+    if share_role(user, dataset) is not None:
+        return groups, []
+    if not is_public_dataset(dataset):
+        return [g for g in groups if g.pk in current], new
+    own = set(user.groups.values_list("id", flat=True)) if getattr(user, "is_authenticated", False) else set()
+    allowed = [g for g in groups if g.pk in current or g.pk in own]
+    return allowed, [g for g in new if g.pk not in own]
+
+
+def skipped_groups_message(skipped) -> str:
+    return ("Group change skipped for: %s (only the data's PIs, their deputies or staff may add groups to existing "
+            "restricted data, and uploaders may only add groups they belong to)." % ", ".join(sorted(g.name for g in skipped)))
