@@ -326,7 +326,11 @@ def _phot_data_quality_label(phot_row):
 
 
 def _phot_flagged(phot_row):
-    """Whether a TransientPhotData row is flagged (#84): the statistics' and fits' rule."""
+    """Whether a TransientPhotData row is flagged (#84): NOT ``legacy_good`` (spec v7).
+
+    The per-row form of the photometry table's split (#85) and the statistics'
+    rule: ``quality_mask & LEGACY_EXCLUDE != 0``, so NOT_PUBLISHED alone is good.
+    """
     return is_legacy_flagged(getattr(phot_row, 'quality_mask', 0), 'TransientPhotData')
 
 

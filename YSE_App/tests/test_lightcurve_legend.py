@@ -39,7 +39,7 @@ from YSE_App.common.legend_layout import (
     label_width_px,
     requested_plot_width,
 )
-from YSE_App.common.quality_mask import PhotFlag
+from YSE_App.common.quality_mask import PhotFlag, legacy_good
 from YSE_App.models import (
     DataQuality,
     Instrument,
@@ -655,6 +655,12 @@ class FlaggedSeriesRenderTests(TestCase):
         self.assertFalse(view_utils._phot_flagged(self.unpublished))
         self.assertEqual(view_utils._phot_data_quality_label(self.flagged_det), "Bad")
         self.assertEqual(view_utils._phot_data_quality_label(self.unpublished), "Good")
+        # the per-row rule is NOT legacy_good, the queryset split the photometry table uses (#85)
+        rows = TransientPhotData.objects.filter(photometry__transient=self.transient)
+        self.assertEqual(
+            {row.pk for row in rows if view_utils._phot_flagged(row)},
+            set(rows.exclude(legacy_good("TransientPhotData")).values_list("pk", flat=True)),
+        )
 
     def test_detail_plot_draws_flagged_points_muted_with_a_legend_entry_and_button(self):
         doc = self._doc("lightcurveplot_detail", self.transient)
