@@ -23,8 +23,10 @@ from django.db import migrations, models
 from django.db.models import F, Q
 import django.db.models.deletion
 
-_ONE_GRANTEE = (Q(grantee_group__isnull=False, grantee_user__isnull=True)
-                | Q(grantee_group__isnull=True, grantee_user__isnull=False))
+# "At most one" in the database (exactly one is checked by ``clean``): on MySQL, Django's
+# cascade sets a nullable CASCADE foreign key to NULL just before deleting the row, so
+# a deleted group, user, point or dataset must not trip the check.
+_ONE_GRANTEE = ~Q(grantee_group__isnull=False, grantee_user__isnull=False)
 _EFFECT = [('allow', 'Allow'), ('deny', 'Restrict')]
 _AS = [('pi', 'PI'), ('program_deputy', 'Program deputy'), ('group_deputy', "PI's data-sharing deputy"),
        ('staff', 'Administrator')]
@@ -182,8 +184,7 @@ class Migration(migrations.Migration):
             model_name='dataaccessrule',
             constraint=models.CheckConstraint(
                 name='yse_dar_one_target',
-                check=(Q(transient_phot_data__isnull=False, transient_spectrum__isnull=True)
-                       | Q(transient_phot_data__isnull=True, transient_spectrum__isnull=False)),
+                check=~Q(transient_phot_data__isnull=False, transient_spectrum__isnull=False),
             ),
         ),
         migrations.AddConstraint(
@@ -266,8 +267,7 @@ class Migration(migrations.Migration):
             model_name='datasetgroupshare',
             constraint=models.CheckConstraint(
                 name='yse_dgs_one_dataset',
-                check=(Q(transient_photometry__isnull=False, transient_spectrum__isnull=True)
-                       | Q(transient_photometry__isnull=True, transient_spectrum__isnull=False)),
+                check=~Q(transient_photometry__isnull=False, transient_spectrum__isnull=False),
             ),
         ),
         migrations.AddConstraint(

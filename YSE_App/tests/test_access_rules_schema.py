@@ -144,8 +144,8 @@ class RuleTests(_Fixture):
 
     def test_database_checks(self):
         point = self.point[("private", 5)]
+        # The database refuses two grantees or two targets ("exactly one" is checked by clean()).
         bad = (
-            dict(transient_phot_data=point),
             dict(transient_phot_data=point, grantee_user=self.outsider, grantee_group=self.other),
             dict(transient_phot_data=point, transient_spectrum=self.spec["other"], grantee_user=self.outsider),
             dict(transient_phot_data=point, grantee_user=self.outsider, effect="maybe"),
@@ -184,11 +184,22 @@ class RuleTests(_Fixture):
                                                      added_by=self.staff)
         self.assertTrue(LogEntry.objects.get_for_object(delegate).exists())
 
-    def test_rules_follow_their_point(self):
+    def test_rules_follow_their_point_grantee_and_dataset(self):
         point = self.point[("other", 5)]
         self.rule(transient_phot_data=point, grantee_user=self.outsider)
         point.delete()
         self.assertFalse(R.objects.exists())
+        self.rule(transient_phot_data=self.point[("other", 1.5)], grantee_group=self.other)
+        self.rule(transient_spectrum=self.spec["private"], grantee_user=self.outsider)
+        self.rule(transient_phot_data=self.point[("private", 1.5)], grantee_user=self.member)
+        self.other.delete()
+        self.outsider.delete()
+        self.assertEqual(list(R.objects.values_list("grantee_user_id", flat=True)), [self.member.pk])
+        self.phot["private"].delete()
+        self.assertFalse(R.objects.exists())
+        grant = self.standing(grantee_user=self.member)
+        self.member.delete()
+        self.assertFalse(S.objects.filter(pk=grant.pk).exists())
 
 
 class StandingGrantTests(_Fixture):
@@ -215,7 +226,8 @@ class StandingGrantTests(_Fixture):
                 self.assertIn(fragment, " ".join(ctx.exception.messages))
 
     def test_database_checks(self):
-        for kw in (dict(), dict(grantee_group=self.other, night_start=self.night_start),
+        for kw in (dict(grantee_group=self.other, grantee_user=self.outsider),
+                   dict(grantee_group=self.other, night_start=self.night_start),
                    dict(grantee_group=self.other, night_start=self.night_end, night_end=self.night_start)):
             with self.subTest(kw=sorted(kw)):
                 with self.assertRaises(IntegrityError):
