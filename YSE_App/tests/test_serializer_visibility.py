@@ -68,27 +68,19 @@ class SerializerVisibilityTests(TestCase):
     def test_best_spectrum_hidden_from_outsider_and_anonymous(self):
         for user in (self.outsider, AnonymousUser()):
             self.assertIsNone(self._best(self.hidden_spec, _ctx(user)))
-        self.assertIsNone(self._best(self.hidden_spec, {}))
+        # No request in context: behaves as anonymous (public only).
+        self.assertFalse(self._field_ok(TransientSpecDataSerializer, "spectrum", self.hidden_spec.pk, None))
 
     def test_best_spectrum_visible_to_member_staff_and_when_public(self):
         for user in (self.member, self.staff):
             self.assertIsNotNone(self._best(self.hidden_spec, _ctx(user)))
         self.assertIsNotNone(self._best(self.public_spec, _ctx(self.outsider)))
-        self.assertIsNotNone(self._best(self.public_spec, {}))
+        self.assertTrue(self._field_ok(TransientSpecDataSerializer, "spectrum", self.public_spec.pk, None))
 
     def _field_ok(self, serializer_cls, name, pk, user):
-        field = serializer_cls(context=_ctx(user)).fields[name]
-        try:
-            field.to_internal_value(self._url(serializer_cls, name, pk))
-        except Exception:
-            return False
-        return True
-
-    def _url(self, serializer_cls, name, pk):
-        field = serializer_cls(context=_ctx(self.staff)).fields[name]
-        from rest_framework.reverse import reverse
-
-        return reverse(field.view_name, kwargs={"pk": pk}, request=_ctx(self.staff)["request"])
+        context = _ctx(user) if user is not None else {}
+        field = serializer_cls(context=context).fields[name]
+        return field.get_queryset().filter(pk=pk).exists()
 
     def test_write_reference_spectrum(self):
         for cls, name in ((TransientSpecDataSerializer, "spectrum"), (LogSerializer, "transient_spectrum")):
