@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Iterable, List, Optional, Set, Union
+from typing import Iterable, List, NamedTuple, Optional, Set, Union
 
 from django.contrib.auth.models import Group, User
 from django.db.models import Count, Exists, OuterRef, Q, QuerySet
@@ -64,11 +64,17 @@ def object_has_groups(obj) -> bool:
 
 
 def object_visible_to_user(user: User, obj) -> bool:
-    """Object with optional ``groups`` M2M (photometry, spectrum, resource, log)."""
+    """Object with optional ``groups`` M2M (photometry, spectrum, resource, log).
+
+    Transient photometry sets and spectra are decided by
+    :func:`dataset_visible_to_user` (the central read rule, #648).
+    """
     if not user.is_authenticated:
         return False
     if user.is_staff or user.is_superuser:
         return True
+    if _dataset_model(obj) is not None:
+        return dataset_visible_to_user(user, obj)
     if not object_has_groups(obj):
         return True
     names = set(user_group_names(user))
@@ -165,16 +171,12 @@ def transient_access_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
     """
     from YSE_App.models import TransientPhotometry, TransientSpectrum
 
-    no_group, contains_group = get_user_group_query(user, names=names)
-    phot_q = no_group | contains_group
-    extra = _extra_photometry_grants_q(user)
-    if extra is not None:  # read-time grants (#648)
-        phot_q |= extra
+    names = user_group_names(user) if names is None else list(names)
     visible_phot = TransientPhotometry.objects.filter(
-        phot_q, transient_id=OuterRef("pk"),
+        photometry_visible_q(user, names=names), transient_id=OuterRef("pk"),
     )
     visible_spec = TransientSpectrum.objects.filter(
-        no_group | contains_group, transient_id=OuterRef("pk"),
+        spectrum_visible_q(user, names=names), transient_id=OuterRef("pk"),
     )
     return Q(Exists(visible_phot)) | Q(Exists(visible_spec))
 
@@ -219,9 +221,10 @@ def filter_transients_by_user_access(
 # restrictions (``services.photstat_visibility``).
 #
 # Read-time grants (#648) plug in at ``_extra_access_grants_q`` (objects) and
-# ``_extra_photometry_grants_q`` (photometry sets): both return ``None`` today,
-# so nothing changes until #648 fills them in; the listing, data-access and
-# hidden-photometry conditions below already consult them.
+# at ``_photometry_access_rules`` / ``_spectrum_access_rules`` (datasets, read
+# through ``photometry_visible_q`` / ``spectrum_visible_q``): all return "no
+# change" today, so nothing changes until #648 fills them in; the listing,
+# data-access and hidden-photometry conditions below already consult them.
 
 TNS_NAME_SQL_REGEX = r'^20[0-9]{2}[a-zA-Z]{1,5}$'
 
@@ -243,8 +246,143 @@ def _extra_access_grants_q(user: User) -> Optional[Q]:
 
 
 def _extra_photometry_grants_q(user: User) -> Optional[Q]:
-    """Extra ``TransientPhotometry`` sets ``user`` may see through a per-user grant (#648); ``None`` today."""
+    """Extra ``TransientPhotometry`` sets ``user`` may see (#648): the ``allow`` of
+    :func:`_photometry_access_rules`, kept for older callers."""
+    return _photometry_access_rules(user).allow
+
+
+# ------------------------------------------- central dataset read rule (#648)
+#
+# Every read of transient photometry sets / points and transient spectra
+# decides visibility with ``photometry_visible_q`` / ``spectrum_visible_q``
+# (or a helper below built on them): the data services, the listing and
+# data-access conditions, plots, tables, exports and the API. The rule today
+# is the collaboration-group rule: a dataset with no groups, or one sharing a
+# group (by name) with the user. Read-time grants and restrictions (#648)
+# plug in at ``_photometry_access_rules`` / ``_spectrum_access_rules``; both
+# return ``NO_RULES`` today, so the conditions (and their SQL) are exactly the
+# group rule. These functions never bypass staff: callers that let staff see
+# everything check ``user_sees_everything`` first, as before.
+
+
+class AccessRules(NamedTuple):
+    """Read-time rules for one user on one dataset model (#648).
+
+    Both are conditions on the dataset model (``TransientPhotometry`` or
+    ``TransientSpectrum``), best written as ``pk__in`` / ``<fk>_id__in``
+    lookups so they never join through ``groups``:
+
+    * ``allow``: rows the user may also see (OR'd onto the group rule);
+    * ``deny``: rows the user may not see even when the group rule or
+      ``allow`` shows them. A deny never hides public data
+      (:func:`_public_dataset_q`).
+    """
+
+    allow: Optional[Q] = None
+    deny: Optional[Q] = None
+
+    @property
+    def empty(self) -> bool:
+        return self.allow is None and self.deny is None
+
+
+NO_RULES = AccessRules()
+
+
+def _photometry_access_rules(user: User) -> AccessRules:
+    """Grants and restrictions on ``TransientPhotometry`` sets for ``user`` (#648); none today."""
+    return NO_RULES
+
+
+def _spectrum_access_rules(user: User) -> AccessRules:
+    """Grants and restrictions on ``TransientSpectrum`` rows for ``user`` (#648); none today."""
+    return NO_RULES
+
+
+def _public_dataset_q(model, names: Iterable[str]) -> Q:
+    """Rows of ``model`` that are public for this user, so no deny may hide them.
+
+    Public data (Ryan, #648, 2026-10-17) can never be restricted from anyone:
+    a dataset with no collaboration group, and, for a member of the ``Public``
+    group, a dataset whose only group is ``Public``. Both are rows the group
+    rule already shows the user, so this only limits what a deny removes.
+    """
+    through = model.groups.through
+    links = through.objects.filter(**{model._meta.model_name + '_id': OuterRef('pk')})
+    if PUBLIC_COLLABORATION_GROUP_NAME in set(names):
+        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
+    return Q(~Exists(links))
+
+
+def _dataset_visible_q(model, rules: AccessRules, user: User, names: Optional[Iterable[str]]) -> Q:
+    names = user_group_names(user) if names is None else list(names)
+    no_group, contains_group = get_user_group_query(user, names=names)
+    q = no_group | contains_group
+    if rules.allow is not None:
+        q |= rules.allow
+    if rules.deny is not None:
+        q = _public_dataset_q(model, names) | (q & ~rules.deny)
+    return q
+
+
+def photometry_visible_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """Condition on ``TransientPhotometry`` rows: the sets ``user`` may see (the central rule).
+
+    ``names`` is the user's group names when the caller already has them.
+    Joins ``groups``, so querysets filtered with it need ``.distinct()`` (or
+    an ``IN`` / ``EXISTS`` wrapper) as before.
+    """
+    from YSE_App.models import TransientPhotometry
+
+    return _dataset_visible_q(TransientPhotometry, _photometry_access_rules(user), user, names)
+
+
+def spectrum_visible_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """Condition on ``TransientSpectrum`` rows: the spectra ``user`` may see (the central rule)."""
+    from YSE_App.models import TransientSpectrum
+
+    return _dataset_visible_q(TransientSpectrum, _spectrum_access_rules(user), user, names)
+
+
+def _dataset_model(obj):
+    """``TransientPhotometry`` / ``TransientSpectrum`` for such an instance, else ``None``."""
+    from YSE_App.models import TransientPhotometry, TransientSpectrum
+
+    for model in (TransientPhotometry, TransientSpectrum):
+        if isinstance(obj, model):
+            return model
     return None
+
+
+def _access_rules_for(model, user: User) -> AccessRules:
+    from YSE_App.models import TransientPhotometry
+
+    if model is TransientPhotometry:
+        return _photometry_access_rules(user)
+    return _spectrum_access_rules(user)
+
+
+def dataset_visible_to_user(user: User, obj, names: Optional[Iterable[str]] = None) -> bool:
+    """Whether the central rule shows one photometry set or spectrum to ``user`` (no staff bypass).
+
+    Without rules for the user this is the group rule in Python (the queries
+    of the old ``object_visible_to_user`` check; none when ``names`` is given
+    and ``groups`` is prefetched). With rules it asks the database with
+    :func:`photometry_visible_q` / :func:`spectrum_visible_q`.
+    """
+    model = _dataset_model(obj)
+    rules = _access_rules_for(model, user)
+    if not rules.empty:
+        return model.objects.filter(pk=obj.pk).filter(
+            _dataset_visible_q(model, rules, user, names)).exists()
+    if names is None:
+        if not object_has_groups(obj):
+            return True
+        names = user_group_names(user)
+        obj_names = set(obj.groups.values_list("name", flat=True))
+    else:
+        obj_names = {g.name for g in obj.groups.all()}
+    return not obj_names or bool(set(names) & obj_names)
 
 
 def tns_named_q() -> Q:
@@ -317,8 +455,15 @@ def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
     """
     from YSE_App.models import TransientPhotometry
 
+    on_transient = TransientPhotometry.objects.filter(transient_id=OuterRef(transient_ref))
+    rules = _photometry_access_rules(user)
+    if not rules.empty:
+        # The exact complement of the central rule (#648).
+        visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
+        return Exists(on_transient.exclude(pk__in=visible))
+    # No rules: the group rule's complement by group id, the indexed form #607 tuned.
     through = TransientPhotometry.groups.through
-    restricted = TransientPhotometry.objects.filter(transient_id=OuterRef(transient_ref)).filter(
+    restricted = on_transient.filter(
         Exists(through.objects.filter(transientphotometry_id=OuterRef('pk')))
     )
     gids = user_group_ids(user)
@@ -326,9 +471,6 @@ def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
         restricted = restricted.filter(~Exists(
             through.objects.filter(transientphotometry_id=OuterRef('pk'), group_id__in=gids)
         ))
-    extra = _extra_photometry_grants_q(user)
-    if extra is not None:
-        restricted = restricted.exclude(extra)
     return Exists(restricted)
 
 
@@ -343,12 +485,8 @@ def visible_photometry_ids_q(user: User, prefix: str = 'photometry_id') -> Optio
         return None
     from YSE_App.models import TransientPhotometry
 
-    no_group, contains_group = get_user_group_query(user)
-    phot_q = no_group | contains_group
-    extra = _extra_photometry_grants_q(user)
-    if extra is not None:
-        phot_q |= extra
-    return Q(**{prefix + '__in': TransientPhotometry.objects.filter(phot_q).values('pk')})
+    visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
+    return Q(**{prefix + '__in': visible})
 
 
 def transients_with_hidden_photometry(user: User, transient_ids: Iterable[int]) -> Set[int]:
