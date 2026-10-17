@@ -90,12 +90,29 @@ def scope_rank(row):
 
 
 def _candidate_scope_q(user) -> Q:
-    """The scope rows ``user`` may see: the public scope and their groups' scopes."""
+    """The scope rows ``user`` may see: the public scope and their groups' scopes.
+
+    With per-point access rules (#648): on a transient where the user has a
+    personal deny, only the public scope (Ryan, Q5); where one of the user's
+    groups ``h`` has a deny, the user's other groups' scopes may hold points
+    hidden from the user, so only ``h``'s scope (built without them) and the
+    public scope remain.
+    """
+    from YSE_App.services import access_rules
+
     gids = user_group_ids(user)
     q = Q(group__isnull=True)
-    if gids:
-        q |= Q(group_id__in=gids)
-    return q
+    if not gids:
+        return q
+    groups = Q(group_id__in=gids)
+    restrictions = access_rules.scope_restrictions(user)
+    if restrictions is not None:
+        personal, by_group = restrictions
+        if personal is not None:
+            groups &= ~Q(transient_id__in=personal)
+        for gid, transients in sorted(by_group.items()):
+            groups &= ~(Q(transient_id__in=transients) & ~Q(group_id=gid))
+    return q | groups
 
 
 def _output_field(field: str):
@@ -223,12 +240,51 @@ def visible_stats(user, transient_ids: Iterable[int], *, full_rows: Optional[Dic
 
     hidden = transients_with_hidden_photometry(user, ids)
     rows = _full_rows(ids, related)
+    exact = _exact_viewer_stats(user, hidden, related)
     candidates: Dict[int, List[object]] = {}
     for row in (TransientPhotStatScope.objects.filter(transient_id__in=ids)
                 .filter(_candidate_scope_q(user)).select_related(*related)):
         candidates.setdefault(row.transient_id, []).append(row)
     for tid in ids:
-        out[tid] = best_scope(candidates.get(tid, ())) if tid in hidden else rows.get(tid)
+        if tid in exact:
+            out[tid] = exact[tid]
+        else:
+            out[tid] = best_scope(candidates.get(tid, ())) if tid in hidden else rows.get(tid)
+    return out
+
+
+def _exact_viewer_stats(user, transient_ids, related=DISPLAY_RELATED) -> Dict[int, object]:
+    """Exact values for a viewer with per-point access rules (#648): ``{transient_id: unsaved scope row}``.
+
+    For table cells and the detail page (Ryan, Q5: they stay exact; list
+    sorting and filters keep the stored-scope approximation). Computed from
+    the points the viewer may see, two queries (points, bands) for the batch,
+    which the callers cap by page size. Empty without rules.
+    """
+    from YSE_App.services import access_rules
+
+    ids = sorted({int(t) for t in transient_ids})
+    if not ids:
+        return {}
+    summary = access_rules.active_summary(user)
+    if summary is None:
+        return {}
+    from YSE_App.models.photometric_band_models import PhotometricBand
+    from YSE_App.models.phot_stat_models import TransientPhotStatScope
+    from YSE_App.services import photstat
+
+    grouped = photstat.points_by_transient(ids, access_rules.point_visible_q(summary))
+    out: Dict[int, object] = {}
+    band_ids = set()
+    for tid in ids:
+        row = TransientPhotStatScope(transient_id=tid, group=None, scope_key='viewer')
+        photstat.apply_values(row, photstat.compute_stats(grouped.get(tid, [])))
+        out[tid] = row
+        band_ids.update(getattr(row, name + '_id') for name in related)
+    bands = {b.pk: b for b in PhotometricBand.objects.filter(pk__in=[b for b in band_ids if b is not None])}
+    for row in out.values():
+        for name in related:
+            setattr(row, name, bands.get(getattr(row, name + '_id')))
     return out
 
 

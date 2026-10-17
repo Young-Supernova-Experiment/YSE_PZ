@@ -4,6 +4,9 @@
   or were written under an older ``photstat.SCHEMA_VERSION`` (the
   ``rebuild_photstats --stale-only`` selection), so a rules change or a
   write path that bypassed the signals is repaired without a manual run.
+* ``photstat.sync_scopes``: rebuild the per-group scope rows of the given
+  transients after a group's access rules changed (#648; queued by
+  ``photstat.invalidate_scopes``).
 * ``photstat.bazin_extrapolate``: store the Bazin-extrapolated magnitude
   (``services.bazin.store_extrapolations``) for the given transients, by
   default the ones with an open follow-up request, at ``at_mjd`` (default:
@@ -26,6 +29,8 @@ from YSE_App.jobs import enqueue, job
 
 REFRESH_STALE_KIND = "photstat.refresh_stale"
 BAZIN_KIND = "photstat.bazin_extrapolate"
+SCOPE_SYNC_KIND = "photstat.sync_scopes"
+SCOPE_SYNC_CHUNK = 500
 
 DEFAULT_STALE_LIMIT = 2000
 DEFAULT_BAZIN_LIMIT = 500
@@ -96,3 +101,22 @@ def queue_job(kind: str, payload=None, created_by=None):
     if Job.objects.filter(kind=kind, status__in=Job.ACTIVE_STATUSES).exists():
         return None
     return enqueue(kind, payload or {}, created_by=created_by)
+
+
+@job(SCOPE_SYNC_KIND, max_attempts=3, backoff_seconds=300)
+def sync_scopes_job(payload=None, job=None):
+    from YSE_App.services import photstat
+
+    ids = [int(t) for t in (payload or {}).get("transient_ids") or ()]
+    result = photstat.sync_scopes(ids)
+    return {"transients": result.transients, "created": result.created, "updated": result.updated,
+            "deleted": result.deleted}
+
+
+def queue_scope_sync(transient_ids, created_by=None):
+    """Queue scope rebuilds for ``transient_ids`` in chunks (always queued: each job names its transients)."""
+    ids = sorted({int(t) for t in transient_ids if t is not None})
+    jobs = []
+    for i in range(0, len(ids), SCOPE_SYNC_CHUNK):
+        jobs.append(enqueue(SCOPE_SYNC_KIND, {"transient_ids": ids[i:i + SCOPE_SYNC_CHUNK]}, created_by=created_by))
+    return jobs

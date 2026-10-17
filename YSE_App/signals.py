@@ -351,10 +351,13 @@ def _record_access_history(fn, *args):
 
 @receiver(m2m_changed, sender=get_user_model().groups.through, dispatch_uid="yse_access_history_membership")
 def record_group_membership(sender, instance, action, reverse, **kwargs):
-    from YSE_App.services import access_history
+    from YSE_App.services import access_history, access_rules
 
     _record_access_history(access_history.record_membership_change, instance, action, reverse,
                            kwargs.get("pk_set"))
+    if action in ("post_add", "post_remove", "post_clear") and access_rules.enabled():
+        # Which group rules apply to a user, and which groups they left, changed (#648, PR 2).
+        _record_access_history(access_rules.bump_version)
 
 
 @receiver(m2m_changed, sender=TransientPhotometry.groups.through, dispatch_uid="yse_access_history_phot_groups")
@@ -371,3 +374,73 @@ def record_spectrum_group_share(sender, instance, action, reverse, **kwargs):
 
     _record_access_history(access_history.record_dataset_share_change, TransientSpectrum, instance, action,
                            reverse, kwargs.get("pk_set"))
+
+
+# ---- Per-point access rules (#648, PR 2) ---------------------------------------
+# Any rule or standing grant written outside an action (the admin, a shell) bumps
+# the rules version, so cached rule summaries and plots are rebuilt; actions bump
+# once themselves (access_actions.signals_quiet). New points and spectra of a
+# program get the program's standing grants at ingest.
+
+from YSE_App.models.data_access_grant_models import DataAccessRule, StandingAccessGrant  # noqa: E402
+
+
+@receiver(post_save, sender=DataAccessRule, dispatch_uid="yse_access_rule_saved")
+def access_rule_saved(sender, instance, **kwargs):
+    from YSE_App.services import access_actions, access_rules, photstat
+
+    if access_actions.signals_quiet() or kwargs.get("raw"):
+        return
+    access_rules.bump_version()
+    if instance.grantee_group_id and instance.transient_phot_data_id and access_rules.enabled():
+        photstat.invalidate_scopes([(instance.transient_id, instance.grantee_group_id)])
+
+
+@receiver(post_delete, sender=DataAccessRule, dispatch_uid="yse_access_rule_deleted")
+def access_rule_deleted(sender, instance, **kwargs):
+    # Version only: a point's deletion recomputes its transient's PhotStat scopes already, and a staff
+    # removal (access_actions.delete_rule, the admin) invalidates the scopes itself.
+    from YSE_App.services import access_actions, access_rules
+
+    if not access_actions.signals_quiet():
+        _record_access_history(access_rules.bump_version)
+
+
+@receiver(post_save, sender=StandingAccessGrant, dispatch_uid="yse_standing_grant_saved")
+def standing_grant_saved(sender, instance, **kwargs):
+    from YSE_App.services import access_rules
+
+    if not kwargs.get("raw"):
+        access_rules.bump_version()
+
+
+def _apply_standing_grants(fn, instance):
+    import logging
+
+    from django.db import transaction
+
+    try:
+        with transaction.atomic():
+            fn(instance)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("standing access grants not applied")
+
+
+@receiver(post_save, sender=TransientPhotData, dispatch_uid="yse_standing_grants_point")
+def standing_grants_on_point(sender, instance, created, **kwargs):
+    if not created or kwargs.get("raw"):
+        return
+    photometry = instance._state.fields_cache.get("photometry")
+    if photometry is not None and not photometry.allocation_id:
+        return  # the usual case: no program link, no query
+    from YSE_App.services import access_actions
+
+    _apply_standing_grants(access_actions.on_point_created, instance)
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_standing_grants_spectrum")
+def standing_grants_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get("raw") and instance.allocation_id:
+        from YSE_App.services import access_actions
+
+        _apply_standing_grants(access_actions.apply_standing_grants_to_spectrum, instance)

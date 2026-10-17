@@ -102,6 +102,8 @@ class PhotPoint:
     # The ``TransientPhotometry`` set the point belongs to (its groups decide
     # which visibility scopes count it, #607).
     photometry_id: Optional[int] = None
+    # The ``TransientPhotData`` id (per-point access rules, #648).
+    point_id: Optional[int] = None
 
 
 _finite = phot_points.finite
@@ -269,31 +271,37 @@ def is_stale(stat: TransientPhotStat) -> bool:
     return (stat.schema_version or 0) < SCHEMA_VERSION
 
 
-def _phot_rows(transient_ids: Sequence[int]):
-    """Unflagged-or-flagged photometry rows for ``transient_ids`` in one query."""
+def _phot_rows(transient_ids: Sequence[int], point_filter=None):
+    """Unflagged-or-flagged photometry rows for ``transient_ids`` in one query (``point_filter``: a ``Q``)."""
     from YSE_App.models.phot_models import TransientPhotData
 
-    return (
-        TransientPhotData.objects.filter(photometry__transient_id__in=list(transient_ids))
-        .values_list(
-            'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
-            'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point', 'quality_mask',
-            'photometry_id',
-        )
+    rows = TransientPhotData.objects.filter(photometry__transient_id__in=list(transient_ids))
+    if point_filter is not None:
+        rows = rows.filter(point_filter)
+    return rows.values_list(
+        'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
+        'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point', 'quality_mask',
+        'photometry_id', 'pk',
     )
 
 
-def points_by_transient(transient_ids: Sequence[int]) -> Dict[int, List[PhotPoint]]:
-    """``{transient_id: [PhotPoint, ...]}`` for ``transient_ids`` (one query)."""
+def points_by_transient(transient_ids: Sequence[int], point_filter=None) -> Dict[int, List[PhotPoint]]:
+    """``{transient_id: [PhotPoint, ...]}`` for ``transient_ids`` (one query).
+
+    ``point_filter`` (a ``Q`` on ``TransientPhotData``) keeps only some points,
+    for example what one viewer may see (``photstat_visibility``).
+    """
     ids = list({int(t) for t in transient_ids if t is not None})
     grouped: Dict[int, List[PhotPoint]] = {tid: [] for tid in ids}
     if not ids:
         return grouped
-    for tid, band_id, band_name, obs_date, mag, mag_err, flux, flux_err, zp, mask, phot_id in _phot_rows(ids):
+    for (tid, band_id, band_name, obs_date, mag, mag_err, flux, flux_err, zp, mask, phot_id,
+         point_id) in _phot_rows(ids, point_filter):
         grouped[tid].append(PhotPoint(
             mjd=datetime_to_mjd(obs_date), band_id=band_id, band_name=band_name or '',
             mag=mag, mag_err=mag_err, flux=flux, flux_err=flux_err, flux_zero_point=zp,
             flagged=is_legacy_flagged(mask, 'TransientPhotData'), photometry_id=phot_id,
+            point_id=point_id,
         ))
     return grouped
 
@@ -518,19 +526,27 @@ def photometry_groups(transient_ids: Sequence[int]) -> Dict[int, Dict[int, froze
     return {tid: {pid: frozenset(g) for pid, g in sets.items()} for tid, sets in out.items()}
 
 
-def scope_point_sets(points: Sequence[PhotPoint], groups_by_photometry: Dict[int, frozenset]) -> Dict[Optional[int], List[PhotPoint]]:
+def scope_point_sets(points: Sequence[PhotPoint], groups_by_photometry: Dict[int, frozenset],
+                     point_rules: Optional[Dict[int, Dict[int, str]]] = None) -> Dict[Optional[int], List[PhotPoint]]:
     """``{None: public points, group_id: public + that group's points}``; ``{}`` without restricted sets.
 
     Pure. ``groups_by_photometry`` maps each restricted photometry set of the
     transient to its groups; a set that is not in it is public. A restricted
     set without points still creates the scopes (the viewer's "has hidden
     photometry" check looks at sets, not points).
+
+    ``point_rules`` (#648, only with ``DATA_ACCESS_GRANTS_ENABLED``) maps a
+    point id to ``{group_id: "allow" | "deny"}``: a group's scope then holds
+    the points the group may see, its set's groups plus its allows minus its
+    denies. Public points are in every scope (they can never be restricted).
     """
     if not groups_by_photometry:
         return {}
-    group_ids = sorted({g for groups in groups_by_photometry.values() for g in groups})
+    point_rules = point_rules or {}
+    group_ids = {g for groups in groups_by_photometry.values() for g in groups}
+    group_ids |= {g for rules in point_rules.values() for g, effect in rules.items() if effect == 'allow'}
     out: Dict[Optional[int], List[PhotPoint]] = {None: []}
-    for gid in group_ids:
+    for gid in sorted(group_ids):
         out[gid] = []
     for p in points:
         groups = groups_by_photometry.get(p.photometry_id)
@@ -538,6 +554,10 @@ def scope_point_sets(points: Sequence[PhotPoint], groups_by_photometry: Dict[int
             for bucket in out.values():
                 bucket.append(p)
             continue
+        rules = point_rules.get(p.point_id) if p.point_id is not None else None
+        if rules:
+            groups = (set(groups) - {g for g, e in rules.items() if e == 'deny'}) | {
+                g for g, e in rules.items() if e == 'allow'}
         for gid in groups:
             out[gid].append(p)
     return out
@@ -568,11 +588,15 @@ def sync_scopes(transient_ids: Sequence[int], grouped_points: Optional[Dict[int,
         return result
     if grouped_points is None:
         grouped_points = points_by_transient([tid for tid in ids if tid in groups])
+    from YSE_App.services import access_rules
+
+    point_rules = access_rules.point_group_rules([t for t in ids if t in groups]) if access_rules.enabled() else {}
     to_create: List[TransientPhotStatScope] = []
     to_update: List[TransientPhotStatScope] = []
     for tid in ids:
         result.transients += 1
-        for gid, pts in scope_point_sets(grouped_points.get(tid, []), groups.get(tid, {})).items():
+        for gid, pts in scope_point_sets(grouped_points.get(tid, []), groups.get(tid, {}),
+                                         point_rules.get(tid)).items():
             key = scope_key_for_group(gid)
             row = existing.pop((tid, key), None)
             values = compute_stats(pts)
@@ -727,3 +751,36 @@ def schedule_recompute(transient_id: Optional[int] = None, *, photometry_id: Opt
         recompute(transient_id, create=create)
     except Exception:
         logger.exception('photstat recompute failed for transient %s', transient_id)
+
+
+# ---------------------------------------------------- access rules (#648)
+
+
+def invalidate_scopes(pairs) -> int:
+    """Delete the scope rows of ``(transient_id, group_id)`` pairs whose group's access changed; queue a rebuild.
+
+    Until the rebuild (the ``photstat.sync_scopes`` job) runs, viewers who
+    relied on those rows see the next best scope or no derived values, never
+    stale ones. Returns the number of rows deleted.
+    """
+    from YSE_App.models.phot_stat_models import TransientPhotStatScope
+
+    by_group: Dict[int, set] = {}
+    for tid, gid in pairs:
+        if tid is not None and gid is not None:
+            by_group.setdefault(int(gid), set()).add(int(tid))
+    if not by_group:
+        return 0
+    deleted = 0
+    transients = set()
+    for gid, tids in sorted(by_group.items()):
+        tids = sorted(tids)
+        transients.update(tids)
+        for i in range(0, len(tids), DEFAULT_BATCH_SIZE):
+            n, _ = TransientPhotStatScope.objects.filter(
+                group_id=gid, transient_id__in=tids[i:i + DEFAULT_BATCH_SIZE]).delete()
+            deleted += n
+    from YSE_App.services import photstat_jobs
+
+    photstat_jobs.queue_scope_sync(sorted(transients))
+    return deleted
