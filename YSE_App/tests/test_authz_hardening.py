@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 from unittest import mock
 
 from django.conf import settings
@@ -190,6 +191,24 @@ class UserScopedViewsetTests(AuthzBase):
         self.assertEqual(view.get_queryset().count(), 0)
         with self.assertRaises(PermissionDenied):
             view.perform_create(mock.Mock(validated_data={"profile": profile}))
+
+
+class UploadFlagDefaultTests(AuthzBase):
+    def test_upload_checks_default_on_and_can_be_turned_off(self):
+        from YSE_PZ import settings as project_settings
+
+        with mock.patch.dict(os.environ, {"YSE_NO_SUCH_FLAG": ""}):
+            self.assertTrue(project_settings._authz_flag("YSE_NO_SUCH_FLAG", "NO_SUCH_FLAG", default=True))
+            self.assertFalse(project_settings._authz_flag("YSE_NO_SUCH_FLAG", "NO_SUCH_FLAG"))
+        with mock.patch.dict(os.environ, {"YSE_NO_SUCH_FLAG": "0"}):
+            self.assertFalse(project_settings._authz_flag("YSE_NO_SUCH_FLAG", "NO_SUCH_FLAG", default=True))
+
+    def test_checks_apply_without_an_override(self):
+        # On unless the stack's settings.ini or env turns it off.
+        if not settings.UPLOAD_GROUP_CHECKS_ENFORCED:
+            self.skipTest("this environment turns the upload checks off")
+        self.assertIsNotNone(bulk_ingest_denial(self.member))
+        self.assertIsNone(bulk_ingest_denial(self.service))
 
 
 class UploadDenialTests(AuthzBase):
