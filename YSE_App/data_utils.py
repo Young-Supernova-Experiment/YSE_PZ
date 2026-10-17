@@ -1542,7 +1542,7 @@ def _query_api_filter_visible_rows(user, field_names, rows):
     (the personal-dashboard convention). Rows that do not resolve to a visible
     transient are dropped.
     """
-    from YSE_App.services.visibility import filter_transients_by_user_access
+    from YSE_App.services.visibility import filter_listed_transients
 
     if not rows:
         return rows
@@ -1558,11 +1558,11 @@ def _query_api_filter_visible_rows(user, field_names, rows):
     if by_pk:
         keys = {k for k in keys if isinstance(k, int)}
         base = Transient.objects.filter(pk__in=keys)
-        visible = set(filter_transients_by_user_access(user, base).values_list('pk', flat=True))
+        visible = set(filter_listed_transients(user, base).values_list('pk', flat=True))
     else:
         keys = {k for k in keys if isinstance(k, str)}
         base = Transient.objects.filter(name__in=keys)
-        visible = set(filter_transients_by_user_access(user, base).values_list('name', flat=True))
+        visible = set(filter_listed_transients(user, base).values_list('name', flat=True))
     return [row for row in rows if row[idx] in visible]
 
 
@@ -1596,8 +1596,8 @@ def query_api(request,query_name):
         try: transients = yse_python_queries.run_python_query(title)
         except KeyError: raise Http404('Invalid Query')
         if filter_rows:
-            from YSE_App.services.visibility import filter_transients_by_user_access
-            transients = filter_transients_by_user_access(request.user, transients)
+            from YSE_App.services.visibility import filter_listed_transients
+            transients = filter_listed_transients(request.user, transients)
         field_names = ('transient_id', 'transient_name', 'transient_ra', 'transient_dec')
         field_vals = [(t.id, t.name, t.ra, t.dec) for t in transients]
 

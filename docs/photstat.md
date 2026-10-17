@@ -68,6 +68,18 @@ Indexes: `peak_mag`, `last_detected_mjd`, `last_detected_mag`, `last_obs_date`, 
 * `manage.py rebuild_photstats` for the backfill and for repairs (below); `--stale-only` after a rules change
   (`SCHEMA_VERSION` bump) reads photometry only for missing or outdated rows.
 
+## Per-scope rows (`YSE_App_transientphotstatscope`, #607)
+
+A transient with photometry restricted to collaboration groups also gets one `TransientPhotStatScope` row
+for its public photometry (`scope_key = 'public'`) and one per restricting group (`g<group id>`: the public
+photometry plus every set shared with that group), with the same columns as the all-data row (no Bazin
+columns). A viewer who may not see all of a transient's photometry is shown the best scope they may see
+(`services/photstat_visibility.py`; the policy is in `docs/transient-search.md`). Every recompute above also
+syncs the scope rows (two extra reads; writes only on change), and `m2m_changed` on
+`TransientPhotometry.groups` recomputes when a set's groups change. `manage.py backfill_photstat_scopes`
+(dry run unless `--apply`) writes the rows for existing data and repairs them after changes that bypass the
+signals (a group deleted in the admin, or a recompute by a stack running older code on the shared database).
+
 ## Surfaces
 
 * Transient detail, Summary tab, "Photometric Summary": a **Peak Mag** row (date, mag, filter) and, right

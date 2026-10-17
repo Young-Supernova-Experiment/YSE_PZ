@@ -87,7 +87,7 @@ from .services.night_astro import calendar_sun_times, twilight_times
 from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
-from YSE_App.services.visibility import filter_transients_by_user_access
+from YSE_App.services.visibility import filter_listed_transients
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_http_methods
 from django.template import RequestContext
@@ -175,13 +175,14 @@ def _main_dashboard_defer_enabled():
 
 def _dashboard_section_tuple(request, title, statusname, status_by_name):
     status = status_by_name.get(statusname)
+    # Only the objects the user may see listed (#607).
     if status:
         transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(status=status).order_by('-disc_date')
+            filter_listed_transients(request.user, Transient.objects.filter(status=status)).order_by('-disc_date')
         )
     else:
         transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(status=None).order_by('-disc_date')
+            filter_listed_transients(request.user, Transient.objects.filter(status=None)).order_by('-disc_date')
         )
     transientfilter = TransientFilter(
         request.GET, queryset=transients, prefix=statusname.lower()
@@ -387,12 +388,10 @@ def _personaldashboard_visible_pks_by_name(user, names):
     ``name IN (...)`` list, and the visibility rule is applied here for both the
     deferred and the synchronous paths (#452).
     """
-    from YSE_App.services.visibility import filter_transients_by_user_access
-
     by_name = {}
     if not names:
         return by_name
-    visible = filter_transients_by_user_access(
+    visible = filter_listed_transients(  # the listing rule (#607)
         user, Transient.objects.filter(name__in=set(names))
     )
     for name, pk in visible.values_list('name', 'pk'):
@@ -421,9 +420,7 @@ def _personaldashboard_section_queryset(pks_by_name, names):
 
 def _personaldashboard_python_query_transients(request, python_query):
     """Rows of a saved Python query that the user may see (same rule as SQL sections)."""
-    from YSE_App.services.visibility import filter_transients_by_user_access
-
-    return filter_transients_by_user_access(
+    return filter_listed_transients(
         request.user, yse_python_queries.run_python_query(python_query)
     )
 
@@ -653,7 +650,7 @@ def transient_summary(request,status_or_query_name,
             except KeyError:
                 raise Http404('Invalid Query')
 
-    transients = filter_transients_by_user_access(request.user, transients)  # collaboration visibility (#547)
+    transients = filter_listed_transients(request.user, transients)  # the listing rule (#547, #607)
     sort = request.GET.get('sort', '')
     if sort and (sort[1:] if sort.startswith('-') else sort) not in _TRANSIENT_SUMMARY_SORT_FIELDS:
         sort = ''  # unknown sort field (#506): keep the default order
@@ -664,7 +661,7 @@ def transient_summary(request,status_or_query_name,
             from YSE_App.table_utils import order_by_recent_phot
 
             transients = order_by_recent_phot(
-                transients, sort.lstrip('-'), sort.startswith('-')
+                transients, sort.lstrip('-'), sort.startswith('-'), user=request.user
             )
         else:
             transients = transients.order_by(sort)
@@ -1405,17 +1402,18 @@ def download_target_list(request, telescope, obs_date):
     follow_requests = list(follow_requests)
     observatory = classical_obs_date.resource.telescope.observatory
     night_mjd = local_midnight_mjd(classical_obs_date.obs_date, observatory.utc_offset if observatory else 0)
-    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests], night_mjd)
+    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests], night_mjd, user=request.user)
+    recent_mags = _visible_recent_mags(request.user, [f.transient for f in follow_requests])
 
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     for f in follow_requests:
         comments = format_comments(f)
         bazin = bazin_mags.get(f.transient_id)
         bazin_str = "bazin_mag = %.2f %s " % (bazin[0], display_filter_label(bazin[1])) if bazin else ""
-        if f.transient.recent_mag():
+        if recent_mags.get(f.transient_id):
             content += "%s  %s %s 2000 mag = %.2f %scomment = %s\n"%(
                 f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),
-                f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()),bazin_str,comments)
+                f.transient.CoordString()[1].replace(':',' '),float(recent_mags[f.transient_id]),bazin_str,comments)
 
         else:
             content += "%s  %s %s 2000 %scomment = %s\n"%(
@@ -1426,6 +1424,30 @@ def download_target_list(request, telescope, obs_date):
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_%s.txt'%(telescope,obs_date)
 
     return response
+
+def _visible_recent_mags(user, transients):
+    """``{transient_id: magnitude text or None}`` for star lists, from photometry ``user`` may see (#607).
+
+    ``Transient.recent_mag()`` (the newest unflagged magnitude) when none of
+    the transient's photometry is hidden from ``user``; otherwise the last
+    detection of the best scope the user may see.
+    """
+    from YSE_App.services.photstat_visibility import visible_stats
+    from YSE_App.services.visibility import transients_with_hidden_photometry
+
+    transients = [t for t in transients if t is not None]
+    hidden = transients_with_hidden_photometry(user, [t.pk for t in transients])
+    scoped = visible_stats(user, hidden) if hidden else {}
+    out = {}
+    for t in transients:
+        if t.pk in hidden:
+            row = scoped.get(t.pk)
+            mag = getattr(row, 'last_detected_mag', None)
+            out[t.pk] = '%.2f' % mag if mag is not None else None
+        else:
+            out[t.pk] = t.recent_mag()
+    return out
+
 
 @login_required
 def download_targets_and_finders(request, telescope, obs_date):
@@ -1454,8 +1476,10 @@ def download_targets_and_finders(request, telescope, obs_date):
     # loaded at the telescope carries the offsets with their targets (#560).
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     findernamelist = []
+    follow_requests = list(follow_requests)
+    recent_mags = _visible_recent_mags(request.user, [f.transient for f in follow_requests])
     for f in follow_requests:
-        recent_mag = f.transient.recent_mag()
+        recent_mag = recent_mags.get(f.transient_id)
         mag_str = "mag = %.2f" % float(recent_mag) if recent_mag else ""
         content += "%s  %s %s 2000 %s\n"%(
             f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '),mag_str)
@@ -1939,9 +1963,10 @@ def transient_detail(request, slug):
         # A transient the backfill has not reached yet gets its row computed
         # here, once, from its own photometry (#345); a failure renders the
         # block empty rather than failing the page.
-        from YSE_App.services.photstat import stat_for_transient
+        # Only from the photometry this user may see (#607).
+        from YSE_App.services.photstat_visibility import visible_stat
 
-        context['photstat'] = stat_for_transient(transient_obj.id)
+        context['photstat'] = visible_stat(request.user, transient_obj.id)
 
         # "Working on this" interests box (#290) and the restricted-data hints (#293).
         from YSE_App.collaboration_views import collaboration_context
@@ -2327,15 +2352,11 @@ def download_bulk_photometry(request, query_title):
     query = Query.objects.filter(title=unquote(query_title))
     if len(query):
         transients = Transient.objects.filter(name__in=run_explorer_query_cached(query[0])).order_by('-disc_date')
-        from YSE_App.services.visibility import filter_transients_by_user_access
-
-        transients = filter_transients_by_user_access(user, transients)
+        transients = filter_listed_transients(user, transients)
 
     elif query_title in yse_python_queries.python_query_reg.all:
-        from YSE_App.services.visibility import filter_transients_by_user_access
-
         transients = yse_python_queries.run_python_query(query_title)
-        transients = filter_transients_by_user_access(user, transients)
+        transients = filter_listed_transients(user, transients)
     else:
         raise Http404('Invalid Query')
 
@@ -2590,10 +2611,16 @@ def delete_followup_request(request, request_id):
 SEARCH_PER_PAGE_CHOICES = (25, 50, 100, 200)
 
 
-def search_results_queryset():
-    """Base queryset for the search page: the dashboard annotations plus the FKs the table shows."""
+def search_results_queryset(user=None):
+    """Base queryset for the search page: the dashboard annotations plus the FKs the table shows.
+
+    With ``user``, only the objects that user may see listed (#607).
+    """
+    qs = Transient.objects.all()
+    if user is not None:
+        qs = filter_listed_transients(user, qs)
     return annotate_dashboard_transient_fields(
-        Transient.objects.select_related('best_spec_class').order_by('-disc_date', '-pk')
+        qs.select_related('best_spec_class').order_by('-disc_date', '-pk')
     )
 
 
@@ -2621,7 +2648,8 @@ class SearchResultsView(TemplateView):
 
         context = super().get_context_data(**kwargs)
         params = quick_search_params(self.request.GET)
-        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(), request=self.request)
+        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(self.request.user),
+                                             request=self.request)
         cone = filterset.cone
 
         try:
@@ -2795,8 +2823,8 @@ def search_bulk_action(request):
     for the first two, ``params`` (the search's query string) and either one
     ``transient_id`` per ticked row or ``select_all=1`` for every match of
     ``params``. Needs POST and the CSRF token (the global middleware). Only
-    transients the user may see (``filter_transients_by_user_access``, the
-    rule of the API and the dashboard) are touched, whatever ids were posted;
+    transients the user may see listed (``filter_listed_transients``, the
+    rule of the API and the dashboard, #607) are touched, whatever ids were posted;
     changing a status or tag is open to any logged-in user, as the status
     dropdown and ``PATCH /api/transients/`` are.
     """
@@ -2838,7 +2866,7 @@ def search_bulk_action(request):
     if not pks:
         return _search_bulk_redirect(params, 'No transients selected.')
 
-    rows = filter_transients_by_user_access(request.user, Transient.objects.filter(pk__in=pks))
+    rows = filter_listed_transients(request.user, Transient.objects.filter(pk__in=pks))
     visible_pks = list(rows.values_list('pk', flat=True))
 
     if action == 'photometry':
@@ -2874,14 +2902,18 @@ def search_export_csv(request):
     filterset = TransientSearchFilterSet(params, queryset=Transient.objects.all(), request=request)
     if not filterset.is_valid():
         return HttpResponse('Invalid search: %s' % filterset.form.errors.as_text(), status=400, content_type='text/plain')
-    qs = filter_transients_by_user_access(request.user, filterset.qs)
+    qs = filter_listed_transients(request.user, filterset.qs)
+    # Stat columns as the user may see them (#607): the values the table shows.
+    from YSE_App.services.photstat_visibility import STAT_EXPORT_FIELDS, annotate_stat_fields
+
+    qs, stat = annotate_stat_fields(qs, request.user, STAT_EXPORT_FIELDS)
     columns = [
         ('name', 'name'), ('ra', 'ra'), ('dec', 'dec'), ('gal_l', 'gal_l'), ('gal_b', 'gal_b'),
         ('disc_date', 'disc_date'), ('status', 'status__name'), ('obs_group', 'obs_group__name'),
         ('best_spec_class', 'best_spec_class__name'), ('photo_class', 'photo_class__name'),
         ('redshift', 'redshift'), ('host_redshift', 'host__redshift'), ('mw_ebv', 'mw_ebv'),
-        ('peak_mag', 'photstat__peak_mag'), ('last_det_mag', 'photstat__last_detected_mag'),
-        ('last_det_mjd', 'photstat__last_detected_mjd'), ('num_det', 'photstat__num_det_global'),
+        ('peak_mag', stat['peak_mag']), ('last_det_mag', stat['last_detected_mag']),
+        ('last_det_mjd', stat['last_detected_mjd']), ('num_det', stat['num_det_global']),
     ]
     rows = list(qs.values_list(*[lookup for _, lookup in columns])[:SEARCH_EXPORT_MAX_ROWS + 1])
     truncated = len(rows) > SEARCH_EXPORT_MAX_ROWS

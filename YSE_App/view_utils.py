@@ -189,7 +189,7 @@ def _note_salt2_fit_failure(ax, exc, transient_id):
 SALT_FIT_NONE_TEXT = "No stored SALT3 fit yet: use Refit on the Summary tab"
 
 
-def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=None):
+def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=None, user=None):
     """Draw the last successful ``sncosmo_fit`` run (#315) instead of refitting in the request.
 
     ``series`` is ``[(bandkey, color)]`` with ``bandkey`` the ``bandpassdict``
@@ -200,7 +200,7 @@ def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, 
     """
     from YSE_App.services import fit_status
 
-    run = salt_run if salt_run is not None else fit_status.stored_salt_fit(transient_id)
+    run = salt_run if salt_run is not None else fit_status.stored_salt_fit(transient_id, user=user)
     if run is None:
         ax.add_layout(Label(
             x=10, y=280, x_units='screen', y_units='screen',
@@ -1254,9 +1254,10 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         # Filter data for this band; flagged points are their own glyph set (#84)
         band_all = (band_ids == band_id) & has_mag
         band_filter = band_all & ~flagged
-        # the SALT2 input keeps every point, as before #84
-        band_mag = mag[band_all]
-        band_mag_err = mag_err[band_all]
+        # The SALT2 input is the points the plot draws (#607, after #84): the
+        # viewer's own photometry, flagged points left out.
+        band_mag = mag[band_filter]
+        band_mag_err = mag_err[band_filter]
 
         def _summary_source(sel):
             n = int(sel.sum())
@@ -1300,8 +1301,8 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         legend_items.append((legend_label, [plot], _band_column_key(band_obj)))
 
         # SALT2 processing
-        if salt2 and str(band_obj.name) in bandpassdict.keys():
-            salt2mjd.append(mjd[band_all])
+        if salt2 and str(band_obj.name) in bandpassdict.keys() and band_filter.any():
+            salt2mjd.append(mjd[band_filter])
             flux_single = 10 ** (-0.4 * (band_mag - 27.5))
             flux.append(flux_single)
             fluxerr.append(flux_single * band_mag_err * 0.4 * np.log(10))
@@ -1444,7 +1445,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         # The SALT3 overlay is the stored run's curves (#315): cheap and
         # deterministic per run, so it is cached under the run's id.
         from YSE_App.services import fit_status
-        salt_run = fit_status.stored_salt_fit(transient_id)
+        salt_run = fit_status.stored_salt_fit(transient_id, user=request.user)
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
@@ -1714,7 +1715,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
             color = band_display_color(bn, bc, fallback_index=count)
             count += 1
             series.append(('Band: %s - %s' % (inn, bn), color))
-        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=salt_run)
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=salt_run,
+                                 user=request.user)
 
     # the plot stays the first root (the page and the tests read it); the
     # "Show flagged" button follows it
@@ -2002,7 +2004,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 color = colorlist[count % len(np.unique(colorlist))]
                 count += 1
             series.append((str(bs), color))
-        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=True)
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=True, user=request.user)
 
     g = file_html(ax,CDN,"my plot")
     return HttpResponse(g.replace('width: 90%','width: 100%'))

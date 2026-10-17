@@ -12,11 +12,12 @@ from rest_framework.reverse import reverse
 from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
-from YSE_App.services.visibility import filter_transients_by_user_access
+from YSE_App.services.visibility import filter_listed_transients, filter_transients_by_user_access
 from YSE_App.filters.transient_search import TransientSearchFilterSet
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
+from django_filters.constants import EMPTY_VALUES
 
 
 def _truthy(value) -> bool:
@@ -868,7 +869,8 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         qs = Transient.objects.all()
-        qs = filter_transients_by_user_access(self.request.user, qs)
+        # The listing rule of the search page and the dashboards (#607).
+        qs = filter_listed_transients(self.request.user, qs)
         # Prefetch tags so the list does not run a query per row (#456).
         return qs.prefetch_related('tags')
 
@@ -1178,24 +1180,87 @@ class PlannerSolveAPIView(generics.GenericAPIView):
 
 
 ### `TransientPhotStat` (per-transient photometry statistics, #268) ###
+def _photstat_api_viewer(filter_):
+    """The requesting user when the PhotStat API values must be scoped for them (#607), else None."""
+    from YSE_App.services.visibility import user_sees_everything
+
+    request = getattr(filter_.parent, 'request', None)
+    user = getattr(request, 'user', None)
+    if user is None or user_sees_everything(user):
+        return None
+    return user
+
+
+def _photstat_api_alias(qs, user, field):
+    """``(qs, name)``: the stat column ``field`` of each row as ``user`` may see it."""
+    from YSE_App.services.photstat_visibility import alias_stat_fields
+
+    qs, names = alias_stat_fields(qs, user, [field], transient_ref='transient_id', stat_path='')
+    return qs, names[field]
+
+
+class _ScopedStatNumberFilter(django_filters.NumberFilter):
+    """A PhotStat API filter on the values the user may see (#607)."""
+
+    def filter(self, qs, value):
+        user = _photstat_api_viewer(self)
+        if value in EMPTY_VALUES or user is None:
+            return super().filter(qs, value)
+        qs, name = _photstat_api_alias(qs, user, self.field_name)
+        return qs.filter(**{'%s__%s' % (name, self.lookup_expr): value})
+
+
+class _ScopedBandNameFilter(django_filters.CharFilter):
+    """``<band>__name`` on the band of the row the user may see (#607)."""
+
+    def filter(self, qs, value):
+        user = _photstat_api_viewer(self)
+        if value in EMPTY_VALUES or user is None:
+            return super().filter(qs, value)
+        qs, name = _photstat_api_alias(qs, user, self.field_name.split('__')[0] + '_id')
+        return qs.filter(**{name + '__in': PhotometricBand.objects.filter(name=value).values('pk')})
+
+
+class _ScopedStatOrderingFilter(django_filters.OrderingFilter):
+    """Ordering on the values the user may see; ``last_updated`` becomes the id for them (#607)."""
+
+    def filter(self, qs, value):
+        user = _photstat_api_viewer(self)
+        if user is None or not value or not any(value):
+            return super().filter(qs, value)
+        ordering = []
+        for param in value:
+            if not param:
+                continue
+            path = self.get_ordering_value(param)
+            desc = path.startswith('-')
+            field = path.lstrip('-')
+            if field == 'last_updated':
+                name = 'pk'
+            else:
+                qs, name = _photstat_api_alias(qs, user, field)
+            ordering.append(('-' if desc else '') + name)
+        return qs.order_by(*ordering) if ordering else qs
+
+
 class TransientPhotStatFilter(django_filters.FilterSet):
     transient_name = django_filters.CharFilter(field_name="transient__name")
-    peak_mag_lte = django_filters.NumberFilter(field_name="peak_mag", lookup_expr='lte')
-    peak_mag_gte = django_filters.NumberFilter(field_name="peak_mag", lookup_expr='gte')
-    last_det_mag_lte = django_filters.NumberFilter(field_name="last_detected_mag", lookup_expr='lte')
-    last_det_mag_gte = django_filters.NumberFilter(field_name="last_detected_mag", lookup_expr='gte')
-    last_det_mjd_gte = django_filters.NumberFilter(field_name="last_detected_mjd", lookup_expr='gte')
-    last_det_mjd_lte = django_filters.NumberFilter(field_name="last_detected_mjd", lookup_expr='lte')
-    first_det_mjd_gte = django_filters.NumberFilter(field_name="first_detected_mjd", lookup_expr='gte')
-    first_det_mjd_lte = django_filters.NumberFilter(field_name="first_detected_mjd", lookup_expr='lte')
-    num_det_gte = django_filters.NumberFilter(field_name="num_det_global", lookup_expr='gte')
-    rise_rate_gte = django_filters.NumberFilter(field_name="rise_rate", lookup_expr='gte')
-    decay_rate_gte = django_filters.NumberFilter(field_name="decay_rate", lookup_expr='gte')
-    deepest_limit_gte = django_filters.NumberFilter(field_name="deepest_limit", lookup_expr='gte')
-    deepest_limit_band = django_filters.CharFilter(field_name="deepest_limit_band__name")
-    last_non_detection_band = django_filters.CharFilter(field_name="last_non_detection_band__name")
-    num_limits_gte = django_filters.NumberFilter(field_name="num_limits_global", lookup_expr='gte')
-    ordering = django_filters.OrderingFilter(
+    peak_mag_lte = _ScopedStatNumberFilter(field_name="peak_mag", lookup_expr='lte')
+    peak_mag_gte = _ScopedStatNumberFilter(field_name="peak_mag", lookup_expr='gte')
+    last_det_mag_lte = _ScopedStatNumberFilter(field_name="last_detected_mag", lookup_expr='lte')
+    last_det_mag_gte = _ScopedStatNumberFilter(field_name="last_detected_mag", lookup_expr='gte')
+    last_det_mjd_gte = _ScopedStatNumberFilter(field_name="last_detected_mjd", lookup_expr='gte')
+    last_det_mjd_lte = _ScopedStatNumberFilter(field_name="last_detected_mjd", lookup_expr='lte')
+    first_det_mjd_gte = _ScopedStatNumberFilter(field_name="first_detected_mjd", lookup_expr='gte')
+    first_det_mjd_lte = _ScopedStatNumberFilter(field_name="first_detected_mjd", lookup_expr='lte')
+    num_det_gte = _ScopedStatNumberFilter(field_name="num_det_global", lookup_expr='gte')
+    rise_rate_gte = _ScopedStatNumberFilter(field_name="rise_rate", lookup_expr='gte')
+    decay_rate_gte = _ScopedStatNumberFilter(field_name="decay_rate", lookup_expr='gte')
+    deepest_limit_gte = _ScopedStatNumberFilter(field_name="deepest_limit", lookup_expr='gte')
+    deepest_limit_band = _ScopedBandNameFilter(field_name="deepest_limit_band__name")
+    last_non_detection_band = _ScopedBandNameFilter(field_name="last_non_detection_band__name")
+    num_limits_gte = _ScopedStatNumberFilter(field_name="num_limits_global", lookup_expr='gte')
+    ordering = _ScopedStatOrderingFilter(
         fields=(
             'peak_mag', 'peak_mjd', 'last_detected_mag', 'last_detected_mjd',
             'first_detected_mjd', 'num_det_global', 'num_obs_global',
@@ -1215,14 +1280,39 @@ class TransientPhotStatViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = (DjangoFilterBackend,)
     filter_class = TransientPhotStatFilter
 
+    def get_serializer(self, *args, **kwargs):
+        """Rows carry the values the user may see (#607): for a transient with
+        photometry hidden from them, the best scope they may see."""
+        if args:
+            from YSE_App.services.photstat_visibility import apply_visible_values
+            from YSE_App.services.visibility import user_sees_everything
+
+            if not user_sees_everything(self.request.user):
+                data = args[0]
+                single = isinstance(data, TransientPhotStat)
+                rows = [data] if single else list(data)
+                apply_visible_values(self.request.user, rows)
+                for row in rows:
+                    # When the all-data row was last rewritten says when photometry
+                    # the user may not see changed: not reported to them.
+                    row.last_updated = None
+                args = (rows[0] if single else rows,) + tuple(args[1:])
+        return super().get_serializer(*args, **kwargs)
+
     def get_queryset(self):
+        from YSE_App.services.visibility import user_sees_everything
+
         allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
-        return (
+        qs = (
             TransientPhotStat.objects.filter(transient__in=allowed.values('pk'))
             .select_related('transient', 'first_detected_band', 'last_detected_band', 'peak_band',
                             'deepest_limit_band', 'last_non_detection_band')
-            .order_by('-last_updated', '-pk')
         )
+        # Staff: most recently rewritten first. Others: by id, an order that
+        # photometry they may not see cannot change (#607).
+        if user_sees_everything(self.request.user):
+            return qs.order_by('-last_updated', '-pk')
+        return qs.order_by('-pk')
 
 
 class AlternateTransientNamesViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
