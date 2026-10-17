@@ -73,6 +73,10 @@ class TransientSpectrum(Spectrum):
     pis = models.ManyToManyField(
         'YSE_App.PrincipalInvestigator', blank=True, related_name='transient_spectra',
         help_text='Principal investigator(s) of this spectrum.')
+    # The program (allocation) these data were taken under (#648); see TransientPhotometry.allocation.
+    allocation = models.ForeignKey(
+        'YSE_App.Allocation', null=True, blank=True, on_delete=models.SET_NULL, related_name='transient_spectra',
+        help_text='Program (allocation) these data were taken under, if known.')
 
     def __str__(self):
         return 'Spectrum: %s - %s' % (self.transient.name, self.obs_date.strftime('%m/%d/%Y'))

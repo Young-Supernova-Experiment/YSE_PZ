@@ -34,6 +34,11 @@ class TransientPhotometry(Photometry):
     pis = models.ManyToManyField(
         'YSE_App.PrincipalInvestigator', blank=True, related_name='transient_photometry',
         help_text='Principal investigator(s) of this photometry set.')
+    # The program (allocation) these data were taken under (#648); its access rules
+    # apply once DATA_ACCESS_GRANTS_ENABLED is on. Empty for unlinked / external data.
+    allocation = models.ForeignKey(
+        'YSE_App.Allocation', null=True, blank=True, on_delete=models.SET_NULL, related_name='transient_photometry',
+        help_text='Program (allocation) these data were taken under, if known.')
 
     def __str__(self):
         return 'Transient Phot: %s' % (self.transient.name)

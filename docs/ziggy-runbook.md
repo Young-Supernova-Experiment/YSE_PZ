@@ -567,7 +567,7 @@ RESEARCHER_METRICS_ENABLED: True
 
 Optional `[research]` keys (defaults): `RESEARCHER_METRICS_CRON_MINUTES: 43200`, `REQUEST_INTERVAL_SECONDS: 2.0`, `MAX_PER_RUN: 200`, `MIN_AGE_DAYS: 25`, `SCIX_API_URL: https://api.adsabs.harvard.edu/v1`.
 
-**Step D (optional, recommended): Explorer grants.** The new tables are hidden from SQL Explorer and refused by its SQL blacklist. The hard barrier is the Explorer MySQL user: if it has database-wide `SELECT`, consider replacing that with table-level grants that leave out `YSE_App_researcherprofile*`, `YSE_App_encryptedprofilevalue`, `YSE_App_profilefieldhistory`, `YSE_App_mentorship`, `YSE_App_affiliationhistory`, `YSE_App_researchermetrics`, `YSE_App_useragreement`, `YSE_App_agreementacceptance` and `YSE_App_datasharingdelegate`. Check with `SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<host>';`.
+**Step D (optional, recommended): Explorer grants.** The new tables are hidden from SQL Explorer and refused by its SQL blacklist. The hard barrier is the Explorer MySQL user: if it has database-wide `SELECT`, consider replacing that with table-level grants that leave out `YSE_App_researcherprofile*`, `YSE_App_encryptedprofilevalue`, `YSE_App_profilefieldhistory`, `YSE_App_mentorship`, `YSE_App_affiliationhistory`, `YSE_App_researchermetrics`, `YSE_App_useragreement`, `YSE_App_agreementacceptance`, `YSE_App_datasharingdelegate`, `YSE_App_dataaccessgrant` and `YSE_App_allocationdelegate`. Check with `SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<host>';`.
 
 Production: the same steps A-D after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
@@ -822,6 +822,26 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 **Re-run `--apply`** (optional) after deleting a group in the admin, or after photometry was uploaded through yse\_test while it still runs older code (both stacks share the database and only the newer code writes the scope rows).
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
+
+<a id="access-grants-schema"></a>
+
+### Access grants and program deputies, schema only (2026-10-17, #648 PR 1) migration applied by the deploy; nothing else required (flag stays off)
+
+**What changes.** Nothing visible to users yet. This is the storage for PI-controlled access rules ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648)): a rule allows or restricts one group or one user on a program (an `Allocation`), one night of a program, one photometry set or spectrum, or one night of a photometry set. Revoking a rule never deletes it. Program deputies are a separate list from the PIs' data-sharing deputies. Staff can view rules and deputies in the admin (Data access grants, Allocation delegates, and an inline on each Allocation), add a rule as an administrator, and revoke rules; rules cannot be deleted. No page, API or export reads the rules: the read path ignores them until a later PR adds the precedence engine **and** the flag below is turned on.
+
+**Migration:** `0043_data_access_grants` adds two new tables, `YSE_App_dataaccessgrant` and `YSE_App_allocationdelegate`, and one nullable, indexed column, `allocation_id`, on `YSE_App_transientphotometry` and on `YSE_App_transientspectrum` (no default needed, no data written). It is safe on the shared `YSE_test` database: develop code ignores the new tables and columns. The deploy applies it. **No new package.**
+
+**Flag, leave it off:** `DATA_ACCESS_GRANTS_ENABLED` (`[site_settings]`, or `YSE_DATA_ACCESS_GRANTS_ENABLED=1`) defaults to `False`. Do not set it yet; a later #648 PR adds the runbook step to enable it on yse\_experimental.
+
+**Explorer:** both new tables say who may see which program's data, so they are hidden from SQL Explorer and refused by its SQL blacklist. If you limited the Explorer MySQL user to table-level grants ([Step D](#onboarding), [Step E](#authz-flags)), do **not** grant `SELECT` on `YSE_App_dataaccessgrant` or `YSE_App_allocationdelegate`. The new `allocation_id` columns need nothing: they are on tables the Explorer user can already read.
+
+**Check (optional), on either stack after the deploy:**
+
+```
+<PYTHON> manage.py showmigrations YSE_App | tail -2
+```
+
+**Expected:** `[X] 0043_data_access_grants`.
 
 <a id="astroscheduler-130"></a>
 
@@ -2762,6 +2782,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-17 v67, **migration applied by the deploy; nothing else required** (flag stays off). Access grants schema ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1): migration `0043_data_access_grants` (two new tables, a nullable `allocation_id` column on transient photometry and spectra; safe on the shared database); admin pages for staff; `DATA_ACCESS_GRANTS_ENABLED` defaults off and nothing reads the rules yet; both tables hidden from SQL Explorer, leave them out of table-level Explorer grants ([section "Access grants and program deputies"](#access-grants-schema)). No new package.
 * 2026-10-16 v66, **migration applied by the deploy; one backfill required per database** (`manage.py backfill_photstat_scopes --apply`, dry run by default). One visibility policy for transient lists ([#607](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/607)): migration `0042_transient_photstat_scope` (one new table, safe on the shared database); non-staff users see TNS-named objects plus the objects whose data they may see, everywhere, and derived photometry values only from photometry they may see ([section "One visibility policy"](#transient-visibility)). Explorer grant note for table-level grants. No new package.
 * 2026-10-16 v65, optional (backfill). TNS references ([#645](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/645)): TNS-reported photometry now goes in its own `TNS` header with the TNS reference (and report ids when sent); `mark_tns_imports_public` is a dry run by default (`--apply` writes; `--dry-run` still accepted) and also tags ZTF/ATLAS forced photometry Public and sets TNS references on old imports ([section](#tns-references)). No migration.
 * 2026-10-16 v64, **required on venvs the deploy does not install**: install `astroscheduler` 1.3.0, then `collectstatic` ([#678](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/678); [section "AstroScheduler 1.3.0"](#astroscheduler-130)). No migration.

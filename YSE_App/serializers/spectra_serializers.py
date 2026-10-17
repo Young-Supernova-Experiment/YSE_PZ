@@ -21,7 +21,8 @@ class TransientSpectrumSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = TransientSpectrum
-        fields = "__all__"
+        # Every field except the program link (#648), which only a data sharer may set (PR 3).
+        exclude = ("allocation",)
         # follows the DataQuality M2M while that is in use (#81); not written through the API
         read_only_fields = ["quality_mask"]
         extra_kwargs = {
