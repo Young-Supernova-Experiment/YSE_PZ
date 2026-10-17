@@ -185,7 +185,7 @@ def _dashboard_section_tuple(request, title, statusname, status_by_name):
             filter_listed_transients(request.user, Transient.objects.filter(status=None)).order_by('-disc_date')
         )
     transientfilter = TransientFilter(
-        request.GET, queryset=transients, prefix=statusname.lower()
+        request.GET, request=request, queryset=transients, prefix=statusname.lower()
     )
     if statusname == 'New':
         table = NewTransientTable(transientfilter.qs, prefix=statusname.lower())
@@ -211,7 +211,7 @@ def dashboard(request):
             # render the (query-free) filter form so the section keeps its
             # search box like the synchronous sections and production.
             deferred_filter = TransientFilter(
-                request.GET,
+                request.GET, request=request,
                 queryset=Transient.objects.none(),
                 prefix=statusname.lower(),
             )
@@ -372,7 +372,7 @@ def _personaldashboard_configure_table(request, prefix, queryset):
     saved_get = request.GET
     request.GET = _personaldashboard_request_get(request, prefix)
     try:
-        transient_filter = TransientFilter(request.GET, queryset=queryset, prefix=prefix)
+        transient_filter = TransientFilter(request.GET, request=request, queryset=queryset, prefix=prefix)
         table = TransientTable(transient_filter.qs, prefix=prefix)
         RequestConfig(request, paginate={'per_page': 10}).configure(table)
         return table, transient_filter
@@ -457,7 +457,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 _personaldashboard_python_query_transients(request, q.python_query)
             )
             transient_filter = TransientFilter(
-                request.GET, queryset=transients, prefix=q.python_query
+                request.GET, request=request, queryset=transients, prefix=q.python_query
             )
             table = TransientTable(transient_filter.qs, prefix=q.python_query)
             RequestConfig(request, paginate={'per_page': 10}).configure(table)
@@ -973,7 +973,7 @@ def _yse_home_defer_enabled():
     return os.environ.get('YSE_HOME_DEFER', '1') != '0'
 
 
-def _yse_home_queryset(prefix):
+def _yse_home_queryset(prefix, user=None):
     """Base queryset of one yse_home table, before the per-row annotations."""
     # '-pk' breaks disc_date ties (NULL or same-day) so a page is the same set of
     # rows on every database, as the personal dashboard already orders.
@@ -983,9 +983,9 @@ def _yse_home_queryset(prefix):
     if prefix == 'yse_follow':
         return yse.order_by('-disc_date', '-pk').filter(Q(status__name='FollowupRequested') | Q(status__name='Following'))
     if prefix == 'yserise':
-        return rising_transient_queryset(ndays=7).filter(tags__name='YSE')
+        return filter_listed_transients(user, rising_transient_queryset(ndays=7, user=user).filter(tags__name='YSE'))
     if prefix == 'ysefastrise':
-        return fastrising_transient_queryset(ndays=7).filter(tags__name='YSE')
+        return filter_listed_transients(user, fastrising_transient_queryset(ndays=7, user=user).filter(tags__name='YSE'))
     if prefix == 'yseztf':
         return Transient.objects.filter(tags__name='ZTF in YSE Fields').filter(~Q(status__name='Ignore')).order_by('-disc_date', '-pk')
     raise KeyError(prefix)
@@ -1008,8 +1008,8 @@ def _yse_home_section_tuple(request, section):
     _key, prefix, anchor, table_cls = section
     # recent_mag/recent_magdate as annotations and the follow-up resource
     # columns from one prefetch, instead of ~8 queries per rendered row.
-    queryset = annotate_dashboard_transient_fields(prefetch_followup_resources(_yse_home_queryset(prefix)))
-    transientfilter = TransientFilter(request.GET, queryset=queryset, prefix=prefix)
+    queryset = annotate_dashboard_transient_fields(prefetch_followup_resources(_yse_home_queryset(prefix, request.user)))
+    transientfilter = TransientFilter(request.GET, request=request, queryset=queryset, prefix=prefix)
     table = table_cls(transientfilter.qs, prefix=prefix)
     RequestConfig(request, paginate={'per_page': 10}).configure(table)
     return (table, anchor, transientfilter)
@@ -1054,7 +1054,7 @@ def yse_home(request):
             # Table comes from /yse_home/section/<prefix>/ via AJAX; still
             # render the (query-free) filter form so the section keeps its
             # search box like the synchronous section.
-            deferred_filter = TransientFilter(request.GET, queryset=Transient.objects.none(), prefix=prefix)
+            deferred_filter = TransientFilter(request.GET, request=request, queryset=Transient.objects.none(), prefix=prefix)
             context[key] = (None, anchor, deferred_filter)
         else:
             context[key] = _yse_home_section_tuple(request, section)
