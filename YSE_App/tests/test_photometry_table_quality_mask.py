@@ -81,7 +81,8 @@ class PhotometryTableQualityMaskTests(TestCase):
         for query in ('', '?dq=good', '?dq=flagged', '?dq=all'):
             _, rows = self._rows(self.viewer, query)
             self.assertEqual(rows, set(), 'viewer must not see restricted rows with %r' % query)
-        _, rows = self._rows(self.admin, '?dq=flagged')
+        self.viewer.groups.add(private)  # a group member does see them, filtered
+        _, rows = self._rows(self.viewer, '?dq=flagged')
         self.assertEqual(rows, {self.sat.pk, self.rej.pk})
 
     def test_deferred_tab_keeps_the_filter(self):
