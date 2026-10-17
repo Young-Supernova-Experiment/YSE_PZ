@@ -139,7 +139,7 @@ endpoints (`/query_api/`, the bulk photometry download, the pointing tool) and t
   `services/visibility.py`; both are empty today.
 * Not covered: the YSE survey-planning pages (`/yse_planning/`, `/yse_sky/`, `/yse_fields/`) and the
   selection SQL of saved Explorer and Python queries still read all photometry (their table cells are
-  scoped); see the follow-up issue linked from #607.
+  scoped); follow-up #687.
 
 ## Saving a search as an SQL query (personal dashboard)
 
