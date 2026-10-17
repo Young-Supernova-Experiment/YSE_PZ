@@ -391,9 +391,16 @@ def _iso(dt) -> str:
 def build_message(transient, topic: str, *, kind: str = "discovery", reporting_group: str = "YSE",
                   authors: str = "", remarks: str = "", allowed_instruments=None, allowed_obs_groups=None,
                   classification: str = "", redshift: Optional[float] = None, max_points: int = 50,
-                  submitter: str = "") -> Dict:
-    """The Hermes ``submit_message`` document for ``transient`` (targets + photometry [+ spectroscopy])."""
+                  submitter: str = "", scope=None) -> Dict:
+    """The Hermes ``submit_message`` document for ``transient`` (targets + photometry [+ spectroscopy]).
+
+    Photometry comes only from the sets in ``scope`` (a ``sharing.report_scope.ReportScope``);
+    none given means public data only (#691).
+    """
     from YSE_App.models.phot_models import TransientPhotData
+    from YSE_App.sharing.report_scope import ReportScope
+
+    scope = scope if scope is not None else ReportScope.public_only()
 
     target = {
         "name": transient.name,
@@ -414,7 +421,8 @@ def build_message(transient, topic: str, *, kind: str = "discovery", reporting_g
         if hasattr(transient, "alternatetransientnames_set") else []
     if aliases:
         target["aliases"] = aliases
-    qs = (TransientPhotData.objects.filter(photometry__transient=transient, mag__isnull=False)
+    qs = (TransientPhotData.objects.filter(photometry__transient=transient, mag__isnull=False,
+                                           photometry_id__in=scope.photometry_ids(transient))
           .select_related("band", "photometry__instrument", "photometry__instrument__telescope", "photometry__obs_group")
           .order_by("-obs_date"))
     if allowed_instruments:
@@ -463,6 +471,8 @@ def publish_submission(submission) -> Dict:
     token = _token(credential)
     if not token:
         raise FeedError("sharing service %s has no Hermes token (credential key hermes_token)" % service.slug)
+    from YSE_App.sharing.report_scope import ReportScope
+
     payload = submission.payload if isinstance(submission.payload, dict) else {}
     hermes = payload.get("hermes") if isinstance(payload.get("hermes"), dict) else {}
     kind = hermes.get("kind") or ("classification" if submission.transient.best_spec_class_id else "discovery")
@@ -473,6 +483,7 @@ def publish_submission(submission) -> Dict:
         allowed_obs_groups=list(service.allowed_obs_groups.all()) or None,
         classification=hermes.get("classification") or "", redshift=num(hermes.get("redshift")),
         submitter=getattr(submission.created_by, "username", "") or "",
+        scope=ReportScope.for_submission(submission),
     )
     result = HermesClient(token=token).submit(message)
     uuid = str(result.get("uuid") or result.get("id") or "")

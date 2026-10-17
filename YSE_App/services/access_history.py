@@ -8,7 +8,7 @@ get points shared with it after they left.
 * :func:`record_membership_change`: every ``User.groups`` add / remove / clear
   (from either side of the relation) opens or closes a
   :class:`~YSE_App.models.GroupMembershipPeriod`. Memberships from before
-  tracking were seeded by migration 0044 with ``joined_at`` unknown.
+  tracking were seeded by migration 0045 with ``joined_at`` unknown.
 * :func:`record_dataset_share_change`: adding a group to a photometry set's or
   spectrum's own ``groups`` stores (or moves forward) its
   :class:`~YSE_App.models.DatasetGroupShare` time; removing the group deletes

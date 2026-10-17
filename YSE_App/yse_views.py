@@ -18,6 +18,7 @@ from django.core import serializers
 from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound
 from YSE_App.queries.raw_sql import DAYS_SINCE_DISC_SQL
 from YSE_App.queries.yse_python_queries import annotate_recent_mag
+from YSE_App.services.visibility import filter_listed_transients, visible_photometry_ids_q
 
 @login_required
 def select_yse_fields(request):
@@ -288,15 +289,15 @@ def yse_sky(request):
     has_transients = transients.exists()  # one existence check for both annotation steps
 
     if has_transients:
-        transients = annotate_recent_mag(transients)
+        transients = annotate_recent_mag(transients, request.user)
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
 
     if has_transients:
         transients = transients.annotate(days_since_disc=RawSQL(days_from_disc_query,())).order_by('-days_since_disc')
 
-    #	nearbytransientfilter = RisingTransientFilter(request.GET, queryset=nearby_transients,prefix='ysenearby')
-    transientfilter = RisingTransientFilter(request.GET, queryset=transients,prefix='default')
+    #	nearbytransientfilter = RisingTransientFilter(request.GET, request=request, queryset=nearby_transients,prefix='ysenearby')
+    transientfilter = RisingTransientFilter(request.GET, request=request, queryset=transients,prefix='default')
     sntable = FieldTransientTable(PageFirstQuerySet.wrap(transientfilter.qs),prefix='default')
     RequestConfig(request, paginate={'per_page': 10}).configure(sntable)
 
@@ -323,38 +324,38 @@ def msb_detail(request,msb):
 def yse_planning(request):
 
     # rising transients
-    rising_transients = rising_transient_queryset(ndays=7).filter(~Q(status__name='Ignore')).filter(~Q(tags__name='YSE'))
+    rising_transients = filter_listed_transients(request.user, rising_transient_queryset(ndays=7, user=request.user)).filter(~Q(status__name='Ignore')).filter(~Q(tags__name='YSE'))
 
-    rising_transients = annotate_recent_mag(rising_transients)
+    rising_transients = annotate_recent_mag(rising_transients, request.user)
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
     rising_transients = rising_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
-    risingtransientfilter = RisingTransientFilter(request.GET, queryset=rising_transients,prefix='yserise')
+    risingtransientfilter = RisingTransientFilter(request.GET, request=request, queryset=rising_transients,prefix='yserise')
     table_rising = FieldTransientTable(PageFirstQuerySet.wrap(risingtransientfilter.qs),prefix='yserise')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_rising)
 
     # possibly interesting transients
-    good_transients = Transient.objects.filter(~Q(status__name='Ignore'))
+    good_transients = filter_listed_transients(request.user, Transient.objects.filter(~Q(status__name='Ignore')))
 
-    good_transients = annotate_recent_mag(good_transients).filter(~Q(tags__name='YSE'))
+    good_transients = annotate_recent_mag(good_transients, request.user).filter(~Q(tags__name='YSE'))
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
     good_transients = good_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
-    goodtransientfilter = RisingTransientFilter(request.GET, queryset=good_transients,prefix='ysegood')
+    goodtransientfilter = RisingTransientFilter(request.GET, request=request, queryset=good_transients,prefix='ysegood')
     table_good = FieldTransientTable(PageFirstQuerySet.wrap(goodtransientfilter.qs),prefix='ysegood')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_good)
 
     # transients w/i 15 deg of existing fields
     nearby_transients = sne_15deg_from_yse() #qs_start=rising_transients)
 
-    nearby_transients = annotate_recent_mag(nearby_transients).filter(~Q(tags__name='YSE'))
+    nearby_transients = annotate_recent_mag(filter_listed_transients(request.user, nearby_transients), request.user).filter(~Q(tags__name='YSE'))
 
     days_from_disc_query = DAYS_SINCE_DISC_SQL
     nearby_transients = nearby_transients.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
-    nearbytransientfilter = RisingTransientFilter(request.GET, queryset=nearby_transients,prefix='ysenearby')
+    nearbytransientfilter = RisingTransientFilter(request.GET, request=request, queryset=nearby_transients,prefix='ysenearby')
     table_nearby = AdjustFieldTransientTable(PageFirstQuerySet.wrap(nearbytransientfilter.qs),prefix='ysenearby')
     RequestConfig(request, paginate={'per_page': 10}).configure(table_nearby)
 
@@ -416,6 +417,10 @@ def yse_fields(request,ra_min_hour,ra_max_hour,min_mag):
 
     brighter_than_limit = TransientPhotData.objects.filter(
         photometry__transient=OuterRef('pk'), mag__lt=mag_limit)
+    visible_points = visible_photometry_ids_q(request.user)  # None for staff (#692)
+    if visible_points is not None:
+        brighter_than_limit = brighter_than_limit.filter(visible_points)
+    qs = filter_listed_transients(request.user, qs)
 
     survey_tables = []
     for s in ztf_ids:
@@ -435,12 +440,12 @@ def yse_fields(request,ra_min_hour,ra_max_hour,min_mag):
                          Q(dec__lt = sf.dec_cen+dec_offset.degree))]
 
         query_full = functools.reduce(operator.or_, qs_list)
-        qs_final = annotate_recent_mag(qs.filter(query_full)).filter(Exists(brighter_than_limit))
+        qs_final = annotate_recent_mag(qs.filter(query_full), request.user).filter(Exists(brighter_than_limit))
 
         days_from_disc_query = DAYS_SINCE_DISC_SQL
         qs_final = qs_final.annotate(days_since_disc=RawSQL(days_from_disc_query,()))
 
-        risingtransientfilter = RisingTransientFilter(request.GET, queryset=qs_final,prefix=str(s))
+        risingtransientfilter = RisingTransientFilter(request.GET, request=request, queryset=qs_final,prefix=str(s))
         table_rising = FieldTransientTable(PageFirstQuerySet.wrap(risingtransientfilter.qs),prefix=str(s))
         RequestConfig(request, paginate={'per_page': 20}).configure(table_rising)
 

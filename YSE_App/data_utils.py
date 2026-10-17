@@ -1394,7 +1394,12 @@ def get_transient(request, slug):
 
 @login_or_basic_auth_required
 def get_rising_transients(request,ndays):
-    qs = recent_rising_transient_queryset(ndays=ndays)
+    from YSE_App.services.visibility import filter_listed_transients
+    try:
+        ndays = float(ndays)
+    except ValueError:
+        return JsonResponse({"error": "ndays must be a number"}, status=400)
+    qs = filter_listed_transients(request.user, recent_rising_transient_queryset(ndays=ndays, user=request.user))
 
     return_dict = {"transient":""}
     for transient in qs:
@@ -1452,7 +1457,8 @@ def get_host(request, ra, dec, sep):
 @login_or_basic_auth_required       
 def get_rising_transients_box(request, ra, dec, ra_width, dec_width):
 
-    qs = recent_rising_transient_queryset(ndays=5)
+    from YSE_App.services.visibility import filter_listed_transients
+    qs = filter_listed_transients(request.user, recent_rising_transient_queryset(ndays=5, user=request.user))
     ramin,ramax,decmin,decmax = getRADecBox(float(ra),float(dec),float(ra_width),float(dec_width))
     qs = qs.filter(ra__gt=ramin).filter(ra__lt=ramax).filter(dec__gt=decmin).filter(dec__lt=decmax).filter(~Q(status__name='Ignore')).filter(
         Q(status__name='New') | Q(status__name='Watch') | Q(status__name='FollowupRequested') |
