@@ -1,4 +1,4 @@
-{% load static %}
+{% load static quality_mask_extras %}
 {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows_photometry %}
 {% if diff_images %}
 <div class="col-12">
@@ -75,6 +75,11 @@
     </div>
 </div>
 {% endif %}
+<div class="yse-dq-filter btn-group" role="group" aria-label="Filter photometry by data quality" style="margin-bottom:8px">
+    <a href="?dq=all#photometry_tab" data-dq="all" class="btn btn-default btn-sm{% if dq_filter|default:'all' == 'all' %} active{% endif %}">All</a>
+    <a href="?dq=good#photometry_tab" data-dq="good" class="btn btn-default btn-sm{% if dq_filter == 'good' %} active{% endif %}">Good only</a>
+    <a href="?dq=flagged#photometry_tab" data-dq="flagged" class="btn btn-default btn-sm{% if dq_filter == 'flagged' %} active{% endif %}">Flagged only</a>
+</div>
 <table class="table table-bordered table-striped">
     <thead>
         <tr>
@@ -98,7 +103,9 @@
             <td>{{allphot.band.name}}</td>
             <td>{{allphot.band.instrument.name}}</td>
             <td class="yse-data-pis">{{ allphot.photometry.pis.all|join:", "|default:"—" }}</td>
-            <td>{{ allphot.data_quality.all|join:"," }}</td>
+            <td>
+                {% for flag in allphot.quality_mask|phot_mask_flags %}<span class="label label-default yse-mask-bit" title="quality_mask bit">{{ flag }}</span> {% endfor %}
+            </td>
         </tr>
     {% endfor %}
     </tbody>

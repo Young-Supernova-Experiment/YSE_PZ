@@ -1686,6 +1686,23 @@ def transient_detail_resources_fragment(request, transient_id):
     )
 
 
+def _apply_dq_filter(photdata, dq):
+    """Photometry table filter (#85): ``dq`` is 'good' (no legacy-flagged bit), 'flagged' or anything else for all.
+
+    Uses the same "good data" definition as the readers (legacy_good, spec v7).
+    Only narrows rows the caller is already allowed to see.
+    """
+    if dq == 'good':
+        return photdata.filter(legacy_good('TransientPhotData'))
+    if dq == 'flagged':
+        return photdata.exclude(legacy_good('TransientPhotData'))
+    return photdata
+
+
+def _clean_dq(value):
+    return value if value in ('good', 'flagged') else 'all'
+
+
 @login_required
 def transient_detail_photometry_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
@@ -1708,9 +1725,11 @@ def transient_detail_photometry_fragment(request, transient_id):
     )
     from YSE_App.collaboration_views import data_access_context
 
+    dq = _clean_dq(request.GET.get('dq'))
     ctx = {
         'transient': transient_obj,
-        'allphotdata': allphotdata,
+        'allphotdata': _apply_dq_filter(allphotdata, dq),
+        'dq_filter': dq,
         'diff_images': diff_images,
     }
     ctx.update(data_access_context(request, transient_obj, kinds=('photometry',)))
@@ -1944,7 +1963,9 @@ def transient_detail(request, slug):
             context['first_filter'] = firstphotdata.band
             context['first_magdate'] = firstphotdata.obs_date
             if allphotdata is not None:
-                context['allphotdata']=allphotdata
+                dq = _clean_dq(request.GET.get('dq'))
+                context['allphotdata'] = _apply_dq_filter(allphotdata, dq)
+                context['dq_filter'] = dq
         if transient_obj.postage_stamp_file:
             context['qub_candidate'] = transient_obj.postage_stamp_file.split('/')[-1].split('_')[0]
             

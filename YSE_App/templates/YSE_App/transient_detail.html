@@ -674,6 +674,27 @@
             "JWST (lookup failed)"
         );
 
+        /* ?dq=good|flagged on the page survives the deferred photometry load (#85). */
+        function yseDqQuery() {
+            var m = /[?&]dq=(good|flagged)(?:&|$)/.exec(window.location.search);
+            return m ? '?dq=' + m[1] : '';
+        }
+        /* Filter buttons reload just the photometry fragment and keep the URL in step. */
+        $(document).on('click', '#photometry_deferred_tables .yse-dq-filter a', function(e) {
+            e.preventDefault();
+            var dq = $(this).data('dq');
+            var q = (dq === 'good' || dq === 'flagged') ? '?dq=' + dq : '';
+            var $c = $('#photometry_deferred_tables');
+            $.get("{% url 'transient_detail_photometry_fragment' transient.id %}" + q).done(function(html) {
+                $c.html(html);
+                if (window.history && history.replaceState) {
+                    history.replaceState(null, '', window.location.pathname + q + '#photometry_tab');
+                }
+            }).fail(function() {
+                $c.prepend('<p class="text-danger">Failed to apply the filter.</p>');
+            });
+        });
+
         var yseDetailFragmentsLoaded = {};
         function yseLoadDetailFragment(key, url, selector) {
             var $c = $(selector);
@@ -688,7 +709,7 @@
             }
             yseDetailFragmentsLoaded[key] = true;
             $c.html('<p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Loading…</p>');
-            $.get(url).done(function(html) {
+            $.get(key === 'photometry' ? url + yseDqQuery() : url).done(function(html) {
                 $c.html(html);
                 if (key === 'followup_requests' && $.fn.boxWidget) {
                     $('.followupbox').boxWidget();
