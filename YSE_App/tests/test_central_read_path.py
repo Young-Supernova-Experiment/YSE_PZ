@@ -344,11 +344,20 @@ class HookShapeTests(_Fixture):
                 self.assertTrue({s.pk for s in public_spec} <= visible)
                 self.assertNotIn(self.transients["public"].pk,
                                  transients_with_hidden_photometry(user, [self.transients["public"].pk]))
-        # Public-only data stays visible to a Public member, and never widens to others.
+        # Public-only data stays visible to a Public member (every account joins Public on creation).
         self.assertIn(publicgrp_phot.pk,
                       _pks(TransientPhotometry.objects.filter(photometry_visible_q(self.public_member))))
         self.assertIn(publicgrp_spec.pk,
                       _pks(TransientSpectrum.objects.filter(spectrum_visible_q(self.public_member))))
-        self.assertNotIn(publicgrp_phot.pk,
-                         _pks(TransientPhotometry.objects.filter(photometry_visible_q(self.outsider))))
         self.assertTrue(object_visible_to_user(self.public_member, publicgrp_phot))
+        # The public guard only limits a deny: it never shows more than the group rule.
+        for label, user in self.users().items():
+            with self.subTest(user=label, check="no widening"):
+                self.assertTrue(_pks(TransientPhotometry.objects.filter(photometry_visible_q(user)))
+                                <= _pks(_old_phot(user)))
+                self.assertTrue(_pks(TransientSpectrum.objects.filter(spectrum_visible_q(user)))
+                                <= _pks(_old_spec(user)))
+        # Without Public membership, Public-only data is not protected (it was never visible).
+        self.public_member.groups.remove(self.public)
+        self.assertNotIn(publicgrp_phot.pk,
+                         _pks(TransientPhotometry.objects.filter(photometry_visible_q(self.public_member))))
