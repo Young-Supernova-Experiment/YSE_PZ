@@ -200,9 +200,10 @@ class YSE_PA:
                     [transients_4best_ra,transients_3best_ra,transients_2best_ra,transients_best_ra],
                     [transients_4best_dec,transients_3best_dec,transients_2best_dec,transients_best_dec]):
                 for transient,tra,tdec in zip(transient_list,transient_ra,transient_dec):
-                    cmd = "echo %.7f %.7f | %s in=sky out=cell ra=%.7f dec=%.7f pa=%.1f dx=0 dy=0 dpa=0 sc=38.856"%(
-                        tra,tdec,self.options.pscoords,msb_ras[0],msb_decs[0],pa)
-                    output = subprocess.check_output(cmd, shell=True)
+                    cmd = [self.options.pscoords, 'in=sky', 'out=cell', 'ra=%.7f' % msb_ras[0], 'dec=%.7f' % msb_decs[0],
+                           'pa=%.1f' % pa, 'dx=0', 'dy=0', 'dpa=0', 'sc=38.856']
+                    # argument list, no shell; the coordinates go in on stdin
+                    output = subprocess.check_output(cmd, input=('%.7f %.7f\n' % (tra, tdec)).encode())
                     ota,cell,centerx,centery = output.split()
                     if 'OTA'+ota.decode('utf-8') in self.goodcells.keys() and cell.decode('utf-8') in self.goodcells['OTA'+ota.decode('utf-8')]:
                         if i < 3: good_list += [transient]
@@ -290,9 +291,10 @@ class YSE_PA:
                 for transient,tra,tdec,tfield in zip(transient_list,transient_ra,transient_dec,transient_field):
                     
                     msbr,msbd = msb_ras[msb_fields == tfield][0],msb_decs[msb_fields == tfield][0]
-                    cmd = "echo %.7f %.7f | %s in=sky out=cell ra=%.7f dec=%.7f pa=%.1f dx=0 dy=0 dpa=0 sc=38.856"%(
-                        tra,tdec,self.options.pscoords,msbr,msbd,pa)
-                    output = subprocess.check_output(cmd, shell=True)
+                    cmd = [self.options.pscoords, 'in=sky', 'out=cell', 'ra=%.7f' % msbr, 'dec=%.7f' % msbd,
+                           'pa=%.1f' % pa, 'dx=0', 'dy=0', 'dpa=0', 'sc=38.856']
+                    # argument list, no shell; the coordinates go in on stdin
+                    output = subprocess.check_output(cmd, input=('%.7f %.7f\n' % (tra, tdec)).encode())
                     ota,cell,centerx,centery = output.split()
                     if 'OTA'+ota.decode('utf-8') in self.goodcells.keys() and cell.decode('utf-8') in self.goodcells['OTA'+ota.decode('utf-8')]:
                         if i < 3: good_list += [transient]

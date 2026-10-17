@@ -2,16 +2,27 @@
 # Regenerate: docker exec ysepz_web_container pip3 freeze > docker/requirements.web.lock
 # Hand-edited for the Django 3.2 target (#133 is not scheduled): Django 4.0 -> 3.2.25 and
 # astrorapid dropped. Regenerate the freeze once the GHCR image is rebuilt on these pins.
+# Also hand-edited for #539 (same pins as requirements.txt): Pillow, cryptography, urllib3,
+# certifi, djangorestframework, sqlparse, lxml, Jinja2, MarkupSafe, tornado, Werkzeug,
+# gunicorn. CI installs these into the pulled image (ci.yml) until the image is rebuilt.
+# Also hand-added for #512 (same pins as requirements.txt): django-otp, segno (two-factor
+# sign-in for staff; used only with [security] STAFF_MFA_REQUIRED). CI installs them too.
+# requests 2.25.1 / idna 2.6 stay as frozen (requests caps idna below 3).
+# astro-ghost removed by hand (#619; GHOST is no longer used). It stays installed in the
+# current image until the image is rebuilt; nothing imports it. opencv-python, seaborn,
+# joypy, imblearn, imbalanced-learn, rfpimp and mastcasjobs (needed only by astro-ghost)
+# removed by hand too (#622); TensorFlow and its pins stay (#186).
+# astroscheduler added by hand (#653; same pin as requirements.txt). CI installs it too.
 absl-py==2.1.0
 alerce==1.0.1
 antares-client==1.2.0
 asgiref==3.4.1
 asn1crypto==0.24.0
-astro-ghost==2.0.16
 astroplan==0.8
 astropy==5.0
 astropy-helpers==4.0.1
 astroquery==0.4.6
+astroscheduler @ https://github.com/UCSC-Transients/AstroScheduler/archive/refs/tags/v1.3.0.tar.gz
 astunparse==1.6.3
 attrs==21.2.0
 auditlog==0.0.5
@@ -23,14 +34,14 @@ bs4==0.0.1
 bson==0.5.10
 cachetools==4.2.2
 casjobs==0.0.2
-certifi==2020.12.5
+certifi==2026.7.22
 cffi==1.14.5
 chardet==3.0.4
 click==8.0.0
 confluent-kafka==1.7.0
 coreapi==2.3.3
 coreschema==0.0.4
-cryptography==3.4.7
+cryptography==45.0.7
 cycler==0.10.0
 Cython==0.29.23
 DateTime==4.3
@@ -45,11 +56,12 @@ django-el-pagination==3.3.0
 django-filter==2.4.0
 django-jsonfield==1.4.1
 django-jsonfield-backport==1.0.5
+django-otp==1.5.4
 django-rest-framework==0.1.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
-djangorestframework==3.13.1
+djangorestframework==3.15.1
 dustmaps==1.0.8
 extinction==0.4.5
 flatbuffers==24.3.25
@@ -58,14 +70,12 @@ google-auth==2.30.0
 google-auth-oauthlib==1.0.0
 google-pasta==0.2.0
 grpcio==1.64.1
-gunicorn==20.1.0
+gunicorn==23.0.0
 h5py==3.1.0
 healpy==1.14.0
 html5lib==1.0.1
 httpie==1.0.3
 idna==2.6
-imbalanced-learn==0.8.0
-imblearn==0.0
 iminuit==2.6.1
 importlib-metadata==4.10.0
 importlib_resources==6.4.0
@@ -75,9 +85,8 @@ ipython-genutils==0.2.0
 itypes==1.1.0
 jedi==0.18.0
 jeepney==0.6.0
-Jinja2==2.10
+Jinja2==3.1.6
 joblib==1.0.1
-joypy==0.2.5
 jsonfield==3.1.0
 keras==2.13.1
 Keras-Applications==1.0.8
@@ -87,12 +96,11 @@ keras-tcn==3.4.0
 keyring==11.0.0
 kiwisolver==1.3.1
 libclang==18.1.1
-lxml==4.6.3
+lxml==6.1.3
 Markdown==3.3.6
-MarkupSafe==1.0
+MarkupSafe==2.1.5
 marshmallow==3.12.1
 marshmallow-jsonapi==0.24.0
-mastcasjobs==0.0.6
 matplotlib==3.4.2
 matplotlib-inline==0.1.2
 mimeparse==0.1.3
@@ -100,7 +108,6 @@ mpld3==0.5.2
 mysqlclient==2.1.0
 numpy==1.22.4
 oauthlib==3.1.1
-opencv-python==4.5.5.64
 opt-einsum==3.3.0
 optional-django==0.1.0
 packaging==21.3
@@ -110,7 +117,7 @@ pbr==5.9.0
 pexpect==4.8.0
 photutils==1.1.0
 pickleshare==0.7.5
-Pillow==8.2.0
+Pillow==10.4.0
 pluggy==0.13.1
 progressbar2==3.53.1
 prompt-toolkit==3.0.18
@@ -132,17 +139,16 @@ PyYAML==5.4.1
 requests==2.25.1
 requests-mock==1.9.2
 requests-oauthlib==1.3.0
-rfpimp==1.3.7
 rsa==4.7.2
 scikit-learn==0.24.2
 scipy==1.6.3
-seaborn==0.11.1
 SecretStorage==2.3.1
+segno==1.6.6
 sfdmap==0.1.1
 six==1.15.0
 sklearn==0.0
 sncosmo==2.5.0
-sqlparse==0.4.2
+sqlparse==0.5.5
 tendo==0.2.15
 tensorboard==2.13.0
 tensorboard-data-server==0.7.2
@@ -154,16 +160,16 @@ tensorflow-io-gcs-filesystem==0.34.0
 termcolor==1.1.0
 threadpoolctl==2.1.0
 toml==0.10.2
-tornado==6.1
+tornado==6.4.2
 traitlets==5.0.5
 typeguard==2.12.1
 typing_extensions==4.0.1
 unicodecsv==0.14.1
 uritemplate==3.0.0
-urllib3==1.22
+urllib3==1.26.20
 wcwidth==0.2.5
 webencodings==0.5.1
-Werkzeug==2.0.1
+Werkzeug==3.0.6
 wget==3.2
 wrapt==1.12.1
 zipp==3.4.1

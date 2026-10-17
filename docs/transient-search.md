@@ -94,8 +94,52 @@ column itself for `annotation_origin=legacy`. Details in `docs/annotations.md`.
 * `/api/transients/?tags_all=young&tags_all=YSE&status=New&status=Watch`
 * Invalid input (an unknown status name, a cone with only RA) is a 400 with the form errors; the search
   page shows the same message above the form and renders the rest of the search.
-* Non-staff users of the API still go through `filter_transients_by_user_access` before the filters
-  (unchanged from before this work).
+* Non-staff users of the API go through the listing rule (`filter_listed_transients`, below) before the
+  filters, like the search page, the dashboards and the export.
+
+## Who sees which transients and which values (#607)
+
+One policy, in `YSE_App/services/visibility.py` (objects) and `YSE_App/services/photstat_visibility.py`
+(derived values), applied to the `/search/` table, the bulk actions and CSV export, the main and personal
+dashboards, `/api/transients/`, `/api/transientphotstats/`, the transient-summary page, the saved-query
+endpoints (`/query_api/`, the bulk photometry download, the pointing tool) and the observing-night pages.
+
+* **Listed objects** (`filter_listed_transients`): staff see everything. Anyone else sees an object when
+  it has a TNS designation (`20YYabc`, as its name or as an alias), or when they may see some of its
+  photometry or spectra (the `filter_transients_by_user_access` rule: data without groups, or shared with
+  one of their groups). Anonymous requests see nothing; scripts authenticate (token or Basic auth) and are
+  treated as their account. Name, position, status and the other basic fields are shown for every listed
+  object; photometry and spectra keep their group restrictions.
+* **Derived values** (Last Det., Last Obs., Peak Mag, the photometry filters and orderings, the
+  `/api/transientphotstats/` rows, the export's stat columns, the detail-page statistics, the Bazin
+  magnitudes and the stored SALT fit) come only from photometry the viewer may see:
+  * staff, and anyone who may see all of a transient's photometry, get the all-data `TransientPhotStat`
+    row (exact);
+  * anyone else gets a stored per-scope row, `TransientPhotStatScope`: one row for the transient's public
+    photometry and one per restricting group (public photometry plus that group's). They are shown the
+    most complete scope they may see (most unflagged points, then detections). A user in **several**
+    groups that each hide data on the same transient sees the larger single-group scope, not the union of
+    both (the combinations are not stored): their values may miss the other group's points, never include
+    data they cannot see;
+  * before `backfill_photstat_scopes --apply` has run (runbook), such a user sees no derived value for a
+    transient with restricted photometry; the detail page computes the missing rows when it is opened.
+* SQL reads (filters, sorting) use one `CASE` per column: for a viewer with no hidden photometry on the
+  row, the indexed `photstat` join as before; otherwise a correlated subquery on the scope table. Staff
+  queries are unchanged.
+* `/api/transientphotstats/` keeps its schema. For non-staff accounts the values are their scope's,
+  `last_updated` is `null` and rows are ordered by id (the time the all-data row was rewritten would say
+  when photometry they cannot see changed).
+* The Bazin magnitudes (night pages, star lists, the planner) are fitted to the viewer's photometry and
+  cached per group-access token. The stored SALT3 fit (Summary-tab overlay and values) was fitted to the
+  photometry its requester could see, so it is not shown to a viewer from whom some photometry is hidden.
+  The detail-page Bazin overlay and the summary plot's SALT fit use the points the plot draws (the
+  viewer's, unflagged).
+* AI summaries are written from collaboration-wide data, so their statistics are the public scope.
+* Read-time grants (#648) plug in at `_extra_access_grants_q` and `_extra_photometry_grants_q` in
+  `services/visibility.py`; both are empty today.
+* Not covered: the YSE survey-planning pages (`/yse_planning/`, `/yse_sky/`, `/yse_fields/`) and the
+  selection SQL of saved Explorer and Python queries still read all photometry (their table cells are
+  scoped); follow-up #687.
 
 ## Saving a search as an SQL query (personal dashboard)
 
@@ -162,11 +206,35 @@ selective time window MySQL can start from `yse_transient_gal_b_idx` instead; ei
 scan. Production `EXPLAIN` after the deploy (`docs/dashboard-performance.md`, "Checks before
 promoting") is still the go/no-go for keeping each new index.
 
+## Bulk actions and CSV export (#284, #287)
+
+* The results table has a tick box per row. "With selected" offers **Set status**, **Add tag** and
+  **Download photometry (zip)**, for the ticked rows, "All on this page", or "All N matches" (the
+  server re-runs the search; ticks are then ignored). Status and tag changes ask for confirmation.
+* `POST /search/bulk/` (fields `action`, `status_id` / `tag_id`, `params`, `transient_id` ... or
+  `select_all=1`) needs a logged-in user and the CSRF token; a GET is 405. Whatever ids are posted, only
+  transients the user may see listed (`filter_listed_transients`, the same rule as the API and the
+  dashboard; staff see all, #607) are touched. Status change is one `UPDATE` stamping
+  `modified_by`; tag add is one `INSERT IGNORE`; photometry uses the zip builder of the saved-query
+  download (`bulk_photometry_zip_response`), which also filters photometry per user. Limits: 5000 rows for
+  status/tag, 300 for photometry; over the limit nothing is done.
+* `GET /search/export/?<same query string>` downloads the search as CSV (name, coordinates, galactic
+  coordinates, discovery date, status, group, classes, redshifts, E(B-V), and the stat-row peak / latest
+  magnitude, MJD and detection count), same filters and ordering, only rows the user may see, at most
+  50000 rows (a final `# truncated` line says so). Text cells starting with `=`, `+`, `-` or `@` get a
+  leading apostrophe (spreadsheet formula injection).
+
+## Filters in `/api/schema/`
+
+Each filter carries a one-line description (`FILTER_HELP` in `filters/transient_search.py`, set as the
+filter's `help_text`), which DRF's schema view lists next to the query parameter. A test fails when a
+filter has no description. The schema stays DRF's built-in `get_schema_view`; moving to drf-spectacular
+belongs with the Django 5.2 upgrade (#601).
+
 ## Not in this change (rest of #284)
 
-* Bulk actions on results (status change, tag, photometry download) and CSV export (#287); saving a
-  search is covered above.
-* Annotation-origin filters (#319, after #317).
+* Select2 on the multi-selects, together with the tag Select2 of #86.
+* (Done in #607: the search page applies the listing rule too.)
 
 ## Tests
 

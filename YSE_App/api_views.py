@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action, api_view
 from rest_framework import generics
 from YSE_App.common import custom_viewsets
+from YSE_App.common.lookup_guard import positive_int_or_none
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from rest_framework.reverse import reverse
@@ -11,11 +12,12 @@ from rest_framework.reverse import reverse
 from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
-from YSE_App.services.visibility import filter_transients_by_user_access
+from YSE_App.services.visibility import filter_listed_transients, filter_transients_by_user_access
 from YSE_App.filters.transient_search import TransientSearchFilterSet
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
+from django_filters.constants import EMPTY_VALUES
 
 
 def _truthy(value) -> bool:
@@ -258,6 +260,23 @@ class LogViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         qs = Log.objects.all().prefetch_related("groups")
         return filter_transient_comments_for_user(qs, self.request.user)
 
+    def _owner_or_staff(self, instance):
+        user = self.request.user
+        if not (user.is_staff or user.is_superuser or instance.created_by_id == user.id):
+            raise PermissionDenied({"message": "Only the author or staff may change this comment."})
+
+    def perform_update(self, serializer):
+        self._owner_or_staff(serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._owner_or_staff(serializer.instance)
+        super().perform_partial_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._owner_or_staff(instance)
+        instance.delete()
+
 ### `Observation Task` ViewSets ###
 class TransientObservationTaskViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = TransientObservationTask.objects.all()
@@ -287,14 +306,53 @@ class YSEOnCallDateViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     permission_classes = (permissions.IsAuthenticated,)
 
 ### `Phot` ViewSets ###
-class TransientPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class PhotStatBatchMixin:
+    """Photometry writes refresh each touched transient's stat row once per request (#269).
+
+    The ``TransientPhotData`` / ``TransientPhotometry`` signals schedule a
+    ``TransientPhotStat`` recompute per saved row (and again per data-quality
+    change); inside ``photstat.deferred_updates()`` they are collected and run
+    once per transient when the request's writes are done. A POST whose body
+    is a JSON list creates every row in it (up to ``MAX_BATCH``) the same way.
+    """
+
+    MAX_BATCH = 1000
+
+    def create(self, request, *args, **kwargs):
+        if not isinstance(request.data, list):
+            return super().create(request, *args, **kwargs)
+        if len(request.data) > self.MAX_BATCH:
+            return Response(
+                {'detail': 'At most %d rows per request.' % self.MAX_BATCH},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer):
+        from YSE_App.services import photstat
+
+        with photstat.deferred_updates():
+            super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        from YSE_App.services import photstat
+
+        with photstat.deferred_updates():
+            super().perform_update(serializer)
+
+
+class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotometrySerializer
     permission_classes = (permissions.IsAuthenticated,)
     lookup_field = "id"
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser(self.request.user)
-        return allowed_phot
+        # 'pis' (#446): one query per page, not one per row (test_api_perf_auth).
+        return allowed_phot.prefetch_related('groups', 'pis')
 
 class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostPhotometrySerializer
@@ -303,15 +361,15 @@ class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot = PhotometryService.GetAuthorizedHostPhotometry_ByUser(self.request.user)
-        return allowed_phot
+        return allowed_phot.prefetch_related('groups')
 
-class TransientPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class TransientPhotDataViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedTransientPhotData_ByUser(self.request.user)
-        return allowed_phot_data
+        return allowed_phot_data.prefetch_related('data_quality')
 
 
 class HostPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -320,7 +378,7 @@ class HostPhotDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedHostPhotData_ByUser(self.request.user)
-        return allowed_phot_data
+        return allowed_phot_data.prefetch_related('data_quality')
 
 
 
@@ -362,15 +420,53 @@ class ProfileViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
 ### `UserQuery` ViewSets ###
 class UserQueryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Saved queries of the requesting user (staff see all); ``user`` is set from the request."""
     queryset = UserQuery.objects.all()
     serializer_class = UserQuerySerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = UserQuery.objects.all()
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(user=user)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(user=user, created_by=user, modified_by=user)
+
 ### `UserTelescopeToFollow` ViewSets ###
 class UserTelescopeToFollowViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+    """Followed telescopes of the requesting user's profile (staff see all)."""
     queryset = UserTelescopeToFollow.objects.all()
     serializer_class = UserTelescopeToFollowSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = UserTelescopeToFollow.objects.all()
+        if user.is_staff or user.is_superuser:
+            return qs
+        return qs.filter(profile__user=user)
+
+    def _check_profile(self, serializer):
+        user = self.request.user
+        profile = serializer.validated_data.get('profile')
+        if profile is not None and profile.user_id != user.id and not (user.is_staff or user.is_superuser):
+            raise PermissionDenied({"message": "You may only change your own followed telescopes."})
+
+    def perform_create(self, serializer):
+        self._check_profile(serializer)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._check_profile(serializer)
+        super().perform_update(serializer)
+
+    def perform_partial_update(self, serializer):
+        self._check_profile(serializer)
+        super().perform_partial_update(serializer)
 
 
 ### `Spectra` ViewSets ###
@@ -381,7 +477,8 @@ class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
-        return allowed_spec
+        # 'pis' (#446): one query per page, not one per row (test_api_perf_auth).
+        return allowed_spec.prefetch_related('groups', 'data_quality', 'pis')
 
 class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpectrumSerializer
@@ -390,7 +487,7 @@ class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         allowed_spec = SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
-        return allowed_spec
+        return allowed_spec.prefetch_related('groups', 'data_quality')
 
 class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpecDataSerializer
@@ -466,10 +563,19 @@ class FacilityRequestViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if not (user.is_staff or user.is_superuser):
             qs = qs.filter(Q(submitted_by=user) | Q(allocation__in=allocations_for_user(user, facility_only=False)))
-        for key in ("transient", "allocation", "state", "kind"):
-            value = self.request.query_params.get(key)
+        params = self.request.query_params
+        for key in ("transient", "allocation"):
+            raw = params.get(key)
+            if raw:
+                # an id from the query string: digits only, else no rows (#540)
+                pk = positive_int_or_none(raw)
+                if pk is None:
+                    return qs.none()
+                qs = qs.filter(**{key + "_id": pk})
+        for key in ("state", "kind"):
+            value = params.get(key)
             if value:
-                qs = qs.filter(**{key if key in ("state", "kind") else key + "_id": value})
+                qs = qs.filter(**{key: value})
         return qs.distinct()
 
 
@@ -763,7 +869,10 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 
     def get_queryset(self):
         qs = Transient.objects.all()
-        return filter_transients_by_user_access(self.request.user, qs)
+        # The listing rule of the search page and the dashboards (#607).
+        qs = filter_listed_transients(self.request.user, qs)
+        # Prefetch tags so the list does not run a query per row (#456).
+        return qs.prefetch_related('tags')
 
     @action(detail=False, methods=['post'], url_path='save_search')
     def save_search(self, request):
@@ -904,25 +1013,254 @@ class SummarySearchAPIView(generics.GenericAPIView):
         })
 
 
+### AstroScheduler night planner (#655, #656) ###
+def _planner_night(night_id):
+    """The classical night, or 404 (also when the planner is turned off, #654)."""
+    from YSE_App.services import night_planner
+
+    if not night_planner.enabled():
+        raise Http404("night planner is not enabled")
+    night = (
+        ClassicalObservingDate.objects
+        .select_related("resource__telescope__observatory", "night_type")
+        .filter(pk=night_id)
+        .first()
+    )
+    if night is None:
+        raise Http404("no observing night %r" % night_id)
+    return night
+
+
+class PlannerTargetsAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/<id>/planner_targets/``: the night's follow-ups that the
+    user may see, in AstroScheduler's target schema (#655)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, night_id):
+        from YSE_App.services import night_planner
+
+        from YSE_App.planner_views import _transient_url
+
+        night = _planner_night(night_id)
+        return Response(night_planner.night_targets(night, request.user, url_for=_transient_url(request)))
+
+
+class PlannerNightsAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/?days_back=7&days_ahead=60``: classical nights the user is
+    authorised for, to choose one to plan (#658)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        from YSE_App.services import night_planner
+
+        if not night_planner.enabled():
+            raise Http404("night planner is not enabled")
+
+        def bounded(name, default, top):
+            value = positive_int_or_none(request.GET.get(name))
+            return default if value is None else min(value, top)
+
+        nights = night_planner.planner_nights(
+            request.user, days_back=bounded("days_back", 7, 60), days_ahead=bounded("days_ahead", 60, 366),
+        )
+        for n in nights:
+            n["planner_targets_url"] = request.build_absolute_uri(
+                reverse("api-planner-targets", kwargs={"night_id": n["id"]}))
+            n["planner_url"] = request.build_absolute_uri(reverse("night_planner", kwargs={"night_id": n["id"]}))
+        return Response({"nights": nights})
+
+
+class NightPlansAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/<id>/plans/``: the night's saved plan versions;
+    ``POST``: save the planner's current schedule as a new version (#662)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, night_id):
+        from YSE_App.services import night_plans
+
+        night = _planner_night(night_id)
+        return Response({
+            "plans": night_plans.plan_summaries(night, request.user),
+            "can_approve": night_plans.can_approve(night, request.user),
+        })
+
+    def post(self, request, night_id):
+        from YSE_App.services import night_plans
+
+        night = _planner_night(night_id)
+        try:
+            plan = night_plans.save_plan(night, request.user, request.data)
+        except night_plans.PlanError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"id": plan.id, "version": plan.version, "state": plan.state,
+                         "blocks": plan.blocks.count()}, status=status.HTTP_201_CREATED)
+
+
+class NightPlanApproveAPIView(generics.GenericAPIView):
+    """``POST /api/night_plans/<id>/approve/``: the night's PI or staff approve a version (#663)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, plan_id):
+        from YSE_App.services import night_plans
+
+        plan = NightPlan.objects.select_related("night__resource__principal_investigator").filter(pk=plan_id).first()
+        if plan is None:
+            raise Http404("no night plan %r" % plan_id)
+        _planner_night(plan.night_id)
+        try:
+            night_plans.approve_plan(plan, request.user)
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        return Response({"id": plan.id, "version": plan.version, "state": plan.state,
+                         "approved_at": plan.approved_at})
+
+
+class NightObservationsAPIView(generics.GenericAPIView):
+    """``GET /api/observing_nights/<id>/observations/``: tonight's observed blocks;
+    ``POST``: record a planner Start / Completed / Failed / Punted (#667, #668)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, night_id):
+        from YSE_App.services import observations
+
+        night = _planner_night(night_id)
+        return Response({"observations": observations.tonight_log(night, request.user)})
+
+    def post(self, request, night_id):
+        from YSE_App.services import observations
+
+        night = _planner_night(night_id)
+        try:
+            result = observations.record_event(night, request.user, request.data)
+        except observations.ObservationError as exc:
+            return Response({"detail": str(exc)}, status=exc.status)
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class ObservedBlockAssessAPIView(generics.GenericAPIView):
+    """``POST /api/observed_blocks/<id>/assess/``: judge an observation (#672): ``success`` makes
+    the request Successful; ``failed`` / ``punted`` (with a reason) leave it alone."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, block_id):
+        from YSE_App.services import observations
+
+        block = ObservedBlock.objects.select_related("night__resource", "followup").filter(pk=block_id).first()
+        if block is None:
+            raise Http404("no observed block %r" % block_id)
+        _planner_night(block.night_id)
+        try:
+            result = observations.assess_block(block, request.user, request.data)
+        except observations.ObservationError as exc:
+            return Response({"detail": str(exc)}, status=exc.status)
+        return Response(result)
+
+
+class PlannerSolveAPIView(generics.GenericAPIView):
+    """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
+    ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, night_id):
+        from YSE_App.services import night_planner
+
+        night = _planner_night(night_id)
+        try:
+            result = night_planner.solve_for_night(night, request.data)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+
+
 ### `TransientPhotStat` (per-transient photometry statistics, #268) ###
+def _photstat_api_viewer(filter_):
+    """The requesting user when the PhotStat API values must be scoped for them (#607), else None."""
+    from YSE_App.services.visibility import user_sees_everything
+
+    request = getattr(filter_.parent, 'request', None)
+    user = getattr(request, 'user', None)
+    if user is None or user_sees_everything(user):
+        return None
+    return user
+
+
+def _photstat_api_alias(qs, user, field):
+    """``(qs, name)``: the stat column ``field`` of each row as ``user`` may see it."""
+    from YSE_App.services.photstat_visibility import alias_stat_fields
+
+    qs, names = alias_stat_fields(qs, user, [field], transient_ref='transient_id', stat_path='')
+    return qs, names[field]
+
+
+class _ScopedStatNumberFilter(django_filters.NumberFilter):
+    """A PhotStat API filter on the values the user may see (#607)."""
+
+    def filter(self, qs, value):
+        user = _photstat_api_viewer(self)
+        if value in EMPTY_VALUES or user is None:
+            return super().filter(qs, value)
+        qs, name = _photstat_api_alias(qs, user, self.field_name)
+        return qs.filter(**{'%s__%s' % (name, self.lookup_expr): value})
+
+
+class _ScopedBandNameFilter(django_filters.CharFilter):
+    """``<band>__name`` on the band of the row the user may see (#607)."""
+
+    def filter(self, qs, value):
+        user = _photstat_api_viewer(self)
+        if value in EMPTY_VALUES or user is None:
+            return super().filter(qs, value)
+        qs, name = _photstat_api_alias(qs, user, self.field_name.split('__')[0] + '_id')
+        return qs.filter(**{name + '__in': PhotometricBand.objects.filter(name=value).values('pk')})
+
+
+class _ScopedStatOrderingFilter(django_filters.OrderingFilter):
+    """Ordering on the values the user may see; ``last_updated`` becomes the id for them (#607)."""
+
+    def filter(self, qs, value):
+        user = _photstat_api_viewer(self)
+        if user is None or not value or not any(value):
+            return super().filter(qs, value)
+        ordering = []
+        for param in value:
+            if not param:
+                continue
+            path = self.get_ordering_value(param)
+            desc = path.startswith('-')
+            field = path.lstrip('-')
+            if field == 'last_updated':
+                name = 'pk'
+            else:
+                qs, name = _photstat_api_alias(qs, user, field)
+            ordering.append(('-' if desc else '') + name)
+        return qs.order_by(*ordering) if ordering else qs
+
+
 class TransientPhotStatFilter(django_filters.FilterSet):
     transient_name = django_filters.CharFilter(field_name="transient__name")
-    peak_mag_lte = django_filters.NumberFilter(field_name="peak_mag", lookup_expr='lte')
-    peak_mag_gte = django_filters.NumberFilter(field_name="peak_mag", lookup_expr='gte')
-    last_det_mag_lte = django_filters.NumberFilter(field_name="last_detected_mag", lookup_expr='lte')
-    last_det_mag_gte = django_filters.NumberFilter(field_name="last_detected_mag", lookup_expr='gte')
-    last_det_mjd_gte = django_filters.NumberFilter(field_name="last_detected_mjd", lookup_expr='gte')
-    last_det_mjd_lte = django_filters.NumberFilter(field_name="last_detected_mjd", lookup_expr='lte')
-    first_det_mjd_gte = django_filters.NumberFilter(field_name="first_detected_mjd", lookup_expr='gte')
-    first_det_mjd_lte = django_filters.NumberFilter(field_name="first_detected_mjd", lookup_expr='lte')
-    num_det_gte = django_filters.NumberFilter(field_name="num_det_global", lookup_expr='gte')
-    rise_rate_gte = django_filters.NumberFilter(field_name="rise_rate", lookup_expr='gte')
-    decay_rate_gte = django_filters.NumberFilter(field_name="decay_rate", lookup_expr='gte')
-    deepest_limit_gte = django_filters.NumberFilter(field_name="deepest_limit", lookup_expr='gte')
-    deepest_limit_band = django_filters.CharFilter(field_name="deepest_limit_band__name")
-    last_non_detection_band = django_filters.CharFilter(field_name="last_non_detection_band__name")
-    num_limits_gte = django_filters.NumberFilter(field_name="num_limits_global", lookup_expr='gte')
-    ordering = django_filters.OrderingFilter(
+    peak_mag_lte = _ScopedStatNumberFilter(field_name="peak_mag", lookup_expr='lte')
+    peak_mag_gte = _ScopedStatNumberFilter(field_name="peak_mag", lookup_expr='gte')
+    last_det_mag_lte = _ScopedStatNumberFilter(field_name="last_detected_mag", lookup_expr='lte')
+    last_det_mag_gte = _ScopedStatNumberFilter(field_name="last_detected_mag", lookup_expr='gte')
+    last_det_mjd_gte = _ScopedStatNumberFilter(field_name="last_detected_mjd", lookup_expr='gte')
+    last_det_mjd_lte = _ScopedStatNumberFilter(field_name="last_detected_mjd", lookup_expr='lte')
+    first_det_mjd_gte = _ScopedStatNumberFilter(field_name="first_detected_mjd", lookup_expr='gte')
+    first_det_mjd_lte = _ScopedStatNumberFilter(field_name="first_detected_mjd", lookup_expr='lte')
+    num_det_gte = _ScopedStatNumberFilter(field_name="num_det_global", lookup_expr='gte')
+    rise_rate_gte = _ScopedStatNumberFilter(field_name="rise_rate", lookup_expr='gte')
+    decay_rate_gte = _ScopedStatNumberFilter(field_name="decay_rate", lookup_expr='gte')
+    deepest_limit_gte = _ScopedStatNumberFilter(field_name="deepest_limit", lookup_expr='gte')
+    deepest_limit_band = _ScopedBandNameFilter(field_name="deepest_limit_band__name")
+    last_non_detection_band = _ScopedBandNameFilter(field_name="last_non_detection_band__name")
+    num_limits_gte = _ScopedStatNumberFilter(field_name="num_limits_global", lookup_expr='gte')
+    ordering = _ScopedStatOrderingFilter(
         fields=(
             'peak_mag', 'peak_mjd', 'last_detected_mag', 'last_detected_mjd',
             'first_detected_mjd', 'num_det_global', 'num_obs_global',
@@ -942,14 +1280,39 @@ class TransientPhotStatViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = (DjangoFilterBackend,)
     filter_class = TransientPhotStatFilter
 
+    def get_serializer(self, *args, **kwargs):
+        """Rows carry the values the user may see (#607): for a transient with
+        photometry hidden from them, the best scope they may see."""
+        if args:
+            from YSE_App.services.photstat_visibility import apply_visible_values
+            from YSE_App.services.visibility import user_sees_everything
+
+            if not user_sees_everything(self.request.user):
+                data = args[0]
+                single = isinstance(data, TransientPhotStat)
+                rows = [data] if single else list(data)
+                apply_visible_values(self.request.user, rows)
+                for row in rows:
+                    # When the all-data row was last rewritten says when photometry
+                    # the user may not see changed: not reported to them.
+                    row.last_updated = None
+                args = (rows[0] if single else rows,) + tuple(args[1:])
+        return super().get_serializer(*args, **kwargs)
+
     def get_queryset(self):
+        from YSE_App.services.visibility import user_sees_everything
+
         allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
-        return (
+        qs = (
             TransientPhotStat.objects.filter(transient__in=allowed.values('pk'))
             .select_related('transient', 'first_detected_band', 'last_detected_band', 'peak_band',
                             'deepest_limit_band', 'last_non_detection_band')
-            .order_by('-last_updated', '-pk')
         )
+        # Staff: most recently rewritten first. Others: by id, an order that
+        # photometry they may not see cannot change (#607).
+        if user_sees_everything(self.request.user):
+            return qs.order_by('-last_updated', '-pk')
+        return qs.order_by('-pk')
 
 
 class AlternateTransientNamesViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):

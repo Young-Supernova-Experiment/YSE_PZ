@@ -1,0 +1,17 @@
+{% extends "YSE_App/staff_mfa/base.html" %}
+{% block title %}Verification code{% endblock %}
+{% block content %}
+  <p>Enter the 6-digit code from your authenticator app (for example Duo Mobile), or one of your backup codes.</p>
+  {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+  <form action="{% url 'staff_mfa_verify' %}" method="post">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}" />
+    <div class="form-group">
+      <label for="id_token">Code</label>
+      <input id="id_token" name="token" class="form-control" type="text" autocomplete="one-time-code"
+             maxlength="32" autofocus required>
+    </div>
+    <button type="submit" class="btn btn-primary btn-block">Verify</button>
+  </form>
+  <p class="mt-3 small">Lost your phone and your backup codes? Ask a YSE_PZ administrator to reset your two-factor sign-in.</p>
+{% endblock %}

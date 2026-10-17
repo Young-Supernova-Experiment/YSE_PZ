@@ -47,9 +47,13 @@ def group_access_plot_cache_token(user: User) -> str:
 user_plot_cache_token = group_access_plot_cache_token
 
 
-def get_user_group_query(user: User):
-    """Same semantics as PhotometryService: ungrouped OR intersects user groups."""
-    names = user_group_names(user)
+def get_user_group_query(user: User, names: Optional[Iterable[str]] = None):
+    """Same semantics as PhotometryService: ungrouped OR intersects user groups.
+
+    ``names`` is the user's group names when the caller already has them, so
+    one membership query serves several group filters.
+    """
+    names = user_group_names(user) if names is None else list(names)
     no_group = Q(groups__isnull=True)
     contains_group = Q(groups__name__in=names)
     return no_group, contains_group
@@ -148,23 +152,216 @@ def log_visible_to_user(user: User, log) -> bool:
     return bool(names.intersection(obj_names))
 
 
+def transient_access_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """Condition on ``Transient`` rows: the user may see some of its photometry or spectra.
+
+    The set-based form of :func:`user_can_view_transient` for an authenticated,
+    non-staff user: a photometry set or spectrum on the transient that has no
+    collaboration groups, or shares one with the user (the
+    ``GetAuthorizedTransientPhotometry_ByUser_ByTransient`` and
+    ``GetAuthorizedTransientSpectrum_ByUser_ByTransient`` rule, flagged spectra
+    included). A transient with neither is not visible. Two correlated EXISTS
+    subqueries; the group names are read once (#451).
+    """
+    from YSE_App.models import TransientPhotometry, TransientSpectrum
+
+    no_group, contains_group = get_user_group_query(user, names=names)
+    phot_q = no_group | contains_group
+    extra = _extra_photometry_grants_q(user)
+    if extra is not None:  # read-time grants (#648)
+        phot_q |= extra
+    visible_phot = TransientPhotometry.objects.filter(
+        phot_q, transient_id=OuterRef("pk"),
+    )
+    visible_spec = TransientSpectrum.objects.filter(
+        no_group | contains_group, transient_id=OuterRef("pk"),
+    )
+    return Q(Exists(visible_phot)) | Q(Exists(visible_spec))
+
+
 def filter_transients_by_user_access(
     user: User, transients: Union[QuerySet, Iterable],
 ):
-    """Post-filter transients (e.g. after SQL Explorer) by photometry/spectrum access."""
+    """Post-filter transients (e.g. after SQL Explorer) by photometry/spectrum access.
+
+    Same rows as calling :func:`user_can_view_transient` per transient, in a
+    fixed number of queries: a QuerySet gets the :func:`transient_access_q`
+    condition (no query until it is evaluated) and an iterable of transients
+    is checked with one query for all of them. Staff and superusers see
+    everything; anonymous users see nothing.
+    """
     if user.is_staff or user.is_superuser:
         return transients
+    if isinstance(transients, QuerySet):
+        if not user.is_authenticated:
+            return transients.none()
+        return transients.filter(transient_access_q(user))
+    transients = list(transients)
+    if not user.is_authenticated or not transients:
+        return []
     from YSE_App.models import Transient
 
+    visible = set(
+        Transient.objects.filter(pk__in={t.id for t in transients})
+        .filter(transient_access_q(user))
+        .values_list("pk", flat=True)
+    )
+    return [t for t in transients if t.id in visible]
+
+
+# ----------------------------------------------------------------- listing (#607)
+#
+# Ryan's rule (issue #607, 2026-10-11): an object with a TNS name is public
+# and is always listed; any other object is listed only when the user may see
+# some of its data (``transient_access_q``); staff see everything. Basic
+# information (name, position, status) is shown for every listed object, and
+# photometry, spectra and every value derived from them keep their group
+# restrictions (``services.photstat_visibility``).
+#
+# Read-time grants (#648) plug in at ``_extra_access_grants_q`` (objects) and
+# ``_extra_photometry_grants_q`` (photometry sets): both return ``None`` today,
+# so nothing changes until #648 fills them in; the listing, data-access and
+# hidden-photometry conditions below already consult them.
+
+TNS_NAME_SQL_REGEX = r'^20[0-9]{2}[a-zA-Z]{1,5}$'
+
+
+def user_group_ids(user: User) -> List[int]:
+    if not getattr(user, 'is_authenticated', False):
+        return []
+    return list(user.groups.values_list('id', flat=True))
+
+
+def user_sees_everything(user) -> bool:
+    """Staff and superusers bypass collaboration-group restrictions."""
+    return bool(user is not None and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
+
+
+def _extra_access_grants_q(user: User) -> Optional[Q]:
+    """Extra ``Transient`` rows ``user`` may see through a per-user grant (#648); ``None`` today."""
+    return None
+
+
+def _extra_photometry_grants_q(user: User) -> Optional[Q]:
+    """Extra ``TransientPhotometry`` sets ``user`` may see through a per-user grant (#648); ``None`` today."""
+    return None
+
+
+def tns_named_q() -> Q:
+    """``Transient`` rows with a TNS designation as their name or as one of their aliases."""
+    from YSE_App.models import AlternateTransientNames
+
+    alias = AlternateTransientNames.objects.filter(
+        transient_id=OuterRef('pk'), name__regex=TNS_NAME_SQL_REGEX,
+    )
+    return Q(name__regex=TNS_NAME_SQL_REGEX) | Q(Exists(alias))
+
+
+def listed_transient_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """Condition on ``Transient`` rows: the object is listed for ``user`` (authenticated, non-staff)."""
+    q = tns_named_q() | transient_access_q(user, names=names)
+    extra = _extra_access_grants_q(user)
+    if extra is not None:
+        q |= extra
+    return q
+
+
+def filter_listed_transients(user: User, transients: Union[QuerySet, Iterable]):
+    """The objects ``user`` may see listed: every list, table, API and export (#607).
+
+    Same calling convention as :func:`filter_transients_by_user_access`: a
+    QuerySet stays lazy, an iterable is checked with one query. Staff and
+    superusers see everything; anonymous users see nothing (machine clients
+    authenticate with a token or Basic auth and are users like any other).
+    Use :func:`filter_transients_by_user_access` instead for surfaces that
+    show the object's *data* (comments, annotations, interests, runs).
+    """
+    if user_sees_everything(user):
+        return transients
+    authenticated = getattr(user, 'is_authenticated', False)
     if isinstance(transients, QuerySet):
-        ids = list(transients.values_list("id", flat=True))
-        allowed = [
-            pk
-            for pk in ids
-            if user_can_view_transient(user, pk)
-        ]
-        return transients.filter(id__in=allowed)
-    return [t for t in transients if user_can_view_transient(user, t.id)]
+        if not authenticated:
+            return transients.none()
+        return transients.filter(listed_transient_q(user))
+    transients = list(transients)
+    if not authenticated or not transients:
+        return []
+    from YSE_App.models import Transient
+
+    listed = set(
+        Transient.objects.filter(pk__in={t.id for t in transients})
+        .filter(listed_transient_q(user))
+        .values_list('pk', flat=True)
+    )
+    return [t for t in transients if t.id in listed]
+
+
+def user_can_list_transient(user: User, transient_id: int) -> bool:
+    if user_sees_everything(user):
+        return True
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    from YSE_App.models import Transient
+
+    return Transient.objects.filter(pk=transient_id).filter(listed_transient_q(user)).exists()
+
+
+def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
+    """``Exists``: the transient at ``OuterRef(transient_ref)`` has a photometry set ``user`` may not see.
+
+    A set is restricted when it has at least one collaboration group, and
+    visible when one of them is the user's (the ``PhotometryService`` rule).
+    Callers skip it for staff, who never have hidden photometry. Without a
+    hidden set the stored all-data ``TransientPhotStat`` row is exactly what
+    the user may see.
+    """
+    from YSE_App.models import TransientPhotometry
+
+    through = TransientPhotometry.groups.through
+    restricted = TransientPhotometry.objects.filter(transient_id=OuterRef(transient_ref)).filter(
+        Exists(through.objects.filter(transientphotometry_id=OuterRef('pk')))
+    )
+    gids = user_group_ids(user)
+    if gids:
+        restricted = restricted.filter(~Exists(
+            through.objects.filter(transientphotometry_id=OuterRef('pk'), group_id__in=gids)
+        ))
+    extra = _extra_photometry_grants_q(user)
+    if extra is not None:
+        restricted = restricted.exclude(extra)
+    return Exists(restricted)
+
+
+def visible_photometry_ids_q(user: User, prefix: str = 'photometry_id') -> Optional[Q]:
+    """Condition on photometry *points*: their set is one ``user`` may see; ``None`` for staff.
+
+    ``prefix`` names the column holding the ``TransientPhotometry`` id
+    (``photometry_id`` on ``TransientPhotData``). One ``IN`` subquery, so
+    rows are never duplicated by the group join.
+    """
+    if user_sees_everything(user):
+        return None
+    from YSE_App.models import TransientPhotometry
+
+    no_group, contains_group = get_user_group_query(user)
+    phot_q = no_group | contains_group
+    extra = _extra_photometry_grants_q(user)
+    if extra is not None:
+        phot_q |= extra
+    return Q(**{prefix + '__in': TransientPhotometry.objects.filter(phot_q).values('pk')})
+
+
+def transients_with_hidden_photometry(user: User, transient_ids: Iterable[int]) -> Set[int]:
+    """The ids among ``transient_ids`` with photometry ``user`` may not see (one query; staff: none)."""
+    ids = {int(t) for t in transient_ids if t is not None}
+    if not ids or user_sees_everything(user):
+        return set()
+    from YSE_App.models import Transient
+
+    return set(
+        Transient.objects.filter(pk__in=ids).filter(hidden_photometry_exists(user))
+        .values_list('pk', flat=True)
+    )
 
 
 # Transient detail shell allows broad metadata; export zip headers must stay narrow.

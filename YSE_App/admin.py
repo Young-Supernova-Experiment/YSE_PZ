@@ -471,7 +471,6 @@ class NotificationAdmin(admin.ModelAdmin):
 	search_fields = ("recipient__username", "subject", "text")
 	readonly_fields = ("created", "delivered")
 	raw_id_fields = ("recipient", "transient")
-	date_hierarchy = "created"
 	list_select_related = ("recipient",)
 
 	def delivery_summary(self, obj):
@@ -646,7 +645,6 @@ class UserFavoriteTransientAdmin(admin.ModelAdmin):
 	list_display = ("user", "transient", "created")
 	search_fields = ("user__username", "transient__name")
 	raw_id_fields = ("user", "transient")
-	date_hierarchy = "created"
 	list_select_related = ("user", "transient")
 
 
@@ -824,6 +822,43 @@ class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
 	list_filter = ("ai_enabled",)
 	search_fields = ("user__username",)
 	raw_id_fields = ("user",)
+
+
+from django.urls import reverse as _reverse  # noqa: E402
+from django.utils.html import format_html as _format_html  # noqa: E402
+
+from YSE_App.models.feedback_models import Feedback  # noqa: E402
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+	"""Feedback button rows (#443). Posting to GitHub is only on the staff review page."""
+	list_display = ("id", "created", "kind", "title", "status", "page_url", "review_link")
+	list_filter = ("status", "kind")
+	search_fields = ("title", "text", "page_url")
+	readonly_fields = ("user", "kind", "title", "text", "page_url", "created", "github_issue_url",
+					   "reviewed_by", "reviewed_at", "review_link")
+	fields = ("status", "review_link", "user", "created", "kind", "title", "text", "page_url",
+			  "github_issue_url", "reviewed_by", "reviewed_at")
+
+	def has_add_permission(self, request):
+		return False
+
+	def review_link(self, obj):
+		if not obj or not obj.pk:
+			return ""
+		return _format_html('<a href="{}">Review / create GitHub issue</a>', _reverse("feedback_review_detail", args=[obj.pk]))
+
+	review_link.short_description = "review"
+
+
+# Two-factor sign-in (#512): superuser action on Users to reset a user's devices.
+from django.conf import settings as _settings  # noqa: E402
+
+if getattr(_settings, 'STAFF_MFA_REQUIRED', False):
+    from YSE_App.staff_mfa.admin import install_user_admin_action  # noqa: E402
+
+    install_user_admin_action()
 
 
 # ---------------------------------------------------------------------------
@@ -1084,6 +1119,73 @@ class GroupMembershipRequestAdmin(admin.ModelAdmin):
 	list_display = ("id", "group", "user", "status", "created_at", "decided_by", "decided_at")
 	list_filter = ("status", "group")
 	readonly_fields = ("user", "group", "message", "status", "created_at", "decided_by", "decided_at")
+	fields = readonly_fields
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+
+from YSE_App.models.night_plan_models import NightPlan, PlannedBlock  # noqa: E402
+
+
+class _PlannedBlockInline(admin.TabularInline):
+	model = PlannedBlock
+	fields = ("order", "kind", "target_name", "start_ut", "end_ut", "followup", "priority_at_plan")
+	readonly_fields = fields
+	extra = 0
+	can_delete = False
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(NightPlan)
+class NightPlanAdmin(admin.ModelAdmin):
+	"""Night plans are saved and approved from the planner (#662, #663); read-only here."""
+	list_display = ("id", "night", "version", "state", "author", "approved_by", "approved_at", "created_date")
+	list_filter = ("state",)
+	readonly_fields = ("night", "version", "parent", "state", "author", "approved_by", "approved_at",
+	                   "solver", "solver_inputs", "notes", "created_by", "created_date")
+	fields = readonly_fields
+	inlines = (_PlannedBlockInline,)
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+
+from YSE_App.models.observed_block_models import ObservedBlock, OutcomeReason  # noqa: E402
+
+
+@admin.register(OutcomeReason)
+class OutcomeReasonAdmin(admin.ModelAdmin):
+	"""Reasons are a lookup table (#666): add or retire them here; codes stay stable."""
+	list_display = ("code", "label", "category", "active")
+	list_filter = ("category", "active")
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(ObservedBlock)
+class ObservedBlockAdmin(admin.ModelAdmin):
+	"""Observed blocks are recorded from the planner (#667); read-only here."""
+	list_display = ("id", "night", "target_name", "outcome", "reason", "end_ut", "recorded_by", "source")
+	list_filter = ("outcome", "source")
+	readonly_fields = ("night", "target_name", "followup", "planned_block", "outcome", "reason", "start_ut",
+	                   "end_ut", "comments", "recorded_by", "source", "created_date")
 	fields = readonly_fields
 
 	def has_add_permission(self, request):

@@ -18,3 +18,8 @@ basic details about the observing night are shown.
 
 Observing requests themselves can be made through the transient
 detail pages.
+
+When the night planner is enabled (``ASTROSCHEDULER_ENABLED``), each classical night has a
+**Plan this night** button that opens the AstroScheduler planner inside YSE-PZ: schedule the
+night, save and approve plan versions, download the planned target list, and record what
+happened at the telescope. See ``docs/astroscheduler.md`` for the observer guide.

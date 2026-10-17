@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master, develop, experimental]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -47,18 +50,26 @@ jobs:
       - name: Write docker compose environment
         working-directory: docker
         run: |
+          # throwaway per-run test credentials; nothing here is a real secret
+          DB_PWD="$(openssl rand -hex 16)"
           printf '%s\n' \
             "VOL=${{ github.workspace }}" \
             "VOL_DB=${{ github.workspace }}/database" \
             "VOL_GHOST=${{ github.workspace }}/ghost_logs" \
             "STATIC_VOL=${{ github.workspace }}/YSE_PZ/static" \
-            "DB_PWD=password" \
+            "DB_PWD=$DB_PWD" \
+            "YSE_DATABASE_PASSWORD=$(openssl rand -hex 16)" \
+            "YSE_EXPLORER_PASSWORD=$(openssl rand -hex 16)" \
             "LOCAL_DB_PORT=53306" \
             "LOCAL_HTTP_PORT=8080" \
             "DJANGO_SUPERUSER_USERNAME=ci_admin" \
-            "DJANGO_SUPERUSER_PASSWORD=ci_password" \
+            "DJANGO_SUPERUSER_PASSWORD=$(openssl rand -hex 16)" \
             "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
+            "YSE_IS_DEBUG=1" \
+            "YSE_LOGIN_LOCKOUT=1" \
             > .env
+          echo "::add-mask::$DB_PWD"
+          echo "DB_PWD=$DB_PWD" >> "$GITHUB_ENV"
           grep -q '^VOL=' .env
           ! grep -q '^[[:space:]]' .env
           # compose env_file lists .env.secrets (gitignored locally); CI needs an empty stub
@@ -82,14 +93,33 @@ jobs:
         working-directory: docker
         run: |
           docker exec ysepz_web_container pip3 install --quiet "Django==3.2.25"
+          # Login lockout (django-axes; same pins as requirements.txt) is not in the
+          # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
+          # Two-factor sign-in for staff (#512; requirements.txt pins), tested in its own step below.
+          docker exec ysepz_web_container pip3 install --quiet --no-deps \
+            $(grep -E -m2 '^(django-otp|segno)==' ../requirements.txt)
+          # Pins bumped in #539 that are newer than the image: install the exact
+          # requirements.txt pins (gunicorn: docker/requirements.web.lock) so the
+          # suite runs on them.
+          PINS=$(for p in Pillow cryptography urllib3 certifi djangorestframework sqlparse lxml Jinja2 MarkupSafe tornado Werkzeug; do
+                   grep -i -m1 "^$p==" ../requirements.txt || { echo "::error::no $p pin in requirements.txt" >&2; exit 1; }
+                 done)
+          PINS="$PINS $(grep -m1 '^gunicorn==' requirements.web.lock)"
+          # AstroScheduler's solver (#653): not in the image yet; its own deps are already pinned.
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^astroscheduler ' ../requirements.txt)"
+          echo "$PINS"
+          docker exec ysepz_web_container pip3 install --quiet --no-deps $PINS
           docker compose restart web
+          # axes' own tables in the CI database (the runbook's `migrate axes` step).
+          docker exec ysepz_web_container python3 manage.py migrate axes --noinput
           docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
 
       - name: Wait for MySQL
         working-directory: docker
         run: |
           for i in $(seq 1 60); do
-            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -ppassword --silent; then
+            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -p"$DB_PWD" --silent; then
               echo "MySQL ready after attempt $i"
               exit 0
             fi
@@ -124,6 +154,14 @@ jobs:
 
       - name: Run tests
         run: docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
+
+      # The suite above runs with two-factor sign-in off (the default). Its flow
+      # tests need django-otp's tables in the test database, so run that module
+      # again with the flag on (YSE_App/tests/test_staff_mfa.py).
+      - name: Staff two-factor sign-in tests (flag on)
+        run: |
+          docker exec -e YSE_STAFF_MFA_REQUIRED=1 ysepz_web_container python3 manage.py check
+          docker exec -e YSE_STAFF_MFA_REQUIRED=1 ysepz_web_container python3 manage.py test YSE_App.tests.test_staff_mfa --verbosity=2
 
       - name: Page load regression and benchmark plots
         run: |

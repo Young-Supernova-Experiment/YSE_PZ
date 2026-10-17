@@ -29,7 +29,7 @@ from YSE_App.feeds.jobs import enqueue_screen
 from YSE_App.services import annotations as annotations_svc
 # ... and the AI summariser runner + summaries.refresh_stale job (#296).
 import YSE_App.services.summaries  # noqa: E402,F401
-from YSE_App.models.phot_models import TransientPhotData
+from YSE_App.models.phot_models import HostPhotData, TransientPhotData, TransientPhotometry
 from YSE_App.services import photstat
 # Favorite-transient activity (#323): comments, audited transient changes, spectra, follow-ups.
 from auditlog.models import LogEntry
@@ -37,7 +37,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models.signals import pre_save
 from YSE_App.models.followup_models import TransientFollowup
 from YSE_App.models.log_models import Log
-from YSE_App.models.spectra_models import TransientSpectrum
+from YSE_App.models.spectra_models import HostSpectrum, TransientSpectrum
+from YSE_App.common import quality_mask_sync
 from YSE_App.services import favorites
 
 User = get_user_model()
@@ -95,6 +96,57 @@ def _photdata_transient_id(instance):
     return getattr(photometry, 'transient_id', None)
 
 
+# ---- quality_mask follows the DataQuality ManyToMany (#81) ------------------
+# Every add / remove / clear on a data_quality relation recomputes the
+# DataQuality-managed bits of the rows involved (quality_mask.merge_data_quality).
+# These receivers are connected before the PhotStat one below, so a PhotStat
+# recompute triggered by the same change already sees the new mask.
+# Writes that bypass m2m_changed (bulk_create of through rows) set the mask
+# themselves (data_utils._write_photdata_points); `backfill_quality_mask`
+# finds anything that slipped through.
+
+
+def _sync_quality_mask(model, instance, action, reverse, pk_set):
+    if reverse:
+        # DataQuality.<model>_set.add/remove/clear(...): many rows at once; clear()
+        # reports no pk_set, so remember the affected rows before it runs.
+        memo = '_quality_mask_%s_pks' % model._meta.model_name
+        if action == 'pre_clear':
+            setattr(instance, memo, list(
+                getattr(instance, '%s_set' % model._meta.model_name).values_list('pk', flat=True)
+            ))
+            return
+        if action == 'post_clear':
+            pks = getattr(instance, memo, [])
+            setattr(instance, memo, [])
+        elif action in ('post_add', 'post_remove'):
+            pks = pk_set or ()
+        else:
+            return
+        quality_mask_sync.recompute(model, pks)
+        return
+    if action not in ('post_add', 'post_remove', 'post_clear') or instance.pk is None:
+        return
+    new = quality_mask_sync.recompute(model, [instance.pk]).get(instance.pk)
+    if new is not None:
+        # Keep the in-memory row current, so a later instance.save() writes the new mask.
+        instance.quality_mask = new
+
+
+def _connect_quality_mask_sync(model):
+    def receiver_fn(sender, instance, action, reverse, **kwargs):
+        _sync_quality_mask(model, instance, action, reverse, kwargs.get('pk_set'))
+
+    m2m_changed.connect(
+        receiver_fn, sender=model.data_quality.through, weak=False,
+        dispatch_uid='yse_quality_mask_dq_%s' % model._meta.model_name,
+    )
+
+
+for _model in (TransientPhotData, HostPhotData, TransientSpectrum, HostSpectrum):
+    _connect_quality_mask_sync(_model)
+
+
 @receiver(post_save, sender=TransientPhotData, dispatch_uid="yse_photstat_photdata_saved")
 def refresh_photstat_on_photdata_save(sender, instance, **kwargs):
     if kwargs.get('raw'):
@@ -138,6 +190,52 @@ def refresh_photstat_on_quality_flag(sender, instance, action, reverse, **kwargs
     if action not in ('post_add', 'post_remove', 'post_clear'):
         return
     photstat.schedule_recompute(_photdata_transient_id(instance), photometry_id=instance.photometry_id)
+
+
+@receiver(m2m_changed, sender=TransientPhotometry.groups.through, dispatch_uid="yse_photstat_scope_groups_changed")
+def refresh_photstat_scopes_on_group_change(sender, instance, action, reverse, **kwargs):
+    """A photometry set's collaboration groups decide which visibility scopes count it (#607)."""
+    if action not in ('post_add', 'post_remove', 'post_clear'):
+        return
+    if reverse:
+        # Group.transientphotometry_set.add/remove/clear(...): many sets at once.
+        if action == 'post_clear':
+            return  # pk_set unknown; ``backfill_photstat_scopes`` repairs a cleared group
+        with photstat.deferred_updates():
+            for pk in list(kwargs.get('pk_set') or ()):
+                photstat.schedule_recompute(photometry_id=pk)
+        return
+    photstat.schedule_recompute(instance.transient_id, photometry_id=instance.pk)
+
+
+@receiver(pre_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moving")
+def remember_photometry_transient(sender, instance, raw=False, update_fields=None, **kwargs):
+    """Note the old transient when a photometry set is moved to another one (#269).
+
+    ``QUB_data.CheckDuplicates`` (and an API update) re-point a
+    ``TransientPhotometry`` at another transient; no point is saved, so the
+    point signals above never run. One pk lookup per update of an existing row.
+    """
+    instance._photstat_old_transient_id = None
+    if raw or instance.pk is None:
+        return
+    if update_fields is not None and not {'transient', 'transient_id'} & set(update_fields):
+        return
+    old = TransientPhotometry.objects.filter(pk=instance.pk).values_list('transient_id', flat=True).first()
+    if old is not None and old != instance.transient_id:
+        instance._photstat_old_transient_id = old
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moved")
+def refresh_photstat_on_photometry_move(sender, instance, created, raw=False, **kwargs):
+    """Both transients' stat rows follow a moved photometry set (#269)."""
+    old = getattr(instance, '_photstat_old_transient_id', None)
+    if raw or created or old is None:
+        return
+    instance._photstat_old_transient_id = None
+    # The old transient may be deleted right after (duplicate clean-up): update, never create.
+    photstat.schedule_recompute(old, create=False)
+    photstat.schedule_recompute(instance.transient_id)
 
 
 # ---- favorite-transient activity (#323) ------------------------------------
@@ -203,3 +301,32 @@ def create_group_profile(sender, instance, created, **kwargs):
     from YSE_App.services.groups import profile_for
 
     profile_for(instance)
+
+
+# ---- AstroScheduler execution feedback (#674) -------------------------------
+# New data prove the observation: the matching data-taken observation becomes a success and
+# its classical request Successful. Never fails the upload (errors are only logged).
+
+def _data_uploaded(instance, obs_date):
+    import logging
+
+    from YSE_App.services.observations import data_uploaded
+
+    try:
+        data_uploaded(instance.transient_id, instance.followup_id, obs_date,
+                      getattr(instance, "created_by", None))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("observation success from uploaded data failed")
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_observation_success_spectrum")
+def observation_success_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get('raw'):
+        _data_uploaded(instance, instance.obs_date)
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_observation_success_photometry")
+def observation_success_on_photometry(sender, instance, created, **kwargs):
+    # A photometry set has no date of its own: only an upload naming its request counts.
+    if created and not kwargs.get('raw') and instance.followup_id:
+        _data_uploaded(instance, None)

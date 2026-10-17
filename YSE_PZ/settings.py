@@ -9,8 +9,10 @@ https://docs.djangoproject.com/en/1.11/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/1.11/ref/settings/
 """
+import hashlib
 import logging
 import os
+import tempfile
 from configparser import RawConfigParser
 
 import django
@@ -29,8 +31,49 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/1.11/howto/deployment/checklist/
 
+
+
+def _env_bool(name):
+    """True / False for an explicit 1/0 (true/false, yes/no, on/off) env value, else None."""
+    value = os.environ.get(name, '').strip().lower()
+    if value in ('1', 'true', 'yes', 'on'):
+        return True
+    if value in ('0', 'false', 'no', 'off'):
+        return False
+    return None
+
+
+def _flag(env_name, section, key, fallback):
+    """Boolean setting: env var (if set to an explicit value), then settings.ini, then fallback."""
+    value = _env_bool(env_name)
+    if value is not None:
+        return value
+    return config.getboolean(section, key, fallback=fallback)
+
+
+def _int_setting(env_name, section, key, fallback):
+    value = os.environ.get(env_name, '').strip()
+    if value:
+        return int(value)
+    return config.getint(section, key, fallback=fallback)
+
+
+def _str_setting(env_name, section, key, fallback=''):
+    value = os.environ.get(env_name, '').strip()
+    if value:
+        return value
+    value = (config.get(section, key, fallback=fallback) or '').strip()
+    return '' if (value.startswith('<') and value.endswith('>')) else value
+
+
+def _list_setting(env_name, section, key):
+    return [v.strip() for v in _str_setting(env_name, section, key).split(',') if v.strip()]
+
+
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config.getboolean('site_settings', 'IS_DEBUG', fallback=False)
+# [site_settings] IS_DEBUG in settings.ini; the YSE_IS_DEBUG env var (1/0)
+# overrides it (local docker and CI set YSE_IS_DEBUG=1 in docker/.env).
+DEBUG = _flag('YSE_IS_DEBUG', 'site_settings', 'IS_DEBUG', False)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # Prefer the DJANGO_SECRET_KEY env var; otherwise [site_settings] SECRET_KEY in
@@ -93,6 +136,22 @@ if not _allowed_hosts:
     _allowed_hosts = config.get('site_settings', 'ALLOWED_HOSTS', fallback='')
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()] or ['*']
 
+# ---------------------------------------------------------------------------
+# Transport and session hardening. Every key below is optional, under
+# [security] in settings.ini (or the named env var), and its default keeps the
+# behaviour from before these settings existed. docs/ziggy-runbook.md has the
+# check to run on each stack before turning one on.
+#
+# REQUIRE_ALLOWED_HOSTS: with DEBUG off, refuse to start unless ALLOWED_HOSTS
+# names this stack's hosts explicitly (no '*').
+REQUIRE_ALLOWED_HOSTS = _flag('YSE_REQUIRE_ALLOWED_HOSTS', 'security', 'REQUIRE_ALLOWED_HOSTS', False)
+if REQUIRE_ALLOWED_HOSTS and not DEBUG and (not _allowed_hosts.strip() or '*' in ALLOWED_HOSTS):
+    raise ImproperlyConfigured(
+        'REQUIRE_ALLOWED_HOSTS is on but ALLOWED_HOSTS is not set to explicit host names. '
+        'Set [site_settings] ALLOWED_HOSTS in YSE_PZ/settings.ini (or DJANGO_ALLOWED_HOSTS), '
+        'without "*".'
+    )
+
 if DEBUG:
     CSRF_TRUSTED_ORIGINS = [
         'http://localhost:8080',
@@ -100,11 +159,33 @@ if DEBUG:
         'http://localhost:8000',
         'http://127.0.0.1:8000',
     ]
-    CSRF_COOKIE_SECURE = False
-    SESSION_COOKIE_SECURE = False
+
+# Cookies only over HTTPS, HTTP->HTTPS redirect, HSTS. All off by default.
+SESSION_COOKIE_SECURE = _flag('YSE_SESSION_COOKIE_SECURE', 'security', 'SESSION_COOKIE_SECURE', False)
+CSRF_COOKIE_SECURE = _flag('YSE_CSRF_COOKIE_SECURE', 'security', 'CSRF_COOKIE_SECURE', False)
+SECURE_SSL_REDIRECT = _flag('YSE_SECURE_SSL_REDIRECT', 'security', 'SECURE_SSL_REDIRECT', False)
+SECURE_HSTS_SECONDS = _int_setting('YSE_SECURE_HSTS_SECONDS', 'security', 'SECURE_HSTS_SECONDS', 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _flag(
+    'YSE_SECURE_HSTS_INCLUDE_SUBDOMAINS', 'security', 'SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
+
+# Session lifetime in seconds; default 1209600 (two weeks, Django's default).
+SESSION_COOKIE_AGE = _int_setting('YSE_SESSION_COOKIE_AGE', 'security', 'SESSION_COOKIE_AGE', 1209600)
+
+# Password-reset emails: with PASSWORD_RESET_DOMAIN set (host name only, e.g.
+# ziggy.ucolick.org) the link in the email always uses that host, and https
+# unless PASSWORD_RESET_USE_HTTPS is False. Unset: the host of the request.
+PASSWORD_RESET_DOMAIN = _str_setting('YSE_PASSWORD_RESET_DOMAIN', 'security', 'PASSWORD_RESET_DOMAIN')
+PASSWORD_RESET_USE_HTTPS = _flag('YSE_PASSWORD_RESET_USE_HTTPS', 'security', 'PASSWORD_RESET_USE_HTTPS', True)
+
+# `manage.py deactivate_inactive_users` never deactivates superusers, these
+# usernames (comma-separated; list every service / cron account here), or the
+# configured service users (SLACK_SERVICE_USERNAME, BROKER_AUTO_SAVE_USERNAME,
+# SHARING_SYSTEM_USERNAME).
+INACTIVE_USER_EXEMPT_USERNAMES = _list_setting(
+    'YSE_INACTIVE_USER_EXEMPT_USERNAMES', 'security', 'INACTIVE_USER_EXEMPT_USERNAMES')
 
 
-# Application definitionEXPLORER_SQL_BLACKLIST
+# Application definition
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -133,8 +214,6 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.Photo_Z.YSE',
 	'YSE_App.data_ingest.SDSS_Photo_Z.YSE',
 	'YSE_App.data_ingest.PS1_cutouts.YSE',
-	'YSE_App.data_ingest.host_associate.YSE',
-	'YSE_App.data_ingest.PS1_PhotoZ.YSE',
 	'YSE_App.data_ingest.Apply_Tags.Tags',
 	'YSE_App.data_ingest.YSE_observations.SurveyObs',
 	'YSE_App.data_ingest.Query_ZTF.AntaresZTF',
@@ -154,7 +233,6 @@ CRON_CLASSES = [
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
     'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
-    'YSE_App.data_ingest.TNS_uploads.UpdateGHOST',
     # Personal-dashboard saved-query cache warmer; no-op unless
     # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
     'YSE_App.data_ingest.Dashboard_Cache_Warm.WarmDashboardQueries',
@@ -164,6 +242,9 @@ CRON_CLASSES = [
     # Daily retention of notification and finished-job rows (#320); no-op when
     # NOTIFICATION_PRUNE_CRON_ENABLED is False.
     'YSE_App.data_ingest.Job_Queue.PruneNotifications',
+    # Daily: close classical follow-up requests that ended without good data (#673);
+    # no-op unless ASTROSCHEDULER_EXPIRE_AFTER is set.
+    'YSE_App.data_ingest.Job_Queue.ExpireFollowupRequests',
     # Broker polling ingest to candidates (#276): enqueues brokers.ingest jobs;
     # no-op unless BROKER_INGEST_CRON_ENABLED is set ([brokers] in settings.ini).
     'YSE_App.data_ingest.Broker_Ingest.BrokerPoll',
@@ -185,6 +266,10 @@ CRON_CLASSES = [
     # AI summaries (#296): nightly batch of summariser runs for transients with new
     # comments / spectra / follow-ups; no-op unless SUMMARY_BATCH_CRON_ENABLED ([llm]).
     'YSE_App.data_ingest.Summary_Jobs.SummaryRefresh',
+    # Photometry statistics upkeep (#269, #271): hourly photstat.refresh_stale job
+    # (on by default) and photstat.bazin_extrapolate job (off unless
+    # PHOTSTAT_BAZIN_CRON_ENABLED); see the settings below.
+    'YSE_App.data_ingest.PhotStat_Jobs.PhotStatRefresh',
     # Researcher metrics from SciX (#629): monthly; no-op unless
     # RESEARCHER_METRICS_ENABLED ([research] in settings.ini).
     'YSE_App.data_ingest.Researcher_Metrics.RefreshResearcherMetrics',
@@ -195,13 +280,60 @@ CRON_CLASSES = [
 # settings.ini overrides the 30-day default.
 DJANGO_CRON_DELETE_LOGS_OLDER_THAN = config.getint('site_settings', 'CRON_LOG_RETENTION_DAYS', fallback=30)
 
+# TransientPhotStat upkeep (#269, #271; YSE_App/data_ingest/PhotStat_Jobs.py).
+# [site_settings] keys; env YSE_PHOTSTAT_REFRESH_CRON / YSE_PHOTSTAT_BAZIN_CRON
+# override the two switches. The refresh recomputes at most
+# PHOTSTAT_REFRESH_LIMIT missing or outdated rows per run; the Bazin job stores
+# the extrapolated magnitude of at most PHOTSTAT_BAZIN_LIMIT transients with an
+# open follow-up request.
+PHOTSTAT_REFRESH_CRON_ENABLED = _flag(
+    'YSE_PHOTSTAT_REFRESH_CRON', 'site_settings', 'PHOTSTAT_REFRESH_CRON_ENABLED', True
+)
+PHOTSTAT_BAZIN_CRON_ENABLED = _flag(
+    'YSE_PHOTSTAT_BAZIN_CRON', 'site_settings', 'PHOTSTAT_BAZIN_CRON_ENABLED', False
+)
+PHOTSTAT_REFRESH_CRON_MINUTES = config.getint('site_settings', 'PHOTSTAT_REFRESH_CRON_MINUTES', fallback=60)
+PHOTSTAT_REFRESH_LIMIT = config.getint('site_settings', 'PHOTSTAT_REFRESH_LIMIT', fallback=2000)
+PHOTSTAT_BAZIN_LIMIT = config.getint('site_settings', 'PHOTSTAT_BAZIN_LIMIT', fallback=500)
+
+# yse_home "Next Telescope Nights" lists classical observing dates up to this
+# many days ahead (#65). Optional env YSE_HOME_CLASSICAL_DAYS_AHEAD or
+# [site_settings] CLASSICAL_DAYS_AHEAD in settings.ini; default 30.
+YSE_HOME_CLASSICAL_DAYS_AHEAD = _int_setting(
+    'YSE_HOME_CLASSICAL_DAYS_AHEAD', 'site_settings', 'CLASSICAL_DAYS_AHEAD', 30
+)
+
+# django_cron's default CacheLock lives in the 'default' cache, which is the
+# per-process LocMemCache unless REDIS_URL is set, so two `runcrons` processes
+# never see each other's lock and a slow job overlaps the next pass (#472).
+# FileLock takes an OS lock on <DJANGO_CRON_LOCKFILE_PATH>/<job>.lock, which
+# the kernel releases if the process dies. The directory must be writable by
+# every user that runs `runcrons` for this checkout: django_cron treats a
+# permission error as "locked" and skips the job. The default is per checkout
+# (yse_experimental and yse_test share a host but must not share locks).
+# Override with YSE_CRON_LOCKFILE_PATH or [site_settings] CRON_LOCKFILE_PATH.
+DJANGO_CRON_LOCK_BACKEND = 'YSE_App.common.cron_lock.FileLock'
+DJANGO_CRON_LOCKFILE_PATH = (
+    os.environ.get('YSE_CRON_LOCKFILE_PATH', '').strip()
+    or config.get('site_settings', 'CRON_LOCKFILE_PATH', fallback='').strip()
+    or os.path.join(
+        tempfile.gettempdir(),
+        'yse_pz_cron_locks_' + hashlib.sha1(BASE_DIR.encode('utf-8')).hexdigest()[:10],
+    )
+)
+
 MIDDLEWARE = [
 	#'silk.middleware.SilkyMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # No-op unless CSP_REPORT_ONLY_ENABLED (see [security] below).
+    'YSE_App.middleware_csp.ContentSecurityPolicyReportOnlyMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Deny-by-default login check with a public allowlist (#496); see
+    # YSE_App/login_required.py and LOGIN_REQUIRED_MIDDLEWARE below.
+    'YSE_App.login_required.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     # Onboarding gate (#630): accept the User Agreement, then complete the
     # profile. ONBOARDING_GATE_ENABLED below; exemptions in YSE_App/onboarding.py.
@@ -211,6 +343,15 @@ MIDDLEWARE = [
     'auditlog.middleware.AuditlogMiddleware',
     #'django.middleware.cache.FetchFromCacheMiddleware'
 ]
+
+# LoginRequiredMiddleware (#496) is on by default. Rollback switch only: set
+# [site_settings] LOGIN_REQUIRED_MIDDLEWARE = False in settings.ini, or the
+# YSE_LOGIN_REQUIRED_MIDDLEWARE=0 env var (the env var wins), to turn it off.
+_login_required_env = os.environ.get('YSE_LOGIN_REQUIRED_MIDDLEWARE', '').strip().lower()
+if _login_required_env:
+    LOGIN_REQUIRED_MIDDLEWARE = _login_required_env not in ('0', 'false', 'no', 'off')
+else:
+    LOGIN_REQUIRED_MIDDLEWARE = config.getboolean('site_settings', 'LOGIN_REQUIRED_MIDDLEWARE', fallback=True)
 
 #CACHE_MIDDLEWARE_ALIAS = 'default'
 #CACHE_MIDDLEWARE_SECONDS = 600
@@ -237,6 +378,10 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.static',
+                # Bare parent template for the SQL Explorer schema iframe (#450).
+                'YSE_App.explorer_shell.explorer_shell',
+                # feedback_enabled for the navbar Feedback button (#443).
+                'YSE_App.context_processors.feedback',
             ],
         },
     },
@@ -246,6 +391,105 @@ AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend', # this is default
 )
 
+# Failed-login lockout (django-axes; [security] in settings.ini). Off by default.
+# When on, failed logins through the login form, the admin, DRF Basic auth and
+# the Basic-auth decorator are counted per username + client address and, past
+# LOGIN_LOCKOUT_FAILURE_LIMIT, refused for LOGIN_LOCKOUT_COOLOFF_MINUTES. Needs
+# `pip install -r requirements.txt` and `manage.py migrate axes` once per
+# database (docs/ziggy-runbook.md); if the package is missing the flag is
+# ignored with a warning, so turning it on before the pip step cannot stop the site.
+LOGIN_LOCKOUT_ENABLED = _flag('YSE_LOGIN_LOCKOUT', 'security', 'LOGIN_LOCKOUT_ENABLED', False)
+if LOGIN_LOCKOUT_ENABLED:
+    try:
+        import axes  # noqa: F401
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            'LOGIN_LOCKOUT_ENABLED is set but django-axes is not installed '
+            '(pip install -r requirements.txt); login lockout stays off.'
+        )
+        LOGIN_LOCKOUT_ENABLED = False
+if LOGIN_LOCKOUT_ENABLED:
+    import datetime as _datetime
+
+    INSTALLED_APPS.append('axes')
+    # Axes' backend must come first; it only checks and counts, ModelBackend authenticates.
+    AUTHENTICATION_BACKENDS = ('YSE_App.auth_backends.LoginLockoutBackend',) + tuple(AUTHENTICATION_BACKENDS)
+    MIDDLEWARE.append('axes.middleware.AxesMiddleware')
+    AXES_FAILURE_LIMIT = _int_setting('YSE_LOGIN_LOCKOUT_FAILURE_LIMIT', 'security', 'LOGIN_LOCKOUT_FAILURE_LIMIT', 10)
+    AXES_COOLOFF_TIME = _datetime.timedelta(minutes=_int_setting(
+        'YSE_LOGIN_LOCKOUT_COOLOFF_MINUTES', 'security', 'LOGIN_LOCKOUT_COOLOFF_MINUTES', 60))
+    # user_and_ip (default): one username from one address; user: the username
+    # from any address; ip: every login from one address.
+    _lockout_mode = (_str_setting('YSE_LOGIN_LOCKOUT_MODE', 'security', 'LOGIN_LOCKOUT_MODE', 'user_and_ip')
+                     or 'user_and_ip').lower()
+    if _lockout_mode not in ('user_and_ip', 'user', 'ip'):
+        raise ImproperlyConfigured('[security] LOGIN_LOCKOUT_MODE must be user_and_ip, user or ip.')
+    AXES_LOCK_OUT_BY_COMBINATION_USER_AND_IP = _lockout_mode == 'user_and_ip'
+    AXES_ONLY_USER_FAILURES = _lockout_mode == 'user'
+    AXES_RESET_ON_SUCCESS = True
+    # Successful logins are not recorded; only failed attempts are kept (until reset or cool-off).
+    AXES_DISABLE_ACCESS_LOG = True
+    # No per-attempt log lines (they would carry usernames and addresses).
+    AXES_VERBOSE = False
+    # The client address is REMOTE_ADDR, never a client-supplied forwarding header.
+    AXES_CLIENT_IP_CALLABLE = 'YSE_App.auth_backends.client_ip_address'
+    # Addresses that are never locked out (comma-separated), e.g. the host the crons run on.
+    AXES_IP_WHITELIST = _list_setting('YSE_LOGIN_LOCKOUT_NEVER_LOCK_IPS', 'security', 'LOGIN_LOCKOUT_NEVER_LOCK_IPS')
+    AXES_NEVER_LOCKOUT_WHITELIST = bool(AXES_IP_WHITELIST)
+
+# Two-factor sign-in for staff and superusers (django-otp TOTP, #512; [security]
+# in settings.ini, or YSE_STAFF_MFA_REQUIRED=1). Off by default. When on, a
+# browser session of an is_staff / is_superuser user must also enter a code from
+# an authenticator app (or a one-time backup code) before any page other than
+# sign-out and the two-factor pages; staff without a device are sent to set one
+# up. Other users, and API requests authenticated by token or HTTP Basic, are not
+# affected (YSE_App/staff_mfa/). Needs `pip install -r requirements.txt` and
+# `manage.py migrate` (django-otp's own tables) once per database
+# (docs/ziggy-runbook.md); if the package is missing the flag is ignored with a
+# warning, so turning it on before the pip step cannot stop the site.
+# STAFF_MFA_ENFORCE_AFTER (YYYY-MM-DD) is an enrollment grace period: before that
+# date staff without a device are offered setup once per session and may skip
+# it; staff who have set up a device always enter a code.
+STAFF_MFA_REQUIRED = _flag('YSE_STAFF_MFA_REQUIRED', 'security', 'STAFF_MFA_REQUIRED', False)
+if STAFF_MFA_REQUIRED:
+    try:
+        import django_otp  # noqa: F401
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            'STAFF_MFA_REQUIRED is set but django-otp is not installed '
+            '(pip install -r requirements.txt); two-factor sign-in stays off.'
+        )
+        STAFF_MFA_REQUIRED = False
+STAFF_MFA_ENFORCE_AFTER = None
+if STAFF_MFA_REQUIRED:
+    import datetime as _datetime
+
+    INSTALLED_APPS += [
+        'django_otp',
+        'django_otp.plugins.otp_totp',
+        'django_otp.plugins.otp_static',
+    ]
+    # OTPMiddleware sets request.user.otp_device from the session, so it goes
+    # right after AuthenticationMiddleware; the staff check runs after the login check.
+    MIDDLEWARE.insert(MIDDLEWARE.index('django.contrib.auth.middleware.AuthenticationMiddleware') + 1,
+                      'django_otp.middleware.OTPMiddleware')
+    MIDDLEWARE.insert(MIDDLEWARE.index('YSE_App.login_required.LoginRequiredMiddleware') + 1,
+                      'YSE_App.staff_mfa.middleware.StaffMFAMiddleware')
+    _mfa_after = _str_setting('YSE_STAFF_MFA_ENFORCE_AFTER', 'security', 'STAFF_MFA_ENFORCE_AFTER')
+    if _mfa_after:
+        try:
+            STAFF_MFA_ENFORCE_AFTER = _datetime.date.fromisoformat(_mfa_after)
+        except ValueError:
+            raise ImproperlyConfigured('[security] STAFF_MFA_ENFORCE_AFTER must be a date, YYYY-MM-DD.')
+    # Label shown in the authenticator app, and the otpauth:// issuer.
+    OTP_TOTP_ISSUER = 'YSE_PZ'
+    # Each wrong code doubles the wait before the next attempt on that device
+    # (1 s, 2 s, 4 s, ...); a correct code resets it.
+    OTP_TOTP_THROTTLE_FACTOR = 1
+    OTP_STATIC_THROTTLE_FACTOR = 1
+    # The admin's device pages do not show secrets or QR codes.
+    OTP_ADMIN_HIDE_SENSITIVE_DATA = True
+
 WSGI_APPLICATION = 'YSE_PZ.wsgi.application'
 
 # Database
@@ -254,24 +498,43 @@ WSGI_APPLICATION = 'YSE_PZ.wsgi.application'
 # MySQL TLS for the default connection. [database] SSL_DISABLED in settings.ini;
 # default True keeps the historical behaviour (plain TCP/socket to a local server).
 _db_ssl_disabled = config.getboolean('database', 'SSL_DISABLED', fallback=True)
+# Optional, only used when SSL_DISABLED is False (all under [database]):
+# SSL_CA / SSL_CERT / SSL_KEY file paths and SSL_MODE (mysqlclient ssl_mode,
+# e.g. REQUIRED, VERIFY_CA, VERIFY_IDENTITY). DB_TLS_EXPLORER (default False)
+# applies the same TLS options to the read-only explorer connection.
+_db_options = {'ssl': {'ssl_disabled': _db_ssl_disabled}}
+_explorer_db_options = {}
+if not _db_ssl_disabled:
+    _db_ssl = {}
+    for _ini_key, _ssl_key in (('SSL_CA', 'ca'), ('SSL_CERT', 'cert'), ('SSL_KEY', 'key')):
+        _path = _str_setting('', 'database', _ini_key)
+        if _path:
+            _db_ssl[_ssl_key] = _path
+    _db_options['ssl'].update(_db_ssl)
+    _db_ssl_mode = _str_setting('', 'database', 'SSL_MODE')
+    if _db_ssl_mode:
+        _db_options['ssl_mode'] = _db_ssl_mode.upper()
+    if config.getboolean('database', 'DB_TLS_EXPLORER', fallback=False):
+        _explorer_db_options = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _db_options.items()}
 DATABASES = {
     'explorer': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': config.get('database', 'DATABASE_NAME'),
         'USER': config.get('database', 'EXPLORER_USER'),
-        'PASSWORD': config.get('database', 'EXPLORER_PASSWORD'),
+        'PASSWORD': os.environ.get('YSE_EXPLORER_PASSWORD') or config.get('database', 'EXPLORER_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
         'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
+        **({'OPTIONS': _explorer_db_options} if _explorer_db_options else {}),
     },
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': config.get('database', 'DATABASE_NAME'),
         'USER': config.get('database', 'DATABASE_USER'),
-        'PASSWORD': config.get('database', 'DATABASE_PASSWORD'),
+        'PASSWORD': os.environ.get('YSE_DATABASE_PASSWORD') or config.get('database', 'DATABASE_PASSWORD'),
         'HOST': config.get('database', 'DATABASE_HOST'),
         'PORT': config.get('database', 'DATABASE_PORT'),
-        'OPTIONS': {'ssl': {'ssl_disabled': _db_ssl_disabled}},
+        'OPTIONS': _db_options,
         'CONN_MAX_AGE': int(os.environ.get('DJANGO_CONN_MAX_AGE', '60')),
     }
 }
@@ -319,6 +582,30 @@ if _redis_backend:
     CACHES = {'default': {'BACKEND': _redis_backend, 'LOCATION': _redis_url}}
 else:
     CACHES = {'default': dict(_LOCMEM_CACHE)}
+
+# Sessions (#488): cached_db reads sessions from the shared cache and falls back
+# to the DB, saving a query per request. Only with a real shared cache (Redis);
+# never on per-process LocMem, where it would log users out between workers.
+# Set REDIS_URL only once #339 is on master.
+if _redis_backend:
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+
+# Logging (#485): console handler; level from YSE_LOG_LEVEL (default INFO).
+_log_level = os.environ.get('YSE_LOG_LEVEL', 'INFO').strip().upper() or 'INFO'
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'yse': {'format': '%(asctime)s %(levelname)s %(name)s: %(message)s'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'yse'},
+    },
+    'loggers': {
+        'YSE_App': {'handlers': ['console'], 'level': _log_level, 'propagate': False},
+        'YSE_PZ': {'handlers': ['console'], 'level': _log_level, 'propagate': False},
+    },
+}
 # pymysql.version_info = (1, 4, 2, "final", 0)
 # pymysql.install_as_MySQLdb()
 
@@ -343,6 +630,55 @@ EXPLORER_QUERY_CACHE_SECONDS = int(
     or config.getint('site_settings', 'EXPLORER_QUERY_CACHE_SECONDS', fallback=3600)
 )
 
+# How long /query_api/<title>/ (data_utils.query_api, polled by the ingest
+# crons) reuses a saved query's rows (#474). Shorter than the dashboard TTL
+# because the crons act on what it returns. 0 runs the query on every call.
+# YSE_QUERY_API_CACHE_SECONDS env var or [site_settings] QUERY_API_CACHE_SECONDS.
+QUERY_API_CACHE_SECONDS = int(
+    os.environ.get('YSE_QUERY_API_CACHE_SECONDS', '').strip()
+    or config.getint('site_settings', 'QUERY_API_CACHE_SECONDS', fallback=300)
+)
+
+# Saved Explorer queries /query_api/<title>/ serves to accounts without SQL
+# Explorer access (#524). The built-in titles are the ones the crons and
+# scripts in YSE_App/data_ingest, yse_utils and util request. Owners may always
+# call their own queries; Explorer users and service accounts may call any.
+# [site_settings] QUERY_API_ALLOWED_QUERIES (or env YSE_QUERY_API_ALLOWED_QUERIES)
+# adds titles: one per line, or separated by '|'.
+QUERY_API_DEFAULT_ALLOWED_QUERIES = (
+    'YSE forced photometry for non-YSE, non-Antares transients',  # data_ingest/QUB_data.py
+    'DECAT_transients_mags',  # data_ingest/DECam_upload.py, DECam_upload_clusters.py
+    'all_yse_transients',  # util/ and yse_utils/get_YSE_PAs.py
+    'yse_transients_goodcell',  # util/ and yse_utils/get_YSE_PAs.py
+)
+
+
+def _title_list(raw):
+    return [t.strip() for t in (raw or '').replace('|', '\n').split('\n') if t.strip()]
+
+
+QUERY_API_ALLOWED_QUERIES = list(QUERY_API_DEFAULT_ALLOWED_QUERIES) + _title_list(
+    os.environ.get('YSE_QUERY_API_ALLOWED_QUERIES', '')
+    or config.get('site_settings', 'QUERY_API_ALLOWED_QUERIES', fallback='')
+)
+# Rows of /query_api/ results are limited to transients the caller may view,
+# except for staff, superusers and service accounts (#524). Default True;
+# env YSE_QUERY_API_VISIBILITY_FILTER=0 (or [site_settings] False) turns it off.
+_qavf = os.environ.get('YSE_QUERY_API_VISIBILITY_FILTER', '').strip()
+QUERY_API_VISIBILITY_FILTER = (
+    _qavf != '0' if _qavf
+    else config.getboolean('site_settings', 'QUERY_API_VISIBILITY_FILTER', fallback=True)
+)
+
+# Ingest-cron HTTP (YSE_App.common.http.ingest_session, #473): connect and read
+# timeouts in seconds, a longer read timeout for the crons' own POSTs to
+# /add_transient/, and how many times a connection error or a 502/503/504 on
+# a GET is retried. [site_settings] INGEST_HTTP_* in settings.ini.
+INGEST_HTTP_CONNECT_TIMEOUT_SECONDS = config.getfloat('site_settings', 'INGEST_HTTP_CONNECT_TIMEOUT_SECONDS', fallback=15.0)
+INGEST_HTTP_READ_TIMEOUT_SECONDS = config.getfloat('site_settings', 'INGEST_HTTP_READ_TIMEOUT_SECONDS', fallback=300.0)
+INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS = config.getfloat('site_settings', 'INGEST_HTTP_UPLOAD_TIMEOUT_SECONDS', fallback=900.0)
+INGEST_HTTP_RETRIES = config.getint('site_settings', 'INGEST_HTTP_RETRIES', fallback=3)
+
 # Cache warmer cron (YSE_App.data_ingest.Dashboard_Cache_Warm): re-run every
 # dashboard saved query on a schedule so no browser triggers a cold run.
 # Off unless [site_settings] DASHBOARD_CACHE_WARM_ENABLED is True (or the
@@ -361,19 +697,92 @@ DASHBOARD_QUERY_BACKUP_DIR = config.get(
     fallback=os.path.join(BASE_DIR, 'backups', 'saved_queries'),
 )
 
+# Authorization hardening (#520-#527). Each flag defaults to the previous
+# behaviour; docs/ziggy-runbook.md has the steps to verify and turn them on.
+# Each reads an env var (1/0) first, then [site_settings] in settings.ini.
+def _authz_flag(env_name, ini_name):
+    raw = os.environ.get(env_name, '').strip()
+    if raw:
+        return raw == '1'
+    return config.getboolean('site_settings', ini_name, fallback=False)
+
+
+# Legacy REST viewsets: unsafe methods need staff, superuser or the model
+# permission (the API_WRITERS_GROUP group holds them; migration 0032).
+API_WRITE_PERMISSIONS_ENFORCED = _authz_flag('YSE_API_WRITE_PERMISSIONS_ENFORCED', 'API_WRITE_PERMISSIONS_ENFORCED')
+# add_transient / add_transient_phot / add_transient_spec / upload_spectrum:
+# group membership and ownership checks for non-service accounts.
+UPLOAD_GROUP_CHECKS_ENFORCED = _authz_flag('YSE_UPLOAD_GROUP_CHECKS_ENFORCED', 'UPLOAD_GROUP_CHECKS_ENFORCED')
+# Service group for crons and scripts that write through the API or the upload endpoints.
+API_WRITERS_GROUP = config.get('site_settings', 'API_WRITERS_GROUP', fallback='api_writers')
+# Accounts migration 0032 adds to API_WRITERS_GROUP when they exist: the
+# [main] dblogin account the ingest crons use (a username, not a secret).
+API_SERVICE_USERNAMES = [
+    name for name in (config.get('main', 'dblogin', fallback='').strip(),)
+    if name and not name.startswith('<')
+]
+# SQL Explorer: superusers plus EXPLORER_ACCESS_GROUP when restricted; all
+# staff otherwise (see issue #102). Dashboard SQL is post-filtered separately.
+EXPLORER_RESTRICTED_ACCESS = _authz_flag('YSE_EXPLORER_RESTRICTED_ACCESS', 'EXPLORER_RESTRICTED_ACCESS')
+EXPLORER_ACCESS_GROUP = config.get('site_settings', 'EXPLORER_ACCESS_GROUP', fallback='explorer_users')
+
+# Feedback button (#443). Off by default: YSE_FEEDBACK_ENABLED=1 or
+# [site_settings] FEEDBACK_ENABLED = True shows the navbar button and accepts
+# POST /feedback/. Feedback is only stored (YSE_App_feedback); staff review it
+# at /feedback/review/ and post an edited version to GitHub by hand. The GitHub
+# token is an EncryptedCredential with service FEEDBACK_GITHUB_CREDENTIAL_SERVICE
+# holding {"token": ...}, never a settings.ini value (runbook).
+_feedback_env = os.environ.get('YSE_FEEDBACK_ENABLED', '').strip().lower()
+if _feedback_env:
+    FEEDBACK_ENABLED = _feedback_env in ('1', 'true', 'yes', 'on')
+else:
+    FEEDBACK_ENABLED = config.getboolean('site_settings', 'FEEDBACK_ENABLED', fallback=False)
+# Submissions per user per rolling hour (counted in the Feedback table).
+FEEDBACK_MAX_PER_HOUR = config.getint('site_settings', 'FEEDBACK_MAX_PER_HOUR', fallback=5)
+FEEDBACK_GITHUB_REPO = config.get('site_settings', 'FEEDBACK_GITHUB_REPO', fallback='Young-Supernova-Experiment/YSE_PZ')
+FEEDBACK_GITHUB_LABEL = config.get('site_settings', 'FEEDBACK_GITHUB_LABEL', fallback='feedback')
+FEEDBACK_GITHUB_CREDENTIAL_SERVICE = 'github_feedback'
+
 EXPLORER_CONNECTIONS = { 'Explorer': 'explorer' }
 EXPLORER_DEFAULT_CONNECTION = 'explorer'
-# SQL Explorer: staff only (see issue #102). Dashboard SQL is post-filtered separately.
-EXPLORER_PERMISSION_VIEW = lambda request: request.user.is_authenticated and (
-    request.user.is_staff or request.user.is_superuser
-)
-EXPLORER_PERMISSION_CHANGE = lambda request: request.user.is_authenticated and (
-    request.user.is_staff or request.user.is_superuser
+
+
+def _explorer_permission(request):
+    from YSE_App.common.authz import explorer_access_allowed
+    return explorer_access_allowed(request.user)
+
+
+EXPLORER_PERMISSION_VIEW = _explorer_permission
+EXPLORER_PERMISSION_CHANGE = _explorer_permission
+# Signed-in users without Explorer access get 403 (Explorer's default shows
+# the admin login form); anonymous users go to the site login (#450).
+EXPLORER_NO_PERMISSION_VIEW = 'YSE_App.explorer_shell.explorer_no_permission'
+# Tables hidden from the Explorer schema browser (django-sql-explorer 2.3).
+# This only affects the schema listing; what queries can read is set by the
+# Explorer MySQL user's grants (runbook).
+EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
+    'auth_',
+    'authtoken_',
+    'axes_',
+    'otp_',
+    'auditlog_',
+    'django_session',
+    'django_admin_log',
+    'django_content_type',
+    'contenttypes_',
+    'sessions_',
+    'admin_',
+    'YSE_App_encryptedcredential',
+    'YSE_App_feedback',
+    'YSE_App_profile',
+    # YSE_App_principalinvestigator is NOT excluded (Ryan, 2026-10-13, #643/#447): PI
+    # tables are visible in Explorer; the PI REST API shows non-staff only id and name.
+    'YSE_App_externalservicerun',
 )
 
 # Researcher-profile and user-agreement tables (#627-#630) are personal data
-# (org policy, FERPA): hidden from the Explorer schema browser and refused in
-# any Explorer SQL. Explorer's own defaults are kept in both lists. The
+# (org policy, FERPA): added to the schema exclusions above and refused in
+# any Explorer SQL. Explorer's own default SQL blacklist is kept. The
 # Explorer MySQL user's grants are the hard barrier (docs/researcher-profile.md).
 _PERSONAL_DATA_TABLES = (
     'YSE_App_researcherprofile',
@@ -396,12 +805,7 @@ _PERSONAL_DATA_TABLES = (
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
-EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = (
-    'auth_',
-    'contenttypes_',
-    'sessions_',
-    'admin_',
-) + _PERSONAL_DATA_TABLES
+EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES = EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES + _PERSONAL_DATA_TABLES
 EXPLORER_SQL_BLACKLIST = (
     'ALTER',
     'RENAME ',
@@ -423,12 +827,29 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+       # Cheap per-request auth for scripts (no PBKDF2); Basic is kept (#457).
+       'rest_framework.authentication.TokenAuthentication',
        'rest_framework.authentication.BasicAuthentication',
        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
     'PAGE_SIZE': 100
 }
+
+# API request rates per client ([security] in settings.ini, DRF rate strings
+# such as 1000/min; empty or "off" disables that throttle). Both are off by
+# default (today's behaviour), so no cron, broker or script can be throttled
+# on deploy; the runbook suggests 300/min anonymous and 1000/min per user.
+_API_THROTTLES = (
+    ('anon', 'rest_framework.throttling.AnonRateThrottle',
+     _str_setting('YSE_API_THROTTLE_ANON', 'security', 'API_THROTTLE_ANON', '')),
+    ('user', 'rest_framework.throttling.UserRateThrottle',
+     _str_setting('YSE_API_THROTTLE_USER', 'security', 'API_THROTTLE_USER', '')),
+)
+_api_throttles = [(scope, cls, rate) for scope, cls, rate in _API_THROTTLES
+                  if rate and rate.lower() not in ('off', 'none', '0')]
+REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = [cls for _scope, cls, _rate in _api_throttles]
+REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {scope: rate for scope, _cls, rate in _api_throttles}
 
 # Password validation
 # https://docs.djangoproject.com/en/1.11/ref/settings/#auth-password-validators
@@ -456,8 +877,23 @@ SMTP_HOST = config.get('SMTP_provider', 'SMTP_HOST')
 SMTP_PORT = config.get('SMTP_provider', 'SMTP_PORT')
 LCOGTUSER = config.get('main', 'lcogtuser')
 LCOGTPASS = config.get('main', 'lcogtpass')
-ZTFPASS = config.get('ztf','ztfforcedphotpass')
-KEPLER_API_ENDPOINT = "http://api.keplerscience.org/is-k2-observing"
+# Required only where ZTF forced photometry runs (see below); a missing value does not stop the web stack.
+ZTFPASS = os.environ.get('ZTF_FORCED_PHOT_PASS') or config.get('ztf', 'ztfforcedphotpass', fallback='')
+# SciServer account for the photo-z crons; required only when those crons run.
+SCISERVER_USER = os.environ.get('SCISERVER_USER') or config.get('main', 'sciserveruser', fallback='')
+SCISERVER_PASSWORD = os.environ.get('SCISERVER_PASSWORD') or config.get('main', 'sciserverpass', fallback='')
+# MAST CasJobs login for the PS1 star/galaxy-score lookups; required only by those ingest jobs.
+CASJOBS_WSID = os.environ.get('CASJOBS_WSID') or config.get('casjobs', 'wsid', fallback='')
+CASJOBS_PW = os.environ.get('CASJOBS_PW') or config.get('casjobs', 'password', fallback='')
+# Optional CA bundle path for the Gemini ODB; empty uses the system trust store.
+GEMINI_CA_BUNDLE = os.environ.get('GEMINI_CA_BUNDLE') or config.get('main', 'gemini_ca_bundle', fallback='')
+KEPLER_API_ENDPOINT = _str_setting('YSE_KEPLER_API_ENDPOINT', 'main', 'kepler_api_endpoint',
+                                   'https://api.keplerscience.org/is-k2-observing')
+# ZTF hosts that refuse https today; override in [ztf] / env once they are fixed (#441).
+ZTF_OBS_SUMMARY_URL = _str_setting('YSE_ZTF_OBS_SUMMARY_URL', 'ztf', 'obs_summary_url',
+                                   'http://skyvision.caltech.edu/ztf/msip/nightly_summary')
+ZTF_SCHEDULE_URL = _str_setting('YSE_ZTF_SCHEDULE_URL', 'ztf', 'schedule_url',
+                                'http://schedule.ztf.uw.edu')
 TNSUSER = config.get('main','tns_bot_name')
 TNSID = config.get('main','tns_bot_id')
 TNSAPIKEY = os.environ.get('TNS_API_KEY') or config.get('main', 'tnsapikey')
@@ -486,6 +922,18 @@ USE_TZ = True
 PROJECT_DIR=os.path.dirname(__file__)
 STATIC_ROOT= os.path.join(PROJECT_DIR,'static/')
 STATIC_URL = config.get('site_settings', 'STATIC')
+# Content-hashed static file names (#482). OFF by default: when
+# YSE_HASHED_STATIC=1, `collectstatic` writes name.<hash>.ext plus a manifest and
+# templates emit the hashed URLs, so Apache can serve them with a long
+# Cache-Control (docs/ziggy-runbook.md). Files missing from the manifest fall back
+# to their plain name (manifest_strict = False).
+if os.environ.get('YSE_HASHED_STATIC', '').strip() == '1':
+    STATICFILES_STORAGE = 'YSE_App.storage.LenientManifestStaticFilesStorage'
+# Finder charts (#484): one directory per transient, written only through
+# YSE_App.view_utils.finder_chart_paths(). Empty = <STATIC_ROOT>/YSE_App/images/findercharts
+# (where the transient detail page serves them from). Prune with
+# `manage.py prune_finder_charts --older-than-days N`.
+FINDER_CHART_DIR = os.environ.get('YSE_FINDER_CHART_DIR', '').strip() or None
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
@@ -502,10 +950,23 @@ YSE_PUBLIC_BASE_URL = os.environ.get(
     'http://127.0.0.1:8000' if DEBUG else 'https://ziggy.ucolick.org/yse/',
 )
 
-if not DEBUG:
+# Proxy headers ([security] in settings.ini). TRUST_X_FORWARDED_PROTO sets
+# SECURE_PROXY_SSL_HEADER; its default (on when DEBUG is off) and the
+# forwarded host / port defaults (on) are the behaviour before these keys.
+# Turn a key off when no proxy in front of Django sets or overwrites that header.
+TRUST_X_FORWARDED_PROTO = _flag('YSE_TRUST_X_FORWARDED_PROTO', 'security', 'TRUST_X_FORWARDED_PROTO', not DEBUG)
+if TRUST_X_FORWARDED_PROTO:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-USE_X_FORWARDED_HOST = True
-USE_X_FORWARDED_PORT = True
+USE_X_FORWARDED_HOST = _flag('YSE_USE_X_FORWARDED_HOST', 'security', 'USE_X_FORWARDED_HOST', True)
+USE_X_FORWARDED_PORT = _flag('YSE_USE_X_FORWARDED_PORT', 'security', 'USE_X_FORWARDED_PORT', True)
+
+# Content-Security-Policy in report-only mode (YSE_App.middleware_csp): the
+# browser reports what the policy would block and blocks nothing. Off by
+# default. CSP_REPORT_ONLY_POLICY replaces the whole default policy;
+# CSP_REPORT_URI adds a report-uri directive.
+CSP_REPORT_ONLY_ENABLED = _flag('YSE_CSP_REPORT_ONLY', 'security', 'CSP_REPORT_ONLY_ENABLED', False)
+CSP_REPORT_ONLY_POLICY = _str_setting('YSE_CSP_REPORT_ONLY_POLICY', 'security', 'CSP_REPORT_ONLY_POLICY')
+CSP_REPORT_URI = _str_setting('YSE_CSP_REPORT_URI', 'security', 'CSP_REPORT_URI')
 
 # ---------------------------------------------------------------------------
 # Background job queue (YSE_App.jobs; issue #263) and notification queue
@@ -533,6 +994,41 @@ JOB_RUNNER_INLINE = (
 JOB_HANDLER_MODULES = [
     m.strip() for m in config.get('site_settings', 'JOB_HANDLER_MODULES', fallback='').split(',') if m.strip()
 ]
+
+# AstroScheduler night planner (#654-#656; docs/astroscheduler.md). Off by default:
+# its pages and API endpoints return 404 until [site_settings] ASTROSCHEDULER_ENABLED
+# (or YSE_ASTROSCHEDULER_ENABLED=1) turns them on.
+ASTROSCHEDULER_ENABLED = _flag('YSE_ASTROSCHEDULER_ENABLED', 'site_settings', 'ASTROSCHEDULER_ENABLED', False)
+# Telescope -> AstroScheduler site and instrument: comma-separated
+# "<pattern>:<site id>:<instrument>" rules; the first pattern found in the telescope's
+# lower-cased name wins. Unmatched telescopes are planned as a custom site with
+# AstroScheduler's generic limits.
+ASTROSCHEDULER_SITE_MAP = _str_setting(
+    'YSE_ASTROSCHEDULER_SITE_MAP', 'site_settings', 'ASTROSCHEDULER_SITE_MAP',
+    'shane:lick:kast,lick:lick:kast,keck ii:keck2:kcwi,keck2:keck2:kcwi,keck i:keck1:lris,keck1:keck1:lris',
+)
+# The planner's front-end files ship inside the astroscheduler package; serve them as
+# <STATIC_URL>astroscheduler/ (collectstatic picks them up). Skipped if not installed.
+try:
+    from astroscheduler import frontend as _astroscheduler_frontend
+    STATICFILES_DIRS = list(globals().get('STATICFILES_DIRS', [])) + [
+        ('astroscheduler', _astroscheduler_frontend.STATIC_DIR),
+    ]
+except ImportError:
+    pass
+# Classical follow-up requests whose window ended on or after this date (YYYY-MM-DD) and
+# that got no good data are closed as Failed by the daily ExpireFollowupRequests cron (#673).
+# Empty = off: requests that ended before the planner was in use are never touched.
+ASTROSCHEDULER_EXPIRE_AFTER = _str_setting(
+    'YSE_ASTROSCHEDULER_EXPIRE_AFTER', 'site_settings', 'ASTROSCHEDULER_EXPIRE_AFTER', '')
+# Magnitude used for a target with no photometry (it gets a warning).
+ASTROSCHEDULER_DEFAULT_MAG = float(_str_setting(
+    'YSE_ASTROSCHEDULER_DEFAULT_MAG', 'site_settings', 'ASTROSCHEDULER_DEFAULT_MAG', '19.0'
+))
+# A last detection older than this many days before the night gets a warning.
+ASTROSCHEDULER_STALE_MAG_DAYS = _int_setting(
+    'YSE_ASTROSCHEDULER_STALE_MAG_DAYS', 'site_settings', 'ASTROSCHEDULER_STALE_MAG_DAYS', 7
+)
 
 # Facility APIs (#298): extra adapter modules (comma-separated) and the HTTP
 # timeout for submissions / status polls (docs/facility-apis.md).

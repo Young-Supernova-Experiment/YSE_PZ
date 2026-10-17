@@ -58,8 +58,10 @@ from django.db.models.functions import (
 )
 from django.utils import timezone
 from django_filters import widgets as filter_widgets
+from django_filters.constants import EMPTY_VALUES
 
 from YSE_App.common.galactic import NGP_DEC_DEG, NGP_RA_DEG, galactic_latitude_expression  # noqa: F401 (re-exported)
+from YSE_App.common.lookup_guard import checked_lookup, is_allowed_ordering
 from YSE_App.common.utilities import getRADecBox
 from YSE_App.models import (
     AlternateTransientNames,
@@ -370,13 +372,73 @@ class TransientSearchForm(forms.Form):
         return cleaned
 
 
+STAT_PREFIX = 'photstat__'
+
+
+def _filterset_user(filterset):
+    """The requesting user of ``filterset``, or ``None`` when it was built without a request."""
+    request = getattr(filterset, 'request', None)
+    return getattr(request, 'user', None) if request is not None else None
+
+
+def visible_stat_lookups(qs, user, fields):
+    """``(qs, {stat field: lookup path})`` for the stat ``fields`` as ``user`` may see them (#607).
+
+    Without a user (a FilterSet built without ``request``) the plain
+    ``photstat__`` paths are used, as before; every page and the API pass the
+    request.
+    """
+    if user is None:
+        return qs, {f: STAT_PREFIX + f for f in fields}
+    from YSE_App.services.photstat_visibility import alias_stat_fields
+
+    return alias_stat_fields(qs, user, fields)
+
+
+class _StatFilterMixin:
+    """A filter on a ``photstat__<field>`` path that reads the value the user may see (#607)."""
+
+    def filter(self, qs, value):
+        if value in EMPTY_VALUES or not self.field_name.startswith(STAT_PREFIX):
+            return super().filter(qs, value)
+        field = self.field_name[len(STAT_PREFIX):]
+        qs, names = visible_stat_lookups(qs, _filterset_user(self.parent), [field])
+        return qs.filter(**{'%s__%s' % (names[field], self.lookup_expr): value})
+
+
+class StatNumberFilter(_StatFilterMixin, django_filters.NumberFilter):
+    pass
+
+
+class StatDateTimeFilter(_StatFilterMixin, django_filters.DateTimeFilter):
+    pass
+
+
 class StableOrderingFilter(django_filters.OrderingFilter):
-    """``ordering`` with a primary-key tie-breaker so pages never overlap."""
+    """``ordering`` with a primary-key tie-breaker so pages never overlap.
+
+    Stat columns (``photstat__<field>``) sort on the value the requesting
+    user may see (#607).
+    """
 
     def filter(self, qs, value):
         if not value or not any(v for v in value):
             return qs
+        # The form already limits ``value`` to the declared choices; this keeps
+        # order_by() to the declared field paths even if a caller bypasses it (#540).
+        allowed = set(self.param_map.values())
         ordering = [self.get_ordering_value(v) for v in value if v]
+        ordering = [o for o in ordering if is_allowed_ordering(o, allowed)]
+        if not ordering:
+            return qs
+        stat_fields = [o.lstrip('-')[len(STAT_PREFIX):] for o in ordering if o.lstrip('-').startswith(STAT_PREFIX)]
+        if stat_fields:
+            qs, names = visible_stat_lookups(qs, _filterset_user(self.parent), stat_fields)
+            ordering = [
+                ('-' if o.startswith('-') else '') + names[o.lstrip('-')[len(STAT_PREFIX):]]
+                if o.lstrip('-').startswith(STAT_PREFIX) else o
+                for o in ordering
+            ]
         tie = '-pk' if ordering and ordering[0].startswith('-') else 'pk'
         return qs.order_by(*ordering, tie)
 
@@ -405,14 +467,16 @@ def _bool(method, label):
 
 
 def _num(field_name, lookup, label):
-    return django_filters.NumberFilter(field_name=field_name, lookup_expr=lookup, label=label)
+    cls = StatNumberFilter if field_name.startswith(STAT_PREFIX) else django_filters.NumberFilter
+    return cls(field_name=field_name, lookup_expr=lookup, label=label)
 
 
 def _when(field_name, lookup, label):
     # forms.DateTimeField (Django >= 3.1) reads both ``2026-09-01`` and ISO
     # 8601 ``2026-09-01T12:00:00Z``; naive values are taken in the current
     # time zone (UTC on the servers).
-    return django_filters.DateTimeFilter(
+    cls = StatDateTimeFilter if field_name.startswith(STAT_PREFIX) else django_filters.DateTimeFilter
+    return cls(
         field_name=field_name, lookup_expr=lookup, label=label,
         widget=forms.DateTimeInput(attrs={'placeholder': 'YYYY-MM-DD[THH:MM]'}),
     )
@@ -420,11 +484,25 @@ def _when(field_name, lookup, label):
 
 def _by_pk(field_name):
     """``method`` for a ModelMultipleChoiceFilter: ``<fk>__in`` on the chosen rows' pks."""
+    key = checked_lookup(field_name + '__in', (field_name,), ('in',))
+
     def _filter(qs, name, value):
         if not value:
             return qs
-        return qs.filter(**{field_name + '__in': [obj.pk for obj in value]})
+        return qs.filter(**{key: [obj.pk for obj in value]})
     return _filter
+
+
+# Columns the archive-flag filters may use (``has_hst`` etc., #540).
+ARCHIVE_FLAG_FILTER_FIELDS = frozenset({'has_hst', 'has_jwst', 'has_chandra'})
+# Lookups the ``legacy.<key>`` annotation filter may add to its column.
+_LEGACY_LOOKUPS = ('isnull', 'gte', 'lte')
+
+
+def _legacy_filter_columns(legacy_columns):
+    """Field paths ``legacy.<key>`` filters may touch: the shim's columns, with the FK read by name."""
+    return {('antares_classification__name' if c == 'antares_classification' else c)
+            for c in legacy_columns.values()}
 
 
 def _names(model, label, **kwargs):
@@ -732,21 +810,22 @@ class TransientSearchFilterSet(django_filters.FilterSet):
             return qs.none()
         if column == 'antares_classification':
             column = 'antares_classification__name'
-        q = Q(**{column + '__isnull': False})
+        allowed = _legacy_filter_columns(LEGACY_COLUMNS)
+        q = Q(**{checked_lookup(column + '__isnull', allowed, _LEGACY_LOOKUPS): False})
         if eq:
             if key in LEGACY_BOOLEAN_KEYS:
-                q &= Q(**{column: eq.lower() in ('1', 'true', 'yes')})
+                q &= Q(**{checked_lookup(column, allowed): eq.lower() in ('1', 'true', 'yes')})
             elif key in LEGACY_NUMERIC_KEYS:
                 try:
-                    q &= Q(**{column: float(eq)})
+                    q &= Q(**{checked_lookup(column, allowed): float(eq)})
                 except ValueError:
                     return qs.none()
             else:
-                q &= Q(**{column: eq})
+                q &= Q(**{checked_lookup(column, allowed): eq})
         if vmin is not None:
-            q &= Q(**{column + '__gte': vmin})
+            q &= Q(**{checked_lookup(column + '__gte', allowed, _LEGACY_LOOKUPS): vmin})
         if vmax is not None:
-            q &= Q(**{column + '__lte': vmax})
+            q &= Q(**{checked_lookup(column + '__lte', allowed, _LEGACY_LOOKUPS): vmax})
         return qs.filter(q)
 
     # --- names ---------------------------------------------------------
@@ -776,7 +855,8 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         return qs.filter(disc_date__gte=UtcNowMinusSeconds(float(value) * 86400.0))
 
     def filter_days_since_last_det_max(self, qs, name, value):
-        return qs.filter(photstat__last_detected_mjd__gte=NowMjd() - _float(value))
+        qs, names = visible_stat_lookups(qs, self._user(), ['last_detected_mjd'])
+        return qs.filter(**{names['last_detected_mjd'] + '__gte': NowMjd() - _float(value)})
 
     # --- classification ------------------------------------------------
     def filter_classification(self, qs, name, value):
@@ -861,7 +941,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     def _filter_archive_flag(self, qs, field, value):
         if value is None:
             return qs
-        return qs.filter(**{field: bool(value)})
+        return qs.filter(**{checked_lookup(field, ARCHIVE_FLAG_FILTER_FIELDS): bool(value)})
 
     def filter_has_hst(self, qs, name, value):
         return self._filter_archive_flag(qs, 'has_hst', value)
@@ -908,3 +988,97 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         """Active filters per ``FIELD_GROUPS`` entry (for the group headers)."""
         active = {name for name, _, _ in self.active_filters()}
         return {title: sum(1 for f in fields if f in active) for title, fields in FIELD_GROUPS}
+
+
+# Per-filter descriptions: django-filter puts ``help_text`` into DRF's schema, so they show up on
+# ``/api/schema/`` next to each query parameter (#284). Every filter needs an entry (tested).
+FILTER_HELP = {
+    'name': 'Exact transient name.',
+    'name_contains': 'Case-insensitive substring of the name.',
+    'alias': 'Substring of the name or of any alternate name.',
+    'has_tns_name': 'true: the name looks like a TNS name (20YYabc, 1 to 4 letters); false: it does not.',
+    'ra': 'Cone-search centre, RA: decimal degrees or sexagesimal hours. Needs dec.',
+    'dec': 'Cone-search centre, Dec: decimal degrees or sexagesimal. Needs ra.',
+    'radius_arcsec': 'Cone-search radius in arcseconds (default 5). Adds a separation annotation and, with no ordering, sorts by it.',
+    'ra_gte': 'Legacy coordinate box: RA at least this, degrees.',
+    'ra_lte': 'Legacy coordinate box: RA at most this, degrees.',
+    'dec_gte': 'Legacy coordinate box: Dec at least this, degrees.',
+    'dec_lte': 'Legacy coordinate box: Dec at most this, degrees.',
+    'gal_b_abs_min': 'Absolute galactic latitude at least this, degrees.',
+    'gal_b_abs_max': 'Absolute galactic latitude at most this, degrees.',
+    'disc_date_after': 'Discovered on or after this date (YYYY-MM-DD or ISO 8601; a bare date is midnight UTC).',
+    'disc_date_before': 'Discovered before this date (YYYY-MM-DD or ISO 8601).',
+    'days_since_disc_max': 'Discovered within the last N days.',
+    'created_after': 'Row created on or after this date.',
+    'created_before': 'Row created before this date.',
+    'modified_after': 'Row last modified on or after this date.',
+    'modified_before': 'Row last modified before this date.',
+    'created_date_gte': 'Legacy name for created_after.',
+    'modified_date_gte': 'Legacy name for modified_after.',
+    'peak_mag_min': 'Peak (brightest) magnitude at least this.',
+    'peak_mag_max': 'Peak (brightest) magnitude at most this.',
+    'latest_mag_min': 'Latest detection magnitude at least this.',
+    'latest_mag_max': 'Latest detection magnitude at most this.',
+    'num_det_min': 'At least this many detections.',
+    'num_det_max': 'At most this many detections.',
+    'first_det_after': 'First detection on or after this date.',
+    'first_det_before': 'First detection before this date.',
+    'last_det_after': 'Last detection on or after this date.',
+    'last_det_before': 'Last detection before this date.',
+    'days_since_last_det_max': 'Last detection within the last N days.',
+    'rise_rate_min': 'Rise rate (mag/day, positive) at least this.',
+    'rise_rate_max': 'Rise rate (mag/day, positive) at most this.',
+    'decay_rate_min': 'Decay rate (mag/day, positive) at least this.',
+    'decay_rate_max': 'Decay rate (mag/day, positive) at most this.',
+    'deepest_limit_min': 'Deepest upper limit at least this magnitude.',
+    'deepest_limit_max': 'Deepest upper limit at most this magnitude.',
+    'peak_mag_lte': 'Legacy name for peak_mag_max.',
+    'peak_mag_gte': 'Legacy name for peak_mag_min.',
+    'last_det_mag_lte': 'Legacy: latest detection magnitude at most this.',
+    'last_det_mag_gte': 'Legacy: latest detection magnitude at least this.',
+    'last_det_mjd_gte': 'Legacy: last detection MJD at least this.',
+    'last_det_mjd_lte': 'Legacy: last detection MJD at most this.',
+    'first_det_mjd_gte': 'Legacy: first detection MJD at least this.',
+    'first_det_mjd_lte': 'Legacy: first detection MJD at most this.',
+    'num_det_gte': 'Legacy name for num_det_min.',
+    'rise_rate_gte': 'Legacy name for rise_rate_min.',
+    'decay_rate_gte': 'Legacy name for decay_rate_min.',
+    'classification': 'Spectroscopic or photometric class is one of these (repeat the parameter).',
+    'spec_class': 'Spectroscopic class is one of these (repeat the parameter).',
+    'photo_class': 'Photometric class is one of these (repeat the parameter).',
+    'exclude_class': 'Neither class is one of these (repeat the parameter).',
+    'has_redshift': 'true: has a redshift (own, else host); false: has none.',
+    'redshift_min': 'Redshift (own, else host) at least this.',
+    'redshift_max': 'Redshift (own, else host) at most this.',
+    'status': 'Status is one of these (repeat the parameter).',
+    'status_in': 'Legacy comma-separated status names, e.g. New,Watch.',
+    'obs_group': 'Observation group is one of these (repeat the parameter).',
+    'internal_survey': 'Internal survey is one of these (repeat the parameter).',
+    'tags': 'Has any of these tags (repeat the parameter).',
+    'tags_all': 'Has all of these tags (repeat the parameter).',
+    'tag_in': 'Legacy comma-separated tag names (any of).',
+    'has_spectrum': 'true: has a spectrum you may see; false: has none.',
+    'has_followup': 'true: has any follow-up request; false: has none.',
+    'followup_status': 'Has a follow-up request in one of these statuses (repeat the parameter).',
+    'has_comment': 'true: has a transient-level comment you may see; false: has none.',
+    'has_host': 'true: has a host galaxy; false: has none.',
+    'host_redshift_min': 'Host redshift at least this.',
+    'host_redshift_max': 'Host redshift at most this.',
+    'visible_to_group': 'Photometry or spectra shared with this collaboration group (non-staff: only groups you belong to).',
+    'favorites': 'true: only transients you starred.',
+    'has_interest': 'true: only transients with at least one paper-interest mark.',
+    'has_hst': 'true: known to have HST data; false: known not to.',
+    'has_jwst': 'true: known to have JWST data; false: known not to.',
+    'has_chandra': 'true: known to have Chandra data; false: known not to.',
+    'annotation_origin': 'Annotation origin to filter on ("legacy" reads the Transient columns).',
+    'annotation_key': 'Annotation key within the origin.',
+    'annotation_value_eq': 'Annotation value equals this.',
+    'annotation_value_min': 'Annotation numeric value at least this.',
+    'annotation_value_max': 'Annotation numeric value at most this.',
+    'annotation_column': 'origin.key to show as an extra sortable column.',
+    'ordering': 'Comma-separated sort fields; prefix - for descending (name, ra, dec, disc_date, peak_mag, num_det, separation (cone only), gal_b, ...).',
+}
+
+for _name, _text in FILTER_HELP.items():
+    TransientSearchFilterSet.base_filters[_name].extra['help_text'] = _text
+del _name, _text

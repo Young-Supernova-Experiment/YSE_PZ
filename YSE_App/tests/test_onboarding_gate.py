@@ -13,6 +13,7 @@ from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import resolve, reverse
 
+from YSE_App import login_required as _login_required
 from YSE_App import onboarding
 from YSE_App.models import AgreementAcceptance, Mentorship, ResearcherProfile, UserAgreement
 from YSE_App.onboarding import OnboardingGateMiddleware
@@ -283,6 +284,28 @@ class GateExemptionTests(TestCase):
         onboard(self.user)
         self.assertExempt(reverse("notification_list"))
 
+    def test_experimental_endpoints_are_exempt(self):
+        # Develop backport (2026-10-12): the two-factor pages (only routed when
+        # STAFF_MFA_REQUIRED is on; test_staff_mfa covers the flow) and the
+        # feedback POST target are exempt by name; query_api and the
+        # external-service callback stay exempt.
+        for name in ("staff_mfa_verify", "staff_mfa_setup", "staff_mfa_backup_codes", "feedback_submit",
+                     "query_api", "external_service_run_callback", "slack_events"):
+            self.assertIn(name, onboarding.EXEMPT_URL_NAMES, name)
+        self.assertExempt(reverse("feedback_submit"))
+        self.assertExempt(reverse("feedback_submit"), method="post")
+        self.assertExempt(reverse("query_api", args=["some_query"]))
+
+    def test_drf_views_outside_api_prefix_are_exempt(self):
+        from rest_framework.views import APIView
+
+        class _Probe(APIView):
+            pass
+
+        request = self.factory.get("/not-under-api/", **BROWSER)
+        request.user = self.user
+        self.assertTrue(onboarding.is_exempt(request, _Probe.as_view()))
+
 
 # --- Served under a URL prefix, as /yse_test/ and /yse_experimental/ are on Ziggy (#634) ---
 
@@ -473,6 +496,8 @@ class GateCoversEveryPageTests(TestCase):
                 continue
             if match.url_name in onboarding.EXEMPT_URL_NAMES or getattr(match.func, "onboarding_exempt", False):
                 continue
+            if _login_required._is_drf_view(match.func):
+                continue  # DRF views are exempt wherever they are routed
             request = factory.get(path, SCRIPT_NAME=PREFIX, **BROWSER)
             request.user = self.user
             request.session = SessionStore()

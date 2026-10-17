@@ -6,9 +6,12 @@ in the Django cache and only solved on a miss. Every helper formats its result
 exactly as the views and tables did when they called astroplan inline.
 """
 
+import hashlib
+
 import astropy.units as u
+import numpy as np
 from astroplan import Observer, moon_illumination
-from astropy.coordinates import EarthLocation, get_moon
+from astropy.coordinates import EarthLocation, SkyCoord, get_moon
 from astropy.time import Time
 from django.core.cache import cache
 
@@ -36,7 +39,7 @@ def _hms(t):
     return t.isot.split('T')[-1][:-7]
 
 
-def twilight_times(telescope, ut_obs_date, which="next"):
+def twilight_times(telescope, ut_obs_date, which="next", timeout=NIGHT_CACHE_TIMEOUT):
     """
     Sunset, twilights, sunrise and moon illumination for the night around ``ut_obs_date``.
 
@@ -44,7 +47,8 @@ def twilight_times(telescope, ut_obs_date, which="next"):
     ``which="next"`` for the YSE pages, the night's full timestamp with
     ``which="previous"`` for a classical observing night). Returns a dict of the
     formatted strings the templates show plus ``sunset_mjd`` / ``sunrise_mjd`` (the
-    ``date_to_mjd`` values the survey-observation windows use). Six astroplan
+    ``date_to_mjd`` values the survey-observation windows use). ``timeout`` bounds the
+    cache entry (a short one for per-minute "now" keys). Six astroplan
     root-finds on a miss, a cache read afterwards.
     """
     key = 'twilight_%s_%s_%s' % (_site_key(telescope), ut_obs_date.replace(' ', 'T'), which)
@@ -65,7 +69,7 @@ def twilight_times(telescope, ut_obs_date, which="next"):
             'sunset_mjd': float(date_to_mjd(sunset)),
             'sunrise_mjd': float(date_to_mjd(sunrise)),
         }
-        cache.set(key, result, timeout=NIGHT_CACHE_TIMEOUT)
+        cache.set(key, result, timeout=timeout)
     return result
 
 
@@ -113,5 +117,43 @@ def calendar_sun_times(telescope, date):
             'sunrise_mjd': date_to_mjd(tel.sun_rise_time(time, which="next")),
             'moon_illum': '%i%%' % (moon_illumination(time) * 100),
         }
+        cache.set(key, result, timeout=NIGHT_CACHE_TIMEOUT)
+    return result
+
+
+def _full_time_str(t):
+    """'HH:MM:SS.sss' (the classical-night rise/set endpoints' historical format), or None if no event."""
+    value = t.value
+    if np.ma.is_masked(value) or value != value:
+        return None
+    try:
+        return t.isot.split('T')[-1]
+    except (AttributeError, ValueError):
+        return None
+
+
+def target_rise_set(telescope, obs_date, coords, horizon_deg=18):
+    """
+    (rise, set) of one target for a classical night, solved in-process and cached.
+
+    ``coords`` is the ``(ra, dec)`` string pair ``Transient.CoordString()`` returns and
+    ``obs_date`` the night (only its date part is used). Both times are the previous
+    event below ``horizon_deg``, formatted ``'HH:MM:SS.sss'`` (``None`` when the target
+    never crosses it), as the ``rise_time`` / ``set_time`` endpoints always returned them.
+    Replaces a forked Process plus a module-global Queue (#463): one vectorised
+    astroplan call for both events, then a cache read on the sibling request.
+    """
+    date_str = str(obs_date).split()[0]
+    coord_hash = hashlib.md5(('%s %s' % (coords[0], coords[1])).encode()).hexdigest()  # keys may not hold spaces
+    key = 'rise_set_full_%s_%s_%s_%s' % (_site_key(telescope), date_str, horizon_deg, coord_hash)
+    result = cache.get(key)
+    if result is None:
+        tme = Time(date_str)
+        sc = SkyCoord('%s %s' % (coords[0], coords[1]), unit=(u.hourangle, u.deg))
+        tel = observer_for(telescope)
+        horizon = horizon_deg * u.deg
+        rise = tel.target_rise_time(tme, sc, horizon=horizon, which="previous")
+        sett = tel.target_set_time(tme, sc, horizon=horizon, which="previous")
+        result = (_full_time_str(rise), _full_time_str(sett))
         cache.set(key, result, timeout=NIGHT_CACHE_TIMEOUT)
     return result

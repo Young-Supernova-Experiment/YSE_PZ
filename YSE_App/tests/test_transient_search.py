@@ -16,6 +16,7 @@ import datetime
 import re
 
 from django.contrib.auth.models import Group
+from django.core.cache import cache
 from django.db import connection
 from django.http import QueryDict
 from django.test import Client, RequestFactory, TestCase
@@ -68,6 +69,15 @@ def _point(photometry, band, days_ago, *, mag=None, flux=None, flux_err=None, zp
 
 class SearchFixture(TestCase):
     """Five transients that differ in every filtered property."""
+
+    def setUp(self):
+        # The LocMem cache is process-global and outlives each test's rollback,
+        # while sqlite reuses Query primary keys across tests. A name list that
+        # run_explorer_query_cached stored for an earlier test's Query id would
+        # otherwise be served to this test's Query (#388).
+        super().setUp()
+        cache.clear()
+        self.addCleanup(cache.clear)
 
     @classmethod
     def setUpTestData(cls):
@@ -446,6 +456,7 @@ class QuickSearchTests(TestCase):
 
 class SearchPageTests(SearchFixture):
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.client.force_login(self.user)
 
@@ -536,6 +547,7 @@ class SearchPageTests(SearchFixture):
 
 class ApiParityTests(SearchFixture):
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.client.force_login(self.user)
 

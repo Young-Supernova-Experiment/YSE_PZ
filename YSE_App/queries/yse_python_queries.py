@@ -22,6 +22,30 @@ def makeRegistrar():
     return registrar
 python_query_reg = makeRegistrar()
 
+
+def get_python_query(name):
+    """The registered python query called ``name`` (#505); KeyError when there is none."""
+    func = python_query_reg.all.get(name) if isinstance(name, str) else None
+    if func is None:
+        raise KeyError(name)
+    return func
+
+
+def run_python_query(name):
+    return get_python_query(name)()
+
+def annotate_recent_mag(qs):
+    """``recent_mag`` for the saved-query and planning tables: the stored last detection (#270).
+
+    ``TransientPhotStat.last_detected_mag`` (a LEFT JOIN, NULL without a stat
+    row or detection) instead of a correlated photometry subquery per row, so
+    the "Max Recent Mag" filter and the "Last Det." cell agree: the latest
+    unflagged detection by the light-curve plot's rule. Explorer users read
+    the same columns from ``yse_transient_photstat_v`` (docs/photstat.md).
+    """
+    return qs.annotate(recent_mag=F('photstat__last_detected_mag'))
+
+
 def annotate_rising_transient_qs(qs):
 
     g_filters = "('g-ZTF', 'g', 'V', 'gp', 'g-Sloan')"
