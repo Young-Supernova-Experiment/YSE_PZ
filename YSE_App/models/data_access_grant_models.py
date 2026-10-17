@@ -88,8 +88,10 @@ GRANTED_AS_CHOICES = (
     (AS_STAFF, "Administrator"),
 )
 
-_ONE_GRANTEE = (Q(grantee_group__isnull=False, grantee_user__isnull=True)
-                | Q(grantee_group__isnull=True, grantee_user__isnull=False))
+# "At most one" in the database (exactly one is checked by ``clean``): on MySQL, Django's
+# cascade sets a nullable CASCADE foreign key to NULL just before deleting the row, so
+# a deleted group, user, point or dataset must not trip the check.
+_ONE_GRANTEE = ~Q(grantee_group__isnull=False, grantee_user__isnull=False)
 
 
 def _clean_grantee(row, errors):
@@ -163,8 +165,7 @@ class DataAccessRule(models.Model):
             models.CheckConstraint(name="yse_dar_one_grantee", check=_ONE_GRANTEE),
             models.CheckConstraint(
                 name="yse_dar_one_target",
-                check=(Q(transient_phot_data__isnull=False, transient_spectrum__isnull=True)
-                       | Q(transient_phot_data__isnull=True, transient_spectrum__isnull=False)),
+                check=~Q(transient_phot_data__isnull=False, transient_spectrum__isnull=False),
             ),
             models.CheckConstraint(name="yse_dar_effect", check=Q(effect__in=(EFFECT_ALLOW, EFFECT_DENY))),
             # One rule per target and grantee. NULLs never collide in a unique index, so the
@@ -344,8 +345,7 @@ class DatasetGroupShare(models.Model):
         constraints = [
             models.CheckConstraint(
                 name="yse_dgs_one_dataset",
-                check=(Q(transient_photometry__isnull=False, transient_spectrum__isnull=True)
-                       | Q(transient_photometry__isnull=True, transient_spectrum__isnull=False)),
+                check=~Q(transient_photometry__isnull=False, transient_spectrum__isnull=False),
             ),
             models.UniqueConstraint(fields=["transient_photometry", "group"], name="yse_dgs_phot_group"),
             models.UniqueConstraint(fields=["transient_spectrum", "group"], name="yse_dgs_spec_group"),
