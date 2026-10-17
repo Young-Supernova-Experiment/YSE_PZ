@@ -290,11 +290,12 @@ def quick_search_params(params):
 
 
 def _rows_visible_to(qs, user):
-    """Restrict grouped rows (photometry / spectra) to what ``user`` may see."""
+    """Restrict a ``TransientSpectrum`` queryset to what ``user`` may see (the central rule, #648)."""
     if user is None or user.is_staff or user.is_superuser:
         return qs
-    names = list(user.groups.values_list('name', flat=True)) if user.is_authenticated else []
-    return qs.filter(Q(groups__isnull=True) | Q(groups__name__in=names))
+    from YSE_App.services.visibility import spectrum_visible_q
+
+    return qs.filter(spectrum_visible_q(user))
 
 
 class UtcNowMinusSeconds(Func):

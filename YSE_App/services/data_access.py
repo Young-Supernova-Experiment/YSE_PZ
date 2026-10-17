@@ -38,7 +38,7 @@ from YSE_App.models import DataAccessRequest, Transient, TransientPhotometry, Tr
 from YSE_App.services import data_sharing
 from YSE_App.services import notify as notify_service
 from YSE_App.services.data_pis import ALLOCATION_PI_PATHS, pi_users_for
-from YSE_App.services.visibility import user_group_names
+from YSE_App.services.visibility import dataset_visible_to_user, user_group_names
 
 logger = logging.getLogger("YSE_App.data_access")
 
@@ -82,13 +82,9 @@ def hidden_datasets(user: User, transient_id: int, kind: str) -> list:
     """
     if not user.is_authenticated:
         return []
-    names = set(user_group_names(user))
-    hidden = []
-    for row in restricted_datasets(transient_id, kind):
-        owners = {g.name for g in row.groups.all()}
-        if not owners & names:
-            hidden.append(row)
-    return hidden
+    names = user_group_names(user)
+    return [row for row in restricted_datasets(transient_id, kind)
+            if not dataset_visible_to_user(user, row, names=names)]
 
 
 def count_hidden(transient_id: int, user: User) -> Dict[str, Dict[str, int]]:
