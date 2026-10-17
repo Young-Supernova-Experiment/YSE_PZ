@@ -1208,6 +1208,220 @@ class DatasetProgramLinkAPIView(generics.GenericAPIView):
                          "previous": result.previous_id, "changed": result.changed, "rules": result.grants})
 
 
+# --- access actions (#648, PR 5); every view is 404 while DATA_ACCESS_GRANTS_ENABLED is off --------------
+
+
+def _access_grantee(data):
+    from YSE_App.services import access_pages
+
+    return access_pages.resolve_grantee(group=data.get("group"), user=data.get("user"))
+
+
+def _grant_json(grant):
+    return {
+        "id": grant.pk, "allocation": grant.allocation_id, "effect": grant.effect,
+        "grantee_group": grant.grantee_group.name if grant.grantee_group_id else None,
+        "grantee_user": grant.grantee_user.username if grant.grantee_user_id else None,
+        "night_start": grant.night_start, "night_end": grant.night_end,
+        "classical_night": grant.classical_night_id, "created_as": grant.created_as,
+        "created_by": grant.created_by.username if grant.created_by_id else None,
+        "created_at": grant.created_at, "stopped_at": grant.stopped_at, "note": grant.note,
+    }
+
+
+def _access_allocation(request, allocation_id):
+    from rest_framework.exceptions import PermissionDenied as APIForbidden
+
+    from YSE_App.services import access_actions, access_pages
+
+    access_pages.require_enabled()
+    allocation = Allocation.objects.select_related("principal_investigator").filter(pk=allocation_id).first()
+    if allocation is None:
+        raise Http404("no allocation %r" % allocation_id)
+    if access_actions.program_role(request.user, allocation) is None:
+        raise APIForbidden("Only the program's PI, its program deputies or an administrator may set its access.")
+    return allocation
+
+
+class AccessProgramGrantsAPIView(generics.GenericAPIView):
+    """``/api/access/programs/<id>/grants/``: ``GET`` the program's standing grants; ``POST`` a program or night
+    action (``effect``, ``group`` or ``user``, optional ``night_start`` + ``night_end`` or ``night`` +
+    ``utc_offset``, ``note``). The response counts what was written now, including ``kept_shared``."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, allocation_id):
+        allocation = _access_allocation(request, allocation_id)
+        grants = StandingAccessGrant.objects.filter(allocation=allocation).select_related(
+            "grantee_group", "grantee_user", "created_by")
+        return Response({"allocation": allocation.pk, "grants": [_grant_json(g) for g in grants]})
+
+    def post(self, request, allocation_id):
+        from YSE_App.services import access_actions, access_pages
+
+        allocation = _access_allocation(request, allocation_id)
+        group, user = _access_grantee(request.data)
+        night_start = night_end = None
+        if any(request.data.get(k) for k in ("night", "night_start", "night_end")):
+            night_start, night_end = access_pages.parse_night(request.data)
+        grant, result = access_actions.program_action(
+            request.user, allocation, effect=request.data.get("effect", ""), grantee_group=group, grantee_user=user,
+            night_start=night_start, night_end=night_end, note=request.data.get("note", "") or "")
+        return Response({"grant": _grant_json(grant), "written": result.as_dict()}, status=status.HTTP_201_CREATED)
+
+
+class AccessStandingGrantStopAPIView(generics.GenericAPIView):
+    """``POST /api/access/standing_grants/<id>/stop/``: data taken from now on are not covered."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, grant_id):
+        from YSE_App.services import access_actions, access_pages
+
+        access_pages.require_enabled()
+        grant = StandingAccessGrant.objects.select_related("allocation__principal_investigator").filter(
+            pk=grant_id).first()
+        if grant is None:
+            raise Http404("no standing grant %r" % grant_id)
+        access_actions.stop_standing_grant(request.user, grant)
+        return Response(_grant_json(grant))
+
+
+class AccessProgramDeputiesAPIView(generics.GenericAPIView):
+    """``/api/access/programs/<id>/deputies/``: ``GET`` the program deputies; ``POST {"user": <username>}``
+    adds one (the program's PI or staff)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, allocation_id):
+        allocation = _access_allocation(request, allocation_id)
+        rows = AllocationDelegate.objects.filter(allocation=allocation).select_related("user")
+        return Response({"allocation": allocation.pk, "deputies": [
+            {"id": r.pk, "user": r.user.username, "note": r.note, "created_at": r.created_at} for r in rows]})
+
+    def post(self, request, allocation_id):
+        from YSE_App.services import access_pages
+
+        allocation = _access_allocation(request, allocation_id)
+        _group, deputy = access_pages.resolve_grantee(user=request.data.get("user"))
+        row = access_pages.add_program_deputy(request.user, allocation, deputy, note=request.data.get("note", ""))
+        return Response({"id": row.pk, "user": deputy.username}, status=status.HTTP_201_CREATED)
+
+
+class AccessProgramDeputyRemoveAPIView(generics.GenericAPIView):
+    """``POST /api/access/programs/<id>/deputies/<deputy id>/remove/`` (the program's PI or staff)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, allocation_id, deputy_id):
+        from YSE_App.services import access_pages
+
+        allocation = _access_allocation(request, allocation_id)
+        row = AllocationDelegate.objects.filter(pk=deputy_id, allocation=allocation).first()
+        if row is None:
+            raise Http404("no deputy %r" % deputy_id)
+        access_pages.remove_program_deputy(request.user, row)
+        return Response({"removed": deputy_id})
+
+
+def _access_dataset(request, kind, dataset_id):
+    from rest_framework.exceptions import PermissionDenied as APIForbidden
+
+    from YSE_App.services import access_actions, access_pages, visibility
+
+    access_pages.require_enabled()
+    model = {"photometry": TransientPhotometry, "spectrum": TransientSpectrum}[kind]
+    dataset = model.objects.filter(pk=dataset_id).first()
+    if dataset is None or not (visibility.user_sees_everything(request.user)
+                               or visibility.dataset_visible_to_user(request.user, dataset)):
+        raise Http404("no %s %s" % (kind, dataset_id))
+    if access_actions.dataset_role(request.user, dataset) is None:
+        raise APIForbidden("Only the data's PIs, their deputies, the program's PI or deputies, or an administrator "
+                           "may set access for these data.")
+    return dataset
+
+
+class AccessDatasetRulesAPIView(generics.GenericAPIView):
+    """``/api/access/datasets/<photometry|spectrum>/<id>/rules/``: ``GET`` the rules per grantee;
+    ``POST {"effect": "allow"|"deny", "group" or "user"}``: a dataset action (every point of the set)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, kind, dataset_id):
+        from YSE_App.services import access_pages
+
+        dataset = _access_dataset(request, kind, dataset_id)
+        sets, spectra = ([dataset], []) if kind == "photometry" else ([], [dataset])
+        return Response({"kind": kind, "id": dataset.pk, "rules": access_pages.rule_summary(sets, spectra)})
+
+    def post(self, request, kind, dataset_id):
+        from YSE_App.services import access_actions
+
+        dataset = _access_dataset(request, kind, dataset_id)
+        group, user = _access_grantee(request.data)
+        result = access_actions.dataset_action(request.user, dataset, effect=request.data.get("effect", ""),
+                                               grantee_group=group, grantee_user=user)
+        return Response({"kind": kind, "id": dataset.pk, "written": result.as_dict()})
+
+
+class AccessDatasetRulesRemoveAPIView(generics.GenericAPIView):
+    """``POST /api/access/datasets/<kind>/<id>/rules/remove/ {"group" or "user"}``: staff only, for mistakes
+    (each deletion is audited)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, kind, dataset_id):
+        from YSE_App.services import access_pages
+
+        access_pages.require_enabled()
+        model = {"photometry": TransientPhotometry, "spectrum": TransientSpectrum}[kind]
+        if not model.objects.filter(pk=dataset_id).exists():
+            raise Http404("no %s %s" % (kind, dataset_id))
+        group, user = _access_grantee(request.data)
+        n = access_pages.delete_rules(request.user, kind=kind, dataset_id=int(dataset_id), grantee_group=group,
+                                      grantee_user=user)
+        return Response({"removed": n})
+
+
+class AccessTransientNightsAPIView(generics.GenericAPIView):
+    """``/api/access/transients/<id>/nights/``: ``GET`` the object's nights (of the data you may set access for);
+    ``POST`` a night action: all of the object's points from that night, in any filter, and its spectra
+    (``effect``, ``group`` or ``user``, ``night_start`` + ``night_end`` or ``night`` + ``utc_offset``)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def _transient(self, transient_id):
+        from YSE_App.services import access_pages
+
+        access_pages.require_enabled()
+        transient = Transient.objects.filter(pk=transient_id).first()
+        if transient is None:
+            raise Http404("no transient %r" % transient_id)
+        return transient
+
+    def get(self, request, transient_id):
+        from YSE_App.services import access_pages
+
+        transient = self._transient(transient_id)
+        sets, spectra = access_pages.manageable_datasets(request.user, transient)
+        nights = access_pages.object_nights(transient, sets, spectra)
+        return Response({"transient": transient.pk, "nights": [
+            {"night": n["night"], "utc_offset": n["utc_offset"], "night_start": n["start"], "night_end": n["end"],
+             "points": n["points"], "spectra": n["spectra"], "telescopes": n["telescopes"]} for n in nights]})
+
+    def post(self, request, transient_id):
+        from YSE_App.services import access_actions, access_pages
+
+        transient = self._transient(transient_id)
+        start, end = access_pages.parse_night(request.data)
+        group, user = _access_grantee(request.data)
+        result = access_actions.object_night_action(request.user, transient, start, end,
+                                                    effect=request.data.get("effect", ""), grantee_group=group,
+                                                    grantee_user=user)
+        return Response({"transient": transient.pk, "night_start": start, "night_end": end,
+                         "written": result.as_dict()})
+
+
 class PlannerSolveAPIView(generics.GenericAPIView):
     """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
     ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""

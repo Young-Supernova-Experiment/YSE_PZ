@@ -22,6 +22,7 @@ from YSE_App import service_run_views
 from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import signup_views
+from YSE_App import access_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feedback_views,
@@ -135,6 +136,9 @@ urlpatterns = [
     # Interests (#290) and data access requests (#293): before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/interests/register/$',
             collaboration_views.interest_register, name='interest_register'),
+    # before the transient_detail slug catch-all (#648, PR 5)
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/data_access/rules/$', access_views.transient_rules,
+            name='access_transient_rules'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/data_access/request/$',
             collaboration_views.data_access_request_create, name='data_access_request_create'),
     # Sharing services (#326): report dialog preview/submit for one transient; before the slug catch-all.
@@ -422,6 +426,9 @@ urlpatterns = [
     re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/decide/$', collaboration_views.data_access_decide,
             name='data_access_decide'),
     re_path(r'^data_sharing_deputies/$', collaboration_views.data_sharing_deputies, name='data_sharing_deputies'),
+    # Read-time access rules (#648, PR 5); 404 unless DATA_ACCESS_GRANTS_ENABLED
+    re_path(r'^data_access/programs/$', access_views.programs, name='access_programs'),
+    re_path(r'^data_access/programs/(?P<allocation_id>[0-9]+)/$', access_views.program, name='access_program'),
     # Background job queue (#263) and notifications (#266)
     re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
     re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),
@@ -573,6 +580,21 @@ api_url_patterns = [
     # The program (allocation) a dataset was taken under (#648, PR 3)
     re_path(r'^api/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/program/$',
             api_views.DatasetProgramLinkAPIView.as_view(), name='api-dataset-program'),
+    # Access actions (#648, PR 5); 404 unless DATA_ACCESS_GRANTS_ENABLED
+    re_path(r'^api/access/programs/(?P<allocation_id>[0-9]+)/grants/$', api_views.AccessProgramGrantsAPIView.as_view(),
+            name='api-access-program-grants'),
+    re_path(r'^api/access/standing_grants/(?P<grant_id>[0-9]+)/stop/$',
+            api_views.AccessStandingGrantStopAPIView.as_view(), name='api-access-grant-stop'),
+    re_path(r'^api/access/programs/(?P<allocation_id>[0-9]+)/deputies/$',
+            api_views.AccessProgramDeputiesAPIView.as_view(), name='api-access-program-deputies'),
+    re_path(r'^api/access/programs/(?P<allocation_id>[0-9]+)/deputies/(?P<deputy_id>[0-9]+)/remove/$',
+            api_views.AccessProgramDeputyRemoveAPIView.as_view(), name='api-access-program-deputy-remove'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/rules/$',
+            api_views.AccessDatasetRulesAPIView.as_view(), name='api-access-dataset-rules'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/rules/remove/$',
+            api_views.AccessDatasetRulesRemoveAPIView.as_view(), name='api-access-dataset-rules-remove'),
+    re_path(r'^api/access/transients/(?P<transient_id>[0-9]+)/nights/$',
+            api_views.AccessTransientNightsAPIView.as_view(), name='api-access-transient-nights'),
     # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
     re_path(
         r'^night_planner/(?P<night_id>[0-9]+)/api/schedule$',
