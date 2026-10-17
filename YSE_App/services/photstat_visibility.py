@@ -201,33 +201,34 @@ def visible_stats(user, transient_ids: Iterable[int], *, full_rows: Optional[Dic
 
     The value is a ``TransientPhotStat`` (all data) or a
     ``TransientPhotStatScope`` (same attribute names), with ``related`` bands
-    loaded. ``full_rows`` (``{transient_id: TransientPhotStat}``) saves the
-    all-data query when the caller already has the rows. Staff: one query
-    (none with ``full_rows``); others at most three.
+    loaded. Staff: one query, none when ``full_rows``
+    (``{transient_id: TransientPhotStat or None}``) is given. Others: always
+    three (hidden photometry, all-data rows, scope rows), whatever the data,
+    so a page's query count never depends on which rows hide photometry.
     """
     ids = {int(t) for t in transient_ids if t is not None}
     if not ids:
         return {}
-    hidden = set() if user_sees_everything(user) else transients_with_hidden_photometry(user, ids)
-    plain = ids - hidden
     out: Dict[int, Optional[object]] = dict.fromkeys(ids)
-    if plain:
-        rows = full_rows if full_rows is not None else _full_rows(plain, related)
-        missing = [tid for tid in plain if tid not in rows]
-        if missing and full_rows is not None:
+    if user_sees_everything(user):
+        rows = full_rows if full_rows is not None else _full_rows(ids, related)
+        missing = [tid for tid in ids if tid not in rows]
+        if missing:
             rows = dict(rows)
             rows.update(_full_rows(missing, related))
-        for tid in plain:
+        for tid in ids:
             out[tid] = rows.get(tid)
-    if hidden:
-        from YSE_App.models.phot_stat_models import TransientPhotStatScope
+        return out
+    from YSE_App.models.phot_stat_models import TransientPhotStatScope
 
-        candidates: Dict[int, List[object]] = {}
-        for row in (TransientPhotStatScope.objects.filter(transient_id__in=hidden)
-                    .filter(_candidate_scope_q(user)).select_related(*related)):
-            candidates.setdefault(row.transient_id, []).append(row)
-        for tid in hidden:
-            out[tid] = best_scope(candidates.get(tid, ()))
+    hidden = transients_with_hidden_photometry(user, ids)
+    rows = _full_rows(ids, related)
+    candidates: Dict[int, List[object]] = {}
+    for row in (TransientPhotStatScope.objects.filter(transient_id__in=ids)
+                .filter(_candidate_scope_q(user)).select_related(*related)):
+        candidates.setdefault(row.transient_id, []).append(row)
+    for tid in ids:
+        out[tid] = best_scope(candidates.get(tid, ())) if tid in hidden else rows.get(tid)
     return out
 
 
