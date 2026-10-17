@@ -51,6 +51,7 @@ from YSE_App.services import photstat
 from YSE_App.common.authz import bulk_ingest_denial, upload_denial
 from YSE_App.common.quality_mask import data_quality_mask
 from YSE_App.services.data_pis import apply_upload_pis
+from YSE_App.services.data_sharing import groups_allowed_for_upload, skipped_groups_message
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -933,6 +934,7 @@ def apply_upload_reference(dataset, reference):
 def add_transient_phot_util(photdict,transient,user,do_photdata=True):
 
     transientphot_entries = []
+    skipped_groups = []
     for k in photdict.keys():
         if k == 'clobber' or k == 'mjdmatchmin': continue
         photometry = photdict[k]
@@ -987,15 +989,23 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
             )
         group_names = collaboration_groups_from_photometry_upload(photometry)
         if transientphot.pk:
-            apply_collaboration_groups_to_photometry(transientphot, group_names)
+            # #647: adding groups to an existing restricted dataset needs a share role
+            wanted = list(Group.objects.filter(name__in=group_names))
+            allowed, skipped = groups_allowed_for_upload(user, transientphot, wanted)
+            if skipped:
+                skipped_groups.extend(g.name for g in skipped)
+            apply_collaboration_groups_to_photometry(transientphot, [g.name for g in allowed])
             # optional ``pis``: PrincipalInvestigator ids (#446)
             apply_upload_pis(transientphot, photometry.get('pis'))
 
     return_dict = {"message":"successfully added phot data"}
+    if skipped_groups:
+        return_dict["group_changes_skipped"] = sorted(set(skipped_groups))
     return JsonResponse(return_dict),transientphot_entries
 
 def add_transient_spec_util(specdict,transient,user):
 
+    skipped_groups = []
     for k in specdict.keys():
         if k == 'clobber': continue
         spectrum = specdict[k]
@@ -1066,6 +1076,9 @@ def add_transient_spec_util(specdict,transient,user):
             apply_upload_reference(transientspec, upload_reference)
 
         if len(allgroups):
+            # #647: adding groups to an existing restricted dataset needs a share role
+            allgroups, skipped = groups_allowed_for_upload(user, transientspec, allgroups)
+            skipped_groups.extend(g.name for g in skipped)
             for group in allgroups:
                 if group not in transientspec.groups.all():
                     transientspec.groups.add(group)
@@ -1094,6 +1107,8 @@ def add_transient_spec_util(specdict,transient,user):
         TransientSpecData.objects.bulk_create(specdata_entries)
 
     return_dict = {"message":"successfully added spec data"}
+    if skipped_groups:
+        return_dict["group_changes_skipped"] = sorted(set(skipped_groups))
     return JsonResponse(return_dict)
 
 @csrf_exempt
@@ -1179,7 +1194,10 @@ def add_transient_phot(request):
             transientphot.modified_by_id = user.id
             transientphot.save()
 
+    skipped = []
     if len(allgroups):
+        # #647: adding groups to an existing restricted dataset needs a share role
+        allgroups, skipped = groups_allowed_for_upload(user, transientphot, allgroups)
         for group in allgroups:
             if group not in transientphot.groups.all():
                 transientphot.groups.add(group)
@@ -1194,6 +1212,9 @@ def add_transient_phot(request):
         _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user)
 
     return_dict = {"message": "success"}
+    if skipped:
+        return_dict["group_changes_skipped"] = sorted(g.name for g in skipped)
+        return_dict["warning"] = skipped_groups_message(skipped)
 
     return JsonResponse(return_dict)
 
@@ -1316,7 +1337,10 @@ def add_transient_spec(request):
                 transientspec.spec_phase = hd['spec_phase']
                 transientspec.modified_by_id = user.id
                 transientspec.save()
+        skipped = []
         if len(allgroups):
+            # #647: adding groups to an existing restricted dataset needs a share role
+            allgroups, skipped = groups_allowed_for_upload(user, transientspec, allgroups)
             for group in allgroups:
                 if group not in transientspec.groups.all():
                     transientspec.groups.add(group)
@@ -1342,6 +1366,9 @@ def add_transient_spec(request):
                                              created_by_id=user.id,modified_by_id=user.id)
 
         return_dict = {"message":"success"}
+        if skipped:
+            return_dict["group_changes_skipped"] = sorted(g.name for g in skipped)
+            return_dict["warning"] = skipped_groups_message(skipped)
         return JsonResponse(return_dict)
     except Exception as e:
         return_dict = {"message":e.__str__()}
