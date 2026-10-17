@@ -823,6 +823,36 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="access-program-links"></a>
+
+### Program links of photometry and spectra (2026-10-17, #648 PR 3) nothing required; backfill optional (dry run first)
+
+**What changes.** A photometry set or spectrum can record the program (`Allocation`) it was taken under, in the `allocation_id` column added by 0043. The program's access rules then cover it once `DATA_ACCESS_GRANTS_ENABLED` is on (still off). Nothing users see changes. No migration.
+- **At ingest, derived:** a new dataset whose follow-up points to exactly one allocation is linked. That covers the follow-up's ToO, classical or queued resource, and its facility request. With `ASTROSCHEDULER_ENABLED`, the classical night of a matching observation also counts. Nothing is linked when there is no allocation or more than one.
+- **Facility results:** the request's allocation is used.
+- **Uploads:** an optional `allocation` key (an id, a proposal id or an allocation name) in the photometry dict, the photheader or the spectrum header. A new dataset may be linked by the program's PI, a program deputy or staff. An existing one may be linked only by someone who may share it. Otherwise the upload still succeeds, and the response lists `program_link_skipped`. Machine clients that send no `allocation` see no change.
+- **Manually:** `GET` / `POST /api/datasets/<photometry|spectrum>/<id>/program/` with `{"allocation": <id, proposal id, name or null>}`, for whoever may share the dataset.
+- **After a link:** the program's active standing grants are applied to the dataset's points. Removing a link removes no rule.
+
+**Backfill (optional, either stack; the stacks share the database, so once is enough):**
+
+```
+<PYTHON> manage.py backfill_data_programs            # dry run: counts only
+<PYTHON> manage.py backfill_data_programs --apply
+```
+
+It links only datasets with no link yet, and only unambiguous ones. The sources, in order:
+1. the follow-up's allocation;
+2. a matching AstroScheduler observation;
+3. for spectra, the one allocation on the same instrument whose dates cover the spectrum.
+
+Options:
+- `--include-public` also links public datasets;
+- `--source` picks and orders the sources;
+- `--limit N` looks at N datasets of each kind.
+
+**Expected:** a line `datasets to link: N (...); ambiguous A; unmatched U`, then `written: N` with `--apply`. Ambiguous and unmatched data stay unlinked; their PIs (or staff) can link them with the endpoint.
+
 <a id="access-rules-engine"></a>
 
 ### Per-point access rules engine (2026-10-17, #648 PR 2) nothing required (flag stays off)
@@ -2845,6 +2875,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-17 v72, **nothing required; backfill optional** (`manage.py backfill_data_programs`, dry run by default; flag stays off; no migration). Program links of photometry and spectra ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 3): derived at ingest from the follow-up (or a matching AstroScheduler observation), set by facility results, named by uploads (`allocation`), or set through `/api/datasets/<kind>/<id>/program/`; linking applies the program's standing access grants ([section "Program links"](#access-program-links)). No new package.
 * 2026-10-17 v71, **nothing required** (flag stays off; no migration). Per-point access rules engine ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 2): precedence, dated-membership rule, rules-version cache keys, PhotStat scope handling and the actions service; with `DATA_ACCESS_GRANTS_ENABLED` off every read is unchanged; standing grants are applied to new points at ingest ([section "Per-point access rules engine"](#access-rules-engine)). No new package.
 * 2026-10-17 v70, **migration applied by the deploy; nothing else required** (flag stays off). Per-point access rules ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 1b): migration `0045_per_point_access_rules` drops the empty PR 1 rule table and adds five tables (per-point rules, standing grants, dated group membership seeded from current memberships, dataset group share times, a version counter; safe on the shared database); group and dataset-share history is recorded from now on; admin pages for staff; all new tables hidden from SQL Explorer ([section "Per-point access rules"](#access-rules-per-point)). No new package.
 * 2026-10-17 v69, **migration applied by the deploy; nothing else required**. TNS and Hermes reports send only data the sender may see and share ([#691](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/691)): migration `0044_autopublish_optin` (one new table, no change to existing tables; safe on the shared database). The report dialog, preview and submit include public data plus restricted data the submitter can see and may share as a PI, deputy or staff, and the dialog says how many restricted datasets were left out; automatic publishing sends public data only until a PI opts a dataset in (`POST /sharing/autopublish_optin/<photometry|spectrum>/<id>/`, logged). `YSE_App_autopublishoptin` is hidden from SQL Explorer; leave it out of table-level Explorer grants. No new package.

@@ -1162,6 +1162,52 @@ class ObservedBlockAssessAPIView(generics.GenericAPIView):
         return Response(result)
 
 
+class DatasetProgramLinkAPIView(generics.GenericAPIView):
+    """``/api/datasets/<photometry|spectrum>/<id>/program/`` (#648, PR 3): the program a dataset was taken under.
+
+    ``GET``: the current ``allocation`` id (or null) and the allocations derived from its
+    follow-up. ``POST {"allocation": <id, proposal id or name, or null>}``: link or unlink;
+    only whoever may share the dataset (its PIs and their deputies, the program's PI or
+    deputies, or staff). Linking applies the program's standing access grants; unlinking
+    removes no rule (shared data stay shared).
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def _dataset(self, request, kind, dataset_id):
+        from YSE_App.services import access_actions, visibility
+
+        model = {"photometry": TransientPhotometry, "spectrum": TransientSpectrum}.get(kind)
+        dataset = model.objects.filter(pk=dataset_id).select_related("allocation").first() if model else None
+        if dataset is None or not (visibility.user_sees_everything(request.user)
+                                   or visibility.dataset_visible_to_user(request.user, dataset)):
+            raise Http404("no %s %s" % (kind, dataset_id))
+        role = access_actions.dataset_role(request.user, dataset)
+        return dataset, role
+
+    def get(self, request, kind, dataset_id):
+        from YSE_App.services import program_links
+
+        dataset, role = self._dataset(request, kind, dataset_id)
+        if role is None:
+            return Response({"detail": "Only someone who may share these data may see their program link."},
+                            status=status.HTTP_403_FORBIDDEN)
+        return Response({"id": dataset.pk, "kind": kind, "allocation": dataset.allocation_id,
+                         "derived": sorted(program_links.derived_allocation_ids(dataset)), "role": role})
+
+    def post(self, request, kind, dataset_id):
+        from YSE_App.services import program_links
+
+        dataset, _role = self._dataset(request, kind, dataset_id)
+        if "allocation" not in request.data:
+            return Response({"detail": "Give allocation (an id, proposal id or name, or null to unlink)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        allocation = program_links.resolve_allocation(request.data.get("allocation"))
+        result = program_links.link_dataset(request.user, dataset, allocation)
+        return Response({"id": dataset.pk, "kind": kind, "allocation": dataset.allocation_id,
+                         "previous": result.previous_id, "changed": result.changed, "rules": result.grants})
+
+
 class PlannerSolveAPIView(generics.GenericAPIView):
     """``POST /api/observing_nights/<id>/planner_solve/``: solve the planner's
     ``/api/schedule`` payload on the server for this night (#656). Saves nothing."""

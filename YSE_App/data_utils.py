@@ -47,7 +47,7 @@ from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
-from YSE_App.services import photstat
+from YSE_App.services import photstat, program_links
 from YSE_App.common.authz import bulk_ingest_denial, upload_denial
 from YSE_App.common.quality_mask import data_quality_mask
 from YSE_App.services.data_pis import apply_upload_pis
@@ -937,10 +937,13 @@ def apply_upload_reference(dataset, reference):
         dataset.save(update_fields=['reference'])
 
 
-def add_transient_phot_util(photdict,transient,user,do_photdata=True):
+def add_transient_phot_util(photdict,transient,user,do_photdata=True,allocation=None):
+    """``allocation``: the program the caller knows these data were taken under (facility results,
+    #648); trusted, not read from the upload. An upload may name one per dataset (``allocation``)."""
 
     transientphot_entries = []
     skipped_groups = []
+    link_skipped = []
     for k in photdict.keys():
         if k == 'clobber' or k == 'mjdmatchmin': continue
         photometry = photdict[k]
@@ -964,14 +967,31 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
 
         transientphot = TransientPhotometry.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group)
         if not len(transientphot):
+            # #648: the program link of a new set (trusted caller's, or the upload's when permitted)
+            if allocation is not None:
+                new_allocation_id, link_message = allocation.pk, None
+            else:
+                new_allocation_id, link_message = program_links.new_dataset_allocation_id(
+                    user, photometry.get('allocation'))
+            if link_message:
+                link_skipped.append(link_message)
             transientphot = TransientPhotometry( #.objects.create
                 instrument=instrument, obs_group=obs_group, transient=transient,
                 reference=clean_upload_reference(photometry.get('reference')),  # #447: e.g. the TNS object of TNS imports
+                allocation_id=new_allocation_id,
                 created_by_id=user.id, modified_by_id=user.id)
             transientphot_entries += [transientphot]
         else:
             transientphot = transientphot[0]
             apply_upload_reference(transientphot, photometry.get('reference'))
+            if allocation is not None:
+                if not transientphot.allocation_id:
+                    program_links.link_dataset(None, transientphot, allocation, trusted=True)
+            else:
+                link_message = program_links.apply_upload_allocation(
+                    user, transientphot, photometry.get('allocation'), new_dataset=False)
+                if link_message:
+                    link_skipped.append(link_message)
         existingphot = TransientPhotData.objects.filter(photometry=transientphot)
         if do_photdata:
             band_cache = {}
@@ -1007,11 +1027,14 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
     return_dict = {"message":"successfully added phot data"}
     if skipped_groups:
         return_dict["group_changes_skipped"] = sorted(set(skipped_groups))
+    if link_skipped:
+        return_dict["program_link_skipped"] = sorted(set(link_skipped))
     return JsonResponse(return_dict),transientphot_entries
 
 def add_transient_spec_util(specdict,transient,user):
 
     skipped_groups = []
+    link_skipped = []
     for k in specdict.keys():
         if k == 'clobber': continue
         spectrum = specdict[k]
@@ -1057,10 +1080,12 @@ def add_transient_spec_util(specdict,transient,user):
         del spectrum_copy['specdata']
         spectrum_copy.pop('groups', None)
         upload_pis = spectrum_copy.pop('pis', None)
+        upload_allocation = spectrum_copy.pop('allocation', None)  # #648: resolved and checked below
         upload_reference = clean_upload_reference(spectrum_copy.pop('reference', None))
         if upload_reference:
             spectrum_copy['reference'] = upload_reference  # only used on create; see below
 
+        spectrum_is_new = not len(transientspec)
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(**spectrum_copy)
             # Need to use a set operation to associate many-to-many, also set takes an enumerable...
@@ -1091,6 +1116,11 @@ def add_transient_spec_util(specdict,transient,user):
                     transientspec.save()
         # optional ``pis``: PrincipalInvestigator ids (#446)
         apply_upload_pis(transientspec, upload_pis)
+        # optional ``allocation``: the program these data were taken under (#648)
+        link_message = program_links.apply_upload_allocation(
+            user, transientspec, upload_allocation, new_dataset=spectrum_is_new)
+        if link_message:
+            link_skipped.append(link_message)
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
@@ -1115,6 +1145,8 @@ def add_transient_spec_util(specdict,transient,user):
     return_dict = {"message":"successfully added spec data"}
     if skipped_groups:
         return_dict["group_changes_skipped"] = sorted(set(skipped_groups))
+    if link_skipped:
+        return_dict["program_link_skipped"] = sorted(set(link_skipped))
     return JsonResponse(return_dict)
 
 @csrf_exempt
@@ -1186,6 +1218,7 @@ def add_transient_phot(request):
     else: transient = transient[0]
     # get all existing photometry
     transientphot = TransientPhotometry.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group)
+    phot_is_new = not len(transientphot)
     if not len(transientphot):
         transientphot = TransientPhotometry.objects.create(
             instrument=instrument,obs_group=obs_group,transient=transient,
@@ -1210,6 +1243,9 @@ def add_transient_phot(request):
                 transientphot.save()
     # optional ``pis`` in the photheader: PrincipalInvestigator ids (#446)
     apply_upload_pis(transientphot, ph.get('pis'))
+    # optional ``allocation`` in the photheader: the program these data were taken under (#648)
+    link_message = program_links.apply_upload_allocation(user, transientphot, ph.get('allocation'),
+                                                          new_dataset=phot_is_new)
 
     existingphot = TransientPhotData.objects.filter(photometry=transientphot)
 
@@ -1221,6 +1257,8 @@ def add_transient_phot(request):
     if skipped:
         return_dict["group_changes_skipped"] = sorted(g.name for g in skipped)
         return_dict["warning"] = skipped_groups_message(skipped)
+    if link_message:
+        return_dict["program_link_skipped"] = [link_message]
 
     return JsonResponse(return_dict)
 
@@ -1310,6 +1348,7 @@ def add_transient_spec(request):
 
         # get the spectrum
         transientspec = TransientSpectrum.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group).filter(obs_date=hd['obs_date'])
+        spectrum_is_new = not len(transientspec)
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(
                 ra=hd['ra'],dec=hd['dec'],instrument=instrument,obs_group=obs_group,transient=transient,
@@ -1353,6 +1392,9 @@ def add_transient_spec(request):
                     transientspec.save()
         # optional ``pis`` in the header: PrincipalInvestigator ids (#446)
         apply_upload_pis(transientspec, hd.get('pis'))
+        # optional ``allocation`` in the header: the program these data were taken under (#648)
+        link_message = program_links.apply_upload_allocation(user, transientspec, hd.get('allocation'),
+                                                              new_dataset=spectrum_is_new)
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
@@ -1375,6 +1417,8 @@ def add_transient_spec(request):
         if skipped:
             return_dict["group_changes_skipped"] = sorted(g.name for g in skipped)
             return_dict["warning"] = skipped_groups_message(skipped)
+        if link_message:
+            return_dict["program_link_skipped"] = [link_message]
         return JsonResponse(return_dict)
     except Exception as e:
         return_dict = {"message":e.__str__()}

@@ -444,3 +444,44 @@ def standing_grants_on_spectrum(sender, instance, created, **kwargs):
         from YSE_App.services import access_actions
 
         _apply_standing_grants(access_actions.apply_standing_grants_to_spectrum, instance)
+
+
+# ---- Program links at ingest (#648, PR 3) -------------------------------------
+# A new photometry set or spectrum with no program gets the one allocation its follow-up
+# (or a matching AstroScheduler observation) points to; nothing when none or several
+# (services.program_links). No query without a follow-up unless the planner is on.
+
+def _link_new_dataset(instance):
+    import logging
+
+    from django.db import transaction
+
+    from YSE_App.services import program_links
+
+    try:
+        with transaction.atomic():
+            program_links.link_at_ingest(instance)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("program link at ingest failed")
+
+
+def _program_link_possible(instance) -> bool:
+    if instance.allocation_id:
+        return False
+    if instance.followup_id:
+        return True
+    from YSE_App.services.night_planner import enabled
+
+    return isinstance(instance, TransientSpectrum) and instance.obs_date is not None and enabled()
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_program_link_photometry")
+def program_link_on_photometry(sender, instance, created, **kwargs):
+    if created and not kwargs.get("raw") and _program_link_possible(instance):
+        _link_new_dataset(instance)
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_program_link_spectrum")
+def program_link_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get("raw") and _program_link_possible(instance):
+        _link_new_dataset(instance)
