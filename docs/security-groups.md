@@ -46,11 +46,13 @@ TNS photometry and spectra are tagged with the `Public` collaboration group on i
 Backfill legacy ungrouped TNS rows on a server snapshot:
 
 ```bash
-docker exec ysepz_web_container python3 manage.py mark_tns_imports_public --dry-run
-docker exec ysepz_web_container python3 manage.py mark_tns_imports_public
+docker exec ysepz_web_container python3 manage.py mark_tns_imports_public            # dry run
+docker exec ysepz_web_container python3 manage.py mark_tns_imports_public --apply
 ```
 
-Tests: `YSE_App.tests.test_tns_import_groups`.
+New TNS photometry goes in its own `TNS` header with `reference = "TNS <prefix> <name> (report <ids>)"` (#645); the backfill also tags ZTF/ATLAS forced photometry Public and sets references on old imports.
+
+Tests: `YSE_App.tests.test_tns_import_groups`, `YSE_App.tests.test_tns_references`.
 
 ### v1 create-time audience UI
 

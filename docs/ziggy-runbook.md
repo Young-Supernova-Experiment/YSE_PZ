@@ -1185,8 +1185,8 @@ Copy
 ```
 <PROD_PYTHON> manage.py ensure_users_in_public_group --dry-run
 <PROD_PYTHON> manage.py ensure_users_in_public_group
-<PROD_PYTHON> manage.py mark_tns_imports_public --dry-run
 <PROD_PYTHON> manage.py mark_tns_imports_public
+<PROD_PYTHON> manage.py mark_tns_imports_public --apply
 <PROD_PYTHON> manage.py verify_production_group_access
 <PROD_PYTHON> manage.py dedupe_dashboard_queries --dry-run
 <PROD_PYTHON> manage.py dedupe_dashboard_queries
@@ -2744,11 +2744,26 @@ Or export `CASJOBS_WSID` and `CASJOBS_PW` for the cron environment instead; the 
 **(c) Check.** Run any ingest job that calls the PS1 score lookup (for example the DECam cluster upload).
 **Expected:** it runs. If the values are missing, only that job stops, with the message "CasJobs credentials are not configured". The website is unaffected either way.
 
+<a id="tns-references"></a>
+
+### TNS references backfill (#645) optional, per stack
+
+New TNS imports write the photometry TNS reports into their own `TNS` header (observation group `TNS`, created on first use) with `reference = "TNS <prefix> <name> (report <ids>)"`, instead of mixing it into the survey's header next to ZTF/ATLAS forced photometry. The report ids appear only when TNS sends them. Nothing is required for new imports. To bring old data in line, run the backfill: a dry run by default, `--apply` writes.
+
+**(a) Dry run.** `<STACK_PYTHON> manage.py mark_tns_imports_public`
+**Expected:** three count lines (TNS rows to tag Public, ZTF/ATLAS forced headers to tag Public, references to set) and `Dry run - no changes made`.
+
+**(b) Apply** if the counts look sane: `<STACK_PYTHON> manage.py mark_tns_imports_public --apply`
+**Expected:** a `Tagged ...` line; running it again reports zeros. It adds the Public group (never removes one), sets `reference` only where there is none, and leaves a header that also holds forced points alone (old TNS points stay in the shared headers; moving them is not done). The shared `YSE_test` database needs it once.
+
+The TNS cron keeps working under the share rule from #647: its header is new, and a header that already carries Public gains nothing, so no group change is skipped.
+
 <a id="changelog"></a>
 
 ## 6 · Changelog
 
-* 2026-10-16 v65, **migration applied by the deploy; one backfill required per database** (`manage.py backfill_photstat_scopes --apply`, dry run by default). One visibility policy for transient lists ([#607](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/607)): migration `0042_transient_photstat_scope` (one new table, safe on the shared database); non-staff users see TNS-named objects plus the objects whose data they may see, everywhere, and derived photometry values only from photometry they may see ([section "One visibility policy"](#transient-visibility)). Explorer grant note for table-level grants. No new package.
+* 2026-10-16 v66, **migration applied by the deploy; one backfill required per database** (`manage.py backfill_photstat_scopes --apply`, dry run by default). One visibility policy for transient lists ([#607](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/607)): migration `0042_transient_photstat_scope` (one new table, safe on the shared database); non-staff users see TNS-named objects plus the objects whose data they may see, everywhere, and derived photometry values only from photometry they may see ([section "One visibility policy"](#transient-visibility)). Explorer grant note for table-level grants. No new package.
+* 2026-10-16 v65, optional (backfill). TNS references ([#645](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/645)): TNS-reported photometry now goes in its own `TNS` header with the TNS reference (and report ids when sent); `mark_tns_imports_public` is a dry run by default (`--apply` writes; `--dry-run` still accepted) and also tags ZTF/ATLAS forced photometry Public and sets TNS references on old imports ([section](#tns-references)). No migration.
 * 2026-10-16 v64, **required on venvs the deploy does not install**: install `astroscheduler` 1.3.0, then `collectstatic` ([#678](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/678); [section "AstroScheduler 1.3.0"](#astroscheduler-130)). No migration.
 * 2026-10-16 v63, **nothing new to run**. AstroScheduler planner: end-to-end smoke test ([#35](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/35)); the plans list and the target-list export now use a fixed number of queries ([#675](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/675)); observer guide and performance notes in `docs/astroscheduler.md` ([#676](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/676)). No migration, no new package.
 * 2026-10-16 v62, **migration applied by the deploy; nothing else required (expiry optional, off)**. AstroScheduler outcomes and request status ([#670](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/670), [#672](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/672)-[#674](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/674)): migration `0041_observed_block_outcomes` only changes choices and help text (no SQL). Completed records "Data taken"; a good judgement or an uploaded spectrum/photometry set makes the request Successful; the new daily `ExpireFollowupRequests` cron (already in `CRON_CLASSES`, run by the existing `runcrons`) fails ended classical requests without good data, but only once `ASTROSCHEDULER_EXPIRE_AFTER` is set ([section "AstroScheduler execution feedback"](#astroscheduler-observations)).
