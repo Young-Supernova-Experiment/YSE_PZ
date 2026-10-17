@@ -21,7 +21,9 @@ from YSE_App.tests.test_data_pis import PiBase, _member
 OBS_DATE = datetime.datetime(2026, 9, 2)
 
 
-@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+# These test the PI share rule, not the upload group checks (tests/test_authz_hardening.py).
+@override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+                   UPLOAD_GROUP_CHECKS_ENFORCED=False)
 class UploadShareRuleTests(PiBase):
     def setUp(self):
         super().setUp()

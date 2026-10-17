@@ -1,8 +1,8 @@
 """Write-authorization helpers for the REST API, the upload endpoints and SQL Explorer.
 
-Every check here that could change who may write is behind a settings flag whose
-default keeps the previous behaviour (see ``YSE_PZ/settings.py``, "Authorization
-hardening", and ``docs/ziggy-runbook.md``):
+Every check here that could change who may write is behind a settings flag (see
+``YSE_PZ/settings.py``, "Authorization hardening", and ``docs/ziggy-runbook.md``).
+``UPLOAD_GROUP_CHECKS_ENFORCED`` defaults to on (#697); the other two default to off:
 
 - ``API_WRITE_PERMISSIONS_ENFORCED``: unsafe methods on the legacy REST viewsets
   need staff, superuser or the Django model permission (granted to the
@@ -10,7 +10,8 @@ hardening", and ``docs/ziggy-runbook.md``):
 - ``UPLOAD_GROUP_CHECKS_ENFORCED``: the upload endpoints (``add_transient``,
   ``add_transient_phot``, ``add_transient_spec``, ``upload_spectrum``) need a
   trusted uploader, or a collaboration-group member who shares only with their
-  own groups and replaces only rows they created.
+  own groups and replaces only rows they created. On by default; turn off with
+  ``UPLOAD_GROUP_CHECKS_ENFORCED: False`` in ``[site_settings]`` or the env var ``=0``.
 - ``EXPLORER_RESTRICTED_ACCESS``: SQL Explorer is limited to superusers and the
   ``EXPLORER_ACCESS_GROUP`` group instead of all staff.
 """
@@ -121,7 +122,7 @@ def upload_denial(user, group_names: Iterable[str] = (), existing_rows: Iterable
 
     ``group_names``: collaboration groups the upload would share data with.
     ``existing_rows``: rows (with ``created_by_id``) the upload would replace or
-    re-share. Always None while ``UPLOAD_GROUP_CHECKS_ENFORCED`` is off.
+    re-share. Always None while ``UPLOAD_GROUP_CHECKS_ENFORCED`` is turned off.
     """
     if not _flag("UPLOAD_GROUP_CHECKS_ENFORCED"):
         return None
