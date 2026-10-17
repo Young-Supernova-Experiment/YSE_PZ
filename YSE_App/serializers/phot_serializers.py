@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from YSE_App.models import *
-from .related_fields import IdHyperlinkedRelatedField
+from .related_fields import IdHyperlinkedRelatedField, VisibleDatasetIdRelatedField, VisibleDatasetRelatedField
 from django.contrib.auth.models import User, Group
 from rest_framework.exceptions import PermissionDenied
 from .auth_helpers import NotAuthorizedToAccessParent
@@ -211,7 +211,7 @@ class HostPhotometrySerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
-    photometry = IdHyperlinkedRelatedField(queryset=TransientPhotometry.objects.all(), view_name='transientphotometry-detail', lookup_field="id")
+    photometry = VisibleDatasetIdRelatedField(dataset_kind='photometry', queryset=TransientPhotometry.objects.all(), view_name='transientphotometry-detail', lookup_field="id")
     band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
 
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
@@ -368,7 +368,7 @@ class HostPhotDataSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientImageSerializer(serializers.HyperlinkedModelSerializer):
-    phot_data = serializers.HyperlinkedRelatedField(queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
+    phot_data = VisibleDatasetRelatedField(dataset_kind='photdata', queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
@@ -395,7 +395,7 @@ class TransientImageSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientDiffImageSerializer(serializers.HyperlinkedModelSerializer):
-    phot_data = serializers.HyperlinkedRelatedField(queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
+    phot_data = VisibleDatasetRelatedField(dataset_kind='photdata', queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
