@@ -911,6 +911,12 @@ def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
             # Rows before a failing point are written, as they were one by one.
             flush()
             if state['bulk_written']:
+                if transientphot.allocation_id:
+                    # bulk_create fires no post_save: give the new points the program's
+                    # standing access grants here (#648)
+                    from YSE_App.services import access_actions
+
+                    access_actions.apply_standing_grants_to_set(transientphot)
                 photstat.schedule_recompute(transientphot.transient_id, photometry_id=transientphot.id)
 
 

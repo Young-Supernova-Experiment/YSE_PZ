@@ -36,11 +36,17 @@ def group_access_plot_cache_token(user: User) -> str:
         return "anon"
     if user.is_staff or user.is_superuser:
         return "staff"
+    from YSE_App.services import access_rules
+
+    # Read-time rules (#648): the rules version, and a per-user part for personal rules
+    # or left groups, so cached plots never cross users with different access. Empty
+    # with DATA_ACCESS_GRANTS_ENABLED off.
+    suffix = access_rules.cache_token_suffix(user)
     names = sorted(user_group_names(user))
     if not names:
-        return "nogroups"
+        return "nogroups" + suffix
     digest = hashlib.sha256("|".join(names).encode()).hexdigest()[:12]
-    return f"g{digest}"
+    return f"g{digest}" + suffix
 
 
 # Backward-compatible alias (deprecated name).
@@ -178,7 +184,14 @@ def transient_access_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
     visible_spec = TransientSpectrum.objects.filter(
         spectrum_visible_q(user, names=names), transient_id=OuterRef("pk"),
     )
-    return Q(Exists(visible_phot)) | Q(Exists(visible_spec))
+    q = Q(Exists(visible_phot)) | Q(Exists(visible_spec))
+    points = photometry_points_visible_q(user)
+    if points is not None:
+        # Per-point rules (#648): a transient with any visible point, also in a partly visible set.
+        from YSE_App.models import TransientPhotData
+
+        q |= Q(Exists(TransientPhotData.objects.filter(points, photometry__transient_id=OuterRef("pk"))))
+    return q
 
 
 def filter_transients_by_user_access(
@@ -220,11 +233,11 @@ def filter_transients_by_user_access(
 # photometry, spectra and every value derived from them keep their group
 # restrictions (``services.photstat_visibility``).
 #
-# Read-time grants (#648) plug in at ``_extra_access_grants_q`` (objects) and
-# at ``_photometry_access_rules`` / ``_spectrum_access_rules`` (datasets, read
-# through ``photometry_visible_q`` / ``spectrum_visible_q``): all return "no
-# change" today, so nothing changes until #648 fills them in; the listing,
-# data-access and hidden-photometry conditions below already consult them.
+# Read-time rules (#648) plug in at ``_photometry_access_rules`` /
+# ``_spectrum_access_rules`` (datasets, read through ``photometry_visible_q``
+# / ``spectrum_visible_q``) and ``photometry_points_visible_q`` (points); with
+# ``DATA_ACCESS_GRANTS_ENABLED`` off they change nothing.
+# ``_extra_access_grants_q`` (objects) stays ``None``.
 
 TNS_NAME_SQL_REGEX = r'^20[0-9]{2}[a-zA-Z]{1,5}$'
 
@@ -259,9 +272,10 @@ def _extra_photometry_grants_q(user: User) -> Optional[Q]:
 # data-access conditions, plots, tables, exports and the API. The rule today
 # is the collaboration-group rule: a dataset with no groups, or one sharing a
 # group (by name) with the user. Read-time grants and restrictions (#648)
-# plug in at ``_photometry_access_rules`` / ``_spectrum_access_rules``; both
-# return ``NO_RULES`` today, so the conditions (and their SQL) are exactly the
-# group rule. These functions never bypass staff: callers that let staff see
+# plug in at ``_photometry_access_rules`` / ``_spectrum_access_rules``
+# (``services.access_rules``); both return ``NO_RULES`` with the flag off or no
+# applicable rule, so the conditions (and their SQL) are exactly the group rule.
+# These functions never bypass staff: callers that let staff see
 # everything check ``user_sees_everything`` first, as before.
 
 
@@ -290,13 +304,36 @@ NO_RULES = AccessRules()
 
 
 def _photometry_access_rules(user: User) -> AccessRules:
-    """Grants and restrictions on ``TransientPhotometry`` sets for ``user`` (#648); none today."""
-    return NO_RULES
+    """Per-point rules on ``TransientPhotometry`` sets for ``user`` (#648, ``services.access_rules``).
+
+    ``NO_RULES`` with ``DATA_ACCESS_GRANTS_ENABLED`` off, for staff, anonymous
+    users and users to whom no rule applies. At set level a set is visible
+    only when every one of its points is.
+    """
+    from YSE_App.services import access_rules
+
+    return access_rules.photometry_rules(user)
 
 
 def _spectrum_access_rules(user: User) -> AccessRules:
-    """Grants and restrictions on ``TransientSpectrum`` rows for ``user`` (#648); none today."""
-    return NO_RULES
+    """Per-spectrum rules on ``TransientSpectrum`` rows for ``user`` (#648, ``services.access_rules``)."""
+    from YSE_App.services import access_rules
+
+    return access_rules.spectrum_rules(user)
+
+
+def photometry_points_visible_q(user: User) -> Optional[Q]:
+    """Condition on ``TransientPhotData`` for a user with per-point rules (#648), else ``None``.
+
+    ``None`` means "use the set-level rule" (no rule applies, the flag is off,
+    staff or anonymous); then point reads keep their old SQL exactly.
+    """
+    from YSE_App.services import access_rules
+
+    summary = access_rules.active_summary(user)
+    if summary is None:
+        return None
+    return access_rules.point_visible_q(summary)
 
 
 def _public_dataset_q(model, names: Iterable[str]) -> Q:
@@ -483,8 +520,13 @@ def visible_photometry_ids_q(user: User, prefix: str = 'photometry_id') -> Optio
     """
     if user_sees_everything(user):
         return None
-    from YSE_App.models import TransientPhotometry
+    from YSE_App.models import TransientPhotData, TransientPhotometry
 
+    points = photometry_points_visible_q(user)
+    if points is not None and (prefix == 'photometry_id' or prefix.endswith('__photometry_id')):
+        # Per-point rules (#648): the exact points, also in a partly visible set.
+        point_path = prefix[:-len('photometry_id')] + 'pk'
+        return Q(**{point_path + '__in': TransientPhotData.objects.filter(points).values('pk')})
     visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
     return Q(**{prefix + '__in': visible})
 

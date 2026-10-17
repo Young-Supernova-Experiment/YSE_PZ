@@ -689,6 +689,23 @@ class DataAccessRuleAdmin(admin.ModelAdmin):
 			obj.granted_as = DataAccessRule.AS_STAFF
 		super().save_model(request, obj, form, change)
 
+	@staticmethod
+	def _invalidate(rules):
+		from YSE_App.services import access_rules, photstat
+
+		if access_rules.enabled():
+			photstat.invalidate_scopes([(r.transient_id, r.grantee_group_id) for r in rules
+			                            if r.grantee_group_id and r.transient_phot_data_id])
+
+	def delete_model(self, request, obj):
+		super().delete_model(request, obj)
+		self._invalidate([obj])
+
+	def delete_queryset(self, request, queryset):
+		rules = list(queryset)
+		super().delete_queryset(request, queryset)
+		self._invalidate(rules)
+
 
 @admin.register(StandingAccessGrant)
 class StandingAccessGrantAdmin(admin.ModelAdmin):
