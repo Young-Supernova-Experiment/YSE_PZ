@@ -1780,29 +1780,58 @@ def annotate_dashboard_transient_fields(qs):
     )
 
 
-def annotate_search_fields(qs):
+def _filter_viewer(filterset):
+    """The user a filter set runs for: ``request.user`` of the ``request=`` it was built with.
+
+    Without a request the filter runs for no one (public data only), never
+    for staff, so a missing request cannot widen a filter (#692).
+    """
+    from django.contrib.auth.models import AnonymousUser
+
+    request = getattr(filterset, 'request', None)
+    user = getattr(request, 'user', None)
+    return AnonymousUser() if user is None else user
+
+
+def annotate_search_fields(qs, user=None, with_recent_mag=False):
     """
     Aliases for the search box: plain FK lookups instead of Min() aggregates.
 
     The old annotate_with_disc_mag() wrapped every alias in Min(), which forced a
     GROUP BY over the whole transient table (and a HAVING for each LIKE). disc_mag
     is the only value that needs a subquery; the rest are single-valued joins.
+
+    The searchable magnitudes are what ``user`` may see (#607, #692): disc_mag
+    reads only visible photometry for a non-staff viewer, and
+    ``with_recent_mag`` adds ``search_recent_mag`` from the viewer's stat scope.
+    ``user=None`` means no viewer: only public (ungrouped) photometry.
     """
-    disc_mag_sq = (
-        TransientPhotData.objects.filter(
-            photometry__transient=OuterRef('pk'),
-            discovery_point=1,
-            mag__isnull=False,
-        )
-        .order_by('mag')
-        .values('mag')[:1]
+    from django.contrib.auth.models import AnonymousUser
+
+    from YSE_App.services.visibility import visible_photometry_ids_q
+
+    user = AnonymousUser() if user is None else user
+    points = TransientPhotData.objects.filter(
+        photometry__transient=OuterRef('pk'),
+        discovery_point=1,
+        mag__isnull=False,
     )
+    visible = visible_photometry_ids_q(user)
+    if visible is not None:
+        points = points.filter(visible)
+    disc_mag_sq = points.order_by('mag').values('mag')[:1]
+    extra = {}
+    if with_recent_mag:
+        from YSE_App.services.photstat_visibility import stat_expression
+
+        extra['search_recent_mag'] = stat_expression(user, 'last_detected_mag')
     return qs.annotate(
         disc_mag=Subquery(disc_mag_sq),
         obs_group_name=F('obs_group__name'),
         host_redshift=F('host__redshift'),
         spec_class=F('best_spec_class__name'),
         status_name=F('status__name'),
+        **extra,
     )
 
 
@@ -1847,7 +1876,7 @@ class TransientFilter(django_filters.FilterSet):
 
     def filter_ex(self, qs, name, value):
         if value:
-            qs = annotate_search_fields(qs)
+            qs = annotate_search_fields(qs, _filter_viewer(self))
             qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
@@ -1857,7 +1886,7 @@ class RisingTransientFilter(django_filters.FilterSet):
     #										label='Name')
 
     #name = django_filters.CharFilter(name='name',lookup_expr='icontains',method='filter_name')
-    recent_mag_lt = django_filters.NumberFilter(field_name='recent_mag',label='Max Recent Mag',lookup_expr='lt')
+    recent_mag_lt = django_filters.NumberFilter(method='filter_recent_mag_lt',label='Max Recent Mag')
     days_since_disc = django_filters.NumberFilter(field_name='days_since_disc',label='Max Days Since Disc',lookup_expr='lt')
     ra_min = django_filters.NumberFilter(field_name='ra',label='Min. RA (deg)',lookup_expr='gt')
     ra_max = django_filters.NumberFilter(field_name='ra',label='Max. RA (deg)',lookup_expr='lt')
@@ -1870,15 +1899,24 @@ class RisingTransientFilter(django_filters.FilterSet):
     ex = django_filters.CharFilter(method='filter_ex',label='Search')
     search_fields = ['name','ra','dec','disc_date','disc_mag','obs_group_name',
                      'spec_class','redshift','host_redshift',
-                     'status_name','recent_mag']
+                     'status_name','search_recent_mag']
 
     class Meta:
         model = Transient
         fields = ['ex','recent_mag_lt','days_since_disc','ra_min','ra_max','dec_min','dec_max','ebv_max']
 
+    def filter_recent_mag_lt(self, qs, name, value):
+        """Brighter than ``value`` by the last detection the viewer may see (#692)."""
+        if value is None:
+            return qs
+        from YSE_App.services.photstat_visibility import stat_expression
+
+        return qs.annotate(_filter_recent_mag=stat_expression(_filter_viewer(self), 'last_detected_mag')
+                           ).filter(_filter_recent_mag__lt=value)
+
     def filter_ex(self, qs, name, value):
         if value:
-            qs = annotate_search_fields(qs)
+            qs = annotate_search_fields(qs, _filter_viewer(self), with_recent_mag=True)
             qs = filter_tokens_any_field(qs, self.search_fields, value)
         return qs
 
