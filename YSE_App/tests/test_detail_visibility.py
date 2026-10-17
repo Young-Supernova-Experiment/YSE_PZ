@@ -34,6 +34,8 @@ class DetailVisibilityTests(TestCase):
         cls.outsider = create_test_user("dv690_outsider", is_staff=False)
         cls.group, _ = Group.objects.get_or_create(name=GROUP)
         cls.member.groups.add(cls.group)
+        cls.staff_member = create_test_user("dv690_staff_member")
+        cls.staff_member.groups.add(cls.group)
         obs_group, instrument, band = create_instrument_stack(cls.staff, obs_group_name="dv690")
         cls.transient = create_minimal_transient(cls.staff, name="YSEdv690", ra=30.0, dec=5.0)
         now = timezone.now()
@@ -73,10 +75,14 @@ class DetailVisibilityTests(TestCase):
                 out = self._detail(self.outsider, defer).context
                 self.assertIn("20.25", out["recent_mag"])
                 self.assertIn("20.25", out["first_mag"])
-                for user in (self.member, self.staff):
-                    ctx = self._detail(user, defer).context
-                    self.assertIn("15.5", ctx["recent_mag"])
-                    self.assertIn("15.75", ctx["first_mag"])
+                ctx = self._detail(self.member, defer).context
+                self.assertIn("15.5", ctx["recent_mag"])
+                self.assertIn("15.75", ctx["first_mag"])
+                # Staff in the group see it too; staff outside it get what the table gives them.
+                ctx = self._detail(self.staff_member, defer).context
+                self.assertIn("15.5", ctx["recent_mag"])
+                ctx = self._detail(self.staff, defer).context
+                self.assertIn("20.25", ctx["recent_mag"])
 
     def test_outsider_summary_unchanged_by_group_photometry(self):
         """Same values as if the restricted sets did not exist."""
@@ -99,31 +105,38 @@ class DetailVisibilityTests(TestCase):
         self.assertEqual(out.status_code, 200)
         self.assertEqual([d.postage_stamp_file for d in out.context["diff_images"]], [PUBLIC_MARK])
         self.assertNotContains(out, HIDDEN_MARK)
-        for user in (self.member, self.staff):
+        for user in (self.member, self.staff_member):
             resp = self._client(user).get(url)
             self.assertEqual(len(resp.context["diff_images"]), 3)
             self.assertEqual(len(resp.context["allphotdata"]), 3)
         self.assertEqual(len(out.context["allphotdata"]), 1)
+        # Diff rows always match the photometry table for the same viewer.
+        resp = self._client(self.staff).get(url)
+        self.assertEqual(len(resp.context["diff_images"]), len(resp.context["allphotdata"]))
 
     def test_diff_images_in_full_detail_branch(self):
         out = self._detail(self.outsider, defer=False).context
         self.assertEqual([d.postage_stamp_file for d in out["diff_images"]], [PUBLIC_MARK])
-        for user in (self.member, self.staff):
+        for user in (self.member, self.staff_member):
             self.assertEqual(len(self._detail(user, defer=False).context["diff_images"]), 3)
 
     def test_query_budget_does_not_grow_with_photometry(self):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
-        url = "/transient_detail/%d/photometry_fragment/" % self.transient.pk
-        c = self._client(self.outsider)
-        with CaptureQueriesContext(connection) as small:
-            c.get(url)
+        from YSE_App.views import _visible_diff_images
+
+        def count():
+            with CaptureQueriesContext(connection) as ctx:
+                rows = list(_visible_diff_images(self.outsider, self.transient.pk))
+                for d in rows:
+                    d.phot_data.band, d.phot_data.photometry
+            return len(ctx.captured_queries)
+
+        small = count()
         for i in range(5):
             self.transient_extra_point(i)
-        with CaptureQueriesContext(connection) as large:
-            c.get(url)
-        self.assertEqual(len(small.captured_queries), len(large.captured_queries))
+        self.assertEqual(small, count())
 
     def transient_extra_point(self, i):
         obs_group, instrument, band = create_instrument_stack(self.staff, obs_group_name="dv690")

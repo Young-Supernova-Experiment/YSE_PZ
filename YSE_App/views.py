@@ -1728,16 +1728,18 @@ def _clean_dq(value):
 
 
 def _visible_diff_images(user, transient_id):
-    """Diff / forced-photometry images of a transient, only for points whose set ``user`` may see."""
-    from YSE_App.services.visibility import visible_photometry_ids_q
+    """Diff / forced-photometry images of a transient, only for points in sets ``user`` may see.
 
-    qs = TransientDiffImage.objects.filter(
-        phot_data__photometry__transient_id=transient_id
-    )
-    visible = visible_photometry_ids_q(user, prefix='phot_data__photometry_id')
-    if visible is not None:
-        qs = qs.filter(visible)
-    return qs.select_related(
+    Same sets as the photometry table beside it (``PhotometryService``), so the
+    two never disagree for a given viewer.
+    """
+    visible_sets = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(
+        user, transient_id
+    ).values('id')
+    return TransientDiffImage.objects.filter(
+        phot_data__photometry__transient_id=transient_id,
+        phot_data__photometry_id__in=visible_sets,
+    ).select_related(
         'phot_data',
         'phot_data__photometry',
         'phot_data__band',
