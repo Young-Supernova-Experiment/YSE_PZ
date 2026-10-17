@@ -2407,6 +2407,9 @@ def upload_spectrum(request):
                 tspec.update(**specdict)
                 tspec = tspec[0]
             tspec.save()
+            # Reference (#646): stored on a new spectrum; an existing one keeps its own.
+            from YSE_App.data_utils import apply_upload_reference
+            apply_upload_reference(tspec, form.cleaned_data.get('reference'))
 
             if 'permissions' in form.data.keys() and form.data['permissions']:
                 for p in form.cleaned_data['permissions']:
