@@ -104,10 +104,11 @@ def _clean_grantee(row, errors):
 
 
 def _grantee_label(row) -> str:
+    # Ids only: no query, and safe while a cascade is deleting the grantee (the audit log calls str()).
     if row.grantee_user_id:
-        return "user %s" % row.grantee_user.username
+        return "user %s" % row.grantee_user_id
     if row.grantee_group_id:
-        return "group %s" % row.grantee_group.name
+        return "group %s" % row.grantee_group_id
     return "(no grantee)"
 
 
@@ -389,7 +390,7 @@ class AllocationDelegate(models.Model):
         ]
 
     def __str__(self):
-        return "%s is a deputy for allocation %s" % (self.user.username, self.allocation_id)
+        return "user %s is a deputy for allocation %s" % (self.user_id, self.allocation_id)
 
 
 auditlog.register(DataAccessRule)
