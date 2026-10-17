@@ -318,7 +318,8 @@ class MembershipHistoryTests(_Fixture):
     def leave(self, user, group, at=None):
         user.groups.remove(group)
         if at is not None:
-            GroupMembershipPeriod.objects.filter(user=user, group=group, left_at__isnull=False).update(left_at=at)
+            GroupMembershipPeriod.objects.filter(user=user, group=group, left_at__isnull=False).update(
+                joined_at=None, left_at=at)
         access_rules.bump_version()
 
     def test_leaver_keeps_points_shared_before_leaving(self):
@@ -435,8 +436,8 @@ class PhotStatTests(_Fixture):
         self.assertIn(self.g.pk, {r.group_id for r in rows})
 
     def test_group_deny_drops_the_other_groups_scopes(self):
-        photstat.sync_scopes([self.transient.pk])
         self.rule(self.points[("go", 0)], DENY, group=self.g)
+        photstat.sync_scopes([self.transient.pk])  # the rule removed G's scope; rebuild it
         both = self.fresh(self.both)
         rows = TransientPhotStatScope.objects.filter(transient=self.transient).filter(
             photstat_visibility._candidate_scope_q(both))
