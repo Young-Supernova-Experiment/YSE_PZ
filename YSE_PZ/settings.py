@@ -697,22 +697,27 @@ DASHBOARD_QUERY_BACKUP_DIR = config.get(
     fallback=os.path.join(BASE_DIR, 'backups', 'saved_queries'),
 )
 
-# Authorization hardening (#520-#527). Each flag defaults to the previous
-# behaviour; docs/ziggy-runbook.md has the steps to verify and turn them on.
+# Authorization hardening (#520-#527). API_WRITE_PERMISSIONS_ENFORCED and
+# EXPLORER_RESTRICTED_ACCESS default to the previous behaviour (off);
+# UPLOAD_GROUP_CHECKS_ENFORCED defaults to on (#697, Ryan's decision). The
+# runbook has the steps to verify and change them.
 # Each reads an env var (1/0) first, then [site_settings] in settings.ini.
-def _authz_flag(env_name, ini_name):
+def _authz_flag(env_name, ini_name, default=False):
     raw = os.environ.get(env_name, '').strip()
     if raw:
         return raw == '1'
-    return config.getboolean('site_settings', ini_name, fallback=False)
+    return config.getboolean('site_settings', ini_name, fallback=default)
 
 
 # Legacy REST viewsets: unsafe methods need staff, superuser or the model
 # permission (the API_WRITERS_GROUP group holds them; migration 0032).
 API_WRITE_PERMISSIONS_ENFORCED = _authz_flag('YSE_API_WRITE_PERMISSIONS_ENFORCED', 'API_WRITE_PERMISSIONS_ENFORCED')
 # add_transient / add_transient_phot / add_transient_spec / upload_spectrum:
-# group membership and ownership checks for non-service accounts.
-UPLOAD_GROUP_CHECKS_ENFORCED = _authz_flag('YSE_UPLOAD_GROUP_CHECKS_ENFORCED', 'UPLOAD_GROUP_CHECKS_ENFORCED')
+# group membership and ownership checks for non-service accounts. On unless
+# turned off with YSE_UPLOAD_GROUP_CHECKS_ENFORCED=0 or
+# UPLOAD_GROUP_CHECKS_ENFORCED: False in [site_settings] (#697).
+UPLOAD_GROUP_CHECKS_ENFORCED = _authz_flag(
+    'YSE_UPLOAD_GROUP_CHECKS_ENFORCED', 'UPLOAD_GROUP_CHECKS_ENFORCED', default=True)
 # Service group for crons and scripts that write through the API or the upload endpoints.
 API_WRITERS_GROUP = config.get('site_settings', 'API_WRITERS_GROUP', fallback='api_writers')
 # Accounts migration 0032 adds to API_WRITERS_GROUP when they exist: the
