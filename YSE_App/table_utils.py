@@ -59,19 +59,53 @@ RECENT_PHOT_ORDER_FIELDS = {
 }
 
 
-def order_by_recent_phot(queryset, key, is_descending):
-    """``queryset`` sorted on the stored photometry statistics for ``key`` (pk tie-break)."""
-    return stable_order_by(queryset, RECENT_PHOT_ORDER_FIELDS[key], is_descending)
+def _table_viewer(table):
+    """The user a table is rendered for (``RequestConfig`` sets ``table.request``), or ``None``.
+
+    Every view configures its tables with ``RequestConfig``; a table built
+    without one (scripts, some tests) shows the all-data statistics.
+    """
+    request = getattr(table, 'request', None)
+    return getattr(request, 'user', None) if request is not None else None
+
+
+def _scoped_viewer(user):
+    """``user`` when the stat values must be scoped for them (#607), else ``None``."""
+    from YSE_App.services.visibility import user_sees_everything
+
+    if user is None or user_sees_everything(user):
+        return None
+    return user
+
+
+def order_by_stat(queryset, field, is_descending, user=None, *, transient_ref='pk', stat_path='photstat__'):
+    """``queryset`` sorted on the stat column ``field`` as ``user`` may see it (pk tie-break, #607)."""
+    viewer = _scoped_viewer(user)
+    if viewer is None:
+        return stable_order_by(queryset, stat_path + field, is_descending)
+    from YSE_App.services.photstat_visibility import alias_stat_fields
+
+    queryset, names = alias_stat_fields(queryset, viewer, [field], transient_ref=transient_ref, stat_path=stat_path)
+    return stable_order_by(queryset, names[field], is_descending)
+
+
+def order_by_recent_phot(queryset, key, is_descending, user=None):
+    """``queryset`` sorted on the stored photometry statistics for ``key`` (pk tie-break).
+
+    With ``user``, on the values that user may see (#607).
+    """
+    field = RECENT_PHOT_ORDER_FIELDS[key][len('photstat__'):]
+    return order_by_stat(queryset, field, is_descending, user)
 
 
 class RecentPhotOrderMixin:
     """order_recent_mag / order_recent_magdate for Transient tables (see RECENT_PHOT_ORDER_FIELDS)."""
 
     def order_recent_mag(self, queryset, is_descending):
-        return (order_by_recent_phot(queryset, 'recent_mag', is_descending), True)
+        return (order_by_recent_phot(queryset, 'recent_mag', is_descending, _table_viewer(self)), True)
 
     def order_recent_magdate(self, queryset, is_descending):
-        return (order_by_recent_phot(queryset, 'recent_magdate', is_descending), True)
+        return (order_by_recent_phot(queryset, 'recent_magdate', is_descending, _table_viewer(self)), True)
 
 
 # "Last Det." and "Last Obs." cells (#557). Both read TransientPhotStat, the
@@ -100,36 +134,71 @@ def _stat_row(transient_id, stat):
     }
 
 
-def _stat_rows_from_records(records, transient_attr):
-    """Stat rows from the page's Transient records, or None to query them.
+def _cached_stat_objects(records, transient_attr):
+    """``{transient_id: TransientPhotStat}`` from the page's Transient records, or None to query them.
 
     ``annotate_dashboard_transient_fields`` select_related()s the stat row and
     its band, so dashboard pages need no stat query.
     """
     if transient_attr != 'pk':
         return None
-    rows = []
+    rows = {}
     for record in records:
         descriptor = getattr(type(record), 'photstat', None)
         related = getattr(descriptor, 'related', None)
         if related is None or not related.is_cached(record):
             return None
         stat = related.get_cached_value(record)
-        if stat is None:
-            continue
-        if stat.last_detected_band_id is not None and \
+        if stat is not None and stat.last_detected_band_id is not None and \
                 not type(stat).last_detected_band.field.is_cached(stat):
             return None
-        rows.append(_stat_row(record.pk, stat))
+        rows[record.pk] = stat  # None: the transient has no stat row
     return rows
 
 
-def last_phot_summary(transient_ids, stat_rows=None):
+def _stat_rows_from_records(records, transient_attr):
+    """Stat rows (see :func:`_stat_row`) from the page's Transient records, or None to query them."""
+    cached = _cached_stat_objects(records, transient_attr)
+    if cached is None:
+        return None
+    return [_stat_row(tid, stat) for tid, stat in cached.items() if stat is not None]
+
+
+def _page_records(record, table):
+    records = [record]
+    rows = table.page.object_list if getattr(table, 'page', None) is not None else table.rows
+    try:
+        records += [row.record for row in rows]
+    except Exception:
+        pass
+    return records
+
+
+def _page_visible_stats(record, table, transient_attr, viewer):
+    """``{transient_id: stat row the viewer may see}`` for the table's page, computed once per table (#607)."""
+    from YSE_App.services.photstat_visibility import visible_stats
+
+    tid = getattr(record, transient_attr, None)
+    cache = table.__dict__.setdefault('_visible_stat_cache', {})
+    if tid not in cache:
+        records = _page_records(record, table)
+        ids = {getattr(r, transient_attr, None) for r in records}
+        ids.discard(None)
+        ids -= set(cache)
+        full = _cached_stat_objects(records, transient_attr)
+        cache.update(dict.fromkeys(ids))
+        cache.update(visible_stats(viewer, ids, full_rows=full, related=('last_detected_band',)))
+    return cache
+
+
+def last_phot_summary(transient_ids, stat_rows=None, user=None):
     """``{transient_id: dict}`` with the Last Det. / Last Obs. values (see above).
 
     Keys of each dict: ``det_mag``, ``det_band``, ``obs_date``, ``limit``,
     ``limit_band``. ``stat_rows`` (see :func:`_stat_row`) saves the stat query. At most two queries for any
-    number of transients.
+    number of transients. With ``user`` the newest point's limit is read only
+    from photometry that user may see (#607); ``stat_rows`` must then hold the
+    rows the user may see.
     """
     import datetime
 
@@ -167,12 +236,15 @@ def last_phot_summary(transient_ids, stat_rows=None):
     for tid, (_, obs_date) in newest_not_det.items():
         window |= Q(photometry__transient_id=tid,
                     obs_date__gte=obs_date - datetime.timedelta(days=1))
-    points = (
-        TransientPhotData.objects.filter(window)
-        .filter(legacy_good('TransientPhotData'))
-        .values_list('photometry__transient_id', 'obs_date', 'band__name',
-                     'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point')
-    )
+    points = TransientPhotData.objects.filter(window).filter(legacy_good('TransientPhotData'))
+    if user is not None:
+        from YSE_App.services.visibility import visible_photometry_ids_q
+
+        visible = visible_photometry_ids_q(user)
+        if visible is not None:
+            points = points.filter(visible)
+    points = points.values_list('photometry__transient_id', 'obs_date', 'band__name',
+                                'mag', 'mag_err', 'flux', 'flux_err', 'flux_zero_point')
     for tid, obs_date, band, mag, mag_err, flux, flux_err, zp in points:
         obs_mjd = newest_not_det[tid][0]
         if abs(datetime_to_mjd(obs_date) - obs_mjd) > _LAST_PHOT_MJD_TOLERANCE:
@@ -212,12 +284,16 @@ class _LastPhotColumn(tables.Column):
         tid = getattr(record, self.transient_attr, None)
         cache = table.__dict__.setdefault('_last_phot_cache', {})
         if tid not in cache:
-            records = [record]
-            rows = table.page.object_list if getattr(table, 'page', None) is not None else table.rows
-            try:
-                records += [row.record for row in rows]
-            except Exception:
-                pass
+            viewer = _scoped_viewer(_table_viewer(table))
+            if viewer is not None:
+                # Only the photometry this viewer may see (#607).
+                stats = _page_visible_stats(record, table, self.transient_attr, viewer)
+                ids = {i for i in stats if i not in cache}
+                stat_rows = [_stat_row(i, stats[i]) for i in ids if stats[i] is not None]
+                cache.update(dict.fromkeys(ids))
+                cache.update(last_phot_summary(ids, stat_rows, user=viewer))
+                return cache.get(tid)
+            records = _page_records(record, table)
             ids = {getattr(r, self.transient_attr, None) for r in records}
             ids.discard(None)
             stat_rows = _stat_rows_from_records(records, self.transient_attr)
@@ -270,8 +346,9 @@ class FollowupRecentMagMixin:
     """Follow-up tables: the "Last Det." column sorts on the transient's stat row (#557)."""
 
     def order_recent_mag(self, queryset, is_descending):
-        return (stable_order_by(queryset, 'transient__' + RECENT_PHOT_ORDER_FIELDS['recent_mag'],
-                                is_descending), True)
+        field = RECENT_PHOT_ORDER_FIELDS['recent_mag'][len('photstat__'):]
+        return (order_by_stat(queryset, field, is_descending, _table_viewer(self),
+                              transient_ref='transient_id', stat_path='transient__photstat__'), True)
 
 
 class BazinMagMixin:
@@ -308,7 +385,8 @@ class BazinMagMixin:
 
         if transient_id not in self._bazin_seen:
             ids = self._page_transient_ids(transient_id)
-            self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd))
+            # Fitted to the photometry the viewer may see (#607).
+            self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd, user=_table_viewer(self)))
             self._bazin_seen |= ids
         return self._bazin_mags.get(transient_id)
 
@@ -499,8 +577,23 @@ class PeakMagColumn(MagnitudeColumn):
 
     The value comes from the ``peak_mag`` annotation ``annotate_peak_mag``
     adds (a LEFT JOIN on the one-row-per-transient stat table, no extra
-    query); a transient without a stat row shows the empty default.
+    query); a transient without a stat row shows the empty default. A viewer
+    who may not see all the photometry gets the peak of the photometry they
+    may see (#607), read with the page's other stat values.
     """
+
+    def __init__(self, *args, **kwargs):
+        kwargs['empty_values'] = ()
+        super().__init__(*args, **kwargs)
+
+    def render(self, value, record=None, table=None, bound_column=None):
+        viewer = _scoped_viewer(_table_viewer(table)) if table is not None else None
+        if viewer is not None and record is not None:
+            stat = _page_visible_stats(record, table, 'pk', viewer).get(record.pk)
+            value = getattr(stat, 'peak_mag', None)
+        if value is None or value == '':
+            return bound_column.default if bound_column is not None else '-'
+        return format_magnitude(value)
 
 
 def annotate_peak_mag(qs):
@@ -602,6 +695,8 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
         return (stable_order_by(queryset, 'open_interest_count', is_descending), True)
 
     def order_peak_mag(self, queryset, is_descending):
+        if _scoped_viewer(_table_viewer(self)) is not None:
+            return (order_by_stat(queryset, 'peak_mag', is_descending, _table_viewer(self)), True)
         queryset = annotate_peak_mag(queryset)
         return (stable_order_by(queryset, 'peak_mag', is_descending), True)
 

@@ -334,8 +334,9 @@ class SignalTests(PhotStatFixture):
     def test_saving_a_point_costs_a_bounded_number_of_queries(self):
         with CaptureQueriesContext(connection) as ctx:
             add_point(self.photometry, self.r, 60060.0, mag=19.5, mag_err=0.1, user=self.user)
-        # INSERT + photometry->transient lookup + stat fetch + points + UPDATE (+ savepoints)
-        self.assertLessEqual(len(ctx.captured_queries), 12, [q["sql"][:80] for q in ctx.captured_queries])
+        # INSERT + photometry->transient lookup + stat fetch + points + UPDATE (+ savepoints),
+        # + the set groups and the scope rows (#607)
+        self.assertLessEqual(len(ctx.captured_queries), 14, [q["sql"][:80] for q in ctx.captured_queries])
 
 
 class CommandTests(PhotStatFixture):
@@ -401,7 +402,8 @@ class CommandTests(PhotStatFixture):
         with CaptureQueriesContext(connection) as ctx:
             result = photstat.recompute_many(ids, batch_size=100)
         self.assertEqual((result.processed, result.created), (5, 5))
-        self.assertLessEqual(len(ctx.captured_queries), 6, [q["sql"][:80] for q in ctx.captured_queries])
+        # + one read of the set groups and one of the scope rows per batch (#607)
+        self.assertLessEqual(len(ctx.captured_queries), 8, [q["sql"][:80] for q in ctx.captured_queries])
 
 
 class ApiTests(PhotStatFixture):
@@ -574,10 +576,11 @@ class SurfaceTests(PhotStatFixture):
         self.assertEqual(photstat.stat_for_transient(self.transient.id).schema_version, photstat.SCHEMA_VERSION)
         TransientPhotStat.objects.filter(transient=self.transient).delete()
         self.assertIsNone(photstat.stat_for_transient(self.transient.id, compute_missing=False))
-        # the miss path: lookup, photometry pass, existence check, INSERT, reload with bands
+        # the miss path: lookup, photometry pass, existence check, INSERT, reload with bands,
+        # + the set groups and the scope rows (#607)
         with CaptureQueriesContext(connection) as ctx:
             stat = photstat.stat_for_transient(self.transient.id)
-        self.assertLessEqual(len(ctx.captured_queries), 5)
+        self.assertLessEqual(len(ctx.captured_queries), 7)
         self.assertIsNotNone(stat)
         self.assertAlmostEqual(stat.rise_rate, 0.25)
         # a row inserted meanwhile (concurrent upload): the failed INSERT is

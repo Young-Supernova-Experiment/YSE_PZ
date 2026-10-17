@@ -191,8 +191,19 @@ def spectra_rows(user, transient, *, include_data: bool = True) -> List[Dict]:
     return out
 
 
-def photstat_section(transient) -> Optional[Dict]:
-    """The PhotStat row (#268) as plain numbers, or None without one."""
+def photstat_section(transient, user=None) -> Optional[Dict]:
+    """The PhotStat row (#268) as plain numbers, or None without one.
+
+    With ``user``, the row of the photometry that user may see (#607), the
+    same subset as :func:`photometry_rows`.
+    """
+    if user is not None:
+        from YSE_App.services.photstat_visibility import visible_stat
+        from YSE_App.services.visibility import user_sees_everything
+
+        if not user_sees_everything(user):
+            stat = visible_stat(user, transient.pk, compute_missing=False)
+            return _stat_dict(stat) if stat is not None else None
     stat = getattr(transient, "photstat", None)
     if stat is None:
         try:
@@ -203,9 +214,13 @@ def photstat_section(transient) -> Optional[Dict]:
             return None
     if stat is None:
         return None
+    return _stat_dict(stat)
+
+
+def _stat_dict(stat) -> Dict:
     out = {}
     for field in stat._meta.fields:
-        if field.name in ("id", "transient", "created_by", "modified_by"):
+        if field.name in ("id", "transient", "created_by", "modified_by", "group", "scope_key"):
             continue
         value = getattr(stat, field.name, None)
         if isinstance(value, (datetime.date, datetime.datetime)):
@@ -231,7 +246,7 @@ def build_payload(transient, user, input_spec=None, params=None) -> Dict:
     }
     if want_all or "photometry" in spec:
         payload["photometry"] = photometry_rows(user, transient)
-        payload["photstat"] = photstat_section(transient)
+        payload["photstat"] = photstat_section(transient, user)
     if want_all or "spectra" in spec:
         payload["spectra"] = spectra_rows(user, transient)
     return payload

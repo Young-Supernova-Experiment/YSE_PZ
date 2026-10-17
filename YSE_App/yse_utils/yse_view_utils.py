@@ -518,8 +518,8 @@ def init_draw_transients(request):
 					cursor.execute(query.sql.replace('%','%%'), ())
 					transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
 					cursor.close()
-					from YSE_App.services.visibility import filter_transients_by_user_access
-					transients = filter_transients_by_user_access(request.user, transients)
+					from YSE_App.services.visibility import filter_listed_transients
+					transients = filter_listed_transients(request.user, transients)
 				else:
 					query = UserQuery.objects.filter(python_query = unquote(query_name))
 					if not len(query): raise Http404('Invalid Query')

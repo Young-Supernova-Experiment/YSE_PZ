@@ -802,6 +802,27 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 (or set `YSE_LOGIN_REQUIRED_MIDDLEWARE=0` in the Apache / WSGI environment; the env var wins), then `sudo systemctl restart apache2`. **Check** the second curl above now returns `302` from the view's own login decorator, or `200` for a view without one. Views keep their own login decorators either way. Report what broke so the allowlist can be fixed, then remove the line.
 
+<a id="transient-visibility"></a>
+
+### One visibility policy for transient lists, per-scope photometry statistics (2026-10-16, #607) migration applied by the deploy; one backfill required per database
+
+**What changes.** Non-staff users now see the same transients on the search page, the dashboards, the API and the exports: every object with a TNS name, plus the objects whose data they may see (`docs/transient-search.md`, section "Who sees which transients and which values"). Values derived from photometry (Last Det., Last Obs., Peak Mag, filters, sorting, `/api/transientphotstats/`, the export, Bazin magnitudes) come only from photometry they may see. Staff see what they saw before.
+
+**Migration:** `0042_transient_photstat_scope` adds one new table, `YSE_App_transientphotstatscope`. It changes no existing table and the deploy applies it. **No new package.**
+
+**Required, once per database** (the shared `YSE_test` once, production after the promotion), from the stack's checkout with its Python:
+
+```
+<PYTHON> manage.py backfill_photstat_scopes            # dry run: prints how many rows would be written
+<PYTHON> manage.py backfill_photstat_scopes --apply    # writes them; safe to re-run, unchanged rows are not written
+```
+
+**Expected:** the dry run counts the transients with photometry restricted to a group (TNS imports in the Public group included) and writes nothing; `--apply` prints `Applied: N transients; scope rows created M, ...`; a second `--apply` prints `created 0, updated 0, deleted 0`. It reads photometry in batches of 500 and can run while the site is up. Until it has run, non-staff users see empty derived values for transients with restricted photometry (never the values of data they may not see).
+
+**Re-run `--apply`** (optional) after deleting a group in the admin, or after photometry was uploaded through yse\_test while it still runs older code (both stacks share the database and only the newer code writes the scope rows).
+
+**Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
+
 <a id="astroscheduler-130"></a>
 
 ### AstroScheduler 1.3.0 (2026-10-16, #678) required on any venv the deploy does not install
@@ -2741,6 +2762,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-16 v66, **migration applied by the deploy; one backfill required per database** (`manage.py backfill_photstat_scopes --apply`, dry run by default). One visibility policy for transient lists ([#607](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/607)): migration `0042_transient_photstat_scope` (one new table, safe on the shared database); non-staff users see TNS-named objects plus the objects whose data they may see, everywhere, and derived photometry values only from photometry they may see ([section "One visibility policy"](#transient-visibility)). Explorer grant note for table-level grants. No new package.
 * 2026-10-16 v65, optional (backfill). TNS references ([#645](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/645)): TNS-reported photometry now goes in its own `TNS` header with the TNS reference (and report ids when sent); `mark_tns_imports_public` is a dry run by default (`--apply` writes; `--dry-run` still accepted) and also tags ZTF/ATLAS forced photometry Public and sets TNS references on old imports ([section](#tns-references)). No migration.
 * 2026-10-16 v64, **required on venvs the deploy does not install**: install `astroscheduler` 1.3.0, then `collectstatic` ([#678](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/678); [section "AstroScheduler 1.3.0"](#astroscheduler-130)). No migration.
 * 2026-10-16 v63, **nothing new to run**. AstroScheduler planner: end-to-end smoke test ([#35](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/35)); the plans list and the target-list export now use a fixed number of queries ([#675](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/675)); observer guide and performance notes in `docs/astroscheduler.md` ([#676](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/676)). No migration, no new package.

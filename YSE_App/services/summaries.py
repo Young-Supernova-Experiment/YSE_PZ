@@ -253,10 +253,15 @@ def _annotations(transient: Transient, viewer):
 
 
 def _photstat(transient: Transient):
-    from YSE_App.services.photstat import stat_for_transient
+    """The PhotStat numbers of the collaboration-wide (ungrouped) photometry only (#607).
+
+    The same subset as the spectra and follow-ups: the public scope when the
+    transient has restricted photometry, else its all-data row.
+    """
+    from YSE_App.services.photstat_visibility import public_stat
 
     try:
-        stat = stat_for_transient(transient.pk, compute_missing=True)
+        stat = public_stat(transient.pk)
     except Exception:  # noqa: BLE001 - the summary must never fail on stats
         log.exception("photstat lookup failed for %s", transient.name)
         return None

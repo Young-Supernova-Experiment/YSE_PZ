@@ -192,6 +192,22 @@ def refresh_photstat_on_quality_flag(sender, instance, action, reverse, **kwargs
     photstat.schedule_recompute(_photdata_transient_id(instance), photometry_id=instance.photometry_id)
 
 
+@receiver(m2m_changed, sender=TransientPhotometry.groups.through, dispatch_uid="yse_photstat_scope_groups_changed")
+def refresh_photstat_scopes_on_group_change(sender, instance, action, reverse, **kwargs):
+    """A photometry set's collaboration groups decide which visibility scopes count it (#607)."""
+    if action not in ('post_add', 'post_remove', 'post_clear'):
+        return
+    if reverse:
+        # Group.transientphotometry_set.add/remove/clear(...): many sets at once.
+        if action == 'post_clear':
+            return  # pk_set unknown; ``backfill_photstat_scopes`` repairs a cleared group
+        with photstat.deferred_updates():
+            for pk in list(kwargs.get('pk_set') or ()):
+                photstat.schedule_recompute(photometry_id=pk)
+        return
+    photstat.schedule_recompute(instance.transient_id, photometry_id=instance.pk)
+
+
 @receiver(pre_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moving")
 def remember_photometry_transient(sender, instance, raw=False, update_fields=None, **kwargs):
     """Note the old transient when a photometry set is moved to another one (#269).

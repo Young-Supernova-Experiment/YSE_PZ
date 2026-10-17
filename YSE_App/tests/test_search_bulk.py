@@ -1,8 +1,9 @@
 """Bulk actions, CSV export and schema descriptions on the search page (#284, #287).
 
 Bulk actions need POST + CSRF and only touch transients the user may see
-(``filter_transients_by_user_access``); the CSV holds exactly the rows the
-search returns for that user; every filter has a schema description.
+listed (``filter_listed_transients``, #607: TNS-named objects, plus objects
+whose data the user may see); the CSV holds exactly the rows the search
+returns for that user; every filter has a schema description.
 """
 
 import csv
@@ -12,8 +13,19 @@ from django.test import Client
 from django.urls import reverse
 
 from YSE_App.filters.transient_search import FILTER_HELP, TransientSearchFilterSet
-from YSE_App.models import Transient, TransientStatus, TransientTag
-from YSE_App.tests.test_transient_search import PRIVATE_GROUP, SearchFixture
+from YSE_App.models import Transient, TransientPhotometry, TransientStatus, TransientTag
+from YSE_App.tests.fixtures_minimal import audit_fields, create_minimal_transient
+from YSE_App.tests.test_transient_search import PRIVATE_GROUP, SearchFixture, _point
+
+
+def _hidden_transient(fixture):
+    """A non-TNS-named transient whose only data are shared with the private group (#607)."""
+    t = create_minimal_transient(fixture.user, name='PS26hid', status_name='Ignore', ra=101.0, dec=-41.0)
+    phot = TransientPhotometry.objects.create(
+        transient=t, instrument=fixture.instrument, obs_group=fixture.obs_group, **audit_fields(fixture.user))
+    phot.groups.add(fixture.group)
+    _point(phot, fixture.band, 2, mag=19.0, user=fixture.user)
+    return t
 
 
 def _names(response):
@@ -79,9 +91,9 @@ class SearchBulkTests(SearchFixture):
 
     def test_non_staff_cannot_touch_transients_they_cannot_see(self):
         self.client.force_login(self.outsider)
-        private = Transient.objects.get(name='2026prv')
-        from YSE_App.services.visibility import filter_transients_by_user_access
-        self.assertFalse(filter_transients_by_user_access(self.outsider, Transient.objects.filter(pk=private.pk)).exists())
+        private = _hidden_transient(self)
+        from YSE_App.services.visibility import filter_listed_transients
+        self.assertFalse(filter_listed_transients(self.outsider, Transient.objects.filter(pk=private.pk)).exists())
         self.client.post(self.url, {'action': 'status', 'status_id': self.watch.pk, 'transient_id': [str(private.pk)]})
         private.refresh_from_db()
         self.assertEqual(private.status.name, 'Ignore')
@@ -89,6 +101,14 @@ class SearchBulkTests(SearchFixture):
                                     'params': 'status=Ignore'})
         private.refresh_from_db()
         self.assertEqual(private.status.name, 'Ignore')
+
+    def test_tns_named_objects_are_listed_for_everyone(self):
+        """#607: a TNS-named object is public; its basic fields (status) are open like any listed object."""
+        self.client.force_login(self.outsider)
+        tns_named = Transient.objects.get(name='2026prv')
+        self.client.post(self.url, {'action': 'status', 'status_id': self.watch.pk, 'transient_id': [str(tns_named.pk)]})
+        tns_named.refresh_from_db()
+        self.assertEqual(tns_named.status.name, 'Watch')
 
     def test_member_of_the_private_group_can(self):
         self.client.force_login(self.member)
@@ -118,8 +138,9 @@ class SearchBulkTests(SearchFixture):
         self.assertEqual(resp.status_code, 200)
         names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
         self.assertEqual(sorted(names), ['2026pub.csv', '2026sea.csv'])
+        hidden = _hidden_transient(self)
         self.client.force_login(self.outsider)
-        resp = self.client.post(self.url, {'action': 'photometry', 'transient_id': self._ids('2026prv')})
+        resp = self.client.post(self.url, {'action': 'photometry', 'transient_id': [str(hidden.pk)]})
         self.assertEqual(zipfile.ZipFile(io.BytesIO(resp.content)).namelist(), [])
 
     def test_page_offers_the_bulk_form_and_csv_link(self):
@@ -151,15 +172,17 @@ class SearchExportTests(SearchFixture):
         self.assertEqual([r[0] for r in rows], sorted(r[0] for r in rows))
 
     def test_csv_only_has_rows_the_user_can_see(self):
+        _hidden_transient(self)
         self.client.force_login(self.member)
         _, member_names = _names(self.client.get(self.url, {}))
         self.client.force_login(self.outsider)
         _, outsider_names = _names(self.client.get(self.url, {}))
-        self.assertIn('2026prv', member_names)
-        self.assertNotIn('2026prv', outsider_names)
+        self.assertIn('PS26hid', member_names)
+        self.assertNotIn('PS26hid', outsider_names)
+        self.assertIn('2026prv', outsider_names)  # TNS-named: listed for everyone (#607)
         self.assertLessEqual(outsider_names, member_names)
         _, staff_names = _names(Client_logged_in(self.user).get(self.url, {}))
-        self.assertEqual(staff_names, self.all_names)
+        self.assertEqual(staff_names, self.all_names | {'PS26hid'})
 
     def test_group_filter_cannot_leak_for_non_staff(self):
         self.client.force_login(self.outsider)

@@ -146,26 +146,32 @@ def sexagesimal(ra_deg: float, dec_deg: float) -> Tuple[str, str]:
     return ra, dec
 
 
-def night_magnitudes(transient_ids, night) -> Dict[int, Dict[str, Any]]:
+def night_magnitudes(transient_ids, night, user=None) -> Dict[int, Dict[str, Any]]:
     """Magnitude per transient for the night (decision 4, 2026-10-15).
 
     The Bazin extrapolation to local midnight of the night when there is a usable fit,
     else the last detection. ``age_days`` is the time from the last detection to that
-    midnight. Transients with neither are absent.
+    midnight. Transients with neither are absent. With ``user``, both come only from the
+    photometry that user may see (#607).
     """
-    from YSE_App.models.phot_stat_models import TransientPhotStat
     from YSE_App.services.bazin import extrapolated_mags, local_midnight_mjd
+    from YSE_App.services.photstat_visibility import visible_stats
 
     ids = sorted({int(t) for t in transient_ids})
     if not ids:
         return {}
     observatory = night.resource.telescope.observatory
     at_mjd = local_midnight_mjd(night.obs_date, observatory.utc_offset if observatory else 0)
-    bazin = extrapolated_mags(ids, at_mjd)
-    stats = {
-        s.transient_id: s
-        for s in TransientPhotStat.objects.filter(transient_id__in=ids).select_related("last_detected_band")
-    }
+    bazin = extrapolated_mags(ids, at_mjd, user=user)
+    if user is None:
+        from YSE_App.models.phot_stat_models import TransientPhotStat
+
+        stats = {
+            s.transient_id: s
+            for s in TransientPhotStat.objects.filter(transient_id__in=ids).select_related("last_detected_band")
+        }
+    else:
+        stats = visible_stats(user, ids, related=("last_detected_band",))
     out: Dict[int, Dict[str, Any]] = {}
     for tid in ids:
         stat = stats.get(tid)
@@ -212,7 +218,7 @@ def night_targets(night, user, url_for=None) -> Dict[str, Any]:
         .select_related("transient", "status")
         .prefetch_related(requests_prefetch())
     )
-    mags = night_magnitudes([f.transient_id for f in followups], night)
+    mags = night_magnitudes([f.transient_id for f in followups], night, user=user)
     default_mag = float(getattr(settings, "ASTROSCHEDULER_DEFAULT_MAG", 19.0))
     stale_days = float(getattr(settings, "ASTROSCHEDULER_STALE_MAG_DAYS", 7))
 

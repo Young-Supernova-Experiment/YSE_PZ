@@ -459,8 +459,12 @@ def pick_extrapolated_mag(
 # ------------------------------------------------------------ database access
 
 
-def detections_by_transient(transient_ids: Iterable[int]):
+def detections_by_transient(transient_ids: Iterable[int], user=None):
     """One query: usable detections for ``transient_ids`` grouped per transient and band.
+
+    With ``user``, only the photometry that user may see (#607): a fitted
+    value never comes from points the viewer cannot see. ``None`` (the
+    background job, staff pages) fits everything.
 
     Returns ``{transient_id: {'token': str, 'bands': {band_id: (band_name, [(mjd, mag, magerr), ...])}}}``.
     ``token`` (``"<n usable rows>:<latest modified_date>"``) identifies the
@@ -478,10 +482,16 @@ def detections_by_transient(transient_ids: Iterable[int]):
             photometry__transient_id__in=ids, mag__isnull=False, mag_err__isnull=False,
         )
         .filter(legacy_good('TransientPhotData'))
-        .values_list(
-            'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
-            'mag', 'mag_err', 'flux', 'flux_err', 'modified_date',
-        )
+    )
+    if user is not None:
+        from YSE_App.services.visibility import visible_photometry_ids_q
+
+        visible = visible_photometry_ids_q(user)
+        if visible is not None:
+            rows = rows.filter(visible)
+    rows = rows.values_list(
+        'photometry__transient_id', 'band_id', 'band__name', 'obs_date',
+        'mag', 'mag_err', 'flux', 'flux_err', 'modified_date',
     )
     latest: Dict[int, Optional[datetime.datetime]] = {}
     counts: Dict[int, int] = {}
@@ -500,11 +510,20 @@ def detections_by_transient(transient_ids: Iterable[int]):
     return result
 
 
-def _fit_cache_key(transient_id: int, token: str) -> str:
-    return 'bazin_fits_%s_%s_%s' % (FIT_CACHE_VERSION, transient_id, token.replace(' ', '_'))
+def _fit_cache_key(transient_id: int, token: str, scope: str = 'all') -> str:
+    return 'bazin_fits_%s_%s_%s_%s' % (FIT_CACHE_VERSION, scope, transient_id, token.replace(' ', '_'))
 
 
-def fits_for_transients(transient_ids: Iterable[int]) -> Dict[int, Dict[int, Tuple[str, BazinFit]]]:
+def _scope_token(user) -> str:
+    """Cache scope of a viewer's fits: ``all`` for staff / no user, else the group-access token."""
+    if user is None:
+        return 'all'
+    from YSE_App.services.visibility import group_access_plot_cache_token, user_sees_everything
+
+    return 'all' if user_sees_everything(user) else group_access_plot_cache_token(user)
+
+
+def fits_for_transients(transient_ids: Iterable[int], user=None) -> Dict[int, Dict[int, Tuple[str, BazinFit]]]:
     """Per-band Bazin fits for many transients: ``{transient_id: {band_id: (band_name, fit)}}``.
 
     One photometry query for the whole batch (see :func:`detections_by_transient`);
@@ -514,8 +533,9 @@ def fits_for_transients(transient_ids: Iterable[int]) -> Dict[int, Dict[int, Tup
     """
     from django.core.cache import cache
 
-    detections = detections_by_transient(transient_ids)
-    keys = {tid: _fit_cache_key(tid, entry['token']) for tid, entry in detections.items()}
+    detections = detections_by_transient(transient_ids, user=user)
+    scope = _scope_token(user)
+    keys = {tid: _fit_cache_key(tid, entry['token'], scope) for tid, entry in detections.items()}
     try:
         cached = cache.get_many(list(keys.values())) if keys else {}
     except Exception:  # a cache outage must not take the observing page down
@@ -544,11 +564,11 @@ def fits_for_transients(transient_ids: Iterable[int]) -> Dict[int, Dict[int, Tup
 
 
 def _extrapolated_with_band_ids(
-    transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None,
+    transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None, user=None,
 ) -> Dict[int, Tuple[float, int, str]]:
     """``{transient_id: (mag, band_id, band_name)}``; see :func:`extrapolated_mags`."""
     out: Dict[int, Tuple[float, int, str]] = {}
-    for tid, bands in fits_for_transients(transient_ids).items():
+    for tid, bands in fits_for_transients(transient_ids, user=user).items():
         if not bands:
             continue
         fits = {band_id: fit for band_id, (_name, fit) in bands.items()}
@@ -563,17 +583,19 @@ def _extrapolated_with_band_ids(
 
 
 def extrapolated_mags(
-    transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None,
+    transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None, user=None,
 ) -> Dict[int, Tuple[float, str]]:
     """``{transient_id: (mag, band_name)}`` at ``at_mjd`` for every transient with a usable fit.
 
     ``band_preference`` lists band names to try first; otherwise the band
     with the most recent detection wins (see :func:`pick_extrapolated_mag`).
+    ``user`` limits the fit to the photometry that user may see (#607); every
+    page passes the viewer.
     """
     return {
         tid: (mag, band_name)
         for tid, (mag, _band_id, band_name) in _extrapolated_with_band_ids(
-            transient_ids, at_mjd, band_preference
+            transient_ids, at_mjd, band_preference, user=user
         ).items()
     }
 
@@ -621,7 +643,8 @@ def store_extrapolations(
     return {'fitted': len(picked), 'cleared': cleared}
 
 
-def extrapolated_mag(transient, at_mjd, band_preference: Optional[Sequence[str]] = None) -> Optional[Tuple[float, str]]:
+def extrapolated_mag(transient, at_mjd, band_preference: Optional[Sequence[str]] = None,
+                     user=None) -> Optional[Tuple[float, str]]:
     """``(mag, band_name)`` for one transient (a ``Transient`` or its id) at ``at_mjd``, or ``None``."""
     transient_id = getattr(transient, 'pk', transient)
-    return extrapolated_mags([transient_id], datetime_to_mjd(at_mjd), band_preference).get(transient_id)
+    return extrapolated_mags([transient_id], datetime_to_mjd(at_mjd), band_preference, user=user).get(transient_id)

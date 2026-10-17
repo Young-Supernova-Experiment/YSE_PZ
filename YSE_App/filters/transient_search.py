@@ -58,6 +58,7 @@ from django.db.models.functions import (
 )
 from django.utils import timezone
 from django_filters import widgets as filter_widgets
+from django_filters.constants import EMPTY_VALUES
 
 from YSE_App.common.galactic import NGP_DEC_DEG, NGP_RA_DEG, galactic_latitude_expression  # noqa: F401 (re-exported)
 from YSE_App.common.lookup_guard import checked_lookup, is_allowed_ordering
@@ -371,8 +372,54 @@ class TransientSearchForm(forms.Form):
         return cleaned
 
 
+STAT_PREFIX = 'photstat__'
+
+
+def _filterset_user(filterset):
+    """The requesting user of ``filterset``, or ``None`` when it was built without a request."""
+    request = getattr(filterset, 'request', None)
+    return getattr(request, 'user', None) if request is not None else None
+
+
+def visible_stat_lookups(qs, user, fields):
+    """``(qs, {stat field: lookup path})`` for the stat ``fields`` as ``user`` may see them (#607).
+
+    Without a user (a FilterSet built without ``request``) the plain
+    ``photstat__`` paths are used, as before; every page and the API pass the
+    request.
+    """
+    if user is None:
+        return qs, {f: STAT_PREFIX + f for f in fields}
+    from YSE_App.services.photstat_visibility import alias_stat_fields
+
+    return alias_stat_fields(qs, user, fields)
+
+
+class _StatFilterMixin:
+    """A filter on a ``photstat__<field>`` path that reads the value the user may see (#607)."""
+
+    def filter(self, qs, value):
+        if value in EMPTY_VALUES or not self.field_name.startswith(STAT_PREFIX):
+            return super().filter(qs, value)
+        field = self.field_name[len(STAT_PREFIX):]
+        qs, names = visible_stat_lookups(qs, _filterset_user(self.parent), [field])
+        return qs.filter(**{'%s__%s' % (names[field], self.lookup_expr): value})
+
+
+class StatNumberFilter(_StatFilterMixin, django_filters.NumberFilter):
+    pass
+
+
+class StatDateTimeFilter(_StatFilterMixin, django_filters.DateTimeFilter):
+    pass
+
+
 class StableOrderingFilter(django_filters.OrderingFilter):
-    """``ordering`` with a primary-key tie-breaker so pages never overlap."""
+    """``ordering`` with a primary-key tie-breaker so pages never overlap.
+
+    Stat columns (``photstat__<field>``) sort on the value the requesting
+    user may see (#607).
+    """
 
     def filter(self, qs, value):
         if not value or not any(v for v in value):
@@ -384,6 +431,14 @@ class StableOrderingFilter(django_filters.OrderingFilter):
         ordering = [o for o in ordering if is_allowed_ordering(o, allowed)]
         if not ordering:
             return qs
+        stat_fields = [o.lstrip('-')[len(STAT_PREFIX):] for o in ordering if o.lstrip('-').startswith(STAT_PREFIX)]
+        if stat_fields:
+            qs, names = visible_stat_lookups(qs, _filterset_user(self.parent), stat_fields)
+            ordering = [
+                ('-' if o.startswith('-') else '') + names[o.lstrip('-')[len(STAT_PREFIX):]]
+                if o.lstrip('-').startswith(STAT_PREFIX) else o
+                for o in ordering
+            ]
         tie = '-pk' if ordering and ordering[0].startswith('-') else 'pk'
         return qs.order_by(*ordering, tie)
 
@@ -412,14 +467,16 @@ def _bool(method, label):
 
 
 def _num(field_name, lookup, label):
-    return django_filters.NumberFilter(field_name=field_name, lookup_expr=lookup, label=label)
+    cls = StatNumberFilter if field_name.startswith(STAT_PREFIX) else django_filters.NumberFilter
+    return cls(field_name=field_name, lookup_expr=lookup, label=label)
 
 
 def _when(field_name, lookup, label):
     # forms.DateTimeField (Django >= 3.1) reads both ``2026-09-01`` and ISO
     # 8601 ``2026-09-01T12:00:00Z``; naive values are taken in the current
     # time zone (UTC on the servers).
-    return django_filters.DateTimeFilter(
+    cls = StatDateTimeFilter if field_name.startswith(STAT_PREFIX) else django_filters.DateTimeFilter
+    return cls(
         field_name=field_name, lookup_expr=lookup, label=label,
         widget=forms.DateTimeInput(attrs={'placeholder': 'YYYY-MM-DD[THH:MM]'}),
     )
@@ -798,7 +855,8 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         return qs.filter(disc_date__gte=UtcNowMinusSeconds(float(value) * 86400.0))
 
     def filter_days_since_last_det_max(self, qs, name, value):
-        return qs.filter(photstat__last_detected_mjd__gte=NowMjd() - _float(value))
+        qs, names = visible_stat_lookups(qs, self._user(), ['last_detected_mjd'])
+        return qs.filter(**{names['last_detected_mjd'] + '__gte': NowMjd() - _float(value)})
 
     # --- classification ------------------------------------------------
     def filter_classification(self, qs, name, value):
