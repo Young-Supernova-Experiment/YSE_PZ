@@ -290,6 +290,7 @@ class BasicAuthStillWorksTests(TestCase):
         if "rest_framework.authentication.TokenAuthentication" in classes:
             self.assertEqual(response.status_code, 200)
 
+    @override_settings(UPLOAD_GROUP_CHECKS_ENFORCED=False)  # about the middleware, not the upload checks
     def test_ingest_endpoints_accept_basic_auth_posts(self):
         # The endpoints YSE_App/data_ingest and util scripts POST to. The
         # payloads are empty, so only check that the middleware lets the
