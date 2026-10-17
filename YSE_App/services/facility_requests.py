@@ -480,10 +480,13 @@ def ingest_points(request: FacilityRequest, points: List[Dict], user: User, *, i
     # two passes like the upload API: the first creates the TransientPhotometry rows, the second the points
     from YSE_App.models.phot_models import TransientPhotometry
 
-    _response, new_photometry = add_transient_phot_util(photdict, request.transient, user, do_photdata=False)
+    # The request's allocation is the program these points were taken under (#648, PR 3).
+    allocation = request.allocation
+    _response, new_photometry = add_transient_phot_util(photdict, request.transient, user, do_photdata=False,
+                                                        allocation=allocation)
     if new_photometry:
         TransientPhotometry.objects.bulk_create(new_photometry)
-    add_transient_phot_util(photdict, request.transient, user, do_photdata=True)
+    add_transient_phot_util(photdict, request.transient, user, do_photdata=True, allocation=allocation)
     return {"points": len(photdata), "bands": ", ".join(sorted(bands))}
 
 

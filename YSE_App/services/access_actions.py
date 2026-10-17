@@ -479,10 +479,18 @@ def _active_grants(allocation_id):
     return grants
 
 
-def _apply(grants, **target) -> WriteResult:
+def _apply(grants, *, linked: bool = False, **target) -> WriteResult:
+    """Write the grants' rules for one target.
+
+    At ingest (``linked=False``) only points created after each grant count, and a deny is
+    written even where the dataset's own groups include the grantee (the point was never
+    shared before). For a dataset linked to the program later (``linked=True``, PR 3) every
+    matching point counts, as for the action itself, and a deny is not written for points the
+    grantee can already see (they stay shared).
+    """
     total = WriteResult()
     for grant in grants:
-        points, spectra = _grant_targets(grant, created_since=grant.created_at, **target)
+        points, spectra = _grant_targets(grant, created_since=None if linked else grant.created_at, **target)
         if not points and not spectra:
             continue
         if grant.grantee_user is not None and not grant.grantee_user.is_active:
@@ -490,29 +498,33 @@ def _apply(grants, **target) -> WriteResult:
         total = total.add(write_rules(
             points=points, spectra=spectra, effect=grant.effect, grantee_group=grant.grantee_group,
             grantee_user=grant.grantee_user, granted_by=grant.created_by, granted_as=grant.created_as,
-            standing_grant=grant, at_ingest=True))
+            standing_grant=grant, at_ingest=not linked))
     return total
 
 
-def apply_standing_grants_to_set(photometry) -> WriteResult:
-    """Write the active standing grants' rules for the set's points created after each grant (idempotent)."""
+def apply_standing_grants_to_set(photometry, *, linked: bool = False) -> WriteResult:
+    """Write the program's active standing grants' rules for the set's points (idempotent).
+
+    ``linked``: the set was just linked to the program after its data were taken (all its
+    points count; see :func:`_apply`). Otherwise only points created after each grant.
+    """
     allocation_id = getattr(photometry, "allocation_id", None)
     if not allocation_id:
         return WriteResult()
     grants = _active_grants(allocation_id)
     if not grants:
         return WriteResult()
-    return _apply(grants, photometry_id=photometry.pk)
+    return _apply(grants, linked=linked, photometry_id=photometry.pk)
 
 
-def apply_standing_grants_to_spectrum(spectrum) -> WriteResult:
+def apply_standing_grants_to_spectrum(spectrum, *, linked: bool = False) -> WriteResult:
     allocation_id = getattr(spectrum, "allocation_id", None)
     if not allocation_id:
         return WriteResult()
     grants = _active_grants(allocation_id)
     if not grants:
         return WriteResult()
-    return _apply(grants, spectrum_id=spectrum.pk)
+    return _apply(grants, linked=linked, spectrum_id=spectrum.pk)
 
 
 def on_point_created(point) -> None:

@@ -570,6 +570,9 @@ api_url_patterns = [
             api_views.NightObservationsAPIView.as_view(), name='api-night-observations'),
     re_path(r'^api/observed_blocks/(?P<block_id>[0-9]+)/assess/$',
             api_views.ObservedBlockAssessAPIView.as_view(), name='api-observed-block-assess'),
+    # The program (allocation) a dataset was taken under (#648, PR 3)
+    re_path(r'^api/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/program/$',
+            api_views.DatasetProgramLinkAPIView.as_view(), name='api-dataset-program'),
     # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
     re_path(
         r'^night_planner/(?P<night_id>[0-9]+)/api/schedule$',
