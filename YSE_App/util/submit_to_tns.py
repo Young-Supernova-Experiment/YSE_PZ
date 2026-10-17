@@ -112,7 +112,11 @@ def submit_to_tns(request,transient_name):
     # to submit, we need to get:
     # discovery date
     # can this just be the first 5-sigma detection?
-    tp = TransientPhotData.objects.filter(photometry__transient=t).filter(photometry__instrument__name='DECam')
+    # only photometry the submitter may see and send (#691)
+    from YSE_App.sharing.report_scope import ReportScope
+    scope = ReportScope.for_user(request.user)
+    tp = TransientPhotData.objects.filter(photometry__transient=t, photometry_id__in=scope.photometry_ids(t))
+    tp = tp.filter(photometry__instrument__name='DECam')
     tp = tp.annotate(snr=ExpressionWrapper(F('flux')/F('flux_err'),output_field=FloatField()))
     tp_det = tp.filter(snr__gt=5).order_by('obs_date')
     

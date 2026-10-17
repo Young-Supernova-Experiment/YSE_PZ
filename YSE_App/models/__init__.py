@@ -33,6 +33,7 @@ from YSE_App.models.favorite_models import UserFavoriteTransient
 from YSE_App.models.feedback_models import Feedback
 from YSE_App.models.data_access_models import DataAccessRequest
 from YSE_App.models.data_sharing_models import DataSharingDelegate
+from YSE_App.models.autopublish_optin_models import AutopublishOptIn
 from YSE_App.models.data_access_grant_models import AllocationDelegate, DataAccessGrant
 from YSE_App.models.sharing_models import SharingService, SharingSubmission, AutoPublisher
 from YSE_App.models.instrument_log_models import InstrumentLog
