@@ -597,7 +597,8 @@ class CandidateAdmin(admin.ModelAdmin):
 
 # --- Allocations and facility requests (#303, #298) -----------------------------
 from YSE_App.models.allocation_models import Allocation, FacilityRequest  # noqa: E402
-from YSE_App.models.data_access_grant_models import AllocationDelegate, DataAccessGrant  # noqa: E402
+from YSE_App.models.data_access_grant_models import (  # noqa: E402
+	AllocationDelegate, DataAccessRule, DatasetGroupShare, GroupMembershipPeriod, StandingAccessGrant)
 
 
 class AllocationDelegateInline(admin.TabularInline):
@@ -655,25 +656,52 @@ class AllocationDelegateAdmin(admin.ModelAdmin):
 		super().save_model(request, obj, form, change)
 
 
-# Read-time access grants and restrictions (#648). Read-mostly: staff may add a rule
-# (recorded as an administrator action) and revoke rules; the target, grantee and
-# provenance never change after creation, and rows are never deleted (soft revoke
-# keeps the history). django-auditlog records creation and revocation.
-@admin.register(DataAccessGrant)
-class DataAccessGrantAdmin(admin.ModelAdmin):
-	list_display = ("id", "effect", "level", "grantee_group", "grantee_user", "allocation", "night_start",
-	                "transient_photometry", "transient_spectrum", "granted_by", "granted_as", "created_at",
-	                "revoked_at", "revoke_retroactive")
-	list_filter = ("effect", "level", "granted_as", ("revoked_at", admin.EmptyFieldListFilter))
+# Per-point access rules and standing grants (#648). Staff may add a rule or a standing
+# grant (recorded as an administrator action). Once shared a point stays shared, so rules
+# are never revoked: staff may only delete one to correct a mistake, and django-auditlog
+# records the deletion. Standing grants are stopped (affects only later points), never deleted.
+@admin.register(DataAccessRule)
+class DataAccessRuleAdmin(admin.ModelAdmin):
+	list_display = ("id", "effect", "grantee_group", "grantee_user", "transient", "transient_phot_data",
+	                "transient_spectrum", "granted_by", "granted_as", "standing_grant", "created_at", "updated_at")
+	list_filter = ("effect", "granted_as")
+	search_fields = ("grantee_group__name", "grantee_user__username", "transient__name")
+	raw_id_fields = ("transient_phot_data", "transient_spectrum", "grantee_user", "grantee_group")
+	list_select_related = ("grantee_group", "grantee_user", "transient", "granted_by")
+	_ADD_FIELDS = ("effect", "transient_phot_data", "transient_spectrum", "grantee_group", "grantee_user")
+	_PROVENANCE = ("transient", "photometry", "granted_by", "granted_as", "standing_grant", "created_at",
+	               "updated_at")
+
+	def get_fields(self, request, obj=None):
+		return self._ADD_FIELDS if obj is None else self._ADD_FIELDS + self._PROVENANCE
+
+	def get_readonly_fields(self, request, obj=None):
+		if obj is None:
+			return ()
+		return self._ADD_FIELDS + self._PROVENANCE
+
+	def has_delete_permission(self, request, obj=None):
+		return bool(request.user.is_active and request.user.is_staff)
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.granted_by = request.user
+			obj.granted_as = DataAccessRule.AS_STAFF
+		super().save_model(request, obj, form, change)
+
+
+@admin.register(StandingAccessGrant)
+class StandingAccessGrantAdmin(admin.ModelAdmin):
+	list_display = ("id", "effect", "grantee_group", "grantee_user", "allocation", "night_start", "night_end",
+	                "created_by", "created_as", "created_at", "stopped_at")
+	list_filter = ("effect", "created_as", ("stopped_at", admin.EmptyFieldListFilter))
 	search_fields = ("grantee_group__name", "grantee_user__username", "allocation__name", "note")
-	raw_id_fields = ("allocation", "classical_night", "transient_photometry", "transient_spectrum",
-	                 "grantee_user", "grantee_group")
-	list_select_related = ("grantee_group", "grantee_user", "allocation", "granted_by")
-	actions = ("revoke_default", "revoke_retroactively")
-	_ADD_FIELDS = ("effect", "allocation", "night_start", "night_end", "classical_night", "transient_photometry",
-	               "transient_spectrum", "grantee_group", "grantee_user", "note")
-	_PROVENANCE = ("level", "granted_by", "granted_as", "created_at", "revoked_at", "revoked_by",
-	               "revoke_retroactive")
+	raw_id_fields = ("allocation", "classical_night", "grantee_user", "grantee_group")
+	list_select_related = ("grantee_group", "grantee_user", "allocation", "created_by")
+	actions = ("stop",)
+	_ADD_FIELDS = ("effect", "allocation", "night_start", "night_end", "classical_night", "grantee_group",
+	               "grantee_user", "note")
+	_PROVENANCE = ("created_by", "created_as", "created_at", "stopped_at", "stopped_by")
 
 	def get_fields(self, request, obj=None):
 		return self._ADD_FIELDS if obj is None else self._ADD_FIELDS + self._PROVENANCE
@@ -688,24 +716,48 @@ class DataAccessGrantAdmin(admin.ModelAdmin):
 
 	def save_model(self, request, obj, form, change):
 		if not change:
-			obj.granted_by = request.user
-			obj.granted_as = DataAccessGrant.AS_STAFF
+			obj.created_by = request.user
+			obj.created_as = StandingAccessGrant.AS_STAFF
 		super().save_model(request, obj, form, change)
 
-	def _revoke(self, request, queryset, retroactive):
+	def stop(self, request, queryset):
+		from django.utils import timezone
+
 		n = 0
-		for grant in queryset.filter(revoked_at__isnull=True):
-			grant.revoke(request.user, retroactive=retroactive)
+		for grant in queryset.filter(stopped_at__isnull=True):
+			grant.stopped_at = timezone.now()
+			grant.stopped_by = request.user
+			grant.save(update_fields=["stopped_at", "stopped_by"])
 			n += 1
-		self.message_user(request, "%d rule(s) revoked." % n)
+		self.message_user(request, "%d standing grant(s) stopped; rules already written stay." % n)
+	stop.short_description = "Stop (points that arrive later are no longer covered)"
 
-	def revoke_default(self, request, queryset):
-		self._revoke(request, queryset, None)
-	revoke_default.short_description = "Revoke (program/night allows going forward, other rules fully)"
 
-	def revoke_retroactively(self, request, queryset):
-		self._revoke(request, queryset, True)
-	revoke_retroactively.short_description = "Revoke fully, including data taken before now"
+class _ReadOnlyHistoryAdmin(admin.ModelAdmin):
+	"""Access history (#648): written by signals, never edited by hand."""
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(GroupMembershipPeriod)
+class GroupMembershipPeriodAdmin(_ReadOnlyHistoryAdmin):
+	list_display = ("id", "user", "group", "joined_at", "left_at")
+	search_fields = ("user__username", "group__name")
+	list_select_related = ("user", "group")
+
+
+@admin.register(DatasetGroupShare)
+class DatasetGroupShareAdmin(_ReadOnlyHistoryAdmin):
+	list_display = ("id", "group", "transient_photometry", "transient_spectrum", "shared_at")
+	search_fields = ("group__name",)
+	list_select_related = ("group",)
 
 
 @admin.register(FacilityRequest)

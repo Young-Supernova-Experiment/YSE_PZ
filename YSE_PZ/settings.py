@@ -807,9 +807,14 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_groupmembershiprequest',
     # Data-sharing deputies: who a PI designated to share their data (#650).
     'YSE_App_datasharingdelegate',
-    # Read-time access grants and program deputies (#648): who may see which program's data.
-    'YSE_App_dataaccessgrant',
+    # Read-time access rules, standing grants, program deputies and access history (#648):
+    # who may see which data, and dated group membership.
+    'YSE_App_dataaccessrule',
+    'YSE_App_standingaccessgrant',
     'YSE_App_allocationdelegate',
+    'YSE_App_groupmembershipperiod',
+    'YSE_App_datasetgroupshare',
+    'YSE_App_accessrulesversion',
     # Which restricted datasets a PI opted in to automatic TNS / Hermes publishing (#691).
     'YSE_App_autopublishoptin',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
@@ -1010,7 +1015,7 @@ JOB_HANDLER_MODULES = [
 # (or YSE_ASTROSCHEDULER_ENABLED=1) turns them on.
 ASTROSCHEDULER_ENABLED = _flag('YSE_ASTROSCHEDULER_ENABLED', 'site_settings', 'ASTROSCHEDULER_ENABLED', False)
 
-# Read-time access grants and restrictions (#648; YSE_App.models.data_access_grant_models).
+# Read-time per-point access rules and standing grants (#648; YSE_App.models.data_access_grant_models).
 # Off by default: the tables exist (staff can view them in the admin) but no read path
 # consults them until [site_settings] DATA_ACCESS_GRANTS_ENABLED (or
 # YSE_DATA_ACCESS_GRANTS_ENABLED=1) is set, and not before the precedence engine lands.
