@@ -43,6 +43,7 @@ from .common.legend_layout import (
     legend_label_width_px,
     requested_plot_width,
 )
+from .common.quality_mask import is_legacy_flagged
 from .common.utilities import date_to_mjd
 from .services.visibility import group_access_plot_cache_token
 from .services import bazin as bazin_fits
@@ -236,6 +237,14 @@ BAZIN_FIT_UNAVAILABLE_TEXT = "Bazin fit unavailable (fewer than %d detections)" 
 BAZIN_LEGEND_LABEL = "Bazin fit"
 # Legend column of the today line and fit overlays: after every instrument column.
 MARKER_LEGEND_COLUMN = "markers"
+# Flagged points (#84): ``quality_mask & LEGACY_EXCLUDE != 0``, the rows the
+# "good data" readers, the statistics and the fits leave out. They are drawn
+# hollow as their own glyph set, muted until "flagged" is switched on.
+FLAGGED_LEGEND_LABEL = "flagged"
+FLAGGED_LEGEND_COLOR = "#7f7f7f"
+FLAGGED_LINE_ALPHA = 0.8
+FLAGGED_MUTED_ALPHA = 0.15
+FLAGGED_SPECTRUM_SUFFIX = " (flagged)"
 
 
 def _draw_bazin_fits(ax, series, today):
@@ -307,8 +316,23 @@ def _plot_html_cache_enabled():
 
 
 def _phot_data_quality_label(phot_row):
+    """Tooltip ``dq`` text: the DataQuality names, or ``Good``.
+
+    Reads ``data_quality.all()`` so the views' ``prefetch_related('data_quality')``
+    answers it without a query per row.
+    """
     dq_names = [dq.name for dq in phot_row.data_quality.all()]
     return 'Good' if not dq_names else ','.join(dq_names)
+
+
+def _phot_flagged(phot_row):
+    """Whether a TransientPhotData row is flagged (#84): the statistics' and fits' rule."""
+    return is_legacy_flagged(getattr(phot_row, 'quality_mask', 0), 'TransientPhotData')
+
+
+def _spectrum_flagged(spectrum):
+    """Whether a TransientSpectrum is flagged (#84): the "good data" readers' rule."""
+    return is_legacy_flagged(getattr(spectrum, 'quality_mask', 0), 'TransientSpectrum')
 
 
 def _downsample_phot_rows_for_display(phot_rows, max_points=MAX_LC_DISPLAY_POINTS):
@@ -356,18 +380,6 @@ def _cached_plot_http_response(cache_key, html):
         cache.set(cache_key, html, timeout=PLOT_HTML_CACHE_TIMEOUT)
     return django.http.HttpResponse(html)
 
-
-        
-        
-
-
-
-
-def _phot_data_quality_label(phot_row):
-    dq_names = list(phot_row.data_quality.values_list("name", flat=True))
-    if not dq_names:
-        return "Good"
-    return ",".join(dq_names)
 
 py2bokeh_symboldict = {"^":"triangle",
                        "+":"cross",
@@ -970,6 +982,78 @@ def _link_series_visibility(leader, followers):
     )
 
 
+def _flagged_glyph_kwargs(color):
+    """Glyph options of a flagged (#84) series: the band's marker, hollow, muted until shown."""
+    return dict(
+        line_color=color, fill_color=color, fill_alpha=0.0, line_alpha=FLAGGED_LINE_ALPHA,
+        muted_line_color=color, muted_fill_alpha=0.0, muted_line_alpha=FLAGGED_MUTED_ALPHA,
+        muted=True,
+    )
+
+
+def _flagged_error_bar_kwargs(color):
+    """Error bars of a flagged (#84) series."""
+    return dict(
+        color=color, line_alpha=FLAGGED_LINE_ALPHA, muted_alpha=FLAGGED_MUTED_ALPHA, muted=True,
+    )
+
+
+# Flagged renderers follow their band's legend entry (hidden with it) and the
+# "flagged" switch (muted while it is off).
+_FLAGGED_SYNC_JS = """
+const show = proxy.visible;
+for (let i = 0; i < flagged.length; i++) {
+    flagged[i].visible = leaders[i].visible;
+    flagged[i].muted = !show;
+}
+"""
+
+
+def _add_flagged_switch(ax, pairs, n_points, legend_items, *, toggle=False):
+    """Legend entry (and optional "Show flagged" button) for the flagged glyph sets (#84).
+
+    ``pairs`` are ``(band leader, flagged renderer)``: markers, limits and
+    error bars of the flagged points, drawn muted. Nothing is added when there
+    are none. The legend entry is an empty hollow-circle renderer whose
+    ``visible`` is the switch, hidden (off) by default, so clicking it in the
+    ``hide``-policy legend un-mutes every flagged renderer; hiding a band
+    still hides its flagged points. Returns the ``Toggle`` when ``toggle`` is
+    set (kept in step with the legend entry), else ``None``.
+    """
+    from bokeh.models import CustomJS
+
+    pairs = [(leader, renderer) for leader, renderer in pairs if renderer is not None]
+    if not pairs or not n_points:
+        return None
+    proxy = ax.circle(
+        [], [], size=7, line_color=FLAGGED_LEGEND_COLOR, fill_alpha=0.0,
+        line_alpha=FLAGGED_LINE_ALPHA, visible=False,
+    )
+    sync = CustomJS(
+        args=dict(
+            proxy=proxy,
+            leaders=[leader for leader, _r in pairs],
+            flagged=[renderer for _l, renderer in pairs],
+        ),
+        code=_FLAGGED_SYNC_JS,
+    )
+    proxy.js_on_change('visible', sync)
+    seen = set()
+    for leader, _renderer in pairs:
+        if leader.id not in seen:
+            seen.add(leader.id)
+            leader.js_on_change('visible', sync)
+    legend_items.append(('%s (%d)' % (FLAGGED_LEGEND_LABEL, n_points), [proxy], MARKER_LEGEND_COLUMN))
+    if not toggle:
+        return None
+    from bokeh.models import Toggle
+
+    button = Toggle(label='Show flagged (%d)' % n_points, active=False, width=150)
+    button.js_link('active', proxy, 'visible')
+    proxy.js_link('visible', button, 'active')
+    return button
+
+
 def _requested_plot_width(request, default):
     """Nominal figure width: the container width the page sends as ``?w=``, else ``default``."""
     return requested_plot_width(request.GET.get('w'), default)
@@ -1037,7 +1121,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_summary_v1_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_summary_v2_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{_requested_plot_width(request, 500)}' + ('_salt' if salt2 else '')
         )
         cached_html = cache.get(cache_key)
@@ -1082,6 +1166,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
             "band": p.band_id,
             "mag_sys__name": p.mag_sys.name if p.mag_sys_id else None,
             "dq_label": _phot_data_quality_label(p),
+            "flagged": _phot_flagged(p),
         }
         for p in phot_rows
     ]
@@ -1096,6 +1181,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     obs_date = np.array([p["obs_date"] for p in phot_values], dtype="datetime64")
     mag_sys = np.array([p["mag_sys__name"] or "None" for p in phot_values])
     dq_labels = np.array([p["dq_label"] for p in phot_values])
+    flagged = np.array([p["flagged"] for p in phot_values], dtype=bool)
     band_ids = np.array([p["band"] for p in phot_values], dtype=int)
 
     # Convert observation dates to MJD
@@ -1121,6 +1207,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     unique_bands = unique_bands[_legend_series_order([band_lookup[b] for b in unique_bands])]
 
     legend_items = []
+    flagged_pairs, n_flagged = [], 0
     salt2mjd, flux, fluxerr, salt2band, zpsys = [], [], [], [], []
 
     # Upper limits (for the y-range): once, not once per band (#254)
@@ -1160,41 +1247,57 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
             plotmethod = getattr(ax, 'triangle')  # Default to triangle if bsym is not valid
         size = 20 if symbol == "asterisk" else 7
 
-        # Filter data for this band
-        band_filter = (band_ids == band_id) & has_mag
-        band_mjd = mjd[band_filter]
-        band_mag = mag[band_filter]
-        band_mag_err = mag_err[band_filter]
-        band_obs_date_str = np.array(obs_date_str)[band_filter]
+        # Filter data for this band; flagged points are their own glyph set (#84)
+        band_all = (band_ids == band_id) & has_mag
+        band_filter = band_all & ~flagged
+        # the SALT2 input keeps every point, as before #84
+        band_mag = mag[band_all]
+        band_mag_err = mag_err[band_all]
+
+        def _summary_source(sel):
+            n = int(sel.sum())
+            return ColumnDataSource(
+                data=dict(
+                    x=mjd[sel].tolist(),
+                    y=mag[sel].tolist(),
+                    date=np.array(obs_date_str)[sel].tolist(),
+                    data_quality=dq_labels[sel].tolist(),
+                    magsys=mag_sys[sel].tolist(),
+                    telescope=[tel_label] * n,
+                    filter=[short_filter] * n,
+                )
+            )
+
+        def _summary_err(sel, **kwargs):
+            err_xs = [(x, x) for x in mjd[sel]]
+            err_ys = [(y - yerr, y + yerr) for y, yerr in zip(mag[sel], mag_err[sel])]
+            return ax.multi_line(err_xs, err_ys, **kwargs)
 
         # Plot data
-        source = ColumnDataSource(
-            data=dict(
-                x=band_mjd.tolist(),
-                y=band_mag.tolist(),
-                date=band_obs_date_str.tolist(),
-                data_quality=dq_labels[band_filter].tolist(),
-                magsys=mag_sys[band_filter].tolist(),
-                telescope=[tel_label] * len(band_mjd),
-                filter=[short_filter] * len(band_mjd),
-            )
-        )
+        source = _summary_source(band_filter)
         plot_func = getattr(ax, symbol, ax.triangle)
         plot = plot_func("x", "y", source=source, color=color, size=size, muted_alpha=0.2)
         hover = HoverTool(renderers=[plot], tooltips=TOOLTIPS, toggleable=False)
         ax.add_tools(hover)
 
         # Error bars
-        err_xs = [(x, x) for x in band_mjd]
-        err_ys = [(y - yerr, y + yerr) for y, yerr in zip(band_mag, band_mag_err)]
-        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = _summary_err(band_filter, color=color, muted_alpha=0.2)
         _link_series_visibility(plot, [p_err])
+
+        band_flagged = band_all & flagged
+        if band_flagged.any():
+            n_flagged += int(band_flagged.sum())
+            p_flag = plot_func("x", "y", source=_summary_source(band_flagged), size=size,
+                               **_flagged_glyph_kwargs(color))
+            ax.add_tools(HoverTool(renderers=[p_flag], tooltips=TOOLTIPS, toggleable=False))
+            p_flag_err = _summary_err(band_flagged, **_flagged_error_bar_kwargs(color))
+            flagged_pairs += [(plot, p_flag), (plot, p_flag_err)]
 
         legend_items.append((legend_label, [plot], _band_column_key(band_obj)))
 
         # SALT2 processing
         if salt2 and str(band_obj.name) in bandpassdict.keys():
-            salt2mjd.append(mjd[band_filter])
+            salt2mjd.append(mjd[band_all])
             flux_single = 10 ** (-0.4 * (band_mag - 27.5))
             flux.append(flux_single)
             fluxerr.append(flux_single * band_mag_err * 0.4 * np.log(10))
@@ -1205,6 +1308,9 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     today_mjd = Time(datetime.datetime.today()).mjd
     today_line = Span(location=today_mjd, dimension="height", line_color="black", line_width=3)
     ax.add_layout(today_line)
+
+    # Flagged points (#84): muted until the "flagged" legend entry is clicked
+    _add_flagged_switch(ax, flagged_pairs, n_flagged, legend_items)
 
     # Configure legend: columns sized to the longest label (#226)
     _add_legend_grid(ax, legend_items, plot_width)
@@ -1338,7 +1444,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_detail_v6_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_detail_v7_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
             + (f'_salt{salt_run.pk if salt_run is not None else 0}' if salt2 else '')
         )
@@ -1378,6 +1484,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     obs_dates_str = np.array([p.obs_date.strftime('%m/%d/%Y') for p in phot_rows])
     mjds = date_to_mjd(np.array([p.obs_date for p in phot_rows]))
     data_quality = np.array([_phot_data_quality_label(p) for p in phot_rows])
+    flagged = np.array([_phot_flagged(p) for p in phot_rows], dtype=bool)
     mag_sys = np.array([p.mag_sys.name if p.mag_sys else 'None' for p in phot_rows])
     band = np.array([p.band_id for p in phot_rows], dtype=int)
     band_name = np.array([band_lookup[b].name for b in band])
@@ -1411,6 +1518,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     bandunq, idx = bandunq[series_order], idx[series_order]
     count = 0
     legend_it = []
+    flagged_pairs, n_flagged = [], 0
     upperlimmag,upperlimmjd = np.array([]),np.array([])
     for bs,bn,b,bc,bsym,inn in zip(
             bandunq,band_name[idx],band[idx],disp_color[idx],disp_symbol[idx],instrument_name[idx]):
@@ -1450,56 +1558,70 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
                 if 'bessell' in bandpassdict[bandkey]: zpsys = np.append(zpsys,['Vega']*len(mag_errs[iBand]))
                 else: zpsys = np.append(zpsys,['AB']*len(mag_errs[iBand]))
 
-        iPlot = (band_name == bn) & (instrument_name == inn) & is_det
-        iUlim = (band_name == bn) & (instrument_name == inn) & is_ulim
-        mags_ulim = ulim_mags[iUlim]
-        upperlimmag = np.append(upperlimmag,mags_ulim)
-        upperlimmjd = np.append(upperlimmjd,mjds[iUlim].tolist())
+        iSeries = (band_name == bn) & (instrument_name == inn)
+        # all of the band's points: the y range and the SALT2 input as before #84
+        iPlotAll = iSeries & is_det
+        iUlimAll = iSeries & is_ulim
+        # flagged points are their own (muted) glyph set (#84)
+        iPlot = iPlotAll & ~flagged
+        iUlim = iUlimAll & ~flagged
+        upperlimmag = np.append(upperlimmag,ulim_mags[iUlimAll])
+        upperlimmjd = np.append(upperlimmjd,mjds[iUlimAll].tolist())
 
-        source = ColumnDataSource(data=dict(x=mjds[iPlot].tolist(),
-                                            y=mags[iPlot].tolist(),
-                                            date=obs_dates_str[iPlot].tolist(),
-                                            data_quality=data_quality[iPlot].tolist(),
-                                            magsys=mag_sys[iPlot].tolist(),
-                                            telescope=[tel_label]*len(mjds[iPlot].tolist()),
-                                            filter=[short_filter]*len(mjds[iPlot].tolist())))
-            
-        p_det = plotmethod('x','y',source=source,
+        def _detail_source(sel, y):
+            n = int(sel.sum())
+            return ColumnDataSource(data=dict(x=mjds[sel].tolist(),
+                                              y=y[sel].tolist(),
+                                              date=obs_dates_str[sel].tolist(),
+                                              data_quality=data_quality[sel].tolist(),
+                                              magsys=mag_sys[sel].tolist(),
+                                              telescope=[tel_label]*n,
+                                              filter=[short_filter]*n))
+
+        def _detail_err(sel, **kwargs):
+            err_xs,err_ys = [],[]
+            for x,y,yerr in zip(mjds[sel].tolist(),mags[sel].tolist(),mag_errs[sel].tolist()):
+                err_xs.append((x, x))
+                err_ys.append((y - yerr, y + yerr))
+            return ax.multi_line(err_xs, err_ys, **kwargs)
+
+        p_det = plotmethod('x','y',source=_detail_source(iPlot, mags),
                    color=color,size=size, muted_alpha=0.2)
         g1_hover = HoverTool(renderers=[p_det],
                              tooltips=TOOLTIPS,toggleable=False)
         ax.add_tools(g1_hover)
 
-        ulim_x = mjds[iUlim]
-        ulim_y = mags_ulim
         p_ulim = None
-        if len(ulim_x):
-            source = ColumnDataSource(data=dict(x=ulim_x.tolist(),
-                                                y=ulim_y.tolist(),
-                                                date=obs_dates_str[iUlim].tolist(),
-                                                data_quality=data_quality[iUlim].tolist(),
-                                                magsys=mag_sys[iUlim].tolist(),
-                                                telescope=[tel_label]*len(ulim_x),
-                                                filter=[short_filter]*len(ulim_x)))
-
+        if iUlim.any():
             # same size as the detections (asterisk series use 20 px for the
             # thin marker; a 20 px triangle would swamp the plot)
-            p_ulim = ax.inverted_triangle('x','y',source=source,
+            p_ulim = ax.inverted_triangle('x','y',source=_detail_source(iUlim, ulim_mags),
                                      color=color,size=7,muted_alpha=0.2)
             g1_hover = HoverTool(renderers=[p_ulim],
                                  tooltips=TOOLTIPS,toggleable=False)
             ax.add_tools(g1_hover)
-        err_xs,err_ys = [],[]
-        for x,y,yerr in zip(mjds[iPlot].tolist(),mags[iPlot].tolist(),mag_errs[iPlot].tolist()):
-            err_xs.append((x, x))
-            err_ys.append((y - yerr, y + yerr))
-        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = _detail_err(iPlot, color=color, muted_alpha=0.2)
         _link_series_visibility(p_det, [p_err, p_ulim])
+
+        iPlotFlag = iPlotAll & flagged
+        iUlimFlag = iUlimAll & flagged
+        if iPlotFlag.any():
+            p_flag = plotmethod('x','y',source=_detail_source(iPlotFlag, mags),
+                                size=size, **_flagged_glyph_kwargs(color))
+            ax.add_tools(HoverTool(renderers=[p_flag], tooltips=TOOLTIPS, toggleable=False))
+            p_flag_err = _detail_err(iPlotFlag, **_flagged_error_bar_kwargs(color))
+            flagged_pairs += [(p_det, p_flag), (p_det, p_flag_err)]
+        if iUlimFlag.any():
+            p_flag_ulim = ax.inverted_triangle('x','y',source=_detail_source(iUlimFlag, ulim_mags),
+                                               size=7, **_flagged_glyph_kwargs(color))
+            ax.add_tools(HoverTool(renderers=[p_flag_ulim], tooltips=TOOLTIPS, toggleable=False))
+            flagged_pairs.append((p_det, p_flag_ulim))
+        n_flagged += int(iPlotFlag.sum() + iUlimFlag.sum())
 
         legend_it.append((legend_label, [p_det], _band_column_key(band_obj)))
         if bazin:
-            # detections only, flagged (data_quality) points left out
-            iFit = iPlot & (data_quality == 'Good')
+            # unflagged detections only (the statistics' rule, #84)
+            iFit = iPlot
             bazin_series.append(dict(
                 label=legend_label, band_name=bn, color=color, leader=p_det,
                 mjd=mjds[iFit].astype(float), mag=mags[iFit].astype(float),
@@ -1514,6 +1636,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
             legend_it.append((BAZIN_LEGEND_LABEL, bazin_renderers, MARKER_LEGEND_COLUMN))
         if bazin_x_end is not None:
             x_end = max(x_end, bazin_x_end)
+    # Flagged points (#84): muted until "Show flagged" or the legend entry is clicked
+    flagged_toggle = _add_flagged_switch(ax, flagged_pairs, n_flagged, legend_it, toggle=True)
     p_today = ax.line(today,20,line_width=3,line_color='black')
     legend_it.append(('today (%i)'%today, [p_today], MARKER_LEGEND_COLUMN))
     vline = Span(location=today, dimension='height', line_color='black',
@@ -1588,7 +1712,10 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
             series.append(('Band: %s - %s' % (inn, bn), color))
         _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=salt_run)
 
-    html = file_html(ax, CDN, "my plot").replace('width: 90%', 'width: 100%')
+    # the plot stays the first root (the page and the tests read it); the
+    # "Show flagged" button follows it
+    roots = [ax, flagged_toggle] if flagged_toggle is not None else ax
+    html = file_html(roots, CDN, "my plot").replace('width: 90%', 'width: 100%')
     if cache_key:
         return _cached_plot_http_response(cache_key, html)
     return django.http.HttpResponse(html)
@@ -1624,6 +1751,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     upperlimmjd,upperlimdate,upperlimmag,upperlimband,upperlimbandstr,upperlimbandcolor,upperlimmagsys = \
         np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
     limmjd = None
+    flagged = []
 
     for p in phot_rows:
         dbmjd = date_to_mjd(p.obs_date)
@@ -1640,6 +1768,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
             else: magsys = np.append(magsys,[p.mag_sys])
 
             data_quality = np.append(data_quality, [_phot_data_quality_label(p)])
+            flagged.append(_phot_flagged(p))
 
             if not p.flux or not p.flux_err:
                 flux_single = 10**(-0.4*(p.mag-27.5))
@@ -1732,7 +1861,9 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
 
     
+    flagged = np.array(flagged, dtype=bool)
     legend_it = []
+    flagged_pairs, n_flagged = [], 0
     for bs,b,bc,bsym in zip(bandunq,allband[idx],allbandcolor[idx],allbandsym[idx]):
         raw_band_name = b.name if hasattr(b, 'name') else str(bs)
         short_filter = display_filter_label(raw_band_name)
@@ -1757,31 +1888,48 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         if bsym != 'asterisk': size=7
         else: size=20
             
-        source = ColumnDataSource(data=dict(x=mjd[bandstr == bs].tolist(),
-                                            y=flux[bandstr == bs].tolist(),
-                                            date=date[bandstr == bs].tolist(),
-                                            data_quality=data_quality[bandstr == bs].tolist(),
-                                            magsys=magsys[bandstr == bs].tolist(),
-                                            telescope=[tel_label]*len(mjd[bandstr == bs].tolist()),
-                                            filter=[short_filter]*len(mjd[bandstr == bs].tolist())))
+        def _flux_source(sel):
+            n = int(sel.sum())
+            return ColumnDataSource(data=dict(x=mjd[sel].tolist(),
+                                              y=flux[sel].tolist(),
+                                              date=date[sel].tolist(),
+                                              data_quality=data_quality[sel].tolist(),
+                                              magsys=magsys[sel].tolist(),
+                                              telescope=[tel_label]*n,
+                                              filter=[short_filter]*n))
 
-        p = plotmethod('x','y',source=source,
+        def _flux_err(sel, **kwargs):
+            err_xs,err_ys = [],[]
+            for x,y,yerr in zip(mjd[sel].tolist(),flux[sel].tolist(),fluxerr[sel].tolist()):
+                err_xs.append((x, x))
+                err_ys.append((y - yerr, y + yerr))
+            return ax.multi_line(err_xs, err_ys, **kwargs)
+
+        # flagged points are their own (muted) glyph set (#84)
+        iBand = bandstr == bs
+        iGood = iBand & ~flagged
+        p = plotmethod('x','y',source=_flux_source(iGood),
                    color=color,size=size, muted_alpha=0.2)#,legend='%s - %s'%(
 
         g1_hover = HoverTool(renderers=[p],
                              tooltips=TOOLTIPS,toggleable=False)
         ax.add_tools(g1_hover)
 
-            
-        err_xs,err_ys = [],[]
-        for x,y,yerr in zip(mjd[bandstr == bs].tolist(),flux[bandstr == bs].tolist(),fluxerr[bandstr == bs].tolist()):
-            err_xs.append((x, x))
-            err_ys.append((y - yerr, y + yerr))
-        p_err = ax.multi_line(err_xs, err_ys, color=color, muted_alpha=0.2)
+        p_err = _flux_err(iGood, color=color, muted_alpha=0.2)
         _link_series_visibility(p, [p_err])
+
+        iFlag = iBand & flagged
+        if iFlag.any():
+            n_flagged += int(iFlag.sum())
+            p_flag = plotmethod('x','y',source=_flux_source(iFlag), size=size,
+                                **_flagged_glyph_kwargs(color))
+            ax.add_tools(HoverTool(renderers=[p_flag], tooltips=TOOLTIPS, toggleable=False))
+            p_flag_err = _flux_err(iFlag, **_flagged_error_bar_kwargs(color))
+            flagged_pairs += [(p, p_flag), (p, p_flag_err)]
 
         legend_it.append((legend_label, [p], _band_column_key(b)))
         
+    _add_flagged_switch(ax, flagged_pairs, n_flagged, legend_it)
     today = Time(datetime.datetime.today()).mjd
     p = ax.line(today,20,line_width=3,line_color='black')
     legend_it.append(('today (%i)'%today, [p], MARKER_LEGEND_COLUMN))
@@ -1912,7 +2060,8 @@ def _spectra_for_plot(dbspectra):
     registered without wavelength/flux rows gets the empty-state message rather
     than a traceback (#343). Each spectrum is resampled to at most
     ``MAX_SPEC_DISPLAY_PIXELS`` points. Points are read with one ``values_list``
-    query for all spectra (#479), not one ORM object per pixel.
+    query for all spectra (#479), not one ORM object per pixel. A flagged
+    spectrum (#84) carries ``flagged`` and a " (flagged)" legend label.
     """
     spectra = []
     n_without_points = 0
@@ -1933,13 +2082,23 @@ def _spectra_for_plot(dbspectra):
         wave_interp = np.linspace(np.min(wave), np.max(wave), n_display)
         flux_interp = np.interp(wave_interp, wave, flux)
 
+        flagged = _spectrum_flagged(spectrum)
+        label = f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}'
         spectra.append({
             'wave': wave_interp,
             'flux': flux_interp,
             'mjd': date_to_mjd(spectrum.obs_date.isoformat().split('+')[0]),
-            'label': f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}',
+            'label': label + (FLAGGED_SPECTRUM_SUFFIX if flagged else ''),
+            'flagged': flagged,
         })
     return spectra, n_without_points
+
+
+def _spectrum_line_kwargs(spec):
+    """A flagged spectrum (#84) is dashed and starts muted; its legend entry un-mutes it."""
+    if not spec.get('flagged'):
+        return {}
+    return dict(line_dash='dashed', muted=True)
 
 
 def _normalized_plot_flux(flux, offset):
@@ -1960,7 +2119,7 @@ def spectrumplot(request, transient_id):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'specplot_v2_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+            f'specplot_v3_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -1991,7 +2150,8 @@ def spectrumplot(request, transient_id):
     
     for spec, color, offset in zip(spectra, colors, offsets):
         norm_flux = _normalized_plot_flux(spec['flux'], offset)
-        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2)
+        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2,
+                    **_spectrum_line_kwargs(spec))
         legend_items.append((spec['label'], [p]))
     
     # Add legend
@@ -2019,7 +2179,7 @@ def spectrumplot_summary(request, transient_id):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'specsummary_v1_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+            f'specsummary_v2_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -2056,7 +2216,8 @@ def spectrumplot_summary(request, transient_id):
     legend_it = [None] * len(spectra)
     for spec, color, offset in zip(spectra, colors, offsets):
         norm_flux = _normalized_plot_flux(spec['flux'], offset)
-        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2)
+        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2,
+                    **_spectrum_line_kwargs(spec))
         legend_it[len(spectra) - 1 - offset] = (spec['label'], [p])
 
     legend = Legend(items=legend_it, location="bottom_right")

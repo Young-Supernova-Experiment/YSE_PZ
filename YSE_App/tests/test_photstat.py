@@ -740,28 +740,86 @@ class PlotAgreementTests(PlotAgreementFixture):
         self.assertEqual(stat.per_band[str(self.r.id)]["n_det"], 3)
         self.assertEqual(stat.per_band[str(self.g.id)]["n_det"], 1)
 
-    def _plot_markers(self):
-        """``(detections, limits)``: ``{mjd: dq_label}`` for the markers the detail plot draws."""
+    def _plot_doc(self):
         client = Client()
         client.force_login(self.user)
         response = client.get(reverse("lightcurveplot_detail", args=[self.transient.id]))
         self.assertEqual(response.status_code, 200)
-        doc = bokeh_doc_from_html(response.content.decode())
+        return bokeh_doc_from_html(response.content.decode())
+
+    def _plot_markers(self, doc=None, *, with_flagged=False):
+        """``(detections, limits)``: ``{mjd: dq_label}`` for the markers the detail plot draws.
+
+        With ``with_flagged`` also the ``{mjd}`` drawn by the muted flagged
+        glyph set (#84).
+        """
+        doc = doc or self._plot_doc()
         refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
-        detections, limits = {}, {}
+        detections, limits, flagged = {}, {}, set()
         for ref in refs.values():
             if ref["type"] != "GlyphRenderer":
                 continue
             glyph = refs[ref["attributes"]["glyph"]["id"]]
             data = refs[ref["attributes"]["data_source"]["id"]]["attributes"]["data"]
             if "telescope" not in data:
-                continue  # error bars, the "today" line, fits
+                continue  # error bars, the "today" line, fits, the flagged switch
             marker = glyph["attributes"].get("marker", {}).get("value")
             is_ulim = glyph["type"] == "InvertedTriangle" or marker == "inverted_triangle"
             target = limits if is_ulim else detections
             for x, dq in zip(data["x"], data["data_quality"]):
                 target[round(float(x), 6)] = dq
+                if ref["attributes"].get("muted"):
+                    flagged.add(round(float(x), 6))
+        if with_flagged:
+            return detections, limits, flagged
         return detections, limits
+
+    def test_flagged_points_are_a_muted_glyph_set(self):
+        """#84: flagged points are drawn hollow and muted, with a legend entry and a button."""
+        doc = self._plot_doc()
+        detections, limits, flagged = self._plot_markers(doc, with_flagged=True)
+        self.assertEqual(flagged, {59899.0})
+        self.assertNotEqual(detections[59899.0], "Good")
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        renderers = [ref for ref in refs.values() if ref["type"] == "GlyphRenderer"]
+        muted = [ref for ref in renderers if ref["attributes"].get("muted")]
+        # the flagged marker and its error bar
+        self.assertEqual(len(muted), 2)
+        for ref in muted:
+            glyph = refs[ref["attributes"]["glyph"]["id"]]["attributes"]
+            if "fill_alpha" in glyph:
+                self.assertEqual(glyph["fill_alpha"]["value"], 0.0)
+        # unflagged markers are not muted, and none of them carries the flagged point
+        for ref in renderers:
+            data = refs[ref["attributes"]["data_source"]["id"]]["attributes"]["data"]
+            if "telescope" in data and not ref["attributes"].get("muted"):
+                self.assertNotIn(59899.0, [round(float(x), 6) for x in data["x"]])
+                self.assertTrue(all(dq == "Good" for dq in data["data_quality"]))
+        # one "flagged (1)" legend entry, switched off: its renderer is hidden
+        items = [ref for ref in refs.values() if ref["type"] == "LegendItem"]
+        flagged_items = [
+            item for item in items
+            if item["attributes"]["label"]["value"].startswith("flagged")
+        ]
+        self.assertEqual([item["attributes"]["label"]["value"] for item in flagged_items], ["flagged (1)"])
+        proxy = refs[flagged_items[0]["attributes"]["renderers"][0]["id"]]
+        self.assertIs(proxy["attributes"].get("visible"), False)
+        # the "Show flagged" button is the document's second root, off by default
+        roots = [refs[root_id] for root_id in doc["roots"]["root_ids"]]
+        self.assertEqual([root["type"] for root in roots][1:], ["Toggle"])
+        self.assertEqual(roots[1]["attributes"]["label"], "Show flagged (1)")
+        self.assertFalse(roots[1]["attributes"].get("active", False))
+        # the switch callback un-mutes the flagged renderers and keeps them with their band
+        sync = [
+            ref for ref in refs.values()
+            if ref["type"] == "CustomJS" and "flagged" in ref["attributes"]["args"]
+        ]
+        self.assertEqual(len(sync), 1)
+        args = sync[0]["attributes"]["args"]
+        self.assertEqual({r["id"] for r in args["flagged"]}, {ref["id"] for ref in muted})
+        self.assertEqual(args["proxy"]["id"], proxy["id"])
+        self.assertIn("flagged[i].muted = !show", sync[0]["attributes"]["code"])
+        self.assertIn("flagged[i].visible = leaders[i].visible", sync[0]["attributes"]["code"])
 
     def test_statistics_count_the_limits_the_plot_draws(self):
         detections, limits = self._plot_markers()

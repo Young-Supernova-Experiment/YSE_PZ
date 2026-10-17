@@ -208,6 +208,16 @@ do not exclude data. The `<` triage cuts are opt-in per view. The readers are `P
 `Transient.disc_mag`/`recent_mag`, Bazin, PhotStat, the TNS photometry
 selection and the analysis payload.
 
+**Plots (#84).** The Bokeh plots in `view_utils.py` use the same rule
+(`is_legacy_flagged`, i.e. `quality_mask & LEGACY_EXCLUDE != 0`). Flagged
+photometry is drawn as its own hollow glyph set in the band's marker and
+colour, muted by default, with one "flagged (N)" legend entry that un-mutes
+it; the detail light curve also has a "Show flagged" button. Hiding a band
+still hides its flagged points. Flagged spectra in the overlay plots are
+dashed, labelled "(flagged)" and start muted; click the legend entry to show
+them. Which rows a user may see is unchanged, and the axis ranges still
+include flagged points.
+
 ## Adding a flag
 
 1. Choose the bit by seriousness. Find the two existing flags it falls between,

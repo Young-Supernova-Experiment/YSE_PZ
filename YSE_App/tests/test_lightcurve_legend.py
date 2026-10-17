@@ -39,7 +39,9 @@ from YSE_App.common.legend_layout import (
     label_width_px,
     requested_plot_width,
 )
+from YSE_App.common.quality_mask import PhotFlag
 from YSE_App.models import (
+    DataQuality,
     Instrument,
     ObservationGroup,
     Observatory,
@@ -47,8 +49,11 @@ from YSE_App.models import (
     Telescope,
     TransientPhotData,
     TransientPhotometry,
+    TransientSpecData,
+    TransientSpectrum,
 )
 from YSE_App.tests.fixtures_minimal import (
+    attach_synthetic_spectrum,
     audit_fields,
     create_minimal_transient,
     create_test_user,
@@ -588,3 +593,149 @@ class LightcurveLegendRenderTests(TestCase):
                 self.assertIn('ysePlotWidthQuery("#lcplot")', html)
                 self.assertIn('ysePlotWidthQuery("#lcfluxplot")', html)
                 self.assertIn("window.ysePlotWidthQuery = function", html)
+
+
+FLAGGED_SERIES = (
+    ("Pan-STARRS1", "GPC1", ["g", "r"]),
+    ("Palomar 48", "ZTF-Cam", ["g-ZTF"]),
+)
+
+
+class FlaggedSeriesRenderTests(TestCase):
+    """Flagged points and spectra are their own muted set with a legend entry (#84)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user("lc_flagged_user", is_staff=True)
+        cls.clean = seed_many_band_transient(cls.user, name="lc-flagged-clean", series=FLAGGED_SERIES)
+        cls.transient = seed_many_band_transient(cls.user, name="lc-flagged-sn", series=FLAGGED_SERIES)
+        bad, _ = DataQuality.objects.get_or_create(name="Bad", defaults=audit_fields(cls.user))
+        rows = TransientPhotData.objects.filter(photometry__transient=cls.transient)
+        # one PS1 g detection and one ZTF upper limit, flagged through the M2M
+        # (the signal sets quality_mask, #81)
+        cls.flagged_det = rows.filter(band__name="g", mag__isnull=False).order_by("obs_date").last()
+        cls.flagged_ulim = rows.filter(band__name="g-ZTF", mag__isnull=True).get()
+        for row in (cls.flagged_det, cls.flagged_ulim):
+            row.data_quality.add(bad)
+        # NOT_PUBLISHED alone is not a flag: drawn with the good points
+        cls.unpublished = rows.filter(band__name="r", mag__isnull=False).order_by("obs_date").first()
+        TransientPhotData.objects.filter(pk=cls.unpublished.pk).update(quality_mask=int(PhotFlag.NOT_PUBLISHED))
+        cls.bad = bad
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def _doc(self, view_name, transient):
+        with mock.patch.dict(os.environ, {"YSE_PLOT_HTML_CACHE": "0"}):
+            response = self.client.get(reverse(view_name, args=[transient.id]) + "?w=1000")
+        self.assertEqual(response.status_code, 200)
+        return bokeh_doc_from_html(response.content.decode())
+
+    @staticmethod
+    def _marker_renderers(doc):
+        """``[(renderer attrs, glyph attrs, data)]`` for every renderer with point data."""
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        out = []
+        for ref in refs.values():
+            if ref["type"] != "GlyphRenderer":
+                continue
+            data = refs[ref["attributes"]["data_source"]["id"]]["attributes"]["data"]
+            if "telescope" in data:
+                glyph = refs[ref["attributes"]["glyph"]["id"]]["attributes"]
+                out.append((ref["attributes"], glyph, data))
+        return out
+
+    def test_mask_rule_is_the_statistics_rule(self):
+        from YSE_App import view_utils
+
+        self.flagged_det.refresh_from_db()
+        self.unpublished.refresh_from_db()
+        self.assertTrue(view_utils._phot_flagged(self.flagged_det))
+        self.assertFalse(view_utils._phot_flagged(self.unpublished))
+        self.assertEqual(view_utils._phot_data_quality_label(self.flagged_det), "Bad")
+        self.assertEqual(view_utils._phot_data_quality_label(self.unpublished), "Good")
+
+    def test_detail_plot_draws_flagged_points_muted_with_a_legend_entry_and_button(self):
+        doc = self._doc("lightcurveplot_detail", self.transient)
+        columns = legend_columns(legend_blocks(doc))
+        self.assertEqual(columns[:-1], [["PS1 g", "PS1 r"], ["ZTF g"]])
+        self.assertEqual(columns[-1][0], "flagged (2)")
+        self.assertTrue(columns[-1][1].startswith("today ("))
+        flagged_x, good_x = set(), set()
+        for renderer, glyph, data in self._marker_renderers(doc):
+            target = flagged_x if renderer.get("muted") else good_x
+            target.update(round(float(x), 6) for x in data["x"])
+            if renderer.get("muted"):
+                self.assertEqual(glyph["fill_alpha"]["value"], 0.0)
+                self.assertTrue(all(dq == "Bad" for dq in data["data_quality"]))
+            else:
+                self.assertTrue(all(dq == "Good" for dq in data["data_quality"]))
+        from YSE_App.common.utilities import date_to_mjd
+
+        expected = {round(float(date_to_mjd(r.obs_date)), 6) for r in (self.flagged_det, self.flagged_ulim)}
+        self.assertEqual(flagged_x, expected)
+        self.assertIn(round(float(date_to_mjd(self.unpublished.obs_date)), 6), good_x)
+        self.assertFalse(flagged_x & good_x)
+        refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+        roots = [refs[root_id] for root_id in doc["roots"]["root_ids"]]
+        self.assertEqual([root["type"] for root in roots][1:], ["Toggle"])
+        self.assertEqual(roots[1]["attributes"]["label"], "Show flagged (2)")
+
+    def test_clean_transient_has_no_flagged_entry_or_button(self):
+        doc = self._doc("lightcurveplot_detail", self.clean)
+        labels = legend_series(legend_blocks(doc))
+        self.assertFalse([label for label in labels if label.startswith("flagged")])
+        self.assertEqual(len(doc["roots"]["root_ids"]), 1)
+        self.assertFalse([r for r, _g, _d in self._marker_renderers(doc) if r.get("muted")])
+
+    def test_flux_and_summary_plots_mute_flagged_points_too(self):
+        # the flux plot draws the flux of the upper limit too; the summary only magnitudes
+        for view, n_flagged in (("lightcurveplot_flux", 2), ("lightcurveplot_summary", 1)):
+            with self.subTest(view=view):
+                doc = self._doc(view, self.transient)
+                labels = legend_series(legend_blocks(doc))
+                self.assertIn("flagged (%d)" % n_flagged, labels)
+                muted = [d for r, _g, d in self._marker_renderers(doc) if r.get("muted")]
+                self.assertEqual(sum(len(d["x"]) for d in muted), n_flagged)
+                self.assertEqual(len(doc["roots"]["root_ids"]), 1)
+                clean = legend_series(legend_blocks(self._doc(view, self.clean)))
+                self.assertFalse([label for label in clean if label.startswith("flagged")])
+
+    def test_flagged_spectrum_is_dashed_muted_and_labelled(self):
+        transient = create_minimal_transient(self.user, name="lc-flagged-spec")
+        good = attach_synthetic_spectrum(self.user, transient)
+        flagged = attach_synthetic_spectrum(
+            self.user, transient, obs_group=good.obs_group, instrument=good.instrument,
+        )
+        TransientSpectrum.objects.filter(pk=flagged.pk).update(
+            obs_date=good.obs_date - datetime.timedelta(days=3)
+        )
+        flagged.data_quality.add(self.bad)
+        for spectrum in (good, flagged):
+            TransientSpecData.objects.bulk_create([
+                TransientSpecData(spectrum=spectrum, wavelength=4000 + 10 * i, flux=1.0 + 0.1 * i,
+                                  **audit_fields(self.user))
+                for i in range(20)
+            ])
+        for view in ("spectrumplot", "spectrumplot_summary"):
+            with self.subTest(view=view):
+                doc = self._doc(view, transient)
+                refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+                entries = {}
+                for legend in legends_in_doc(doc):
+                    for item in legend["attributes"].get("items", []):
+                        attrs = refs[item["id"]]["attributes"]
+                        renderer = refs[attrs["renderers"][0]["id"]]["attributes"]
+                        glyph = refs[renderer["glyph"]["id"]]["attributes"]
+                        entries[attrs["label"]["value"]] = (renderer, glyph)
+                flagged_labels = [label for label in entries if label.endswith(" (flagged)")]
+                self.assertEqual(len(flagged_labels), 1)
+                self.assertEqual(len(entries), 2)
+                for label, (renderer, glyph) in entries.items():
+                    if label in flagged_labels:
+                        self.assertTrue(renderer.get("muted"))
+                        self.assertEqual(glyph.get("line_dash"), [6])
+                    else:
+                        self.assertFalse(renderer.get("muted", False))
+                        self.assertNotIn("line_dash", glyph)
