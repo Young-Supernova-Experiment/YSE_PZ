@@ -104,7 +104,9 @@ One policy, in `YSE_App/services/visibility.py` (objects) and `YSE_App/services/
 dashboards, `/api/transients/`, `/api/transientphotstats/`, the transient-summary page, the saved-query
 endpoints (`/query_api/`, the bulk photometry download, the pointing tool) and the observing-night pages.
 
-* **Listed objects** (`filter_listed_transients`): staff see everything. Anyone else sees an object when
+* **Listed objects** (`filter_listed_transients`): the configured service readers (cron and script
+  accounts, `DATA_SERVICE_READER_USERNAMES`, #706) see everything. Everyone else, staff and superusers
+  included, sees an object when
   it has a TNS designation (`20YYabc`, as its name or as an alias), or when they may see some of its
   photometry or spectra (the `filter_transients_by_user_access` rule: data without groups, or shared with
   one of their groups). Anonymous requests see nothing; scripts authenticate (token or Basic auth) and are
@@ -214,7 +216,7 @@ promoting") is still the go/no-go for keeping each new index.
 * `POST /search/bulk/` (fields `action`, `status_id` / `tag_id`, `params`, `transient_id` ... or
   `select_all=1`) needs a logged-in user and the CSRF token; a GET is 405. Whatever ids are posted, only
   transients the user may see listed (`filter_listed_transients`, the same rule as the API and the
-  dashboard; staff see all, #607) are touched. Status change is one `UPDATE` stamping
+  dashboard; staff follow it too, #706) are touched. Status change is one `UPDATE` stamping
   `modified_by`; tag add is one `INSERT IGNORE`; photometry uses the zip builder of the saved-query
   download (`bulk_photometry_zip_response`), which also filters photometry per user. Limits: 5000 rows for
   status/tag, 300 for photometry; over the limit nothing is done.
