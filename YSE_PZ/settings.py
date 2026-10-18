@@ -621,6 +621,16 @@ EXPLORER_QUERY_MAX_EXECUTION_MS = int(
     or config.getint('site_settings', 'EXPLORER_QUERY_MAX_EXECUTION_MS', fallback=0)
 )
 
+# Saved Explorer queries that feed app pages (dashboards, yse_sky, the query
+# API, ...): for viewers who do not see all data they may read only transient
+# metadata tables (#715; services/page_query_scope.py). 'enforce' (default) or
+# 'off' (no table check). PAGE_QUERY_EXTRA_ALLOWED_TABLES: comma-separated
+# extra table or view names (for example a view of derived values).
+PAGE_QUERY_TABLE_POLICY = _str_setting(
+    'YSE_PAGE_QUERY_TABLE_POLICY', 'site_settings', 'PAGE_QUERY_TABLE_POLICY', 'enforce').strip().lower()
+PAGE_QUERY_EXTRA_ALLOWED_TABLES = _str_setting(
+    'YSE_PAGE_QUERY_EXTRA_ALLOWED_TABLES', 'site_settings', 'PAGE_QUERY_EXTRA_ALLOWED_TABLES', '')
+
 # How long a saved query's cached name list is reused by the personal
 # dashboard, transient_summary and the API (run_explorer_query_cached).
 # YSE_EXPLORER_QUERY_CACHE_SECONDS env var or [site_settings]

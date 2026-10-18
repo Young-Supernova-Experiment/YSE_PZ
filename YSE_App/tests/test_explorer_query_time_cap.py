@@ -155,7 +155,7 @@ class RunExplorerQueryCachedTests(TestCase):
         from YSE_App import views
 
         with mock.patch.object(views, "translate_query_timeout", wraps=translate_query_timeout) as guard:
-            names = views.run_explorer_query_cached(self.query)
+            names = views.run_explorer_query_cached(self.query, user=None)
         guard.assert_called_once_with(20000)
         self.assertEqual(names, ["time-cap-sn"])
         self.assertEqual(cache.get(views.explorer_query_cache_key(self.query.id)), ["time-cap-sn"])
@@ -163,9 +163,9 @@ class RunExplorerQueryCachedTests(TestCase):
     def test_cache_hit_skips_the_database(self):
         from YSE_App import views
 
-        views.run_explorer_query_cached(self.query)
+        views.run_explorer_query_cached(self.query, user=None)
         with mock.patch.object(views, "connections", {}):
-            names = views.run_explorer_query_cached(self.query)
+            names = views.run_explorer_query_cached(self.query, user=None)
         self.assertEqual(names, ["time-cap-sn"])
 
     @override_settings(EXPLORER_QUERY_MAX_EXECUTION_MS=20000)
@@ -178,7 +178,7 @@ class RunExplorerQueryCachedTests(TestCase):
         conn.cursor.return_value = cursor
         with mock.patch.object(views, "connections", {"explorer": conn}):
             with self.assertRaises(QueryTimeout) as ctx:
-                views.run_explorer_query_cached(self.query)
+                views.run_explorer_query_cached(self.query, user=None)
         self.assertIn("20000 ms", str(ctx.exception))
         cursor.close.assert_called_once()
         self.assertIsNone(cache.get(views.explorer_query_cache_key(self.query.id)))
@@ -192,5 +192,5 @@ class RunExplorerQueryCachedTests(TestCase):
             title="broken", sql="SELECT name FROM no_such_table_here", created_by_user=self.user
         )
         with self.assertRaises(DatabaseError):
-            views.run_explorer_query_cached(broken)
+            views.run_explorer_query_cached(broken, user=None)
         self.assertIsNone(cache.get(views.explorer_query_cache_key(broken.id)))

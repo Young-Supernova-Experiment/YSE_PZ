@@ -61,6 +61,8 @@ from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
+from django.contrib.auth.models import AnonymousUser
+from YSE_App.services.page_query_scope import PageQueryRefused, check_page_query
 from YSE_App.services.dashboard_queries import (
     dashboard_sql_is_supported,
     dashboard_sql_rejection_reason,
@@ -271,7 +273,7 @@ def explorer_query_cache_key(query_id):
     return f'explorer_query_{QUERY_CACHE_VERSION}_{query_id}'
 
 
-def run_explorer_query_cached(query, timeout=None, refresh=False):
+def run_explorer_query_cached(query, timeout=None, refresh=False, *, user):
     """
     Transient names selected by a saved Explorer query, cached per Query id.
 
@@ -279,7 +281,13 @@ def run_explorer_query_cached(query, timeout=None, refresh=False):
     and download_bulk_photometry so one run serves every page for ``timeout``
     seconds (default ``EXPLORER_QUERY_CACHE_SECONDS``). ``refresh=True`` runs
     the query even when a cached entry exists (the cache warmer).
+
+    ``user`` is the viewer the result is for (required, #715): a viewer who does
+    not see all data may only run queries over transient metadata tables
+    (:class:`PageQueryRefused` otherwise, checked before the shared cache is
+    read). ``user=None`` marks an internal caller (the cache warmer).
     """
+    check_page_query(query.sql, user)
     if timeout is None:
         timeout = explorer_query_cache_seconds()
     cache_key = explorer_query_cache_key(query.id)
@@ -307,7 +315,7 @@ def query_api_cache_seconds():
         return 300
 
 
-def run_explorer_query_rows_cached(query, timeout=None):
+def run_explorer_query_rows_cached(query, timeout=None, *, user):
     """
     ``(column_names, rows)`` of a saved Explorer query, cached per Query id and SQL.
 
@@ -316,9 +324,12 @@ def run_explorer_query_rows_cached(query, timeout=None):
     the same ``EXPLORER_QUERY_MAX_EXECUTION_MS`` cap) and the same
     ``QueryTimeout`` on a capped run. The key includes a hash of the SQL, so an
     edited query is never served from the old text's entry. ``timeout`` defaults
-    to :func:`query_api_cache_seconds`; 0 runs the query every time.
+    to :func:`query_api_cache_seconds`; 0 runs the query every time. ``user`` is
+    the viewer the rows are for (required; see :func:`run_explorer_query_cached`).
     """
     import hashlib
+
+    check_page_query(query.sql, user)
 
     if timeout is None:
         timeout = query_api_cache_seconds()
@@ -429,9 +440,9 @@ def _personaldashboard_table_for_user_query(request, q):
     """Build one dashboard section tuple for a single UserQuery."""
     if q.query:
         try:
-            if not dashboard_sql_is_supported(q.query.sql):
+            if not dashboard_sql_is_supported(q.query.sql, request.user):
                 return None
-            cached_result = run_explorer_query_cached(q.query)
+            cached_result = run_explorer_query_cached(q.query, user=request.user)
             if not cached_result:
                 prefix = _personaldashboard_sql_query_prefix(q.query.title)
                 empty_qs = annotate_dashboard_transient_fields(Transient.objects.none())
@@ -484,9 +495,9 @@ def _personaldashboard_build_all_tables(request, queries):
     for q in queries:
         if q.query:
             try:
-                if not dashboard_sql_is_supported(q.query.sql):
+                if not dashboard_sql_is_supported(q.query.sql, request.user):
                     continue
-                cached_result = run_explorer_query_cached(q.query)
+                cached_result = run_explorer_query_cached(q.query, user=request.user)
                 all_transient_names.update(cached_result)
                 sql_dashboard_sections.append((q, cached_result))
             except Exception as e:
@@ -576,7 +587,7 @@ def personaldashboard_section(request, user_query_id):
         # answering 204, which jQuery treats as success with an empty body
         # and which left the section blank.
         if q.query:
-            reason = dashboard_sql_rejection_reason(q.query.sql) or 'the query returned nothing'
+            reason = dashboard_sql_rejection_reason(q.query.sql, request.user) or 'the query returned nothing'
         else:
             reason = 'no saved query or Python query is attached'
         return render(
@@ -633,10 +644,10 @@ def transient_summary(request,status_or_query_name,
         query = Query.objects.filter(title=unquote(status_or_query_name))
         if len(query):
             query = query[0]
-            if not dashboard_sql_is_supported(query.sql):
+            if not dashboard_sql_is_supported(query.sql, request.user):
                 raise Http404('Invalid Query')
             try:
-                transients = Transient.objects.filter(name__in=run_explorer_query_cached(query)).order_by('-disc_date')
+                transients = Transient.objects.filter(name__in=run_explorer_query_cached(query, user=request.user)).order_by('-disc_date')
             except:
                 # Query bombed
                 pass
@@ -2358,7 +2369,11 @@ def download_bulk_photometry(request, query_title):
 
     query = Query.objects.filter(title=unquote(query_title))
     if len(query):
-        transients = Transient.objects.filter(name__in=run_explorer_query_cached(query[0])).order_by('-disc_date')
+        try:
+            names = run_explorer_query_cached(query[0], user=user if user is not None else AnonymousUser())
+        except PageQueryRefused:
+            raise Http404('Invalid Query')
+        transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
         transients = filter_listed_transients(user, transients)
 
     elif query_title in yse_python_queries.python_query_reg.all:
@@ -2538,7 +2553,10 @@ def change_status_for_query(request, query_id, status_id):
 
     if q.query:
         try:
-            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query))
+            transients = Transient.objects.filter(name__in=run_explorer_query_cached(q.query, user=acting_user))
+        except PageQueryRefused as exc:
+            return JsonResponse({'msg': 'error: this saved query may not be used here (%s); no status changed' % exc},
+                                status=403)
         except Exception as exc:  # noqa: BLE001 - saved SQL can fail or time out
             logger.exception('change_status_for_query: query %s failed', query_id)
             return JsonResponse({'msg': 'error: the saved query failed (%s); no status changed' % type(exc).__name__},

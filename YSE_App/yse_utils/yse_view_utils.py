@@ -513,7 +513,7 @@ def init_draw_transients(request):
 				query = Query.objects.filter(title=unquote(query_name))
 				if len(query):
 					query = query[0]
-					if not dashboard_sql_is_supported(query.sql): raise Http404('Invalid Query')
+					if not dashboard_sql_is_supported(query.sql, request.user): raise Http404('Invalid Query')
 					cursor = connections['explorer'].cursor()
 					cursor.execute(query.sql.replace('%','%%'), ())
 					transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')

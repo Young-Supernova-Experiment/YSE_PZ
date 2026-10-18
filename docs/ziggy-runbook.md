@@ -2353,6 +2353,23 @@ Env equivalents: `YSE_QUERY_API_ALLOWED_QUERIES`, `YSE_QUERY_API_VISIBILITY_FILT
 
 **Check after deploy:** the crons' logs show no new 404 from `/query_api/`.
 
+### Saved Explorer queries that feed pages: viewer-scoped tables (2026-10-18, #715) one check recommended, per stack
+
+Saved Explorer queries that select the rows of dashboards, personal dashboards, `/yse_sky/`, the pointing tool, Summary View, the bulk photometry download, change-status-for-query and `/query_api/` now run for a viewer who does not see all data only when they read transient metadata tables (transient, tags, status, class, host, group, survey, alternate names). A query that reads photometry, spectrum or photometry-statistics tables is refused for that viewer (dashboard sections say why, the API answers 404), because access to data is decided per photometry point or spectrum by the application and not by the database. Staff, superusers, `/query_api/` service accounts and the nightly cache warmer are unchanged. SQL Explorer itself is unchanged. No migration; no new package.
+
+Effect on the saved queries that exist today: those that read `YSE_App_transientphotdata` (for example the magnitude-limited sample and the fast-and-young searches) and saved searches that filter on photometry statistics show an explanatory message to non-staff viewers and keep working for staff. This is the conservative option; the alternative (database views limited to the viewer, set per connection) needs a product decision from Ryan and a database privilege change by David.
+
+**Check (recommended): after the deploy, open a personal dashboard as a non-staff account that has a saved SQL section reading photometry; it should show the message, and a staff account should show rows as before.**
+
+**Optional settings** (`[site_settings]`; restart Apache after a change):
+```
+# rollback switch: off = no table check (the old behaviour); default enforce
+# PAGE_QUERY_TABLE_POLICY: enforce
+# extra table or view names page queries may read (for example a view that exposes only derived fit values), comma-separated
+# PAGE_QUERY_EXTRA_ALLOWED_TABLES: <VIEW_1>, <VIEW_2>
+```
+Env equivalents: `YSE_PAGE_QUERY_TABLE_POLICY=off`, `YSE_PAGE_QUERY_EXTRA_ALLOWED_TABLES`. If you add a view to the extra list, grant the Explorer database user `SELECT` on it; for those queries a non-staff viewer gets only the identifying columns (name, id, position) back from `/query_api/`, never the derived columns.
+
 <a id="authn"></a>
 
 ### Login, session and transport settings (2026-10-11, sec/authn PR) one check required, the rest optional, per stack
@@ -2914,6 +2931,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v78, **nothing required** (no migration; one check recommended). Saved Explorer queries that feed pages are viewer-scoped ([#715](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/715)): for viewers who do not see all data, page-feeding queries may read only transient metadata tables; queries over photometry, spectra or their statistics are refused for them (staff, service accounts and the cache warmer unchanged). Rollback switch `PAGE_QUERY_TABLE_POLICY: off`. See the section "Saved Explorer queries that feed pages" above.
 * 2026-10-17 v77, **nothing required** (no migration). Data reported to TNS become and stay public ([#708](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/708)): after TNS confirms a report (manual dialog, autopublish, legacy DECam form; never the sandbox), exactly the photometry points and spectra that were sent get the Public group and lose their other collaboration groups; a photometry set of which only some points were sent is split (the sent points move to a new public header, the rest stay restricted). Reports queued before this deploy do not record their points, so earlier reports are not touched (`mark_tns_imports_public` covers TNS imports). Staff can no longer opt data in to autopublish (PIs and deputies only; existing opt-ins stay, staff may still opt out).
 * 2026-10-18 v76, **migration applied by the deploy; nothing else required** (dashboard hidden while `DATA_ACCESS_GRANTS_ENABLED` is off). Ryan's access decisions ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 6a): PIs may restrict shared data; turning sharing off is forward by default with a backwards option; removing a group from a dataset writes `kept` rules for the earlier points; data access dashboard with the autopublish opt-ins; migration `0046_access_rule_kept` (choices only) ([section "Data access dashboard"](#access-dashboard)). No new package.
 * 2026-10-17 v75, **nothing required** (no migration, no flag). Upload checks trust PIs and deputies for their own data ([#707](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/707)): when an upload targets an existing photometry set or spectrum, that dataset's PIs and data-sharing deputies, and its program's PI and program deputies, pass the upload checks for it (replace, add, re-share). Other users, new datasets and bulk ingest are unchanged.
