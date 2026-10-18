@@ -195,6 +195,8 @@ class LiteralTests(TestCase):
             inline_sql_params('SELECT 1', [1], conn)
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class SaveServiceTests(SearchFixture):
 
 
