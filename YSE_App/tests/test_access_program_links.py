@@ -197,6 +197,32 @@ class LinkTests(_Fixture):
         program_links.link_dataset(self.data_pi, phot, None)
         self.assertEqual(R.objects.filter(photometry=phot).count(), 2)
 
+    def test_a_stopped_grant_still_covers_data_taken_before_the_stop(self):
+        program, _ = access_actions.program_action(self.prog_pi, self.alloc, effect="allow",
+                                                   grantee_user=self.outsider)
+        start = self.now - datetime.timedelta(days=3)
+        night, _ = access_actions.program_action(self.prog_pi, self.alloc, effect="allow", grantee_user=self.deputy,
+                                                 night_start=start, night_end=start + datetime.timedelta(days=4))
+        stop = self.now - datetime.timedelta(hours=36)  # between the two points of a set (taken 1 and 2 days ago)
+        StandingAccessGrant.objects.filter(pk__in=[program.pk, night.pk]).update(stopped_at=stop)
+        phot = self.phot(groups=(self.g,))
+        after_stop = TransientPhotData.objects.filter(photometry=phot, obs_date__gte=stop).get()
+        before_stop = TransientPhotData.objects.filter(photometry=phot, obs_date__lt=stop).get()
+        program_links.link_dataset(self.data_pi, phot, self.alloc)
+        for grantee in (self.outsider, self.deputy):
+            covered = set(R.objects.filter(photometry=phot, grantee_user=grantee).values_list(
+                "transient_phot_data_id", flat=True))
+            self.assertEqual(covered, {before_stop.pk}, grantee.username)
+        self.assertNotIn(after_stop.pk, set(R.objects.values_list("transient_phot_data_id", flat=True)))
+        spec = self.spec(groups=(self.g,), obs_date=stop - datetime.timedelta(hours=1))
+        late = self.spec(groups=(self.g,), obs_date=stop + datetime.timedelta(hours=1))
+        program_links.link_dataset(self.staff, spec, self.alloc)
+        program_links.link_dataset(self.staff, late, self.alloc)
+        self.assertTrue(R.objects.filter(transient_spectrum=spec, grantee_user=self.outsider).exists())
+        self.assertFalse(R.objects.filter(transient_spectrum=late).exists())
+        self.assertTrue(program.__class__.objects.get(pk=program.pk).covers_obs_date(stop - datetime.timedelta(1)))
+        self.assertFalse(program.__class__.objects.get(pk=program.pk).covers_obs_date(stop))
+
     def test_resolve_allocation(self):
         self.assertEqual(program_links.resolve_allocation(self.alloc.pk), self.alloc)
         self.assertEqual(program_links.resolve_allocation(str(self.alloc.pk)), self.alloc)

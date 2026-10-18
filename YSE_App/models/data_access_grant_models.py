@@ -18,8 +18,9 @@ Ryan's design revision (2026-10-17): **rules are stored per point**.
 * :class:`StandingAccessGrant` is an action on a program (an ``Allocation``,
   one telescope for one semester) or on one night of a program, saved so that
   points taken **later** get their rule written at ingest. Stopping it
-  (``stopped_at``) affects only points that arrive afterwards; rules already
-  written stay.
+  (``stopped_at``) applies going forward in time: points taken after the stop
+  are not covered, points taken before it still are (also when uploaded or
+  linked later); rules already written stay.
 * :class:`GroupMembershipPeriod` is dated group membership: a person who
   leaves a group keeps the points shared with it while they were a member and
   does not get points shared with it after they left. Memberships that existed
@@ -285,7 +286,10 @@ class StandingAccessGrant(models.Model):
         return _grantee_label(self)
 
     def covers_obs_date(self, obs_date) -> bool:
-        """Whether a point of this program taken at ``obs_date`` is in scope (always, for a program-wide grant)."""
+        """Whether a point of this program taken at ``obs_date`` is in scope: in the night (any date for a
+        program-wide grant), and before the stop when the grant was stopped."""
+        if self.stopped_at is not None and (obs_date is None or obs_date >= self.stopped_at):
+            return False
         if self.night_start is None:
             return True
         return obs_date is not None and self.night_start <= obs_date < self.night_end
