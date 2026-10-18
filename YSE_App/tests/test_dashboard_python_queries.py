@@ -168,7 +168,7 @@ class InterestingNewTargetsTests(_Fixture):
     def setUpTestData(cls):
         super().setUpTestData()
         # The saved SQL hard-codes status_id = 1.
-        TransientStatus.objects.get_or_create(pk=1, defaults={"name": "New", **audit_fields(cls.staff)})
+        TransientStatus.objects.get_or_create(pk=1, defaults={"name": "dpq720 status 1", **audit_fields(cls.staff)})
         cls.bright = cls.transient("2026dpqi", status_id=1, mw_ebv=0.1)
         cls.attach_host(cls.bright)
         cls.points(cls.bright, [(3, 16.5, 0.05, None, None)])
