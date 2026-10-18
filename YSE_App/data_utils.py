@@ -1649,7 +1649,7 @@ def query_api(request,query_name):
         if filter_rows:
             field_vals = _query_api_filter_visible_rows(request.user, field_names, field_vals)
     else:
-        try: transients = yse_python_queries.run_python_query(title)
+        try: transients = yse_python_queries.run_python_query(title, request.user if filter_rows else None)
         except KeyError: raise Http404('Invalid Query')
         if filter_rows:
             from YSE_App.services.visibility import filter_listed_transients

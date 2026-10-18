@@ -421,7 +421,7 @@ def _personaldashboard_section_queryset(pks_by_name, names):
 def _personaldashboard_python_query_transients(request, python_query):
     """Rows of a saved Python query that the user may see (same rule as SQL sections)."""
     return filter_listed_transients(
-        request.user, yse_python_queries.run_python_query(python_query)
+        request.user, yse_python_queries.run_python_query(python_query, request.user)
     )
 
 
@@ -646,7 +646,7 @@ def transient_summary(request,status_or_query_name,
                 return HttpResponseNotFound("Invalid Query")
             query = query[0]
             try:
-                transients = yse_python_queries.run_python_query(query.python_query)
+                transients = yse_python_queries.run_python_query(query.python_query, request.user)
             except KeyError:
                 raise Http404('Invalid Query')
 
@@ -2362,7 +2362,7 @@ def download_bulk_photometry(request, query_title):
         transients = filter_listed_transients(user, transients)
 
     elif query_title in yse_python_queries.python_query_reg.all:
-        transients = yse_python_queries.run_python_query(query_title)
+        transients = yse_python_queries.run_python_query(query_title, user)
         transients = filter_listed_transients(user, transients)
     else:
         raise Http404('Invalid Query')
@@ -2545,7 +2545,7 @@ def change_status_for_query(request, query_id, status_id):
                                 status=502)
     elif q.python_query:
         try:
-            transients = yse_python_queries.run_python_query(q.python_query)
+            transients = yse_python_queries.run_python_query(q.python_query, acting_user)
         except KeyError:
             raise Http404('Invalid Query')
     else:
