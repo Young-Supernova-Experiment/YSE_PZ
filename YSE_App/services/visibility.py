@@ -547,6 +547,10 @@ def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
         hidden_point = TransientPhotData.objects.filter(photometry__transient_id=OuterRef(transient_ref)).exclude(
             pk__in=TransientPhotData.objects.filter(points).values('pk'))
         return Q(Exists(hidden_point)) | Q(Exists(on_transient.exclude(pk__in=visible)))
+    if not _photometry_access_rules(user).empty:
+        # Header-level rules only (the hook shape, #648 PR 0): the exact complement of the central rule.
+        visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
+        return Exists(on_transient.exclude(pk__in=visible))
     # No rules: the group rule's complement by group id, the indexed form #607 tuned.
     through = TransientPhotometry.groups.through
     restricted = on_transient.filter(
