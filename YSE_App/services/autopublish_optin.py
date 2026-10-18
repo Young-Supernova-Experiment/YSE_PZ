@@ -1,7 +1,8 @@
 """Who may opt a restricted dataset in to automatic publishing (#691).
 
-Only a PI, a deputy or staff for the dataset (``data_sharing.share_role``);
-public data need no opt-in; every change is written by django-auditlog.
+Only a PI or a deputy for the dataset (``data_sharing.share_role``) may opt it in; staff may not
+opt data in on a PI's behalf (#708, Ryan 2026-10-17), but may still opt data out, and existing opt-ins stay
+as they are. Public data need no opt-in; every change is written by django-auditlog.
 """
 
 from __future__ import annotations
@@ -31,9 +32,12 @@ def set_opt_in(user, dataset, enabled: bool) -> bool:
     field = _field(dataset)
     if enabled and data_sharing.is_public_dataset(dataset):
         raise ValidationError({"dataset": "Public data are always published; no opt-in is needed."})
-    if data_sharing.share_role(user, dataset) is None:
-        raise PermissionDenied({"message": "Only the data's PIs and their designated deputies (or an administrator) "
+    if enabled and data_sharing.share_role(user, dataset, staff_override=False) is None:
+        raise PermissionDenied({"message": "Only the data's PIs and their designated deputies "
                                            "may allow automatic publishing of restricted data."})
+    if not enabled and data_sharing.share_role(user, dataset) is None:
+        raise PermissionDenied({"message": "Only the data's PIs, their deputies or an administrator "
+                                           "may stop automatic publishing of restricted data."})
     rows = AutopublishOptIn.objects.filter(**{field: dataset})
     if enabled:
         if not rows.exists():

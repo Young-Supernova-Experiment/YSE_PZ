@@ -242,6 +242,14 @@ def submit_to_tns(request,transient_name):
              "comments": ""
              }
 
+    # the points this report carries (made public once the real TNS accepts it, #708)
+    reported_point_ids = [disc_data.pk]
+    if len(tp_seconddisc) == 1:
+        reported_point_ids.append(tp_seconddisc[0].pk)
+    if 'non_detection' in json_tmpl['at_report']['0'] and len(tp_nondet) and \
+            json_tmpl['at_report']['0']['non_detection'].get('obsdate'):
+        reported_point_ids.append(tp_nondet[0].pk)
+
     # do we want to send this to the sandbox or the real TNS?
     # if it's going to the real TNS, we first need to make sure that the sandbox link
     # is available for inspection and the user is aware
@@ -307,6 +315,14 @@ def submit_to_tns(request,transient_name):
             t.save()
 
         context = {'msg':f'success!  This SN is now called: {obj_name}'}
+
+        # what went to TNS is public now, and stays public (#708)
+        try:
+            from YSE_App.services import tns_public
+            tns_public.mark_reported_public(t, photometry_point_ids=reported_point_ids)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('could not mark reported photometry public for %s', t.name)
     else:
         context = {'msg':str(message),
                    'new_id':None}
