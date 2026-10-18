@@ -1,0 +1,126 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Data access: {{ allocation.name }}</h1>
+	<p class="text-muted small mb-0">{{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|date:"Y-m-d" }} to {{ allocation.end_date|date:"Y-m-d" }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }} yse-access-message">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Add access</strong></div>
+				<div class="box-body">
+					<form method="post" class="form-inline yse-access-grant-form">
+						{% csrf_token %}
+						<input type="hidden" name="action" value="grant">
+						{% include "YSE_App/access_grantee_fields.html" with prefix="yse-grant" suffix="" %}
+						<label class="sr-only" for="yse-grant-scope">Data</label>
+						<select name="scope" id="yse-grant-scope" class="form-control form-control-sm mr-1">
+							<option value="program">All of this program's data</option>
+							{% if classical_nights %}<option value="classical">One classical night</option>{% endif %}
+							<option value="night">One night (date)</option>
+						</select>
+						{% if classical_nights %}
+						<label class="sr-only" for="yse-grant-classical">Classical night</label>
+						<select name="classical_night" id="yse-grant-classical" class="form-control form-control-sm mr-1">
+							{% for n in classical_nights %}<option value="{{ n.id }}">{{ n.night|date:"Y-m-d" }}</option>{% endfor %}
+						</select>
+						{% endif %}
+						<label class="sr-only" for="yse-grant-night">Night</label>
+						<input type="date" name="night" id="yse-grant-night" class="form-control form-control-sm mr-1">
+						<input type="hidden" name="utc_offset" value="{{ utc_offset }}">
+						<input type="text" name="note" class="form-control form-control-sm mr-1" placeholder="Note (optional)" maxlength="255" aria-label="Note">
+						<button type="submit" class="btn btn-sm btn-primary">Save</button>
+					</form>
+					<p class="small text-muted mt-2 mb-0">This applies now to the program's data and is saved, so data taken later get it too. A night runs from local noon to local noon at the telescope (UTC offset {{ utc_offset }} h).</p>
+				</div>
+			</div>
+
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Standing access</strong></div>
+				<div class="box-body">
+					{% if grants %}
+					<table class="table table-sm mb-0" id="yse-standing-grants">
+						<thead><tr><th>Effect</th><th>Grantee</th><th>Data</th><th>Set by</th><th>Since</th><th>Stopped</th><th></th></tr></thead>
+						<tbody>
+						{% for g in grants %}
+							<tr data-grant-id="{{ g.id }}" class="{% if g.stopped_at %}text-muted{% endif %}">
+								<td>{{ g.get_effect_display }}</td>
+								<td>{% if g.grantee_group %}group {{ g.grantee_group.name }}{% else %}{{ g.grantee_user.username }}{% endif %}</td>
+								<td>{% if g.night_start %}night of {{ g.night_start|date:"Y-m-d H:i" }} UTC{% else %}all of the program's data{% endif %}</td>
+								<td><small>{{ g.created_by.username|default:"-" }} ({{ g.get_created_as_display }})</small></td>
+								<td><small>{{ g.created_at|date:"Y-m-d" }}</small></td>
+								<td><small>{% if g.stopped_at %}{{ g.stopped_at|date:"Y-m-d" }}{% else %}-{% endif %}</small></td>
+								<td>
+									{% if not g.stopped_at %}
+									<form method="post" class="d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="stop">
+										<input type="hidden" name="grant_id" value="{{ g.id }}">
+										<button type="submit" class="btn btn-sm btn-outline-secondary" title="Data taken from now on are not covered; data already shared stay shared">Stop</button>
+									</form>
+									{% endif %}
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">No standing access yet: only the data's own groups decide who may see them.</p>
+					{% endif %}
+				</div>
+			</div>
+
+			{% if can_manage_deputies %}
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Program deputies</strong> <span class="text-muted small">may set access for this program's data, like its PI</span></div>
+				<div class="box-body">
+					{% if deputies %}
+					<table class="table table-sm mb-2" id="yse-program-deputies">
+						<thead><tr><th>Deputy</th><th>Note</th><th>Since</th><th></th></tr></thead>
+						<tbody>
+						{% for d in deputies %}
+							<tr data-deputy-id="{{ d.id }}">
+								<td>{{ d.user.username }}</td>
+								<td><small>{{ d.note|default:"-" }}</small></td>
+								<td><small>{{ d.created_at|date:"Y-m-d" }}</small></td>
+								<td>
+									<form method="post" class="d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="remove_deputy">
+										<input type="hidden" name="deputy_id" value="{{ d.id }}">
+										<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small">No program deputies.</p>
+					{% endif %}
+					<form method="post" class="form-inline yse-add-program-deputy">
+						{% csrf_token %}
+						<input type="hidden" name="action" value="add_deputy">
+						<label class="sr-only" for="yse-program-deputy-user">Username</label>
+						<input type="text" name="username" id="yse-program-deputy-user" class="form-control form-control-sm mr-1" placeholder="Username" required maxlength="150">
+						<input type="text" name="note" class="form-control form-control-sm mr-1" placeholder="Note (optional)" maxlength="255" aria-label="Note">
+						<button type="submit" class="btn btn-sm btn-primary">Add deputy</button>
+					</form>
+				</div>
+			</div>
+			{% endif %}
+		</div>
+		<div class="col-lg-3 col-12">
+			{% include "YSE_App/access_help.html" %}
+		</div>
+	</div>
+</section>
+{% endblock %}

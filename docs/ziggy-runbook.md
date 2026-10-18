@@ -823,6 +823,24 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="access-pages"></a>
+
+### Access rule pages and API (2026-10-17, #648 PR 5) nothing required (hidden while the flag is off)
+
+**What changes with `DATA_ACCESS_GRANTS_ENABLED` on:**
+- **Program page** (`/data_access/programs/`, then one page per program), for the program's PI, its program deputies and staff:
+  - its standing access, with a Stop button;
+  - "Add access" for the whole program, one classical night, or one night by date;
+  - program deputies, which the program's PI or staff manage.
+- **Per-object page** (`/transient_detail/<id>/data_access/rules/`, linked from the photometry tab), for the data's PIs, their deputies, program deputies and staff:
+  - a night action covering all of the object's points from one night, in any filter, plus that night's spectra;
+  - an action per photometry set or spectrum;
+  - the rules on those data, with staff-only "Remove (staff)" for mistakes (logged).
+- **API** under `/api/access/`: program grants (list, create, stop), program deputies, dataset rules (list, create, staff remove), and an object's nights (list, act).
+- **"Kept shared":** results say how many items stayed shared because the grantee could already see them. A restriction never takes back shared data.
+
+**With the flag off (now):** every page and API above returns 404 and the links are hidden. There is no migration.
+
 <a id="access-program-links"></a>
 
 ### Program links of photometry and spectra (2026-10-17, #648 PR 3) nothing required; backfill optional (dry run first)
@@ -2875,6 +2893,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-17 v74, **nothing required** (hidden while `DATA_ACCESS_GRANTS_ENABLED` is off; no migration). Access rule pages and API ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 5): program page with standing access and program deputies, per-object night and dataset actions, staff rule removal, `/api/access/` endpoints ([section "Access rule pages and API"](#access-pages)). No new package.
 * 2026-10-17 v73, **nothing required** (flag stays off; no migration). Standing access grants ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648)): stopping one applies going forward in time; points taken before the stop are still covered when they are uploaded or linked to the program later ([section "Per-point access rules engine"](#access-rules-engine)). No new package.
 * 2026-10-17 v72, **nothing required; backfill optional** (`manage.py backfill_data_programs`, dry run by default; flag stays off; no migration). Program links of photometry and spectra ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 3): derived at ingest from the follow-up (or a matching AstroScheduler observation), set by facility results, named by uploads (`allocation`), or set through `/api/datasets/<kind>/<id>/program/`; linking applies the program's standing access grants ([section "Program links"](#access-program-links)). No new package.
 * 2026-10-17 v71, **nothing required** (flag stays off; no migration). Per-point access rules engine ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 2): precedence, dated-membership rule, rules-version cache keys, PhotStat scope handling and the actions service; with `DATA_ACCESS_GRANTS_ENABLED` off every read is unchanged; standing grants are applied to new points at ingest ([section "Per-point access rules engine"](#access-rules-engine)). No new package.

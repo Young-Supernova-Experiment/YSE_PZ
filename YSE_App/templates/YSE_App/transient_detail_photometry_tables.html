@@ -1,5 +1,6 @@
-{% load static quality_mask_extras %}
+{% load static quality_mask_extras access_rules_tags %}
 {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows_photometry %}
+{% access_rules_enabled as access_rules_on %}{% if access_rules_on and user.is_authenticated %}<p class="small mb-2 yse-access-rules-link"><a href="{% url 'access_transient_rules' transient.id %}"><i class="fa fa-key" aria-hidden="true"></i> Access rules for this object's data</a> <span class="text-muted">(for the data's PIs, their deputies, program deputies and administrators)</span></p>{% endif %}
 {% if diff_images %}
 <div class="col-12">
     <div class="box box-primary">
