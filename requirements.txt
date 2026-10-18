@@ -179,6 +179,9 @@ six==1.15.0
 sncosmo==2.8.0
 specutils==1.16.0
 sqlparse==0.5.5
+# SQL Explorer query scope (#723): pure Python, no runtime dependencies; 26.33.0 is the last
+# release that supports Python 3.8 (27.x needs 3.9). Do not install the optional sqlglotrs.
+sqlglot==26.33.0
 tendo==0.2.15
 tensorboard==2.13.0
 tensorboard-data-server==0.7.2

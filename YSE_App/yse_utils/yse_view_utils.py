@@ -514,9 +514,17 @@ def init_draw_transients(request):
 				if len(query):
 					query = query[0]
 					if not dashboard_sql_is_supported(query.sql, request.user): raise Http404('Invalid Query')
-					cursor = connections['explorer'].cursor()
-					cursor.execute(query.sql.replace('%','%%'), ())
-					transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
+					# Rewritten to the viewer's visible rows (#723).
+					from YSE_App.services.explorer_scope import viewer_time_cap
+					from YSE_App.services.page_query_scope import PageQueryRefused, page_query_sql
+					try: run_sql, viewer_cap_ms = page_query_sql(query.sql, request.user)
+					except PageQueryRefused: raise Http404('Invalid Query')
+					conn = connections['explorer']
+					cursor = conn.cursor()
+					with viewer_time_cap(conn, viewer_cap_ms):
+						cursor.execute(run_sql.replace('%','%%'), ())
+						names = [x[0] for x in cursor.fetchall()]
+					transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
 					cursor.close()
 					from YSE_App.services.visibility import filter_listed_transients
 					transients = filter_listed_transients(request.user, transients)

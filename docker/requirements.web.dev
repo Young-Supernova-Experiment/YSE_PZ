@@ -12,3 +12,5 @@ protobuf==3.20.3
 # image (and CI, which installs the same pin into the pulled image) tests what
 # production runs, until the Django 4 upgrade (#133) is scheduled.
 Django==3.2.25
+# SQL Explorer query scope (#723); same pin as requirements.txt (last release for Python 3.8).
+sqlglot==26.33.0

@@ -18,7 +18,7 @@ Access is decided **for each photometry point and each spectrum**, never for a "
 - **Staff and superusers** see only the data they have access to, like everyone else ([#706](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/706)).
   - They keep their administrative actions: deciding access requests, the Django admin, acting on access rules as administrators, and moderating comments and follow-ups.
   - The only accounts that read all data are the configured **service readers**, which are cron and script accounts (`DATA_SERVICE_READER_USERNAMES`; see the runbook).
-- **Saved Explorer queries behind pages** may read only transient metadata tables for viewers who do not see all data ([#715](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/715) / #716). Derived values may select objects but are not displayed. See [`transient-search.md`](transient-search.md#selection-rule-for-saved-explorer-queries-715).
+- **SQL Explorer and saved Explorer queries behind pages** are rewritten so they read only the viewer's data, per point ([#723](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/723); before that, #715 allowed such page queries only transient metadata tables). Derived values may select objects but are not displayed. See [`transient-search.md`](transient-search.md#selection-rule-for-saved-explorer-queries-715).
 
 ## 2. Access rules
 

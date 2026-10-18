@@ -1,3 +1,6 @@
 # gitleaks findings reviewed and accepted (one fingerprint per line: commit:path:rule:line).
 # Synthetic throwaway password in a test fixture (develop #644, backported 2026-10-15).
 e2269de49993842ebb56651d7ccbb0fe0b5a013b:YSE_App/tests/test_self_signup.py:generic-api-key:36
+# Not a secret: the name pattern of a SQL placeholder (variable since renamed; #723).
+3d958b69d56347d2559807dc5898e33da3b65d57:YSE_App/services/explorer_scope.py:yse-python-password-kwarg-literal:563
+7c730a8b833f04a0d1c3f04a7a16edccaa2d52ef:YSE_App/services/explorer_scope.py:yse-python-password-kwarg-literal:563

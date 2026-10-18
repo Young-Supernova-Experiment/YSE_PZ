@@ -184,6 +184,15 @@ class VisibilityQueryCountTests(TestCase):
         self.assertLessEqual(large[1], 2)
 
 
+class _ExplorerToDefault:
+    """Route the 'explorer' alias to 'default' (CI has no test database for it)."""
+
+    def __getitem__(self, alias):
+        from django.db import connections
+
+        return connections["default" if alias == "explorer" else alias]
+
+
 @override_settings(PASSWORD_HASHERS=PASSWORD_HASHERS)
 class PersonalDashboardAccessTests(TestCase):
     """Deferred section and synchronous build agree for a non-staff user (#452, #455)."""
@@ -214,7 +223,15 @@ class PersonalDashboardAccessTests(TestCase):
 
     def setUp(self):
         cache.clear()
+        # Results scoped to a viewer are cached under that viewer's key (#723).
+        from YSE_App.services.page_query_scope import page_query_cache_suffix
+
+        cache.set(views_module.explorer_query_cache_key(self.query.id) + page_query_cache_suffix(self.member),
+                  list(self.names), timeout=600)
         cache.set(views_module.explorer_query_cache_key(self.query.id), list(self.names), timeout=600)
+        explorer = mock.patch.object(views_module, "connections", _ExplorerToDefault())
+        explorer.start()
+        self.addCleanup(explorer.stop)
         self.client = Client()
         self.client.force_login(self.member)
         # Python queries are looked up in the registry (#505), not by attribute.
@@ -318,8 +335,12 @@ class NonStaffQueryCountTests(TestCase):
 
     def setUp(self):
         cache.clear()
+        from YSE_App.services.page_query_scope import page_query_cache_suffix
+
         for query, _uq, names in self.queries.values():
-            cache.set(views_module.explorer_query_cache_key(query.id), names, timeout=600)
+            # Results scoped to a viewer are cached under that viewer's key (#723).
+            cache.set(views_module.explorer_query_cache_key(query.id) + page_query_cache_suffix(self.member),
+                      names, timeout=600)
         self.client = Client()
         self.client.force_login(self.member)
 

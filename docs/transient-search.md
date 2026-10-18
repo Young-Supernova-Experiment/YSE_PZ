@@ -149,15 +149,18 @@ endpoints (`/query_api/`, the bulk photometry download, the pointing tool) and t
 * **Actual data**, and values that reveal it (last detection, number of points), are not used for
   selection, search, sorting or display unless the viewer can see the underlying data. Access is decided
   per photometry point or spectrum, never per header.
-* Saved Explorer (SQL) queries behind pages are staff-written and run over the whole database, so for a
-  viewer who does not see all data (`YSE_App/services/page_query_scope.py`) they may read only transient
-  metadata tables (`DEFAULT_ALLOWED_TABLES`). A query that names any other application table, any
-  authentication or session table, or `information_schema` is refused for that viewer: the dashboard
-  section shows the reason, `/query_api/`, the pointing tool and the other page views answer 404 (403 for
-  change-status-for-query). The check runs before the shared name cache is read, so a result cached from a
-  staff run is never served to a restricted viewer. Service readers (`/query_api/` service accounts,
-  `DATA_SERVICE_READER_USERNAMES`) and the cache warmer (`user=None`) are unchanged; staff and superusers
-  are restricted viewers like everyone else since #706; SQL Explorer is unchanged.
+* Saved Explorer (SQL) queries behind pages run, for a viewer who does not see all data, rewritten to that
+  viewer's rows (#723, `YSE_App/services/explorer_scope.py`, through `services/page_query_scope.py`): every
+  data table they read (photometry points and headers, spectra, photometry statistics, transients and their
+  names and tags, annotations) holds only what the viewer may see, per point, so aggregates, joins and
+  `WHERE` clauses cannot use hidden data. Queries that cannot be rewritten (more than one statement, not a
+  `SELECT`, `information_schema` or other databases, personal-data, account or session tables) are refused:
+  the dashboard section shows the reason, `/query_api/`, the pointing tool and the other page views answer
+  404 (403 for change-status-for-query). The check runs before any cache is read, and scoped results are
+  cached per viewer, so a result from another viewer is never served. Service readers
+  (`DATA_SERVICE_READER_USERNAMES`) and the cache warmer (`user=None`) are unchanged; staff and superusers
+  are restricted viewers like everyone else since #706. SQL Explorer itself uses the same rewrite.
+  `EXPLORER_QUERY_SCOPE: off` restores the #715 rule (transient metadata tables only, `DEFAULT_ALLOWED_TABLES`).
 * A derived-value view can be offered to page queries by listing it in `PAGE_QUERY_EXTRA_ALLOWED_TABLES`.
   Queries that read such a view may select on it; `/query_api/` returns a restricted viewer only the
   identifying columns (name, id, position). `PAGE_QUERY_TABLE_POLICY: off` restores the old behaviour.

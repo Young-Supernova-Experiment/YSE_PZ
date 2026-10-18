@@ -11,8 +11,11 @@ pages extend ``YSE_App/base.html``. Two small hooks support it:
   user without Explorer access gets 403 instead of Explorer's default admin
   login form; an anonymous user is sent to the site login.
 
-Who may use Explorer is unchanged: ``common.authz.explorer_access_allowed``
-via ``EXPLORER_PERMISSION_VIEW`` / ``EXPLORER_PERMISSION_CHANGE``.
+Who may use Explorer: ``common.authz.explorer_access_allowed`` (full access),
+plus every signed-in user with narrower rights when ``EXPLORER_OPEN_TO_ALL_USERS``
+is on (``explorer_view_allowed`` / ``explorer_change_allowed``, #723), via
+``EXPLORER_PERMISSION_VIEW`` / ``EXPLORER_PERMISSION_CHANGE``. What a query may
+read is decided by ``services.explorer_scope`` (``YSE_App.explorer_scope_hooks``).
 """
 
 from django.contrib.auth.views import redirect_to_login

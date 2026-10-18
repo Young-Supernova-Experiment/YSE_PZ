@@ -1,10 +1,11 @@
-"""Saved Explorer queries that feed app pages are viewer-scoped (#715).
+"""Saved Explorer queries that feed app pages are viewer-scoped (#715, #723).
 
-A viewer who does not see all data may only use page-feeding queries over
-transient metadata tables; queries over photometry, spectra or their
-statistics are refused for them. Staff, service accounts and internal callers
-(``user=None``) are unchanged. Derived-value tables may be added by setting;
-their columns select rows but are not returned to a scoped viewer.
+For a viewer who does not see all data, a page-feeding query is rewritten to
+that viewer's rows (#723), so it may read photometry; with the rollback switch
+``EXPLORER_QUERY_SCOPE: off`` only transient metadata tables are allowed
+(#715). Service readers and internal callers (``user=None``) are unchanged.
+Derived-value tables may be added by setting; their columns select rows but
+are not returned to a scoped viewer.
 
 Synthetic users, groups and transients only.
 """
@@ -94,17 +95,24 @@ class ViewerRuleTests(TestCase):
         with override_settings(PAGE_QUERY_TABLE_POLICY='off'):
             self.assertFalse(pqs.viewer_is_scoped(member))
 
-    def test_rejection_reason_names_the_table_only_for_scoped_viewers(self):
+    def test_rejection_reason_for_scoped_viewers(self):
         staff = create_test_user('pqs_staff2', is_staff=True)
         member = create_test_user('pqs_plain2', is_staff=False)
         self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL))
-        self.assertIn('yse_app_transientphotdata', dashboard_sql_rejection_reason(RAW_PHOT_SQL, staff))  # #706
-        with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_staff2']):
-            self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL, staff))
-        self.assertIn('yse_app_transientphotdata', dashboard_sql_rejection_reason(RAW_PHOT_SQL, member))
+        # #723: queries over photometry are rewritten to the viewer's rows, not refused
+        self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL, staff))
+        self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL, member))
         self.assertIsNone(dashboard_sql_rejection_reason(META_SQL, member))
+        refused = "SELECT t.name FROM YSE_App_transient t WHERE t.id IN (SELECT 1 FROM YSE_App_researcherprofile)"
+        self.assertIn('cannot be limited', dashboard_sql_rejection_reason(refused, member))
+        self.assertIn('cannot be limited', dashboard_sql_rejection_reason(refused, staff))
+        with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_staff2']):
+            self.assertIsNone(dashboard_sql_rejection_reason(refused, staff))
+        # the rollback switch restores the #715 rule
+        with override_settings(EXPLORER_QUERY_SCOPE='off'):
+            self.assertIn('yse_app_transientphotdata', dashboard_sql_rejection_reason(RAW_PHOT_SQL, member))
 
-    def test_runner_refuses_before_reading_the_shared_cache(self):
+    def test_runner_never_serves_the_shared_cache_to_a_scoped_viewer(self):
         from explorer.models import Query
 
         owner = create_test_user('pqs_owner', is_staff=True)
@@ -114,7 +122,9 @@ class ViewerRuleTests(TestCase):
         self.addCleanup(cache.clear)
         with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_owner']):  # a service reader (#706)
             self.assertEqual(views_module.run_explorer_query_cached(query, user=owner), ['staff-only-result'])
-        with self.assertRaises(pqs.PageQueryRefused):
+        with mock.patch.object(views_module, 'connections', _ExplorerToDefault()):
+            self.assertEqual(views_module.run_explorer_query_cached(query, user=member), [])
+        with override_settings(EXPLORER_QUERY_SCOPE='off'), self.assertRaises(pqs.PageQueryRefused):
             views_module.run_explorer_query_cached(query, user=member)
 
     def test_selection_only_result_drops_derived_columns_for_scoped_viewers(self):
@@ -169,8 +179,21 @@ class QueryApiScopeTests(TestCase):
     def test_non_staff_may_run_a_metadata_query(self):
         self.assertEqual(self._get(self.member, self.meta).status_code, 200)
 
-    def test_non_staff_is_refused_a_query_over_raw_photometry(self):
-        self.assertEqual(self._get(self.member, self.raw).status_code, 404)
+    def test_non_staff_get_a_query_over_raw_photometry_scoped_to_their_data(self):
+        response = self._get(self.member, self.raw)
+        self.assertEqual(response.status_code, 200)
+        names = {r['name'] for r in json.loads(response.content)['transients']}
+        from YSE_App.models import TransientPhotData
+        from YSE_App.services.visibility import visible_photometry_ids_q
+
+        member = type(self.member).objects.get(pk=self.member.pk)
+        points = TransientPhotData.objects.filter(
+            visible_photometry_ids_q(member), photometry__transient__name__startswith='pqs', mag__lt=30)
+        expected = set(points.values_list('photometry__transient__name', flat=True))
+        self.assertTrue(expected)
+        self.assertEqual(names, expected)
+        with override_settings(EXPLORER_QUERY_SCOPE='off'):
+            self.assertEqual(self._get(self.member, self.raw).status_code, 404)
 
     def test_staff_and_service_accounts_may_run_it(self):
         for user in (self.owner, self.cron):

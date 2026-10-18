@@ -889,6 +889,74 @@ This copies each header's program onto its points that have none, and never chan
 
 **Expected:** `headers: H; points to link: N`, then `written: N`.
 
+<a id="explorer-for-everyone"></a>
+
+### SQL Explorer for everyone: every query reads only the viewer's data (2026-10-18, #723) new package; one grant check; opening Explorer optional
+
+**What changes on deploy.** Every SQL Explorer query (run, playground, download, stream and email exports, saved queries, the schema browser) and every saved query that feeds a page (dashboards, personal dashboards, `/yse_sky/`, the pointing tool, Summary View, `/query_api/`) is parsed and rewritten before it runs, so each table it reads holds only the rows its viewer may see, per photometry point and per spectrum (the same rules as the pages). Service readers (`DATA_SERVICE_READER_USERNAMES`, the `[main] dblogin` account) and the cache warmer are not rewritten.
+
+- **Staff in Explorer** see only the data they have access to, like everywhere else since #706. They still read the collaboration and operations tables (follow-ups, comments, resources, ...) unchanged, and `auth_user` only as id, username and names. Queries on `information_schema` or other databases, on the personal-data, account, session, token and credential tables, and anything other than one `SELECT` are refused with a reason.
+- **Page-feeding queries over photometry or spectra** (refused since #716) run again for viewers who do not see all data, limited to their data. Their cached results are kept per viewer.
+- **Limits for rewritten queries:** at most 100000 rows and 120 s per statement (settings below).
+- `/explorer/` stays limited to staff (or the Explorer group) until you turn on `EXPLORER_OPEN_TO_ALL_USERS` (step 3).
+
+**1. Package (required on any venv the deploy does not install).** New dependency `sqlglot==26.33.0`: pure Python, no dependencies of its own, the last release that supports Python 3.8. The deploy installs `requirements.txt`. Elsewhere (`--no-deps` is fine):
+
+```
+<STACK_PYTHON> -m pip install --no-deps "sqlglot==26.33.0"
+<STACK_PYTHON> -c "import sqlglot; print(sqlglot.__version__)"
+```
+
+**Expected:** `26.33.0`. Do not install the optional `sqlglotrs` extension. Without the package the site still starts, but every rewritten query fails with an import error.
+
+**2. Explorer database user grants (check required, per database).** The rewritten queries still run on the `explorer` connection (`[database] EXPLORER_USER`). Besides the application tables the user already reads, the added conditions read `auth_group` (group names). Check the grants:
+
+```
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "SHOW GRANTS FOR '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';"
+```
+
+- **Database-wide** `GRANT SELECT ON <DB>.*` (the default): nothing to do.
+- **Table-level grants** ([Step E](#authz-flags)): add the group names (two columns only):
+
+```
+mysql -u <PROD_DB_USER> -p -h <PROD_DB_HOST> -e "GRANT SELECT (id, name) ON \`<DB>\`.\`auth_group\` TO '<EXPLORER_DB_USER>'@'<EXPLORER_DB_HOST>';"
+```
+
+- **Only once `DATA_ACCESS_GRANTS_ENABLED` is turned on** ([Enable access rules](#enable-access-rules)) and only with table-level grants: the conditions also read the access rules, so grant `SELECT` on `YSE_App_dataaccessrule` and `YSE_App_datasetgroupshare` to the Explorer user at the same time. Explorer users still cannot name these tables: the rewrite refuses them, the schema browser hides them and Explorer's SQL blacklist still lists them. This replaces the earlier "do not grant" notes for these two tables only.
+
+**Check:** as a staff account, open `/explorer/play/` and run `SELECT COUNT(*) FROM YSE_App_transientphotdata`. **Expected:** a number (the points that account may see). `SELECT command denied ... 'auth_group'` means the grant above is missing.
+
+**3. Optional: open Explorer to every signed-in user.** In `[site_settings]` set `EXPLORER_OPEN_TO_ALL_USERS: True` and restart Apache. Every signed-in active user may then run and export queries, use the playground and the schema browser (which lists only the tables they may read), and create, edit and delete their own saved queries. They do not see the query log or the email export, cannot edit or delete other people's queries, and cannot reuse a title another saved query has. Staff and the Explorer group keep full access.
+
+**Check:** sign in as a non-staff account; `/explorer/play/` opens, `SELECT COUNT(*) FROM YSE_App_transientphotdata` returns only that account's points, `SELECT * FROM information_schema.tables` says "Query refused", and `/explorer/logs/` answers 403.
+
+**Optional settings** (`[site_settings]`; restart Apache after a change):
+```
+# rollback switch: off = Explorer as before #723 (and EXPLORER_OPEN_TO_ALL_USERS has no effect), page queries back to the #715 table check
+# EXPLORER_QUERY_SCOPE: enforce
+# per-statement time cap (ms) and row limit for rewritten queries; 0 = none (the EXPLORER_QUERY_MAX_EXECUTION_MS cap still applies)
+# EXPLORER_SCOPED_MAX_EXECUTION_MS: 120000
+# EXPLORER_SCOPED_MAX_ROWS: 100000
+# derived-value columns (table.column, comma-separated): selectable, never returned; none today
+# EXPLORER_DERIVED_VALUE_COLUMNS: <TABLE>.<COLUMN>
+```
+Env equivalents: `YSE_EXPLORER_QUERY_SCOPE`, `YSE_EXPLORER_OPEN_TO_ALL_USERS`, `YSE_EXPLORER_SCOPED_MAX_EXECUTION_MS`, `YSE_EXPLORER_SCOPED_MAX_ROWS`, `YSE_EXPLORER_DERIVED_VALUE_COLUMNS`.
+
+**Performance (not measured on production data).**
+- The rewrite itself costs one parse and a few small queries (the viewer's groups and rules) per run.
+- Each data table becomes a derived table limited by `id IN (visible rows)`. MySQL 8 merges such derived tables into the outer query, so the outer filters still use their indexes. The added conditions are `EXISTS` lookups on the indexed group-link tables (and, with access rules on, the rule table).
+- The transient table costs the most: each transient is checked against the listing rule (TNS name, or some visible data). A query over many transients or all photometry may take seconds longer than before; the caps above bound it.
+- Page results are cached per viewer, so the cache warmer now helps only service readers. Each viewer's first load of a heavy SQL section runs the query; the #720 Python queries are the faster option for those sections.
+
+**Optional check of a plan:**
+```
+cd <STACK> && <STACK_PYTHON> manage.py shell -c "from django.contrib.auth.models import User; from YSE_App.services.explorer_scope import rewrite; print(rewrite('SELECT COUNT(*) FROM YSE_App_transientphotdata', User.objects.get(username='<NON_STAFF_ACCOUNT>')).sql)" > /tmp/scoped.sql
+(printf 'EXPLAIN '; cat /tmp/scoped.sql) | mysql -u <EXPLORER_DB_USER> -p -h <PROD_DB_HOST> <DB>
+```
+Compare with `EXPLAIN SELECT COUNT(*) FROM YSE_App_transientphotdata` run the same way; report full scans (`type` `ALL`) that only the rewritten plan has.
+
+**Rollback:** `EXPLORER_QUERY_SCOPE: off` and restart.
+
 ### Dashboard queries as viewer-scoped Python queries (2026-10-18, #720) no migration; one command per database, plus a mapping for the queries only the database knows
 
 **Why.** Since #716 a saved SQL query that reads photometry or spectra is refused for anyone who cannot see all data, so sections such as the magnitude-limited sample and Fast & Young are empty for them. Python queries select only from the viewer's visible data (#710), so the same selections now exist as Python queries:
@@ -2481,6 +2549,8 @@ Env equivalents: `YSE_QUERY_API_ALLOWED_QUERIES`, `YSE_QUERY_API_VISIBILITY_FILT
 
 Saved Explorer queries that select the rows of dashboards, personal dashboards, `/yse_sky/`, the pointing tool, Summary View, the bulk photometry download, change-status-for-query and `/query_api/` now run for a viewer who does not see all data only when they read transient metadata tables (transient, tags, status, class, host, group, survey, alternate names). A query that reads photometry, spectrum or photometry-statistics tables is refused for that viewer (dashboard sections say why, the API answers 404), because access to data is decided per photometry point or spectrum by the application and not by the database. Staff, superusers, `/query_api/` service accounts and the nightly cache warmer are unchanged. SQL Explorer itself is unchanged. No migration; no new package.
 
+**Superseded by #723** ([SQL Explorer for everyone](#explorer-for-everyone)): such queries now run limited to the viewer's data instead of being refused; this metadata-only rule applies again only with `EXPLORER_QUERY_SCOPE: off`.
+
 Effect on the saved queries that exist today: those that read `YSE_App_transientphotdata` (for example the magnitude-limited sample and the fast-and-young searches) and saved searches that filter on photometry statistics show an explanatory message to non-staff viewers and keep working for staff. This is the conservative option; the alternative (database views limited to the viewer, set per connection) needs a product decision from Ryan and a database privilege change by David.
 
 **Check (recommended): after the deploy, open a personal dashboard as a non-staff account that has a saved SQL section reading photometry; it should show the message, and a staff account should show rows as before.**
@@ -3055,6 +3125,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v83, **new package `sqlglot==26.33.0` on any venv the deploy does not install; check the Explorer database user grants** (no migration). SQL Explorer for everyone ([#723](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/723)): every Explorer query and every page-feeding saved query is rewritten to read only its viewer's rows (per point; service readers unchanged), so staff see only their data in Explorer and page queries over photometry run again, scoped and cached per viewer; with table-level Explorer grants add `SELECT (id, name)` on `auth_group`; `EXPLORER_OPEN_TO_ALL_USERS` (off) opens `/explorer/` to every signed-in user; rollback `EXPLORER_QUERY_SCOPE: off` ([section "SQL Explorer for everyone"](#explorer-for-everyone)).
 * 2026-10-18 v82, **one command per database** (`manage.py switch_dashboard_queries`, dry run by default; no migration). Dashboard SQL queries as viewer-scoped Python queries ([#720](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/720)): the magnitude-limited sample, Fast & Young, New Transients Last Two Days and Interesting New Targets exist as Python queries that select only from photometry the viewer may see; the command repoints dashboard sections to them (SQL stays in Explorer) and lists the saved queries that still need a Python equivalent; `best_spectrum_id` is no longer readable by page-feeding queries for viewers who do not see all data. Steps in the section "Dashboard queries as viewer-scoped Python queries".
 * 2026-10-18 v81, **nothing required now** (docs only; the flag stays off). Access rules documentation ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 6): user guide `docs/data-access-rules.md`, developer notes `docs/access-rules-engine.md`, and the steps to enable `DATA_ACCESS_GRANTS_ENABLED` on yse\_experimental first, with `backfill_photstat_scopes --apply` ([section "Enable access rules"](#enable-access-rules)).
 * 2026-10-18 v80, **migration applied by the deploy; one optional command** (`manage.py migrate_point_programs`, dry run by default). Access is per point ([#714](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/714)): every read returns exactly the visible points; migration `0047_point_program_link` adds a nullable, indexed `allocation_id` on photometry points (no FK constraint: online on MySQL); standing grants follow each point's program ([section "Access is per point"](#per-point-access)). No new package.

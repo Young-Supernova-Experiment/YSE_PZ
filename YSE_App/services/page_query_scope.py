@@ -1,30 +1,29 @@
-"""Which tables a saved Explorer query that feeds an app page may read (#715).
+"""Which saved Explorer queries may feed an app page, and what they read (#715, #723).
 
 Saved Explorer (SQL) queries select the rows that dashboards, personal
 dashboards, ``/yse_sky/``, the pointing tool, Summary View, the bulk photometry
-download and ``/query_api/`` show. Explorer itself is a staff-only SQL console
-and is unchanged; this module only decides what such a query may read when it
-runs for a page viewer.
+download and ``/query_api/`` show.
 
 The rule (Ryan, 2026-10-18): selection may use only data the viewer can see.
-Access to data is per point (a photometry point or a spectrum), and that rule is
-evaluated by the application (``services/visibility.py``), not by the database.
-A viewer who does not see everything therefore gets only queries over
-transient metadata tables. A query that reads a photometry, spectrum or
-photometry-statistics table (including the stored per-scope values, which are
-tied to whoever saved the query) is refused for that viewer, with a reason.
-Staff, superusers and the service accounts the query API already leaves
-unfiltered (and internal callers that pass no viewer, such as the cache warmer)
-are unchanged.
+Since #723 a page query run for a viewer who does not see everything is
+rewritten by ``services.explorer_scope`` (the same layer as SQL Explorer) so
+every table it reads holds only that viewer's rows, built from the per-point
+rules; it may therefore read photometry, spectra and their statistics. It is
+refused only when it cannot be rewritten (more than one statement, not a
+SELECT, personal-data or account tables, other schemas, ...). Its cached
+result is kept per viewer (:func:`page_query_cache_suffix`). Service readers
+and internal callers that pass no viewer (the cache warmer) are unchanged.
+With ``EXPLORER_QUERY_SCOPE: off`` the #715 rule applies again: such a viewer
+gets only queries over transient metadata tables.
 
-Derived values (fit parameters such as SALT) may later be offered to page
-queries for selection only: create a view that exposes just those columns and
-list its name in ``PAGE_QUERY_EXTRA_ALLOWED_TABLES``. Pages never display those
-columns to a viewer who cannot see the data.
+``best_spectrum_id`` stays refused for scoped viewers (#720). Derived values
+may be offered for selection only: list a view in
+``PAGE_QUERY_EXTRA_ALLOWED_TABLES``; its columns are never returned to a
+scoped viewer (here and in the rewrite).
 
 ``PAGE_QUERY_TABLE_POLICY`` (settings.ini ``[site_settings]``, or the
 ``YSE_PAGE_QUERY_TABLE_POLICY`` environment variable) is ``enforce`` (default)
-or ``off`` (the old behaviour: no table check).
+or ``off`` (no check and no rewrite).
 """
 
 from __future__ import annotations
@@ -119,7 +118,15 @@ def viewer_is_scoped(user) -> bool:
 
 
 def page_query_table_refusal(sql: str, user) -> Optional[str]:
-    """Why ``user`` may not use ``sql`` to feed a page, or None."""
+    """Why ``user`` may not use ``sql`` to feed a page, or None.
+
+    With the Explorer query scope enforced (#723, the default) the query is
+    rewritten to the viewer's visible rows (:func:`page_query_sql`), so it may
+    read photometry, spectra and their statistics; it is refused only when it
+    cannot be rewritten (``services.explorer_scope``). With
+    ``EXPLORER_QUERY_SCOPE: off`` the #715 rule applies: transient metadata
+    tables only.
+    """
     if not viewer_is_scoped(user):
         return None
     bad_columns = disallowed_columns(sql)
@@ -128,6 +135,14 @@ def page_query_table_refusal(sql: str, user) -> Optional[str]:
             "the query reads %s; a saved query that feeds a page may not read columns derived "
             "from spectra for viewers who do not see all data" % ", ".join(bad_columns)
         )
+    from YSE_App.services import explorer_scope
+
+    if explorer_scope.scope_enforced():
+        try:
+            explorer_scope.rewrite(sql, user)
+        except explorer_scope.ExplorerQueryRefused as exc:
+            return "the query cannot be limited to the data you may see: %s" % exc.args[0]
+        return None
     bad = disallowed_tables(sql)
     if not bad:
         return None
@@ -143,6 +158,37 @@ def check_page_query(sql: str, user) -> None:
     reason = page_query_table_refusal(sql, user)
     if reason is not None:
         raise PageQueryRefused(reason)
+
+
+def page_query_sql(sql: str, user):
+    """``(sql_to_run, time_cap_ms)`` for a page-feeding query run for ``user`` (#723).
+
+    For a scoped viewer with the Explorer query scope enforced, the query
+    rewritten to the viewer's visible rows and the viewer time cap; otherwise
+    ``sql`` unchanged and 0. Raises :class:`PageQueryRefused` like
+    :func:`check_page_query`.
+    """
+    if not viewer_is_scoped(user):
+        return sql, 0
+    from YSE_App.services import explorer_scope
+
+    if not explorer_scope.scope_enforced() or disallowed_columns(sql):
+        check_page_query(sql, user)
+        return sql, 0
+    try:
+        plan = explorer_scope.rewrite(sql, user)
+    except explorer_scope.ExplorerQueryRefused as exc:
+        raise PageQueryRefused("the query cannot be limited to the data you may see: %s" % exc.args[0])
+    return plan.sql, plan.time_cap_ms
+
+
+def page_query_cache_suffix(user) -> str:
+    """Cache-key suffix for a page query's result: per viewer when the result is scoped (#723)."""
+    if not viewer_is_scoped(user):
+        return ""
+    from YSE_App.services import explorer_scope
+
+    return explorer_scope.viewer_cache_suffix(user)
 
 
 #: Columns a scoped viewer may still receive from a query that reads an extra

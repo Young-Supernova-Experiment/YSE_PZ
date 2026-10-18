@@ -267,9 +267,16 @@ def yse_sky(request):
             if not query.sql.lower().startswith('select'): raise Http404('Invalid Query')
             if not dashboard_sql_is_supported(query.sql, request.user): raise Http404('Invalid Query')
             try:
-                cursor = connections['explorer'].cursor()
-                cursor.execute(query.sql.replace('%','%%'), ())
-                transients = filter_listed_transients(request.user, Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date'))
+                # Rewritten to the viewer's visible rows (#723).
+                from YSE_App.services.explorer_scope import viewer_time_cap
+                from YSE_App.services.page_query_scope import page_query_sql
+                run_sql, viewer_cap_ms = page_query_sql(query.sql, request.user)
+                conn = connections['explorer']
+                cursor = conn.cursor()
+                with viewer_time_cap(conn, viewer_cap_ms):
+                    cursor.execute(run_sql.replace('%','%%'), ())
+                    names = [x[0] for x in cursor.fetchall()]
+                transients = filter_listed_transients(request.user, Transient.objects.filter(name__in=names).order_by('-disc_date'))
                 cursor.close()
             except:
                 # Query bombed
