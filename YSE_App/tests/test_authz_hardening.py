@@ -349,3 +349,73 @@ class TransientSummaryVisibilityTests(TestCase):
         with mock.patch.dict(views.yse_python_queries.python_query_reg.all,
                              {"sumvis_python_query": lambda: Transient.objects.filter(name="sumvis-sn")}):
             self.check_branch("sumvis_python_query")
+
+
+class UploadTrustForOwnDataTests(TestCase):
+    """#707: PIs and deputies are trusted for their own existing datasets only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        import datetime
+
+        from django.utils import timezone
+
+        from YSE_App.models import (
+            Allocation, AllocationDelegate, DataSharingDelegate, PrincipalInvestigator, TransientPhotometry,
+        )
+        from YSE_App.tests.fixtures_minimal import audit_fields
+
+        cls.staff = _user("t707_staff", is_staff=True)
+        cls.pi_user = _user("t707_pi")
+        cls.deputy = _user("t707_deputy")
+        cls.prog_pi_user = _user("t707_progpi")
+        cls.prog_deputy = _user("t707_progdep")
+        cls.member = _user("t707_member")
+        g = Group.objects.create(name="t707-g")
+        for u in (cls.member, cls.pi_user, cls.deputy):
+            u.groups.add(g)
+        cls.obs_group, cls.instrument, _ = create_instrument_stack(cls.staff, obs_group_name="t707")
+        audit = audit_fields(cls.staff)
+        cls.pi = PrincipalInvestigator.objects.create(
+            name="t707 PI", phone="0", email="t707@example.com", institution="Synthetic", user=cls.pi_user, **audit)
+        prog_pi = PrincipalInvestigator.objects.create(
+            name="t707 PI2", phone="0", email="t707b@example.com", institution="Synthetic",
+            user=cls.prog_pi_user, **audit)
+        now = timezone.now()
+        alloc = Allocation.objects.create(
+            name="t707 A", proposal_id="T707", telescope=cls.instrument.telescope, instrument=cls.instrument,
+            principal_investigator=prog_pi, start_date=now - datetime.timedelta(days=1),
+            end_date=now + datetime.timedelta(days=1), **audit)
+        AllocationDelegate.objects.create(allocation=alloc, user=cls.prog_deputy, added_by=cls.staff)
+        DataSharingDelegate.objects.create(pi=cls.pi, delegate=cls.deputy, created_by=cls.staff)
+        transient = create_minimal_transient(cls.staff, name="YSE707a")
+        cls.phot = TransientPhotometry.objects.create(
+            transient=transient, instrument=cls.instrument, obs_group=cls.obs_group, **audit)
+        cls.phot.groups.add(g)
+        cls.phot.pis.add(cls.pi)
+        cls.prog_phot = TransientPhotometry.objects.create(
+            transient=transient, instrument=cls.instrument, obs_group=cls.obs_group, allocation=alloc, **audit)
+        cls.prog_phot.groups.add(g)
+        cls.prog_phot.pis.add(prog_pi)
+
+    @override_settings(UPLOAD_GROUP_CHECKS_ENFORCED=True)
+    def test_pi_and_deputy_trusted_for_their_dataset(self):
+        theirs = mock.Mock(created_by_id=self.staff.id)
+        for user in (self.pi_user, self.deputy):
+            self.assertIsNone(upload_denial(user, ["t707-other"], [theirs], existing_dataset=self.phot))
+            self.assertIsNone(upload_denial(user, [], [], existing_dataset=self.phot))
+
+    @override_settings(UPLOAD_GROUP_CHECKS_ENFORCED=True)
+    def test_program_pi_and_deputy_trusted_for_program_data(self):
+        theirs = mock.Mock(created_by_id=self.staff.id)
+        for user in (self.prog_pi_user, self.prog_deputy):
+            self.assertIsNone(upload_denial(user, [], [theirs], existing_dataset=self.prog_phot))
+            self.assertIsNotNone(upload_denial(user, [], [theirs], existing_dataset=self.phot))
+
+    @override_settings(UPLOAD_GROUP_CHECKS_ENFORCED=True)
+    def test_unrelated_member_and_new_data_unchanged(self):
+        theirs = mock.Mock(created_by_id=self.staff.id)
+        self.assertIsNotNone(upload_denial(self.member, [], [theirs], existing_dataset=self.phot))
+        self.assertIsNotNone(upload_denial(self.member, ["t707-other"], [], existing_dataset=self.phot))
+        # No existing dataset: a PI is an ordinary member (here without a collaboration group of their own).
+        self.assertIsNotNone(upload_denial(self.prog_pi_user, [], []))

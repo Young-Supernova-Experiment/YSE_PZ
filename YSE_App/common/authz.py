@@ -117,18 +117,32 @@ def legacy_write_permission_applies(view) -> bool:
 
 # -- upload endpoints -----------------------------------------------------------
 
-def upload_denial(user, group_names: Iterable[str] = (), existing_rows: Iterable = ()) -> Optional[str]:
+def _trusted_for_dataset(user, dataset) -> bool:
+    """#707: the dataset's PIs and deputies, and its program's PI and program deputies."""
+    if dataset is None or not getattr(dataset, "pk", None):
+        return False
+    from YSE_App.services.access_actions import dataset_role
+
+    return dataset_role(user, dataset) is not None
+
+
+def upload_denial(user, group_names: Iterable[str] = (), existing_rows: Iterable = (),
+                  existing_dataset=None) -> Optional[str]:
     """Reason an upload is refused, or None if it may proceed.
 
     ``group_names``: collaboration groups the upload would share data with.
     ``existing_rows``: rows (with ``created_by_id``) the upload would replace or
-    re-share. Always None while ``UPLOAD_GROUP_CHECKS_ENFORCED`` is turned off.
+    re-share. ``existing_dataset``: the existing photometry set or spectrum the
+    upload targets, if any; its PIs and deputies, and its program's PI and
+    program deputies, are trusted for it (#707). Always None while ``UPLOAD_GROUP_CHECKS_ENFORCED`` is turned off.
     """
     if not _flag("UPLOAD_GROUP_CHECKS_ENFORCED"):
         return None
     if user is None or not getattr(user, "is_authenticated", False) or not user.is_active:
         return "Authentication required."
     if is_trusted_writer(user):
+        return None
+    if existing_dataset is not None and _trusted_for_dataset(user, existing_dataset):
         return None
     own = set(user.groups.values_list("name", flat=True))
     if not (own - {PUBLIC_COLLABORATION_GROUP_NAME}):

@@ -1204,7 +1204,7 @@ def add_transient_phot(request):
     replaced = []
     if existing_phot is not None and (hd['clobber'] or upload_groups):
         replaced = [existing_phot]
-    denial = upload_denial(user, upload_groups, replaced)
+    denial = upload_denial(user, upload_groups, replaced, existing_dataset=existing_phot)
     if denial:
         return JsonResponse({"message": denial}, status=403)
 
@@ -1335,7 +1335,7 @@ def add_transient_spec(request):
         replaced = []
         if existing_spec is not None and (hd['clobber'] or upload_groups):
             replaced = [existing_spec]
-        denial = upload_denial(user, upload_groups, replaced)
+        denial = upload_denial(user, upload_groups, replaced, existing_dataset=existing_spec)
         if denial:
             return JsonResponse({"message": denial}, status=403)
 
