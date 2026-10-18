@@ -155,8 +155,9 @@ endpoints (`/query_api/`, the bulk photometry download, the pointing tool) and t
   authentication or session table, or `information_schema` is refused for that viewer: the dashboard
   section shows the reason, `/query_api/`, the pointing tool and the other page views answer 404 (403 for
   change-status-for-query). The check runs before the shared name cache is read, so a result cached from a
-  staff run is never served to a restricted viewer. Staff, superusers, `/query_api/` service accounts and
-  the cache warmer (`user=None`) are unchanged; SQL Explorer is unchanged.
+  staff run is never served to a restricted viewer. Service readers (`/query_api/` service accounts,
+  `DATA_SERVICE_READER_USERNAMES`) and the cache warmer (`user=None`) are unchanged; staff and superusers
+  are restricted viewers like everyone else since #706; SQL Explorer is unchanged.
 * A derived-value view can be offered to page queries by listing it in `PAGE_QUERY_EXTRA_ALLOWED_TABLES`.
   Queries that read such a view may select on it; `/query_api/` returns a restricted viewer only the
   identifying columns (name, id, position). `PAGE_QUERY_TABLE_POLICY: off` restores the old behaviour.
