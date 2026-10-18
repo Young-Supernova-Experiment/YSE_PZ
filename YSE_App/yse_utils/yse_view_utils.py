@@ -525,7 +525,7 @@ def init_draw_transients(request):
 					if not len(query): raise Http404('Invalid Query')
 					query = query[0]
 					try:
-						transients = yse_python_queries.run_python_query(query.python_query)
+						transients = filter_listed_transients(request.user, yse_python_queries.run_python_query(query.python_query, request.user))
 					except KeyError:
 						raise Http404('Invalid Query')
 			else: 
