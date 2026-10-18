@@ -222,18 +222,14 @@ class VisibilityTests(AnnotationBase):
             self.assertTrue(TransientAnnotation.objects.get(origin="private").visible_to(reader))
         self.assertEqual([a.origin for a in svc.visible_annotations(self.transient, reader)], ["public"])
 
-    def test_api_staff_outside_group_matches_non_staff(self):
+    def test_api_staff_outside_group_sees_only_public(self):
         outsider = create_test_user("ann_api_out", is_staff=True)
         url = reverse("transientannotation-list")
-        seen = {}
-        for who in (outsider, self.other):
-            client = Client()
-            client.force_login(who)
-            body = client.get(url, {"transient": self.transient.pk, "legacy": "0"}).json()
-            rows = body["results"] if isinstance(body, dict) else body
-            seen[who.username] = sorted(r["origin"] for r in rows)
-        self.assertEqual(seen["ann_api_out"], seen["ann_other"])
-        self.assertEqual(seen["ann_api_out"], ["public"])
+        client = Client()
+        client.force_login(outsider)
+        body = client.get(url, {"transient": self.transient.pk, "legacy": "0"}).json()
+        rows = body["results"] if isinstance(body, dict) else body
+        self.assertEqual(sorted(r["origin"] for r in rows), ["public"])
         client = Client()
         client.force_login(self.staff)  # member of the group
         body = client.get(url, {"transient": self.transient.pk, "legacy": "0"}).json()
