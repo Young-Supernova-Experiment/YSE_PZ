@@ -243,7 +243,8 @@ class SameAnswerAsTheApplicationTests(_Fixture):
 
         with self.assertRaises(DatabaseError):
             run("SELECT email FROM auth_user", self.staff)
-        for sql in ("SELECT COUNT(*) FROM YSE_App_log", "SELECT username FROM auth_user"):
+        self.assertEqual(scalar("SELECT COUNT(*) FROM YSE_App_tooresource WHERE 1 = 0", self.staff), 0)
+        for sql in ("SELECT COUNT(*) FROM YSE_App_tooresource", "SELECT username FROM auth_user"):
             with self.subTest(sql=sql), self.assertRaises(ExplorerQueryRefused):
                 rewrite(sql, self.member)
 
@@ -398,13 +399,13 @@ class ExplorerPagesTests(_Fixture):
         html = response.content.decode()
         self.assertIn('>YSE_App_transientphotdata</h4>', html)
         self.assertIn('>YSE_App_photometricband</h4>', html)
-        for table in ('YSE_App_log', 'auth_user', 'YSE_App_analysisresultfile') + tuple(
+        for table in ('YSE_App_tooresource', 'auth_user', 'YSE_App_analysisresultfile') + tuple(
                 settings.EXPLORER_PERSONAL_DATA_TABLES):
             self.assertNotIn('>%s</h4>' % table, html)
         self.client.force_login(self.staff)
         cache.clear()
         html = self.client.get(reverse('explorer_schema', kwargs={'connection': 'explorer'})).content.decode()
-        self.assertIn('>YSE_App_log</h4>', html)
+        self.assertIn('>YSE_App_tooresource</h4>', html)
 
     def test_queries_outside_an_explorer_request_are_refused(self):
         from django.db import DatabaseError

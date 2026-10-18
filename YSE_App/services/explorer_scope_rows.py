@@ -130,6 +130,12 @@ def row_rules() -> Dict[str, RowRule]:
         # The stored-statistics view of migration 0034 (one row per TransientPhotStat).
         RowRule('yse_transient_photstat_v', None, 'transient_id', 'visible_photstat_transients'),
 
+        # Comments and follow-ups: the rules of the pages (staff see every row, as there).
+        _rule(m.Log, 'id', 'visible_logs'),
+        *_through_rules(m.Log, 'visible_logs'),
+        _rule(m.TransientFollowup, 'id', 'visible_transient_followups'),
+        *_through_rules(m.TransientFollowup, 'visible_transient_followups'),
+
         _rule(m.TransientAnnotation, 'id', 'visible_annotations'),
         *_through_rules(m.TransientAnnotation, 'visible_annotations'),
         _rule(m.TransientAnnotationValue, 'annotation_id', 'visible_annotations'),
@@ -155,6 +161,12 @@ def open_tables():
             if field.remote_field.through._meta.auto_created:
                 names.add(field.remote_field.through._meta.db_table.lower())
     return frozenset(names)
+
+
+def column_limited_tables():
+    """Lower-case names of account tables every scoped viewer reads only as rewritten here:
+    group names (the read rules name groups)."""
+    return {'auth_group': "SELECT `id`, `name` FROM `auth_group`"}
 
 
 def staff_only_tables():
@@ -189,9 +201,9 @@ class ViewerRows:
     @property
     def names(self):
         if self._names is None:
-            from YSE_App.services.visibility import user_group_names
+            from YSE_App.services.explorer_scope import viewer_group_names
 
-            self._names = user_group_names(self.user)
+            self._names = viewer_group_names(self.user)
         return self._names
 
     def sql(self, method: str) -> str:
@@ -302,3 +314,15 @@ class ViewerRows:
 
         return (self._group_rule(TransientAnnotation)
                 .filter(transient_id__in=self.listed_transients()).values('pk'))
+
+    def visible_logs(self):
+        from YSE_App.models import Log
+        from YSE_App.services.visibility import filter_transient_comments_for_user
+
+        return filter_transient_comments_for_user(Log.objects.all(), self.user).values('pk')
+
+    def visible_transient_followups(self):
+        from YSE_App.models import TransientFollowup
+        from YSE_App.services.visibility import filter_transient_followups_for_user
+
+        return filter_transient_followups_for_user(TransientFollowup.objects.all(), self.user).values('pk')

@@ -63,9 +63,9 @@ MAX_SQL_CHARS = 200_000
 
 _SYSTEM_SCHEMAS = frozenset({'information_schema', 'mysql', 'performance_schema', 'sys'})
 
-# Staff read these account tables as they are (group names, memberships); everything else
+# Staff read this account table as it is (group memberships); everything else
 # under the excluded prefixes is refused for every scoped viewer.
-_STAFF_ACCOUNT_TABLES = frozenset({'auth_group', 'auth_user_groups'})
+_STAFF_ACCOUNT_TABLES = frozenset({'auth_user_groups'})
 
 # Result files of analysis runs are data results (#706): refused for every scoped viewer.
 _ALWAYS_REFUSED_TABLES = frozenset({'yse_app_analysisresultfile'})
@@ -188,7 +188,44 @@ def _database_tables() -> Dict[str, str]:
 
 
 def clear_table_cache() -> None:
+    global _MODEL_TABLES
     _table_cache.update(at=0.0, names=None)
+    _MODEL_TABLES = None
+
+
+_MODEL_TABLES: Optional[Dict[str, str]] = None
+
+
+def _model_tables() -> Dict[str, str]:
+    """``{lower-case name: name}`` of every installed model's table (no query)."""
+    global _MODEL_TABLES
+    if _MODEL_TABLES is None:
+        from django.apps import apps
+
+        out: Dict[str, str] = {}
+        for model in apps.get_models(include_auto_created=True):
+            if not model._meta.proxy and model._meta.managed:
+                out.setdefault(model._meta.db_table.lower(), model._meta.db_table)
+        _MODEL_TABLES = out
+    return _MODEL_TABLES
+
+
+def real_table(name: str) -> Optional[str]:
+    """The stored name of table or view ``name`` (any case), or None when there is none.
+
+    Model tables are known without a query; anything else (views, legacy tables) is
+    looked up in the database's table list, read at most every few minutes.
+    """
+    low = name.lower()
+    known = _model_tables().get(low)
+    if known is not None:
+        return known
+    return _database_tables().get(low)
+
+
+def table_exists(name: str) -> bool:
+    low = name.lower()
+    return low in _model_tables() or low in _database_tables()
 
 
 def _database_names() -> Set[str]:
@@ -250,10 +287,9 @@ def classify(name: str, tier: str) -> Decision:
     from YSE_App.services import explorer_scope_rows as rows
 
     low = name.lower()
-    real = _database_tables()
-    if low not in real:
+    if not table_exists(low):
         return Decision('refuse', reason='unknown table %s' % name)
-    real_name = real[low]
+    real_name = real_table(low)
     if real_name is None:
         return Decision('refuse', reason='ambiguous table name %s' % name)
     if low in _personal_tables() or low in _ALWAYS_REFUSED_TABLES:
@@ -265,6 +301,9 @@ def classify(name: str, tier: str) -> Decision:
         return Decision('derived', real_name)
     if low in rows.open_tables():
         return Decision('pass', real_name)
+    limited_sql = rows.column_limited_tables().get(low)
+    if limited_sql is not None:
+        return Decision('sql', real_name, sql=limited_sql)
     staff_sql = rows.staff_only_tables().get(low)
     if staff_sql is not None:
         if tier == TIER_STAFF:
@@ -480,26 +519,50 @@ def _cap_rows(root, cap: int) -> None:
     root.set('limit', exp.Limit(expression=exp.Literal.number(cap)))
 
 
+def _memo_key(sql: str, row_cap: Optional[int]):
+    return (sql, row_cap, max_rows(), max_execution_ms(),
+            str(getattr(settings, 'EXPLORER_DERIVED_VALUE_COLUMNS', '')),
+            str(getattr(settings, 'PAGE_QUERY_EXTRA_ALLOWED_TABLES', '')),
+            bool(getattr(settings, 'DATA_ACCESS_GRANTS_ENABLED', False)))
+
+
 def rewrite(sql: str, user, *, row_cap: Optional[int] = None) -> ScopedQuery:
     """``sql`` rewritten so it reads only ``user``'s rows (raises :class:`ExplorerQueryRefused`).
 
     Service readers get ``sql`` unchanged. ``row_cap`` defaults to
-    ``EXPLORER_SCOPED_MAX_ROWS``.
+    ``EXPLORER_SCOPED_MAX_ROWS``. The result is remembered on the user object for a
+    few seconds (one page checks and then runs the same query).
     """
-    from sqlglot import exp
-
     tier = viewer_tier(user)
     if tier is None:
         _refuse('sign in to run queries')
     if tier == TIER_SERVICE:
         return ScopedQuery(sql, tier, False)
+    key = _memo_key(sql, row_cap)
+    now = time.monotonic()
+    memo = getattr(user, '_yse_scope_memo', None)
+    if memo is None or now - memo[0] >= _MEMO_SECONDS:
+        memo = (now, {})
+    if key in memo[1]:
+        return memo[1][key]
+    plan = _rewrite(sql, user, tier, row_cap)
+    if len(memo[1]) < 64:
+        memo[1][key] = plan
+    try:
+        user._yse_scope_memo = memo
+    except AttributeError:  # pragma: no cover
+        pass
+    return plan
+
+
+def _rewrite(sql: str, user, tier: str, row_cap: Optional[int]) -> ScopedQuery:
+    from sqlglot import exp
 
     root = _parse(sql)
     _check_nodes(root)
-    real = _database_tables()
     ctes = _cte_names(root)
     for name in ctes:
-        if name in real:
+        if table_exists(name):
             _refuse('a WITH name may not be the name of a table (%s)' % name)
     databases = _database_names()
 
@@ -561,20 +624,20 @@ def rewrite(sql: str, user, *, row_cap: Optional[int] = None) -> ScopedQuery:
                         qn(decision.real_name), viewer_rows.sql('listed_transients'))
                 else:
                     sql_by_table[low] = 'SELECT `__yse_b`.* FROM %s `__yse_b`' % qn(decision.real_name)
-        token = '__yse_scope_%s_%d' % (nonce, len(splices))
-        splices[token] = sql_by_table[low]
+        placeholder = '__yse_scope_' + nonce + '_' + str(len(splices))
+        splices[placeholder] = sql_by_table[low]
         alias = table.args.get('alias')
         if alias is None:
             alias = exp.TableAlias(this=exp.to_identifier(name, quoted=True))
-        replacement = exp.Table(this=exp.to_identifier(token, quoted=True), alias=alias.copy())
+        replacement = exp.Table(this=exp.to_identifier(placeholder, quoted=True), alias=alias.copy())
         table.replace(replacement)
 
     _strip_derived_outputs(root, _derived_for_query(referenced))
     _cap_rows(root, max_rows() if row_cap is None else row_cap)
     text = root.sql(dialect='mysql', comments=False, identify=True)
     _verify(text, splices, passed, ctes)
-    for token, sub in splices.items():
-        text = text.replace('`%s`' % token, '(%s)' % sub)
+    for placeholder, sub in splices.items():
+        text = text.replace('`%s`' % placeholder, '(%s)' % sub)
     return ScopedQuery(text, tier, True, max_execution_ms())
 
 
@@ -602,12 +665,13 @@ def _verify(text: str, splices: Dict[str, str], passed: Set[str], ctes: Set[str]
         low = name.lower()
         if table.db or (low not in passed and low not in ctes):
             _refuse('the query could not be rewritten safely')
-    for token in list(splices):
+    for placeholder in list(splices):
         # A placeholder may have gone with an output column that was returned as NULL.
-        if seen.get(token, 0) != text.count('`%s`' % token) or seen.get(token, 0) > 1:
+        count = seen.get(placeholder, 0)
+        if count != text.count('`%s`' % placeholder) or count > 1:
             _refuse('the query could not be rewritten safely')
-        if not seen.get(token):
-            del splices[token]
+        if not count:
+            del splices[placeholder]
 
 
 # ------------------------------------------------------------------ running
@@ -650,11 +714,34 @@ def viewer_time_cap(connection, ms: int) -> Iterator[None]:
         _set_cap(connection, base)
 
 
+_MEMO_SECONDS = 10.0
+
+
+def viewer_group_names(user) -> List[str]:
+    """``visibility.user_group_names``, remembered on the user object for a few seconds, so the
+    sections of one page cost one membership query."""
+    memo = getattr(user, '_yse_scope_names', None)
+    now = time.monotonic()
+    if memo is not None and now - memo[0] < _MEMO_SECONDS:
+        return list(memo[1])
+    from YSE_App.services.visibility import user_group_names
+
+    names = list(user_group_names(user))
+    try:
+        user._yse_scope_names = (now, tuple(names))
+    except AttributeError:  # pragma: no cover - read-only user objects
+        pass
+    return names
+
+
 def viewer_cache_suffix(user) -> str:
     """Cache-key suffix for results scoped to ``user``: per viewer, and new when their groups or
     access rules change. Empty for unscoped callers."""
     if user is None or viewer_tier(user) in (None, TIER_SERVICE) or not scope_enforced():
         return ''
-    from YSE_App.services.visibility import group_access_plot_cache_token
+    import hashlib
 
-    return '_v%s_%s' % (user.pk, group_access_plot_cache_token(user))
+    from YSE_App.services import access_rules
+
+    digest = hashlib.sha256('|'.join(sorted(viewer_group_names(user))).encode()).hexdigest()[:12]
+    return '_v%s_g%s%s' % (user.pk, digest, access_rules.cache_token_suffix(user))
