@@ -391,7 +391,9 @@ def build_at_report(service: SharingService, transient: Transient, *, coauthors:
             "archiveid": "0",
             "archival_remarks": str(service.config_value("archival_remarks", "Other") or "Other"),
         }
-    return {"at_report": {"0": report}}
+    sent = list(detections) + ([last_limit[0]] if last_limit is not None else [])
+    # bookkeeping, stripped before sending: which points go out, so they can be made public once accepted (#708)
+    return {"at_report": {"0": report}, "_yse": {"photometry_point_ids": sorted({p.pk for p in sent})}}
 
 
 def spectrum_ascii(spectrum: TransientSpectrum) -> Optional[bytes]:
@@ -710,6 +712,19 @@ def _notify(submission: SharingSubmission, text: str):
         log.exception("sharing: could not notify about submission %s", submission.pk)
 
 
+def _publish_reported(submission: SharingSubmission) -> dict:
+    """After a confirmed report, make exactly the data that was sent public (#708); never for the sandbox."""
+    if submission.service.testing:
+        return {}
+    from YSE_App.services import tns_public
+
+    try:
+        return tns_public.mark_reported_public(submission.transient, **tns_public.reported_ids(submission.payload))
+    except Exception:  # noqa: BLE001 - the report is accepted; a failure here is logged and can be re-run
+        log.exception("sharing: could not mark reported data public for submission %s", submission.pk)
+        return {}
+
+
 def apply_acceptance(submission: SharingSubmission, outcome: Outcome, reply: dict) -> str:
     submission.mark_accepted(outcome.objname, reply)
     transient = submission.transient
@@ -719,6 +734,7 @@ def apply_acceptance(submission: SharingSubmission, outcome: Outcome, reply: dic
                                  user=submission.created_by, source="TNS")
     actor = submission.created_by or system_user()
     where = "sandbox" if submission.service.testing else "TNS"
+    published = _publish_reported(submission)
     Log.objects.create(
         transient=transient, created_by=actor, modified_by=actor,
         comment="Submitted to TNS (%s): %s report %s accepted as %s %s" % (

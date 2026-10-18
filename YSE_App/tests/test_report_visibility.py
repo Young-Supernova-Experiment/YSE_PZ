@@ -259,11 +259,21 @@ class OptInPermissionTests(ReportBase):
             with self.assertRaises(PermissionDenied):
                 autopublish_optin.set_opt_in(user, self.phot, True)
         self.assertFalse(AutopublishOptIn.objects.exists())
-        for user in (self.pi_user, self.deputy, self.staff):
+        for user in (self.pi_user, self.deputy):
             self.assertTrue(autopublish_optin.set_opt_in(user, self.phot, True))
             self.assertTrue(autopublish_optin.is_opted_in(self.phot))
             self.assertFalse(autopublish_optin.set_opt_in(user, self.phot, False))
             self.assertFalse(autopublish_optin.is_opted_in(self.phot))
+
+    def test_staff_cannot_opt_in_but_existing_rows_stay_and_staff_may_opt_out(self):
+        with self.assertRaises(PermissionDenied):
+            autopublish_optin.set_opt_in(self.staff, self.phot, True)
+        self.assertFalse(AutopublishOptIn.objects.exists())
+        autopublish_optin.set_opt_in(self.pi_user, self.phot, True)
+        self.assertTrue(autopublish_optin.is_opted_in(self.phot))  # nothing removes it
+        with self.assertRaises(PermissionDenied):
+            autopublish_optin.set_opt_in(self.member, self.phot, False)
+        self.assertFalse(autopublish_optin.set_opt_in(self.staff, self.phot, False))
 
     def test_public_data_needs_no_opt_in(self):
         public_phot = self.transient.transientphotometry_set.exclude(pk=self.phot.pk).first()
