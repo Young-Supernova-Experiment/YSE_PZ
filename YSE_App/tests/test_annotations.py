@@ -103,6 +103,7 @@ class AnnotationBase(TestCase):
         self.other = create_test_user("ann_other", is_staff=False)
         self.group, _ = Group.objects.get_or_create(name="Annotators")
         self.user.groups.add(self.group)
+        self.staff.groups.add(self.group)  # staff follow the group rule too (#719); this one is a member
         self.transient = create_minimal_transient(self.staff, name="2026ann", obs_group_name="ann-group", ra=10.0, dec=20.0)
         self.services = {s.slug: s for s in svc.ensure_builtin_services(self.staff)}
         self.client = Client()
@@ -200,6 +201,54 @@ class VisibilityTests(AnnotationBase):
         private = TransientAnnotation.objects.get(origin="private")
         self.assertTrue(private.visible_to(self.user))
         self.assertFalse(private.visible_to(self.other))
+
+    def test_staff_outside_group_sees_what_a_non_staff_outsider_sees(self):
+        outsider = create_test_user("ann_staff_out", is_staff=True)
+        admin = create_test_user("ann_super_out", is_superuser=True)
+        for who in (outsider, admin):
+            self.assertEqual([a.origin for a in svc.visible_annotations(self.transient, who)],
+                             [a.origin for a in svc.visible_annotations(self.transient, self.other)])
+            self.assertEqual([a.origin for a in svc.visible_annotations(self.transient, who)], ["public"])
+            self.assertFalse(TransientAnnotation.objects.get(origin="private").visible_to(who))
+            out = svc.annotations_for_transients([self.transient], who)
+            self.assertEqual([a.origin for a in out[self.transient.pk]], ["public"])
+            # administrative actions are unchanged
+            self.assertTrue(svc.can_write_origin(who, "anything"))
+
+    def test_service_reader_reads_all(self):
+        reader = create_test_user("ann_reader", is_staff=False)
+        with override_settings(DATA_SERVICE_READER_USERNAMES=["ann_reader"]):
+            self.assertEqual([a.origin for a in svc.visible_annotations(self.transient, reader)], ["private", "public"])
+            self.assertTrue(TransientAnnotation.objects.get(origin="private").visible_to(reader))
+        self.assertEqual([a.origin for a in svc.visible_annotations(self.transient, reader)], ["public"])
+
+    def test_api_staff_outside_group_matches_non_staff(self):
+        outsider = create_test_user("ann_api_out", is_staff=True)
+        url = reverse("transientannotation-list")
+        seen = {}
+        for who in (outsider, self.other):
+            client = Client()
+            client.force_login(who)
+            body = client.get(url, {"transient": self.transient.pk, "legacy": "0"}).json()
+            rows = body["results"] if isinstance(body, dict) else body
+            seen[who.username] = sorted(r["origin"] for r in rows)
+        self.assertEqual(seen["ann_api_out"], seen["ann_other"])
+        self.assertEqual(seen["ann_api_out"], ["public"])
+        client = Client()
+        client.force_login(self.staff)  # member of the group
+        body = client.get(url, {"transient": self.transient.pk, "legacy": "0"}).json()
+        rows = body["results"] if isinstance(body, dict) else body
+        self.assertEqual(sorted(r["origin"] for r in rows), ["private", "public"])
+
+    def test_search_value_filter_and_column_follow_group_rule(self):
+        from YSE_App.filters.transient_search import annotate_annotation_column
+
+        outsider = create_test_user("ann_col_out", is_staff=True)
+        qs = Transient.objects.filter(pk=self.transient.pk)
+        hidden = annotate_annotation_column(qs, "private", "b", outsider).get()
+        self.assertIsNone(hidden.annotation_value_num)
+        shown = annotate_annotation_column(qs, "private", "b", self.staff).get()
+        self.assertEqual(shown.annotation_value_num, 2)
 
     def test_bulk_lookup(self):
         t2 = create_minimal_transient(self.staff, name="2026ann2", obs_group_name="ann-group")

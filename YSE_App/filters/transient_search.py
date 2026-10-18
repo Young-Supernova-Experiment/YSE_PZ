@@ -159,14 +159,20 @@ def parse_annotation_column(text):
     return origin, key
 
 
-def _annotation_value_rows(origin, key):
+def _annotation_value_rows(origin, key, user=None):
+    """Value rows of ``key`` on the outer transient that ``user`` may see (the annotation group rule, #719)."""
+    from YSE_App.services.annotations import group_rule_q
+
     rows = TransientAnnotationValue.objects.filter(transient_id=OuterRef('pk'), key=key)
+    rule = group_rule_q(user, 'annotation__')
+    if rule is not None:
+        rows = rows.filter(rule)
     if origin:
         rows = rows.filter(origin=origin)
     return rows.order_by('origin')
 
 
-def annotate_annotation_column(qs, origin, key):
+def annotate_annotation_column(qs, origin, key, user=None):
     """``annotation_value`` (text) and ``annotation_value_num`` of one ``origin.key`` per row, as subqueries."""
     if 'annotation_value' in qs.query.annotations:
         return qs
@@ -177,7 +183,7 @@ def annotate_annotation_column(qs, origin, key):
         if key in LEGACY_NUMERIC_KEYS:
             return qs.annotate(annotation_value=F(column), annotation_value_num=F(column))
         return qs.annotate(annotation_value=F(column), annotation_value_num=Value(None, output_field=FloatField()))
-    rows = _annotation_value_rows(origin, key)
+    rows = _annotation_value_rows(origin, key, user)
     return qs.annotate(
         annotation_value=Subquery(rows.values('value_text')[:1], output_field=CharField()),
         annotation_value_num=Subquery(rows.values('value_num')[:1], output_field=FloatField()),
@@ -715,7 +721,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         queryset = self._filter_annotations(queryset, cleaned)
         column = self.annotation_column_spec
         if column is not None:
-            queryset = annotate_annotation_column(queryset, column[0], column[1])
+            queryset = annotate_annotation_column(queryset, column[0], column[1], getattr(self.request, 'user', None))
             if 'annotation_value' in wanted:
                 # numbers first (nulls sort as the database likes), then the text form
                 expanded = []
@@ -787,8 +793,14 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         if origin == 'legacy':
             return self._filter_legacy(qs, key, eq, vmin, vmax)
         if not key:
-            return qs.filter(Exists(TransientAnnotation.objects.filter(transient_id=OuterRef('pk'), origin=origin)))
-        rows = TransientAnnotationValue.objects.filter(transient_id=OuterRef('pk'), key=key)
+            from YSE_App.services.annotations import group_rule_q
+
+            seen = TransientAnnotation.objects.filter(transient_id=OuterRef('pk'), origin=origin)
+            rule = group_rule_q(getattr(self.request, 'user', None))
+            if rule is not None:
+                seen = seen.filter(rule)
+            return qs.filter(Exists(seen))
+        rows = _annotation_value_rows(origin, key, getattr(self.request, 'user', None)).order_by()
         if origin:
             rows = rows.filter(origin=origin)
         if eq:
