@@ -34,6 +34,7 @@ import requests
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -239,9 +240,11 @@ def _scope(scope):
 
 
 def _photometry_rows(service: SharingService, transient: Transient, scope: Optional[ReportScope] = None):
+    point_filter = _scope(scope).point_filter()
     qs = (
         TransientPhotData.objects.filter(photometry__transient=transient,
                                          photometry_id__in=_scope(scope).photometry_ids(transient))
+        .filter(point_filter if point_filter is not None else Q())
         .select_related("photometry__instrument", "photometry__obs_group", "band")
         .filter(legacy_good('TransientPhotData'))
         .order_by("obs_date")

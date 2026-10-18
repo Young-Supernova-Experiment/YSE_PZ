@@ -85,6 +85,15 @@ class ReportScope:
     def photometry_ids(self, transient) -> Set[int]:
         return self._decide(TransientPhotometry, transient, photometry_visible_q, "photometry")[0]
 
+    def point_filter(self):
+        """Extra ``Q`` on ``TransientPhotData`` for a submitter's scope: only the points they may see (access is
+        per point, #714); ``None`` for public-only / autopublish scopes and service readers."""
+        if self.mode == PUBLIC_ONLY or self.mode == AUTOPUBLISH or self.user is None:
+            return None
+        from YSE_App.services.visibility import visible_photometry_ids_q
+
+        return visible_photometry_ids_q(self.user)
+
     def spectrum_ids(self, transient) -> Set[int]:
         return self._decide(TransientSpectrum, transient, spectrum_visible_q, "spectrum")[0]
 

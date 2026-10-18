@@ -116,6 +116,8 @@ def submit_to_tns(request,transient_name):
     from YSE_App.sharing.report_scope import ReportScope
     scope = ReportScope.for_user(request.user)
     tp = TransientPhotData.objects.filter(photometry__transient=t, photometry_id__in=scope.photometry_ids(t))
+    if scope.point_filter() is not None:
+        tp = tp.filter(scope.point_filter())  # only the points the submitter may see (#714)
     tp = tp.filter(photometry__instrument__name='DECam')
     tp = tp.annotate(snr=ExpressionWrapper(F('flux')/F('flux_err'),output_field=FloatField()))
     tp_det = tp.filter(snr__gt=5).order_by('obs_date')

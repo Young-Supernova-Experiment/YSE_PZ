@@ -29,12 +29,14 @@ XB the dataset's ``groups`` containing a group U left with the point shared
 before U left. A rule term is a correlated ``EXISTS`` on the
 ``(target, grantee)`` unique index.
 
-**Photometry sets** are visible at set level only when *every* point of the
-set is visible, so code that reads a set and then all its points never shows
-a hidden point; point reads (``visibility.visible_photometry_ids_q``,
-``PhotometryService.*PhotData*``) use the exact point condition, and
-``visibility.transient_access_q`` counts a transient with any visible point.
-A partly visible set counts as hidden photometry for PhotStat.
+**Access is per point** (Ryan, 2026-10-18, #714). The photometry header
+(``TransientPhotometry``) is a storage grouping, not an access unit: its
+``groups`` are only the default for its points. A header is listed when the
+viewer may see at least one of its points (or, with no points, by its
+groups), and every read of photometry points uses the exact point condition
+(``visibility.visible_photometry_ids_q``, ``PhotometryService.*PhotData*``,
+report scopes), so a viewer sees exactly the points they may see. A transient
+with any point hidden from the viewer has hidden photometry for PhotStat.
 
 **Cache.** The rules that can apply to U (which effects U has personally,
 which of U's groups have rules, and the groups U has left) are summarised in
@@ -336,7 +338,8 @@ def _rule_sets_q(summary: RulesSummary, effect: str) -> Optional[Q]:
 
 
 def photometry_rules(user):
-    """``AccessRules`` on ``TransientPhotometry`` for ``user`` (set level: every point visible)."""
+    """``AccessRules`` on ``TransientPhotometry`` for ``user``: a header is listed when at least one of its points
+    is visible (or, with no points, by its groups); its points are filtered one by one by the point reads."""
     from YSE_App.models import TransientPhotData, TransientPhotometry
     from YSE_App.services.visibility import NO_RULES, AccessRules
 
@@ -353,13 +356,14 @@ def photometry_rules(user):
             candidates = _or(candidates, Q(pk__in=TransientPhotometry.groups.through.objects.filter(
                 group_id__in=sorted(summary.left)).values("transientphotometry_id")))
         if candidates is not None:
-            allow = candidates & Q(Exists(points)) & ~Q(Exists(points.filter(~visible)))
+            allow = candidates & Q(Exists(points.filter(visible)))  # any point visible through a rule
     deny = None
     hidden = terms.rule_hidden
     if hidden is not None:
         candidates = _rule_sets_q(summary, DENY)
         if candidates is not None:
-            deny = candidates & Q(Exists(points.filter(hidden)))
+            # every point hidden by a rule (a header with no visible point is not listed)
+            deny = candidates & Q(Exists(points)) & ~Q(Exists(points.filter(~hidden)))
     if allow is None and deny is None:
         return NO_RULES
     return AccessRules(allow=allow, deny=deny)
