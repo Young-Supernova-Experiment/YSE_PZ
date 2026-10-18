@@ -1169,7 +1169,7 @@ class DatasetProgramLinkAPIView(generics.GenericAPIView):
     follow-up. ``POST {"allocation": <id, proposal id or name, or null>}``: link or unlink;
     only whoever may share the dataset (its PIs and their deputies, the program's PI or
     deputies, or staff). Linking applies the program's standing access grants; unlinking
-    removes no rule (shared data stay shared).
+    removes no rule.
     """
 
     permission_classes = (permissions.IsAuthenticated,)
@@ -1246,7 +1246,8 @@ def _access_allocation(request, allocation_id):
 class AccessProgramGrantsAPIView(generics.GenericAPIView):
     """``/api/access/programs/<id>/grants/``: ``GET`` the program's standing grants; ``POST`` a program or night
     action (``effect``, ``group`` or ``user``, optional ``night_start`` + ``night_end`` or ``night`` +
-    ``utc_offset``, ``note``). The response counts what was written now, including ``kept_shared``."""
+    ``utc_offset``, ``note``). The response counts what was written now (``overridden``: shared data now
+    restricted)."""
 
     permission_classes = (permissions.IsAuthenticated,)
 
@@ -1271,7 +1272,8 @@ class AccessProgramGrantsAPIView(generics.GenericAPIView):
 
 
 class AccessStandingGrantStopAPIView(generics.GenericAPIView):
-    """``POST /api/access/standing_grants/<id>/stop/``: data taken from now on are not covered."""
+    """``POST /api/access/standing_grants/<id>/stop/ {"backwards": false}``: going forward (default), data taken
+    from now on are not covered; ``backwards`` also deletes the rules it wrote (earlier data too)."""
 
     permission_classes = (permissions.IsAuthenticated,)
 
@@ -1283,8 +1285,9 @@ class AccessStandingGrantStopAPIView(generics.GenericAPIView):
             pk=grant_id).first()
         if grant is None:
             raise Http404("no standing grant %r" % grant_id)
-        access_actions.stop_standing_grant(request.user, grant)
-        return Response(_grant_json(grant))
+        deleted = access_actions.stop_standing_grant(request.user, grant,
+                                                     backwards=_truthy(request.data.get("backwards")))
+        return Response(dict(_grant_json(grant), rules_deleted=deleted))
 
 
 class AccessProgramDeputiesAPIView(generics.GenericAPIView):
@@ -1332,10 +1335,11 @@ def _access_dataset(request, kind, dataset_id):
     access_pages.require_enabled()
     model = {"photometry": TransientPhotometry, "spectrum": TransientSpectrum}[kind]
     dataset = model.objects.filter(pk=dataset_id).first()
-    if dataset is None or not (visibility.user_sees_everything(request.user)
-                               or visibility.dataset_visible_to_user(request.user, dataset)):
+    role = access_actions.dataset_role(request.user, dataset) if dataset is not None else None
+    if dataset is None or (role is None and not (visibility.user_sees_everything(request.user)
+                                                 or visibility.dataset_visible_to_user(request.user, dataset))):
         raise Http404("no %s %s" % (kind, dataset_id))
-    if access_actions.dataset_role(request.user, dataset) is None:
+    if role is None:
         raise APIForbidden("Only the data's PIs, their deputies, the program's PI or deputies, or an administrator "
                            "may set access for these data.")
     return dataset
@@ -1364,23 +1368,56 @@ class AccessDatasetRulesAPIView(generics.GenericAPIView):
         return Response({"kind": kind, "id": dataset.pk, "written": result.as_dict()})
 
 
+def _truthy(value) -> bool:
+    return value is True or str(value).strip().lower() in ("1", "true", "yes", "backward", "backwards")
+
+
 class AccessDatasetRulesRemoveAPIView(generics.GenericAPIView):
-    """``POST /api/access/datasets/<kind>/<id>/rules/remove/ {"group" or "user"}``: staff only, for mistakes
-    (each deletion is audited)."""
+    """``POST /api/access/datasets/<kind>/<id>/rules/remove/ {"group" or "user", "effect": "allow"|"deny",
+    "backwards": false}``: turn off an allow (going forward by default: earlier data stay visible; ``backwards``
+    deletes the allow rules) or lift a restriction (``effect: deny``)."""
 
     permission_classes = (permissions.IsAuthenticated,)
 
     def post(self, request, kind, dataset_id):
-        from YSE_App.services import access_pages
+        from YSE_App.services import access_actions
 
-        access_pages.require_enabled()
-        model = {"photometry": TransientPhotometry, "spectrum": TransientSpectrum}[kind]
-        if not model.objects.filter(pk=dataset_id).exists():
-            raise Http404("no %s %s" % (kind, dataset_id))
+        dataset = _access_dataset(request, kind, dataset_id)
         group, user = _access_grantee(request.data)
-        n = access_pages.delete_rules(request.user, kind=kind, dataset_id=int(dataset_id), grantee_group=group,
-                                      grantee_user=user)
+        n = access_actions.remove_rules(request.user, dataset, effect=request.data.get("effect") or "allow",
+                                        grantee_group=group, grantee_user=user,
+                                        backwards=_truthy(request.data.get("backwards")))
         return Response({"removed": n})
+
+
+class AccessDatasetGroupRemoveAPIView(generics.GenericAPIView):
+    """``POST /api/access/datasets/<kind>/<id>/groups/remove/ {"group", "backwards": false}``: remove a group from
+    the dataset's own groups; going forward by default (the points shared before stay visible to it)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, kind, dataset_id):
+        from YSE_App.services import access_actions, access_pages
+
+        dataset = _access_dataset(request, kind, dataset_id)
+        group, _user = access_pages.resolve_grantee(group=request.data.get("group"))
+        kept = access_actions.remove_dataset_group(request.user, dataset, group,
+                                                   backwards=_truthy(request.data.get("backwards")))
+        return Response({"group": group.name, "kept": kept})
+
+
+class AccessDatasetAutopublishAPIView(generics.GenericAPIView):
+    """``POST /api/access/datasets/<kind>/<id>/autopublish/ {"enabled": true|false}``: the automatic-publishing
+    opt-in (#691; decided by the data's PIs and deputies)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, kind, dataset_id):
+        from YSE_App.services import autopublish_optin
+
+        dataset = _access_dataset(request, kind, dataset_id)
+        state = autopublish_optin.set_opt_in(request.user, dataset, _truthy(request.data.get("enabled")))
+        return Response({"opted_in": state})
 
 
 class AccessTransientNightsAPIView(generics.GenericAPIView):

@@ -11,8 +11,10 @@ get points shared with it after they left.
   tracking were seeded by migration 0045 with ``joined_at`` unknown.
 * :func:`record_dataset_share_change`: adding a group to a photometry set's or
   spectrum's own ``groups`` stores (or moves forward) its
-  :class:`~YSE_App.models.DatasetGroupShare` time; removing the group deletes
-  the row. A group on a dataset with no row was shared before tracking.
+  :class:`~YSE_App.models.DatasetGroupShare` time; removing the group writes
+  ``kept`` rules for the points shared before the removal (the forward default,
+  ``access_actions.keep_after_group_removal``) and deletes the row. A group on a
+  dataset with no row was shared before tracking.
 
 Both are wired to ``m2m_changed`` in ``YSE_App.signals``. Writes that bypass
 ``m2m_changed`` (raw through-table inserts) are not recorded; none exist for
@@ -122,18 +124,22 @@ def shared(model, pairs, at=None) -> None:
 
 
 def unshared(model, pairs) -> None:
-    """Forget the share time of ``(dataset_id, group_id)`` pairs whose group was removed from the dataset."""
+    """A group was removed from datasets: keep the earlier points (the forward default, #648 PR 6a), then
+    forget the share times."""
     from YSE_App.models import DatasetGroupShare
+    from YSE_App.services import access_actions
 
     pairs = {(int(d), int(g)) for d, g in pairs}
     if not pairs:
         return
     field = _dataset_field(model)
-    rows = DatasetGroupShare.objects.filter(
+    rows = [row for row in DatasetGroupShare.objects.filter(
         **{field + "__in": {d for d, _ in pairs}}, group_id__in={g for _, g in pairs})
-    pks = [row.pk for row in rows if (getattr(row, field), row.group_id) in pairs]
-    if pks:
-        DatasetGroupShare.objects.filter(pk__in=pks).delete()
+        if (getattr(row, field), row.group_id) in pairs]
+    shared_at = {(getattr(row, field), row.group_id): row.shared_at for row in rows}
+    access_actions.keep_after_group_removal(model, pairs, shared_at)
+    if rows:
+        DatasetGroupShare.objects.filter(pk__in=[row.pk for row in rows]).delete()
 
 
 def record_dataset_share_change(model, instance, action, reverse, pk_set) -> None:

@@ -184,18 +184,21 @@ class LinkTests(_Fixture):
         phot.refresh_from_db()
         self.assertEqual(phot.allocation_id, self.alloc.pk)
 
-    def test_linking_later_applies_standing_grants_and_shared_stays_shared(self):
+    def test_linking_later_applies_standing_grants(self):
         phot = self.phot(groups=(self.g,))
         access_actions.program_action(self.prog_pi, self.alloc, effect="allow", grantee_user=self.outsider)
         access_actions.program_action(self.prog_pi, self.alloc, effect="deny", grantee_group=self.g)
+        # an explicit rule already on a point is not replaced by a standing grant
+        point = TransientPhotData.objects.filter(photometry=phot).first()
+        R.objects.create(transient_phot_data=point, grantee_group=self.g, effect="allow", granted_as="pi")
         result = program_links.link_dataset(self.data_pi, phot, self.alloc)
         self.assertEqual(R.objects.filter(photometry=phot, grantee_user=self.outsider, effect="allow").count(), 2)
-        # the group is on the dataset: its points were shared with it, so no restriction is written
-        self.assertFalse(R.objects.filter(photometry=phot, grantee_group=self.g).exists())
-        self.assertEqual(result.grants["kept_shared"], 2)
+        self.assertEqual(R.objects.filter(photometry=phot, grantee_group=self.g, effect="deny").count(), 1)
+        self.assertEqual(R.objects.get(transient_phot_data=point, grantee_group=self.g).effect, "allow")
+        self.assertEqual(result.grants["created"], 3)
         # unlinking removes no rule
         program_links.link_dataset(self.data_pi, phot, None)
-        self.assertEqual(R.objects.filter(photometry=phot).count(), 2)
+        self.assertEqual(R.objects.filter(photometry=phot).count(), 4)
 
     def test_a_stopped_grant_still_covers_data_taken_before_the_stop(self):
         program, _ = access_actions.program_action(self.prog_pi, self.alloc, effect="allow",
@@ -204,7 +207,8 @@ class LinkTests(_Fixture):
         night, _ = access_actions.program_action(self.prog_pi, self.alloc, effect="allow", grantee_user=self.deputy,
                                                  night_start=start, night_end=start + datetime.timedelta(days=4))
         stop = self.now - datetime.timedelta(hours=36)  # between the two points of a set (taken 1 and 2 days ago)
-        StandingAccessGrant.objects.filter(pk__in=[program.pk, night.pk]).update(stopped_at=stop)
+        StandingAccessGrant.objects.filter(pk__in=[program.pk, night.pk]).update(  # as if made earlier and stopped
+            created_at=stop - datetime.timedelta(days=10), stopped_at=stop)
         phot = self.phot(groups=(self.g,))
         after_stop = TransientPhotData.objects.filter(photometry=phot, obs_date__gte=stop).get()
         before_stop = TransientPhotData.objects.filter(photometry=phot, obs_date__lt=stop).get()

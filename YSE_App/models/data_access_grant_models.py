@@ -11,10 +11,13 @@ Ryan's design revision (2026-10-17): **rules are stored per point**.
   ``transient`` and, for points, ``photometry`` are copies of the point's
   transient and set, kept so set- and transient-level reads (and PhotStat
   invalidation) need no join through the point table.
-* Once a point is shared it stays shared (shared data may already have been
-  downloaded): an allow is never revoked. Only staff may delete a rule, to
-  correct a mistake; django-auditlog records the deletion. A deny may later
-  become an allow (that is sharing); ``updated_at`` is then when it became one.
+* A PI may restrict any non-public data from anyone, also data already
+  shared (Ryan, 2026-10-17): a deny may replace an allow, and an allow a deny;
+  ``updated_at`` is when the rule last changed (for an allow, when the point
+  was shared). Turning sharing off goes forward in time by default (earlier
+  data stay visible); removing a group from a dataset's own groups writes
+  ``kept`` allow rules for the points shared before the change.
+  django-auditlog records every change and deletion.
 * :class:`StandingAccessGrant` is an action on a program (an ``Allocation``,
   one telescope for one semester) or on one night of a program, saved so that
   points taken **later** get their rule written at ingest. Stopping it
@@ -88,6 +91,10 @@ GRANTED_AS_CHOICES = (
     (AS_GROUP_DEPUTY, "PI's data-sharing deputy"),
     (AS_STAFF, "Administrator"),
 )
+# Rules written by the system to keep earlier data visible when sharing is turned off going forward
+# (a group removed from a dataset's own groups; #648, PR 6a).
+AS_KEPT = "kept"
+RULE_GRANTED_AS_CHOICES = GRANTED_AS_CHOICES + ((AS_KEPT, "Kept after a sharing change"),)
 
 # "At most one" in the database (exactly one is checked by ``clean``): on MySQL, Django's
 # cascade sets a nullable CASCADE foreign key to NULL just before deleting the row, so
@@ -122,6 +129,7 @@ class DataAccessRule(models.Model):
     AS_PROGRAM_DEPUTY = AS_PROGRAM_DEPUTY
     AS_GROUP_DEPUTY = AS_GROUP_DEPUTY
     AS_STAFF = AS_STAFF
+    AS_KEPT = AS_KEPT
 
     effect = models.CharField(max_length=8, choices=EFFECT_CHOICES)
 
@@ -149,7 +157,7 @@ class DataAccessRule(models.Model):
     # -- provenance -----------------------------------------------------------
     granted_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="data_access_rules_made")
-    granted_as = models.CharField(max_length=16, choices=GRANTED_AS_CHOICES)
+    granted_as = models.CharField(max_length=16, choices=RULE_GRANTED_AS_CHOICES)
     standing_grant = models.ForeignKey(
         "StandingAccessGrant", null=True, blank=True, on_delete=models.SET_NULL, related_name="rules",
         help_text="The standing grant that wrote this rule at ingest, if any.")
@@ -288,8 +296,9 @@ class StandingAccessGrant(models.Model):
     def covers_obs_date(self, obs_date) -> bool:
         """Whether a point of this program taken at ``obs_date`` is in scope: in the night (any date for a
         program-wide grant), and before the stop when the grant was stopped."""
-        if self.stopped_at is not None and (obs_date is None or obs_date >= self.stopped_at):
-            return False
+        if self.stopped_at is not None and (obs_date is None or obs_date >= self.stopped_at
+                                            or self.stopped_at <= self.created_at):
+            return False  # stopped: data taken later are not covered; stopped backwards: none are
         if self.night_start is None:
             return True
         return obs_date is not None and self.night_start <= obs_date < self.night_end

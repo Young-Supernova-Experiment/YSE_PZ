@@ -2,8 +2,8 @@
 
 The actions themselves are ``services.access_actions``; this module adds what
 the screens need: the programs a user manages, program deputies, grantee
-lookup, an object's observing nights, rule summaries, staff removal and the
-plain-language result of an action (including the "kept shared" count).
+lookup, an object's observing nights, rule summaries, the datasets a user
+manages (the dashboard) and the plain-language result of an action.
 
 Everything here is only reachable while ``DATA_ACCESS_GRANTS_ENABLED`` is on
 (:func:`require_enabled`).
@@ -33,13 +33,16 @@ def require_enabled() -> None:
 # ------------------------------------------------------------------ programs
 
 
-def managed_allocations(user):
-    """Allocations whose access ``user`` may set: as the PI's account, a program deputy, or staff (all)."""
+def managed_allocations(user, *, own_only: bool = False):
+    """Allocations whose access ``user`` may set: as the PI's account, a program deputy, or staff (all).
+
+    ``own_only``: only as the PI or a program deputy (the dashboard; staff use the program list).
+    """
     from YSE_App.models import Allocation
     from YSE_App.services.access_actions import is_staff
 
     qs = Allocation.objects.select_related("principal_investigator", "telescope").order_by("-start_date", "name")
-    if is_staff(user):
+    if is_staff(user) and not own_only:
         return qs
     if not getattr(user, "is_authenticated", False):
         return qs.none()
@@ -244,50 +247,89 @@ def rule_summary(phot_sets, spectra) -> List[Dict]:
     return sorted(out.values(), key=lambda r: (r["kind"], r["dataset_id"], r["grantee"]))
 
 
-def delete_rules(actor, *, kind: str, dataset_id: int, grantee_group=None, grantee_user=None) -> int:
-    """Staff only: delete one grantee's rules on one dataset (a mistake); each deletion is audited."""
-    from YSE_App.models import DataAccessRule
-    from YSE_App.services import access_actions, access_rules, photstat
+def dataset_for(kind: str, dataset_id):
+    from YSE_App.models import TransientPhotometry, TransientSpectrum
 
-    if not access_actions.is_staff(actor):
-        raise PermissionDenied({"message": "Only an administrator may remove access rules."})
-    rules = DataAccessRule.objects.filter(
-        **({"transient_spectrum_id": dataset_id} if kind == "spectrum" else {"photometry_id": dataset_id}))
-    rules = rules.filter(grantee_group=grantee_group) if grantee_group is not None else rules.filter(
-        grantee_user=grantee_user)
-    transients = set(rules.values_list("transient_id", flat=True))
-    with transaction.atomic(), access_actions._quiet_signals():
-        n, _ = rules.delete()
-        if n:
-            access_rules.bump_version()
-            if grantee_group is not None and kind == "photometry":
-                photstat.invalidate_scopes([(t, grantee_group.pk) for t in transients])
-    return n
+    model = TransientSpectrum if kind == "spectrum" else TransientPhotometry
+    return model.objects.filter(pk=dataset_id).first()
 
 
 # ------------------------------------------------------------------ wording
 
 
 def describe(result, effect: str, grantee_label: str) -> str:
-    """One sentence for a page message, explaining the "kept shared" and public counts."""
+    """One sentence for a page message: what was written, restrictions of shared data, public items."""
     verb = "may now see" if effect == "allow" else "may not see"
     parts = ["%s %s %d new item%s" % (grantee_label, verb, result.created, "" if result.created == 1 else "s")]
     if result.upgraded:
         parts.append("%d restriction%s turned into access" % (result.upgraded, "" if result.upgraded == 1 else "s"))
+    if result.overridden:
+        parts.append("%d shared item%s now restricted" % (result.overridden, "" if result.overridden == 1 else "s"))
     if result.unchanged:
         parts.append("%d already had this rule" % result.unchanged)
     text = "; ".join(parts) + "."
-    if result.kept_shared:
-        text += (" %d item%s %s already shared with %s and stay%s shared: shared data cannot be taken back, so a "
-                 "restriction only applies to data not yet shared." % (
-                     result.kept_shared, "" if result.kept_shared == 1 else "s",
-                     "was" if result.kept_shared == 1 else "were", grantee_label,
-                     "s" if result.kept_shared == 1 else ""))
     if result.public:
-        text += " %d public item%s need%s no rule (public data are visible to everyone)." % (
+        text += " %d public item%s need%s no rule (public data are visible to everyone and are never restricted)." % (
             result.public, "" if result.public == 1 else "s", "s" if result.public == 1 else "")
     return text
 
 
+FORWARD_HELP = "Going forward (the default): data taken before now stay visible to them."
+BACKWARD_HELP = ("Backwards: they also lose access to data taken earlier, including data they may already have "
+                 "looked at or downloaded.")
+
+
 def grantee_label(group, user) -> str:
     return ("group %s" % group.name) if group is not None else ("user %s" % user.username)
+
+
+# ------------------------------------------------------------------ dashboard
+
+DASHBOARD_LIMIT = 200
+
+
+def dashboard_datasets(user, limit: int = DASHBOARD_LIMIT) -> List[Dict]:
+    """The restricted datasets ``user`` leads: as their PI or deputy (``share_role``) or through a program they
+    lead or are a deputy of. Staff only see their own here (they act as administrators on the object pages).
+
+    Each row: ``kind``, ``dataset``, ``transient``, ``groups``, ``grantees`` (rules per grantee),
+    ``opted_in`` and ``can_opt_in`` (automatic publishing; never as staff on a PI's behalf).
+    """
+    from YSE_App.models import AllocationDelegate, AutopublishOptIn, TransientPhotometry, TransientSpectrum
+    from YSE_App.services import data_sharing
+
+    if not getattr(user, "is_authenticated", False):
+        return []
+    programs = set(AllocationDelegate.objects.filter(user=user).values_list("allocation_id", flat=True))
+    from YSE_App.models import Allocation
+
+    programs |= set(Allocation.objects.filter(principal_investigator__user=user).values_list("pk", flat=True))
+    out = []
+    for kind, model in (("photometry", TransientPhotometry), ("spectrum", TransientSpectrum)):
+        q = data_sharing.shareable_q(user, model)
+        if programs:
+            program_q = Q(allocation_id__in=sorted(programs))
+            q = program_q if q is None else q | program_q
+        if q is None:
+            continue
+        restricted = model.groups.through.objects.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME).values(
+            "transientphotometry_id" if kind == "photometry" else "transientspectrum_id")
+        rows = list(model.objects.filter(q).filter(pk__in=restricted).select_related("transient", "instrument")
+                    .prefetch_related("groups").order_by("-pk")[:limit])
+        if not rows:
+            continue
+        sets, spectra = (rows, []) if kind == "photometry" else ([], rows)
+        rules: Dict[int, List[Dict]] = {}
+        for item in rule_summary(sets, spectra):
+            rules.setdefault(item["dataset_id"], []).append(item)
+        field = "photometry_id" if kind == "photometry" else "spectrum_id"
+        opted = set(AutopublishOptIn.objects.filter(**{field + "__in": [d.pk for d in rows]}).values_list(
+            field, flat=True))
+        for dataset in rows:
+            out.append({
+                "kind": kind, "dataset": dataset, "transient": dataset.transient,
+                "groups": [g for g in dataset.groups.all() if g.name != PUBLIC_COLLABORATION_GROUP_NAME],
+                "grantees": rules.get(dataset.pk, []), "opted_in": dataset.pk in opted,
+                "can_opt_in": data_sharing.share_role(user, dataset, staff_override=False) is not None,
+            })
+    return out
