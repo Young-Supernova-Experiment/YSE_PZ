@@ -108,6 +108,8 @@ jobs:
           PINS="$PINS $(grep -m1 '^gunicorn==' requirements.web.lock)"
           # AstroScheduler's solver (#653): not in the image yet; its own deps are already pinned.
           docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^astroscheduler ' ../requirements.txt)"
+          # SQL Explorer query scope (#723): sqlglot, pure Python with no dependencies; not in the image yet.
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^sqlglot==' ../requirements.txt)"
           echo "$PINS"
           docker exec ysepz_web_container pip3 install --quiet --no-deps $PINS
           docker compose restart web

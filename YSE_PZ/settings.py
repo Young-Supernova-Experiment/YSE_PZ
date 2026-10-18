@@ -771,12 +771,20 @@ EXPLORER_DEFAULT_CONNECTION = 'explorer'
 
 
 def _explorer_permission(request):
-    from YSE_App.common.authz import explorer_access_allowed
-    return explorer_access_allowed(request.user)
+    from YSE_App.common.authz import explorer_view_allowed
+    return explorer_view_allowed(request)
 
 
+def _explorer_change_permission(request):
+    from YSE_App.common.authz import explorer_change_allowed
+    return explorer_change_allowed(request)
+
+
+# Full access: common.authz.explorer_access_allowed (as before). With
+# EXPLORER_OPEN_TO_ALL_USERS, other signed-in users get the narrower rights in
+# explorer_view_allowed / explorer_change_allowed (#723).
 EXPLORER_PERMISSION_VIEW = _explorer_permission
-EXPLORER_PERMISSION_CHANGE = _explorer_permission
+EXPLORER_PERMISSION_CHANGE = _explorer_change_permission
 # Signed-in users without Explorer access get 403 (Explorer's default shows
 # the admin login form); anonymous users go to the site login (#450).
 EXPLORER_NO_PERMISSION_VIEW = 'YSE_App.explorer_shell.explorer_no_permission'
@@ -852,6 +860,34 @@ EXPLORER_SQL_BLACKLIST = (
     'GRANT',
     'OWNER TO',
 ) + _PERSONAL_DATA_TABLES
+# Personal-data tables as a setting, so the Explorer query scope refuses them by name (#723).
+EXPLORER_PERSONAL_DATA_TABLES = _PERSONAL_DATA_TABLES
+
+# SQL Explorer for everyone (#723; YSE_App/services/explorer_scope.py). Every Explorer
+# query (run, export, saved queries, schema browser) and every saved query that feeds a
+# page is parsed and rewritten so it reads only the rows its viewer may see; service
+# readers are not rewritten. EXPLORER_QUERY_SCOPE: 'enforce' (default) or 'off' (rollback:
+# Explorer as before #723, and page queries back to the #715 metadata-only table check).
+EXPLORER_QUERY_SCOPE = _str_setting(
+    'YSE_EXPLORER_QUERY_SCOPE', 'site_settings', 'EXPLORER_QUERY_SCOPE', 'enforce').strip().lower()
+# Off by default: when on (and the scope is enforced), every signed-in active user may use
+# /explorer/ (run and export queries, the playground, the schema browser, and edit their
+# own saved queries); the Explorer group and staff keep full access (runbook step).
+EXPLORER_OPEN_TO_ALL_USERS = _authz_flag('YSE_EXPLORER_OPEN_TO_ALL_USERS', 'EXPLORER_OPEN_TO_ALL_USERS')
+# Limits for rewritten (viewer-scoped) queries: statement time in ms (0 = only the
+# EXPLORER_QUERY_MAX_EXECUTION_MS cap) and rows returned (0 = no limit).
+EXPLORER_SCOPED_MAX_EXECUTION_MS = int(
+    os.environ.get('YSE_EXPLORER_SCOPED_MAX_EXECUTION_MS', '').strip()
+    or config.getint('site_settings', 'EXPLORER_SCOPED_MAX_EXECUTION_MS', fallback=120000)
+)
+EXPLORER_SCOPED_MAX_ROWS = int(
+    os.environ.get('YSE_EXPLORER_SCOPED_MAX_ROWS', '').strip()
+    or config.getint('site_settings', 'EXPLORER_SCOPED_MAX_ROWS', fallback=100000)
+)
+# Derived-value columns ("table.column", comma-separated): a scoped query may select and
+# sort on them, but never gets them back. Empty by default (none are stored today).
+EXPLORER_DERIVED_VALUE_COLUMNS = _str_setting(
+    'YSE_EXPLORER_DERIVED_VALUE_COLUMNS', 'site_settings', 'EXPLORER_DERIVED_VALUE_COLUMNS', '')
 
 REST_FRAMEWORK = {
     # Use Django's standard `django.contrib.auth` permissions,

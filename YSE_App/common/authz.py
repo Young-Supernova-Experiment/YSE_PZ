@@ -175,3 +175,84 @@ def explorer_access_allowed(user) -> bool:
     if _flag("EXPLORER_RESTRICTED_ACCESS"):
         return user_in_group(user, getattr(settings, "EXPLORER_ACCESS_GROUP", "explorer_users"))
     return bool(user.is_staff)
+
+
+# SQL Explorer for everyone (#723). With ``EXPLORER_OPEN_TO_ALL_USERS`` (off by default)
+# and the query scope enforced, every signed-in active user may run and export queries,
+# use the playground and the schema browser, and create, edit or delete their own saved
+# queries; every query they run is rewritten to their visible data
+# (``services.explorer_scope``). Full access (``explorer_access_allowed``) is unchanged.
+# Open users never see the query log (everyone's SQL and email addresses) or the email
+# export, and may not edit or delete queries they did not create.
+
+_EXPLORER_OPEN_VIEW_DENIED = frozenset({"explorer_logs", "email_csv_query"})
+_EXPLORER_OPEN_CHANGE_ALLOWED = frozenset({
+    "explorer_index", "explorer_playground", "explorer_schema", "query_create", "download_sql",
+})
+_EXPLORER_OPEN_OWNER_ONLY = frozenset({"query_detail", "query_delete"})
+
+
+def explorer_open_to_all() -> bool:
+    if not _flag("EXPLORER_OPEN_TO_ALL_USERS"):
+        return False
+    from YSE_App.services.explorer_scope import scope_enforced
+
+    return scope_enforced()
+
+
+def explorer_open_access(user) -> bool:
+    """A signed-in active user who may use Explorer only because it is open to everyone."""
+    return bool(
+        explorer_open_to_all() and user is not None and getattr(user, "is_authenticated", False)
+        and getattr(user, "is_active", False)
+    )
+
+
+def _explorer_url(request):
+    match = getattr(request, "resolver_match", None)
+    if match is None:
+        return None, {}
+    return match.url_name, dict(match.kwargs or {})
+
+
+def _explorer_query_owned(user, query_id) -> bool:
+    from explorer.models import Query
+
+    try:
+        return Query.objects.filter(pk=int(query_id), created_by_user_id=user.pk).exists()
+    except (TypeError, ValueError):
+        return False
+
+
+def explorer_view_allowed(request) -> bool:
+    """``EXPLORER_PERMISSION_VIEW``: full access, or an open user outside the log and email pages."""
+    user = getattr(request, "user", None)
+    if explorer_access_allowed(user):
+        return True
+    if not explorer_open_access(user):
+        return False
+    url_name, _kwargs = _explorer_url(request)
+    return url_name not in _EXPLORER_OPEN_VIEW_DENIED
+
+
+def explorer_change_allowed(request) -> bool:
+    """``EXPLORER_PERMISSION_CHANGE``: full access, or an open user on the playground, schema and
+    new-query pages, and on their own saved queries."""
+    user = getattr(request, "user", None)
+    if explorer_access_allowed(user):
+        return True
+    if not explorer_open_access(user):
+        return False
+    url_name, kwargs = _explorer_url(request)
+    if url_name == "explorer_playground" and request.GET.get("querylog_id"):
+        from explorer.models import QueryLog
+
+        try:
+            return QueryLog.objects.filter(pk=int(request.GET["querylog_id"]), run_by_user_id=user.pk).exists()
+        except (TypeError, ValueError):
+            return False
+    if url_name in _EXPLORER_OPEN_CHANGE_ALLOWED:
+        return True
+    if url_name in _EXPLORER_OPEN_OWNER_ONLY:
+        return _explorer_query_owned(user, kwargs.get("query_id", kwargs.get("pk")))
+    return False
