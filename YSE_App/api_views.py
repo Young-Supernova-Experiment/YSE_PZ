@@ -704,8 +704,10 @@ class TransientAnnotationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = (TransientAnnotation.objects.select_related("transient", "created_by", "modified_by", "service", "run")
               .prefetch_related("groups"))
+        rule = annotations_svc.group_rule_q(user)
+        if rule is not None:
+            qs = qs.filter(rule)
         if not (user.is_staff or user.is_superuser):
-            qs = qs.filter(Q(groups__isnull=True) | Q(groups__in=user.groups.all()))
             visible = filter_transients_by_user_access(user, Transient.objects.filter(annotations__isnull=False).distinct())
             qs = qs.filter(transient__in=visible)
         params = self.request.query_params
