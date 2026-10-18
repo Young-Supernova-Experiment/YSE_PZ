@@ -431,7 +431,7 @@ def standing_grants_on_point(sender, instance, created, **kwargs):
     if not created or kwargs.get("raw"):
         return
     photometry = instance._state.fields_cache.get("photometry")
-    if photometry is not None and not photometry.allocation_id:
+    if photometry is not None and not photometry.allocation_id and not instance.allocation_id:
         return  # the usual case: no program link, no query
     from YSE_App.services import access_actions
 

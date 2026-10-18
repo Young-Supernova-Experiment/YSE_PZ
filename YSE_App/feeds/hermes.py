@@ -24,6 +24,7 @@ from typing import Dict, Iterable, List, Optional
 
 import requests
 from django.conf import settings
+from django.db.models import Q
 
 from YSE_App.brokers import register
 from YSE_App.brokers.base import BrokerAlert, make_point
@@ -421,8 +422,10 @@ def build_message(transient, topic: str, *, kind: str = "discovery", reporting_g
         if hasattr(transient, "alternatetransientnames_set") else []
     if aliases:
         target["aliases"] = aliases
+    point_filter = scope.point_filter()
     qs = (TransientPhotData.objects.filter(photometry__transient=transient, mag__isnull=False,
                                            photometry_id__in=scope.photometry_ids(transient))
+          .filter(point_filter if point_filter is not None else Q())
           .select_related("band", "photometry__instrument", "photometry__instrument__telescope", "photometry__obs_group")
           .order_by("-obs_date"))
     if allowed_instruments:

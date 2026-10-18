@@ -99,6 +99,14 @@ class TransientPhotData(PhotData):
     # Entity relationships ###
     # Required
     photometry = models.ForeignKey(TransientPhotometry, on_delete=models.CASCADE)
+    # The program (allocation) this point was taken under (#648, #714): access is per point, so
+    # forced photometry from several programs in one header follows each program's rules. Empty:
+    # the header's ``allocation`` is the default. No database constraint (an online ALTER on a big
+    # table); Django still sets it to NULL when the allocation is deleted.
+    allocation = models.ForeignKey(
+        'YSE_App.Allocation', null=True, blank=True, on_delete=models.SET_NULL, db_constraint=False,
+        related_name='photometry_points',
+        help_text="Program (allocation) this point was taken under, if known; empty: its header's.")
 
     ### Properties ###
     # Optional

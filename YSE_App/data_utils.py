@@ -776,7 +776,7 @@ def _data_quality_for(value, cache):
 
 
 def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
-                           mjdmatchmin, band_for, with_diffimg):
+                           mjdmatchmin, band_for, with_diffimg, allocation_id=None):
     """Match incoming points against ``existing_qs``, then update or insert rows.
 
     Same rules as the per-pair loop it replaces (#471):
@@ -879,6 +879,7 @@ def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
 
                 dq = _data_quality_for(p['data_quality'], dq_cache)
                 e = TransientPhotData(
+                    allocation_id=allocation_id,  # the program of these points, if the caller knows it (#714)
                     obs_date=p['obs_date'], flux=p['flux'], flux_err=p['flux_err'],
                     mag=p['mag'], mag_err=p['mag_err'], forced=p['forced'],
                     diffim=p['diffim'],
@@ -911,7 +912,7 @@ def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
             # Rows before a failing point are written, as they were one by one.
             flush()
             if state['bulk_written']:
-                if transientphot.allocation_id:
+                if transientphot.allocation_id or allocation_id:
                     # bulk_create fires no post_save: give the new points the program's
                     # standing access grants here (#648)
                     from YSE_App.services import access_actions
@@ -984,10 +985,7 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True,allocation=
         else:
             transientphot = transientphot[0]
             apply_upload_reference(transientphot, photometry.get('reference'))
-            if allocation is not None:
-                if not transientphot.allocation_id:
-                    program_links.link_dataset(None, transientphot, allocation, trusted=True)
-            else:
+            if allocation is None:  # a trusted caller's program goes on the new points, not the header (#714)
                 link_message = program_links.apply_upload_allocation(
                     user, transientphot, photometry.get('allocation'), new_dataset=False)
                 if link_message:
@@ -1012,6 +1010,7 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True,allocation=
                 transientphot, existingphot, user,
                 clobber=photdict['clobber'], mjdmatchmin=photdict['mjdmatchmin'],
                 band_for=band_for, with_diffimg=True,
+                allocation_id=allocation.pk if allocation is not None else None,
             )
         group_names = collaboration_groups_from_photometry_upload(photometry)
         if transientphot.pk:

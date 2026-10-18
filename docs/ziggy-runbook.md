@@ -823,6 +823,32 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="per-point-access"></a>
+
+### Access is per point; program link on each photometry point (2026-10-18, #714) migration applied by the deploy; one optional command
+
+**Ryan's decision (2026-10-18):** access to photometry is decided **per point**. A photometry header (one set per transient, instrument and observation group) only groups points for storage. Its collaboration `groups` are the default for its points, and per-point rules override them. "All of an object's points from one night" is just the default scope of an access action.
+
+**What changes with `DATA_ACCESS_GRANTS_ENABLED` on:**
+- Every page, table, plot, export, API and report shows exactly the points a viewer may see, including when that is only some of a header's points. A header is listed when at least one of its points is visible.
+- The program a point was taken under is stored on the point. Forced photometry from two programs in one header follows each program's standing grants.
+- Facility results put their request's program on the new points. They no longer claim an existing header.
+
+With the flag off, reads are unchanged.
+
+**Migration:** `0047_point_program_link` adds a nullable, indexed `allocation_id` column to `YSE_App_transientphotdata`. It has no foreign-key constraint, so MySQL adds it online without copying the table. Existing rows stay empty, and their header's link applies. Safe on the shared database.
+
+**Optional, once per database (both stacks share it), dry run first:**
+
+```
+<PYTHON> manage.py migrate_point_programs            # counts only
+<PYTHON> manage.py migrate_point_programs --apply
+```
+
+This copies each header's program onto its points that have none, and never changes a point's own link. Access does not change, because unlinked points already follow their header. Afterwards every point carries its program explicitly.
+
+**Expected:** `headers: H; points to link: N`, then `written: N`.
+
 <a id="staff-visibility"></a>
 
 ### Staff see only the data they have access to (2026-10-18, #706) check the script accounts below; no migration
@@ -2955,6 +2981,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v80, **migration applied by the deploy; one optional command** (`manage.py migrate_point_programs`, dry run by default). Access is per point ([#714](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/714)): every read returns exactly the visible points; migration `0047_point_program_link` adds a nullable, indexed `allocation_id` on photometry points (no FK constraint: online on MySQL); standing grants follow each point's program ([section "Access is per point"](#per-point-access)). No new package.
 * 2026-10-18 v79, **check the script accounts** (no migration). Staff see only the data they have access to ([#706](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/706)): staff and superusers no longer bypass collaboration groups or access rules on any data path; only `DATA_SERVICE_READER_USERNAMES` (the `[main] dblogin` account plus `[site_settings] DATA_SERVICE_READERS`) read all data; add any other cron or script account that must keep reading everything ([section "Staff see only the data they have access to"](#staff-visibility)). No new package.
 * 2026-10-18 v78, **nothing required** (no migration; one check recommended). Saved Explorer queries that feed pages are viewer-scoped ([#715](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/715)): for viewers who do not see all data, page-feeding queries may read only transient metadata tables; queries over photometry, spectra or their statistics are refused for them (staff, service accounts and the cache warmer unchanged). Rollback switch `PAGE_QUERY_TABLE_POLICY: off`. See the section "Saved Explorer queries that feed pages" above.
 * 2026-10-17 v77, **nothing required** (no migration). Data reported to TNS become and stay public ([#708](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/708)): after TNS confirms a report (manual dialog, autopublish, legacy DECam form; never the sandbox), exactly the photometry points and spectra that were sent get the Public group and lose their other collaboration groups; a photometry set of which only some points were sent is split (the sent points move to a new public header, the rest stay restricted). Reports queued before this deploy do not record their points, so earlier reports are not touched (`mark_tns_imports_public` covers TNS imports). Staff can no longer opt data in to autopublish (PIs and deputies only; existing opt-ins stay, staff may still opt out).

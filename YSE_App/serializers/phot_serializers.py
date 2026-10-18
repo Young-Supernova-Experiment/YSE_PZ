@@ -223,7 +223,8 @@ class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = TransientPhotData
-        fields = "__all__"
+        # Every field except the per-point program link (#714), set only by the ingest paths and data sharers.
+        exclude = ("allocation",)
         # follows the DataQuality M2M while that is in use (#81); not written through the API
         read_only_fields = ["quality_mask"]
 

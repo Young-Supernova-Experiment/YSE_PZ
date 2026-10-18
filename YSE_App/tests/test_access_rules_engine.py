@@ -221,16 +221,17 @@ class PrecedenceTests(_Fixture):
         point = self.points[("g", 0)]
         self.rule(point, ALLOW, user=self.outsider)
         self.assertEqual(self.points_of(self.outsider), self.all_points("pub") | {point.pk})
-        # set level: the G set is only partly visible, so it is not listed as a set
-        self.assertNotIn(self.sets["g"].pk, self.sets_of(self.outsider))
+        # access is per point (#714): the header is listed because one of its points is visible
+        self.assertIn(self.sets["g"].pk, self.sets_of(self.outsider))
         outsider = self.fresh(self.outsider)
         self.assertEqual(
             _pks(PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(outsider, self.transient.pk)),
             self.all_points("pub") | {point.pk})
         self.assertTrue(Transient.objects.filter(transient_access_q(outsider), pk=self.transient.pk).exists())
-        # both points allowed: the whole set is visible
+        # both points allowed: both points, the header still listed
         self.rule(self.points[("g", 1)], ALLOW, user=self.outsider)
         self.assertIn(self.sets["g"].pk, self.sets_of(self.outsider))
+        self.assertTrue(self.all_points("g") <= self.points_of(self.outsider))
 
     def test_partly_allowed_transient_is_listed(self):
         lonely = create_minimal_transient(self.staff, name="YSEare648b", ra=42.0, dec=-6.0)
@@ -251,8 +252,10 @@ class PrecedenceTests(_Fixture):
         point = self.points[("g", 0)]
         self.rule(point, DENY, user=self.member)
         self.assertEqual(self.points_of(self.member), self.all_points("pub", "g", "go") - {point.pk})
-        self.assertNotIn(self.sets["g"].pk, self.sets_of(self.member))
+        self.assertIn(self.sets["g"].pk, self.sets_of(self.member))  # its other point is visible (#714)
         self.assertIn(self.sets["go"].pk, self.sets_of(self.member))
+        self.rule(self.points[("g", 1)], DENY, user=self.member)
+        self.assertNotIn(self.sets["g"].pk, self.sets_of(self.member))  # no visible point left
         member = self.fresh(self.member)
         self.assertTrue(Transient.objects.filter(hidden_photometry_exists(member), pk=self.transient.pk).exists())
         self.assertEqual(self.points_of(self.member2), self.all_points("pub", "g", "go"))  # only that user

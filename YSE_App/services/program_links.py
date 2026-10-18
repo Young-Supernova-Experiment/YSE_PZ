@@ -1,7 +1,9 @@
 """Which program (``Allocation``) a dataset was taken under (#648, PR 3).
 
-``TransientPhotometry.allocation`` / ``TransientSpectrum.allocation`` say "these
-data were taken under this program". The link gives the program's access
+``TransientPhotData.allocation`` (per point, #714) and ``TransientSpectrum.allocation``
+say "these data were taken under this program". Access is per point: the
+photometry header's ``allocation`` is only the default for its points that
+have no link of their own (``access_actions.point_program_q``). The link gives the program's access
 rules (its standing grants, PR 2) authority over the data, so setting it is a
 sharing action.
 
@@ -354,4 +356,29 @@ def apply_backfill(plan: dict) -> int:
             continue
         _set_link(dataset, allocation_id, new_dataset=False)
         n += 1
+    return n
+
+
+# ----------------------------------------------------------- per point (#714)
+
+
+def point_link_plan():
+    """``{header_id: (allocation_id, points without a link)}``: header links to copy onto their points."""
+    from django.db.models import Count
+
+    from YSE_App.models import TransientPhotometry
+
+    rows = (TransientPhotometry.objects.filter(allocation__isnull=False, transientphotdata__allocation__isnull=True)
+            .values("pk", "allocation_id").annotate(n=Count("transientphotdata")).order_by("pk"))
+    return {row["pk"]: (row["allocation_id"], row["n"]) for row in rows}
+
+
+def apply_point_links(plan) -> int:
+    """Copy each header's program onto its points that have none (never overwrites a point's own). Returns points."""
+    from YSE_App.models import TransientPhotData
+
+    n = 0
+    for header_id, (allocation_id, _count) in sorted(plan.items()):
+        n += TransientPhotData.objects.filter(photometry_id=header_id, allocation__isnull=True).update(
+            allocation_id=allocation_id)
     return n

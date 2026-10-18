@@ -312,11 +312,16 @@ def _night_q(field: str, night_start, night_end) -> Q:
     return Q(**{field + "__gte": night_start, field + "__lt": night_end})
 
 
+def point_program_q(allocation_id) -> Q:
+    """``TransientPhotData`` of one program: the point's own link, else its header's (#714, access is per point)."""
+    return Q(allocation_id=allocation_id) | Q(allocation__isnull=True, photometry__allocation_id=allocation_id)
+
+
 def _grant_targets(grant, *, created_since=None, photometry_id=None, spectrum_id=None, point_id=None):
     """``(point ids, spectrum ids)`` a standing grant covers (optionally only new ones, or one dataset)."""
     from YSE_App.models import TransientPhotData, TransientSpectrum
 
-    points = TransientPhotData.objects.filter(photometry__allocation_id=grant.allocation_id).filter(
+    points = TransientPhotData.objects.filter(point_program_q(grant.allocation_id)).filter(
         _night_q("obs_date", grant.night_start, grant.night_end))
     spectra = TransientSpectrum.objects.filter(allocation_id=grant.allocation_id).filter(
         _night_q("obs_date", grant.night_start, grant.night_end))
@@ -665,13 +670,19 @@ def apply_standing_grants_to_set(photometry, *, linked: bool = False) -> WriteRe
     ``linked``: the set was just linked to the program after its data were taken (all its
     points count; see :func:`_apply`). Otherwise only points created after each grant.
     """
-    allocation_id = getattr(photometry, "allocation_id", None)
-    if not allocation_id:
-        return WriteResult()
-    grants = _program_grants(allocation_id)
-    if not grants:
-        return WriteResult()
-    return _apply(grants, linked=linked, photometry_id=photometry.pk)
+    from YSE_App.models import TransientPhotData
+
+    # Per point (#714): the programs of the set's points (their own links, else the header's).
+    programs = set(TransientPhotData.objects.filter(photometry_id=photometry.pk, allocation__isnull=False)
+                   .order_by().values_list("allocation_id", flat=True).distinct())
+    if getattr(photometry, "allocation_id", None):
+        programs.add(photometry.allocation_id)
+    total = WriteResult()
+    for allocation_id in sorted(programs):
+        grants = _program_grants(allocation_id)
+        if grants:
+            total = total.add(_apply(grants, linked=linked, photometry_id=photometry.pk))
+    return total
 
 
 def apply_standing_grants_to_spectrum(spectrum, *, linked: bool = False) -> WriteResult:
@@ -685,14 +696,17 @@ def apply_standing_grants_to_spectrum(spectrum, *, linked: bool = False) -> Writ
 
 
 def on_point_created(point) -> None:
-    """``post_save`` of a new ``TransientPhotData``: no query unless its set is linked to a program."""
-    photometry = point._state.fields_cache.get("photometry")
-    if photometry is None:
-        from YSE_App.models import TransientPhotometry
+    """``post_save`` of a new ``TransientPhotData``: no query unless the point (or its header) has a program."""
+    allocation_id = point.allocation_id
+    if not allocation_id:
+        photometry = point._state.fields_cache.get("photometry")
+        if photometry is None:
+            from YSE_App.models import TransientPhotometry
 
-        photometry = TransientPhotometry.objects.filter(pk=point.photometry_id).only("pk", "allocation_id").first()
-    if photometry is None or not photometry.allocation_id:
+            photometry = TransientPhotometry.objects.filter(pk=point.photometry_id).only("pk", "allocation_id").first()
+        allocation_id = getattr(photometry, "allocation_id", None)
+    if not allocation_id:
         return
-    grants = _program_grants(photometry.allocation_id)
+    grants = _program_grants(allocation_id)
     if grants:
         _apply(grants, point_id=point.pk)

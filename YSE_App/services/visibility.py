@@ -526,20 +526,29 @@ def user_can_list_transient(user: User, transient_id: int) -> bool:
 
 
 def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
-    """``Exists``: the transient at ``OuterRef(transient_ref)`` has a photometry set ``user`` may not see.
+    """Condition: the transient at ``OuterRef(transient_ref)`` has photometry ``user`` may not see.
 
-    A set is restricted when it has at least one collaboration group, and
-    visible when one of them is the user's (the ``PhotometryService`` rule).
-    Callers skip it for staff, who never have hidden photometry. Without a
+    Without access rules: a set is restricted when it has at least one
+    collaboration group, and visible when one of them is the user's (the
+    ``PhotometryService`` rule). With rules: any point hidden from the user
+    (access is per point, #714). Callers skip it for service readers. Without a
     hidden set the stored all-data ``TransientPhotStat`` row is exactly what
     the user may see.
     """
     from YSE_App.models import TransientPhotometry
 
     on_transient = TransientPhotometry.objects.filter(transient_id=OuterRef(transient_ref))
-    rules = _photometry_access_rules(user)
-    if not rules.empty:
-        # The exact complement of the central rule (#648).
+    points = photometry_points_visible_q(user)
+    if points is not None:
+        # Per point (#648, #714): a point the user may not see, or a header (with no points) they may not see.
+        from YSE_App.models import TransientPhotData
+
+        visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
+        hidden_point = TransientPhotData.objects.filter(photometry__transient_id=OuterRef(transient_ref)).exclude(
+            pk__in=TransientPhotData.objects.filter(points).values('pk'))
+        return Q(Exists(hidden_point)) | Q(Exists(on_transient.exclude(pk__in=visible)))
+    if not _photometry_access_rules(user).empty:
+        # Header-level rules only (the hook shape, #648 PR 0): the exact complement of the central rule.
         visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
         return Exists(on_transient.exclude(pk__in=visible))
     # No rules: the group rule's complement by group id, the indexed form #607 tuned.
