@@ -726,6 +726,14 @@ API_SERVICE_USERNAMES = [
     name for name in (config.get('main', 'dblogin', fallback='').strip(),)
     if name and not name.startswith('<')
 ]
+# Service readers (#706): the only accounts that read all photometry and spectra regardless of
+# collaboration groups and access rules (staff and superusers see only what they have access to).
+# The [main] dblogin ingest account plus [site_settings] DATA_SERVICE_READERS (comma-separated
+# usernames of cron and script accounts; empty by default). Usernames only, never secrets.
+DATA_SERVICE_READER_USERNAMES = sorted(set(API_SERVICE_USERNAMES) | {
+    name.strip() for name in config.get('site_settings', 'DATA_SERVICE_READERS', fallback='').split(',')
+    if name.strip() and not name.strip().startswith('<')
+})
 # SQL Explorer: superusers plus EXPLORER_ACCESS_GROUP when restricted; all
 # staff otherwise (see issue #102). Dashboard SQL is post-filtered separately.
 EXPLORER_RESTRICTED_ACCESS = _authz_flag('YSE_EXPLORER_RESTRICTED_ACCESS', 'EXPLORER_RESTRICTED_ACCESS')

@@ -7,7 +7,8 @@ detection, last observation, peak, rates, limits, the Last Det. / Last Obs.
 / Peak Mag columns, their sorting and filters, the PhotStat API and the
 search export) comes instead from one stored ``TransientPhotStatScope`` row:
 
-* **staff** (and superusers) see the all-data row;
+* **service readers** (``visibility.user_sees_everything``: the configured cron and script
+  accounts) see the all-data row; staff and superusers are viewers like everyone else (#706);
 * a viewer with **no hidden photometry** on the transient sees the all-data
   row too, because it is exactly their data (this covers every transient
   without restricted photometry, and a viewer who is in every restricting
@@ -22,7 +23,7 @@ search export) comes instead from one stored ``TransientPhotStatScope`` row:
 same transient may see the union of both scopes, which is not stored (the
 combinations grow with the number of groups). They are shown the larger of
 the two single-group scopes, so their values are correct for that scope but
-can miss the other group's points; staff and viewers in every restricting
+can miss the other group's points; service readers and viewers in every restricting
 group get exact values. This is the documented approximation (#607).
 
 **Before the backfill** a transient with restricted photometry has no scope
@@ -30,7 +31,7 @@ rows yet: a viewer with hidden photometry then sees no derived values for it
 (the stop-gap rule (c)), never the all-data values. The detail page computes
 the missing rows on the spot.
 
-SQL reads (filters and sorting) use :func:`stat_expression`: for staff the
+SQL reads (filters and sorting) use :func:`stat_expression`: for service readers the
 plain ``photstat__<field>`` LEFT JOIN, otherwise a ``CASE`` over one
 ``EXISTS`` (hidden photometry) and one correlated subquery on the indexed
 scope table. Python reads (table cells, the detail page, the API) use
@@ -159,7 +160,7 @@ def alias_stat_fields(queryset, user, fields: Iterable[str], *, transient_ref: s
                       stat_path: str = 'photstat__'):
     """``(queryset, {field: name})``: each stat ``field`` as ``user`` may see it, under ``name``.
 
-    For staff the names are the plain ``photstat__<field>`` paths (no alias,
+    For service readers the names are the plain ``photstat__<field>`` paths (no alias,
     the indexed LEFT JOIN as before); otherwise ``_vs_<field>`` aliases
     (``QuerySet.alias``, not selected) usable in ``filter`` and ``order_by``.
     """

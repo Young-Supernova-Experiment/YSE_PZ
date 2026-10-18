@@ -291,9 +291,10 @@ def quick_search_params(params):
 
 def _rows_visible_to(qs, user):
     """Restrict a ``TransientSpectrum`` queryset to what ``user`` may see (the central rule, #648)."""
-    if user is None or user.is_staff or user.is_superuser:
+    from YSE_App.services.visibility import spectrum_visible_q, user_sees_everything
+
+    if user is None or user_sees_everything(user):
         return qs
-    from YSE_App.services.visibility import spectrum_visible_q
 
     return qs.filter(spectrum_visible_q(user))
 
@@ -956,13 +957,15 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     def filter_visible_to_group(self, qs, name, value):
         """Transients with photometry or spectra shared with collaboration group ``value``.
 
-        A user may only ask about groups they belong to (staff: any group);
+        A user may only ask about groups they belong to (staff too, #706; service readers: any group);
         anything else matches nothing rather than leaking group membership.
         """
+        from YSE_App.services.visibility import user_sees_everything
+
         user = self._user()
         if user is None or not user.is_authenticated:
             return qs.none()
-        if not (user.is_staff or user.is_superuser):
+        if not user_sees_everything(user):
             if not user.groups.filter(name=value).exists():
                 return qs.none()
         phot = TransientPhotometry.objects.filter(transient_id=OuterRef('pk'), groups__name=value)

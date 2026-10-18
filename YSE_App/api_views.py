@@ -13,6 +13,7 @@ from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
 from YSE_App.services.visibility import filter_listed_transients, filter_transients_by_user_access
+from YSE_App.services.visibility import user_sees_everything as _sees_all_data  # service readers only (#706)
 from YSE_App.filters.transient_search import TransientSearchFilterSet
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
@@ -633,7 +634,7 @@ class AnalysisRunViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mix
         qs = (ExternalServiceRun.objects.filter(service__kind=ExternalService.KIND_ANALYSIS)
               .select_related("service", "service__analysis", "transient", "created_by").prefetch_related("files"))
         user = self.request.user
-        if not (user.is_staff or user.is_superuser):
+        if not _sees_all_data(user):
             visible = filter_transients_by_user_access(
                 user, Transient.objects.filter(service_runs__service__kind=ExternalService.KIND_ANALYSIS).distinct())
             qs = qs.filter(Q(created_by=user) | Q(transient__in=visible))
@@ -700,7 +701,7 @@ class TransientAnnotationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = (TransientAnnotation.objects.select_related("transient", "created_by", "modified_by", "service", "run")
               .prefetch_related("groups"))
-        if not (user.is_staff or user.is_superuser):
+        if not _sees_all_data(user):
             qs = qs.filter(Q(groups__isnull=True) | Q(groups__in=user.groups.all()))
             visible = filter_transients_by_user_access(user, Transient.objects.filter(annotations__isnull=False).distinct())
             qs = qs.filter(transient__in=visible)
@@ -1943,7 +1944,7 @@ class TransientInterestViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         status_value = (params.get("status") or "").strip()
         if status_value:
             qs = qs.filter(status=status_value)
-        if not (self.request.user.is_staff or self.request.user.is_superuser):
+        if not _sees_all_data(self.request.user):
             visible = filter_transients_by_user_access(
                 self.request.user, Transient.objects.filter(id__in=qs.values_list("transient_id", flat=True)),
             )

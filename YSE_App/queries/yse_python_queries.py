@@ -57,7 +57,7 @@ def annotate_recent_mag(qs, user=None):
     the same columns from ``yse_transient_photstat_v`` (docs/photstat.md).
 
     With ``user`` the value is the one that user may see (#607, #692): the
-    stored per-scope stat for a non-staff viewer with hidden photometry, so
+    stored per-scope stat for a viewer (staff included, #706) with hidden photometry, so
     filters on it cannot probe restricted points. Staff, and callers that
     pass no user, keep the all-data column.
     """
@@ -93,7 +93,7 @@ def _last_mag_sql(column, filters, offset, visible=None):
 
 
 def annotate_rising_transient_qs(qs, user=None):
-    """Rise-rate annotations; for a non-staff ``user`` only from photometry they may see (#692)."""
+    """Rise-rate annotations; for a ``user`` who is not a service reader only from photometry they may see (#692)."""
     visible = _visible_point_sql(user)
 
     g_filters = "('g-ZTF', 'g', 'V', 'gp', 'g-Sloan')"
