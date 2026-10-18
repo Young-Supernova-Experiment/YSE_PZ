@@ -823,6 +823,46 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="enable-access-rules"></a>
+
+### Enable access rules on yse\_experimental (#648 PR 6) when Ryan asks; first yse\_experimental only
+
+The access-rule work (#648 PRs 1-6a, #706, #714) is merged with `DATA_ACCESS_GRANTS_ENABLED` **off**, which is the default. Leave it off until Ryan asks. Then turn it on **on yse\_experimental first**. The stacks share the database, so the data steps below run once and serve both stacks; only the flag differs per stack. User guide: [`docs/data-access-rules.md`](data-access-rules.md). Developer notes: [`docs/access-rules-engine.md`](access-rules-engine.md).
+
+**1. Prerequisites (any order; each is a dry run first):**
+
+```
+<PYTHON> manage.py showmigrations YSE_App | tail -3      # 0045, 0046, 0047 applied
+<PYTHON> manage.py backfill_data_programs                # optional: link datasets to programs (counts only)
+<PYTHON> manage.py backfill_data_programs --apply
+<PYTHON> manage.py migrate_point_programs                # optional: copy header program links onto points
+<PYTHON> manage.py migrate_point_programs --apply
+```
+
+**2. Turn the flag on for yse\_experimental only.** Either:
+- set `DATA_ACCESS_GRANTS_ENABLED: True` under `[site_settings]` in `/data/yse_pz/YSE_PZ_experimental/YSE_PZ/settings.ini`; or
+- export `YSE_DATA_ACCESS_GRANTS_ENABLED=1` in that stack's service environment.
+
+Then restart its gunicorn.
+
+**3. Rebuild the stored PhotStat scopes once, so they include existing group rules:**
+
+```
+<PYTHON> manage.py backfill_photstat_scopes              # dry run
+<PYTHON> manage.py backfill_photstat_scopes --apply
+```
+
+After this, rule changes rebuild the affected scopes through the `photstat.sync_scopes` job, which the existing job runner (`RunQueuedJobs`) executes.
+
+**4. Check:**
+- **As a PI:** `/data_access/` (the dashboard) and `/data_access/programs/` load, and a transient's photometry tab shows "Access rules for this object's data".
+- **As a user outside a group:** the transient lists and tables match what they saw before, because no rules exist yet.
+- **The crons** keep uploading and reading (`DATA_SERVICE_READERS`, [section](#staff-visibility)).
+
+**Rollback:** set the flag back to `False` (or unset the variable) and restart. Every read returns to the collaboration-group rule at once, and the rules stay stored. If you rolled back after scopes were rebuilt with rules, run `backfill_photstat_scopes --apply` again.
+
+**Later, yse\_test and production:** repeat step 2 on that stack when Ryan asks. Step 3 is only needed once per database. Run it again after any period in which the flag was off on every stack while rules changed.
+
 <a id="per-point-access"></a>
 
 ### Access is per point; program link on each photometry point (2026-10-18, #714) migration applied by the deploy; one optional command
@@ -948,7 +988,7 @@ Options:
 
 **What changes with the flag off (now):** nothing users see, no migration. Every page, API, export and plot keeps today's rule with the same SQL. New photometry points and spectra of a program (an `Allocation`) that has a standing grant get their per-point rule at ingest, so they are ready when the flag is turned on.
 
-**What the flag will turn on (a later #648 PR adds the step to enable it on yse\_experimental):**
+**What the flag will turn on (steps to enable it: [section "Enable access rules"](#enable-access-rules)):**
 - Per-point allow and restrict rules for groups and single users. Precedence: a rule for the person beats a rule for their groups, a restriction beats an allow, and either beats the dataset's own groups. Public data is never hidden.
 - Someone who leaves a group keeps the points shared with it before they left.
 - Plot caches are keyed by the rules version, so they never cross users with different access.
@@ -992,7 +1032,7 @@ Options:
 
 **Migration:** `0043_data_access_grants` adds two new tables, `YSE_App_dataaccessgrant` and `YSE_App_allocationdelegate`, and one nullable, indexed column, `allocation_id`, on `YSE_App_transientphotometry` and on `YSE_App_transientspectrum` (no default needed, no data written). It is safe on the shared `YSE_test` database: develop code ignores the new tables and columns. The deploy applies it. **No new package.**
 
-**Flag, leave it off:** `DATA_ACCESS_GRANTS_ENABLED` (`[site_settings]`, or `YSE_DATA_ACCESS_GRANTS_ENABLED=1`) defaults to `False`. Do not set it yet; a later #648 PR adds the runbook step to enable it on yse\_experimental.
+**Flag, leave it off:** `DATA_ACCESS_GRANTS_ENABLED` (`[site_settings]`, or `YSE_DATA_ACCESS_GRANTS_ENABLED=1`) defaults to `False`. Do not set it until Ryan asks; the steps are in [section "Enable access rules"](#enable-access-rules).
 
 **Explorer:** both new tables say who may see which program's data, so they are hidden from SQL Explorer and refused by its SQL blacklist. If you limited the Explorer MySQL user to table-level grants ([Step D](#onboarding), [Step E](#authz-flags)), do **not** grant `SELECT` on `YSE_App_dataaccessgrant` or `YSE_App_allocationdelegate`. The new `allocation_id` columns need nothing: they are on tables the Explorer user can already read.
 
@@ -2981,6 +3021,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v81, **nothing required now** (docs only; the flag stays off). Access rules documentation ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 6): user guide `docs/data-access-rules.md`, developer notes `docs/access-rules-engine.md`, and the steps to enable `DATA_ACCESS_GRANTS_ENABLED` on yse\_experimental first, with `backfill_photstat_scopes --apply` ([section "Enable access rules"](#enable-access-rules)).
 * 2026-10-18 v80, **migration applied by the deploy; one optional command** (`manage.py migrate_point_programs`, dry run by default). Access is per point ([#714](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/714)): every read returns exactly the visible points; migration `0047_point_program_link` adds a nullable, indexed `allocation_id` on photometry points (no FK constraint: online on MySQL); standing grants follow each point's program ([section "Access is per point"](#per-point-access)). No new package.
 * 2026-10-18 v79, **check the script accounts** (no migration). Staff see only the data they have access to ([#706](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/706)): staff and superusers no longer bypass collaboration groups or access rules on any data path; only `DATA_SERVICE_READER_USERNAMES` (the `[main] dblogin` account plus `[site_settings] DATA_SERVICE_READERS`) read all data; add any other cron or script account that must keep reading everything ([section "Staff see only the data they have access to"](#staff-visibility)). No new package.
 * 2026-10-18 v78, **nothing required** (no migration; one check recommended). Saved Explorer queries that feed pages are viewer-scoped ([#715](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/715)): for viewers who do not see all data, page-feeding queries may read only transient metadata tables; queries over photometry, spectra or their statistics are refused for them (staff, service accounts and the cache warmer unchanged). Rollback switch `PAGE_QUERY_TABLE_POLICY: off`. See the section "Saved Explorer queries that feed pages" above.

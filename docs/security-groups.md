@@ -5,6 +5,8 @@ YSE uses Django **collaboration groups** (`auth.Group`) on photometry, spectra, 
 ## Rules
 
 - **Empty `groups` M2M** on photometry/spectra/resources: visible to all logged-in users (unchanged).
+- **Photometry and spectra are decided per point** (#714): a header's `groups` are the default for its points; with `DATA_ACCESS_GRANTS_ENABLED` per-point access rules override them ([`data-access-rules.md`](data-access-rules.md)).
+- **Staff and superusers see only the data they have access to** (#706); only the configured service readers (`DATA_SERVICE_READER_USERNAMES`, cron and script accounts) read all data. Staff keep their administrative actions.
 - **Every user** is a member of the `Public` collaboration group (signal on user create + `ensure_users_in_public_group` for backfill).
 - **New transient comments**: private by default (`Log.is_public=False` with `Log.groups` set to shared collaboration groups). Opt-in `is_public=True` for all collaborators who can open the transient.
 - **Legacy comments** (before migration `0005_log_visibility`): `is_public=True`, no groups — unchanged visibility.
