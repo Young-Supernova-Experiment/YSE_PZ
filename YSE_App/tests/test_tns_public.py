@@ -9,7 +9,7 @@ from rest_framework.exceptions import ValidationError
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.jobs import run_pass
-from YSE_App.models import TransientPhotData, TransientPhotometry, TransientSpectrum
+from YSE_App.models import TransientPhotData, TransientPhotometry, TransientSpecData, TransientSpectrum
 from YSE_App.services import access_actions, data_sharing, tns_public
 from YSE_App.sharing import tns
 from YSE_App.tests import test_access_rules_engine as engine
@@ -109,7 +109,13 @@ class ReportedDataBecomePublicTests(ss.SharingBase):
     def test_accepted_classification_makes_the_spectrum_public(self):
         self.transient.name = "2026abc"
         self.transient.save()
-        self.report(kind=tns.KIND_CLASSIFICATION, spectrum=self.spectrum, classification="SN Ia")
+        for i in range(3):
+            TransientSpecData.objects.create(spectrum=self.spectrum, wavelength=4000 + 10 * i, flux=1e-16 * (i + 1),
+                                             created_by=self.staff, modified_by=self.staff)
+        self.service.config = dict(self.service.config, instrument_ids={self.spectrum.instrument.name: 172})
+        self.service.save()
+        submission = self.report(kind=tns.KIND_CLASSIFICATION, spectrum=self.spectrum, classification="SN Ia")
+        self.assertEqual(submission.status, "accepted", submission.error)
         self.assertEqual(_group_names(self.spectrum), {PUBLIC_COLLABORATION_GROUP_NAME})
         self.assertEqual(_group_names(self.header), {"tnspub-private"})  # no photometry was sent
 
