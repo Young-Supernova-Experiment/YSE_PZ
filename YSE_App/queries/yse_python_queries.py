@@ -3,6 +3,7 @@ from django.db.models import DateTimeField, ExpressionWrapper, F, Q
 from django.db.models.functions import Greatest
 from django.db.models.expressions import RawSQL
 from datetime import timedelta
+import inspect
 import astropy.coordinates as cd
 import astropy.units as u
 import numpy as np
@@ -31,8 +32,20 @@ def get_python_query(name):
     return func
 
 
-def run_python_query(name):
-    return get_python_query(name)()
+def run_python_query(name, user=None):
+    """Run the saved Python query ``name`` for ``user`` (#687).
+
+    Queries that take a ``user`` (the rising-transient family) select rows
+    using only the photometry that viewer may see, so a row cannot appear or
+    vanish because of data they cannot read. Staff and ``user=None`` keep the
+    all-data selection. Queries without a ``user`` parameter read no
+    photometry (position and tag selections) and are called as before. The
+    caller still applies ``filter_listed_transients`` to the rows.
+    """
+    func = get_python_query(name)
+    if user is not None and 'user' in inspect.signature(func).parameters:
+        return func(user=user)
+    return func()
 
 def annotate_recent_mag(qs, user=None):
     """``recent_mag`` for the saved-query and planning tables: the stored last detection (#270).

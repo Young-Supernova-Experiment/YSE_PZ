@@ -241,3 +241,51 @@ class YseFieldsPageTests(_Fixture):
         self.assertEqual(self.names(self.member, "17.5"), ["2026risa"])
         self.assertEqual(self.names(self.staff, "17.5"), ["2026risa"])
         self.assertEqual(self.names(self.outsider, "18.5"), ["2026risb"])
+
+
+@override_settings(ONBOARDING_GATE_ENABLED=False)
+class SavedPythonQueryTests(_Fixture):
+    """``run_python_query`` and its callers select on visible photometry (#687)."""
+
+    def run_query(self, user):
+        from YSE_App.queries.yse_python_queries import run_python_query
+
+        return sorted(run_python_query("rising_transient_queryset", user).values_list("name", flat=True))
+
+    def test_outsider_selection_unchanged_member_and_staff_see_effect(self):
+        before = self.run_query(self.outsider)
+        self.assertEqual(before, ["2026risb"])
+        self.add_private_points()
+        self.assertEqual(self.run_query(self.outsider), before)
+        self.assertEqual(self.run_query(self.member), ["2026risa"])
+        self.assertEqual(self.run_query(self.staff), ["2026risa"])
+
+    def test_no_user_keeps_all_data_selection(self):
+        from YSE_App.queries.yse_python_queries import run_python_query
+
+        self.add_private_points()
+        self.assertEqual(
+            sorted(run_python_query("rising_transient_queryset").values_list("name", flat=True)), ["2026risa"])
+
+    def test_query_without_user_parameter_still_runs(self):
+        from unittest import mock
+
+        from YSE_App.queries import yse_python_queries
+
+        sentinel = object()
+        with mock.patch.dict(yse_python_queries.python_query_reg.all, {"sqv_q": lambda: sentinel}):
+            self.assertIs(yse_python_queries.run_python_query("sqv_q", self.outsider), sentinel)
+
+    def test_query_api_selection_follows_viewer(self):
+        def names(user):
+            client = Client()
+            client.force_login(user)
+            resp = client.get("/query_api/rising_transient_queryset/")
+            self.assertEqual(resp.status_code, 200)
+            return sorted(t["transient_name"] for t in resp.json()["transients"])
+
+        before = names(self.outsider)
+        self.add_private_points()
+        self.assertEqual(names(self.outsider), before)
+        self.assertEqual(names(self.member), ["2026risa"])
+        self.assertEqual(names(self.staff), ["2026risa"])

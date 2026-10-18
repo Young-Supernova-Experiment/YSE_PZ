@@ -267,7 +267,7 @@ def yse_sky(request):
             try:
                 cursor = connections['explorer'].cursor()
                 cursor.execute(query.sql.replace('%','%%'), ())
-                transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
+                transients = filter_listed_transients(request.user, Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date'))
                 cursor.close()
             except:
                 # Query bombed
@@ -278,7 +278,7 @@ def yse_sky(request):
                 return HttpResponseNotFound("Invalid Query")
             query = query[0]
             try:
-                transients = yse_python_queries.run_python_query(query.python_query)
+                transients = filter_listed_transients(request.user, yse_python_queries.run_python_query(query.python_query, request.user))
             except KeyError:
                 raise Http404('Invalid Query')
     else:
