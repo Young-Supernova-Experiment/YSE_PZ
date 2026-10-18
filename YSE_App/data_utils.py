@@ -1638,16 +1638,21 @@ def query_api(request,query_name):
     query = Query.objects.filter(title=title).first()
     if query is not None:
         if not _query_api_may_run(request.user, query): raise Http404('Invalid Query')
-        if not dashboard_sql_is_supported(query.sql): raise Http404('Invalid Query')
+        scoped_viewer = request.user if filter_rows else None
+        if not dashboard_sql_is_supported(query.sql, scoped_viewer): raise Http404('Invalid Query')
         # Cached for QUERY_API_CACHE_SECONDS on the capped explorer connection (#474).
         from YSE_App.common.db_time_cap import QueryTimeout
         from YSE_App.views import run_explorer_query_rows_cached
         try:
-            field_names, field_vals = run_explorer_query_rows_cached(query)
+            field_names, field_vals = run_explorer_query_rows_cached(query, user=scoped_viewer)
         except QueryTimeout as exc:
             return JsonResponse({"message": "query %s: %s" % (query.title, exc)}, status=504)
         if filter_rows:
             field_vals = _query_api_filter_visible_rows(request.user, field_names, field_vals)
+        # Derived-value columns may select rows but are not returned to a viewer who
+        # cannot see the data (#715).
+        from YSE_App.services.page_query_scope import selection_only_result
+        field_names, field_vals = selection_only_result(query.sql, scoped_viewer, field_names, field_vals)
     else:
         try: transients = yse_python_queries.run_python_query(title, request.user if filter_rows else None)
         except KeyError: raise Http404('Invalid Query')

@@ -137,9 +137,31 @@ endpoints (`/query_api/`, the bulk photometry download, the pointing tool) and t
 * AI summaries are written from collaboration-wide data, so their statistics are the public scope.
 * Read-time grants (#648) plug in at `_extra_access_grants_q` and `_extra_photometry_grants_q` in
   `services/visibility.py`; both are empty today.
-* Not covered: the YSE survey-planning pages (`/yse_planning/`, `/yse_sky/`, `/yse_fields/`) and the
-  selection SQL of saved Explorer and Python queries still read all photometry (their table cells are
-  scoped); follow-up #687.
+* Not covered here: the YSE survey-planning pages (`/yse_planning/`, `/yse_sky/`, `/yse_fields/`);
+  saved Python queries are covered by #687 and saved Explorer queries by the next section.
+
+## Selection rule for saved Explorer queries (#715)
+
+* **Derived values** (for example SALT fit parameters) may be used to search and select, even when they
+  come from data the viewer cannot see, but are never displayed to that viewer.
+* **Actual data**, and values that reveal it (last detection, number of points), are not used for
+  selection, search, sorting or display unless the viewer can see the underlying data. Access is decided
+  per photometry point or spectrum, never per header.
+* Saved Explorer (SQL) queries behind pages are staff-written and run over the whole database, so for a
+  viewer who does not see all data (`YSE_App/services/page_query_scope.py`) they may read only transient
+  metadata tables (`DEFAULT_ALLOWED_TABLES`). A query that names any other application table, any
+  authentication or session table, or `information_schema` is refused for that viewer: the dashboard
+  section shows the reason, `/query_api/`, the pointing tool and the other page views answer 404 (403 for
+  change-status-for-query). The check runs before the shared name cache is read, so a result cached from a
+  staff run is never served to a restricted viewer. Staff, superusers, `/query_api/` service accounts and
+  the cache warmer (`user=None`) are unchanged; SQL Explorer is unchanged.
+* A derived-value view can be offered to page queries by listing it in `PAGE_QUERY_EXTRA_ALLOWED_TABLES`.
+  Queries that read such a view may select on it; `/query_api/` returns a restricted viewer only the
+  identifying columns (name, id, position). `PAGE_QUERY_TABLE_POLICY: off` restores the old behaviour.
+* The `/search/` filters, orderings and the API already use only visible data or the viewer's scoped
+  derived values (#607), so they follow the rule. A saved search that filters on photometry statistics
+  compiles to SQL over the statistics tables; those are refused for restricted viewers, so such a saved
+  search keeps working for staff only until viewer-scoped views exist.
 
 ## Saving a search as an SQL query (personal dashboard)
 

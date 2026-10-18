@@ -308,14 +308,14 @@ class ExplorerQueryCacheSettingTests(TestCase):
     def test_run_explorer_query_cached_uses_the_setting_and_refresh(self):
         with mock.patch.object(views_module, "connections", _ExplorerToDefault()), \
                 mock.patch.object(views_module.cache, "set", wraps=views_module.cache.set) as cache_set:
-            names = views_module.run_explorer_query_cached(self.query)
+            names = views_module.run_explorer_query_cached(self.query, user=None)
             self.assertEqual(names, ["cache-ttl-1"])
             self.assertEqual(cache_set.call_args.kwargs["timeout"], 1234)
             # warm hit: no second cache.set
-            views_module.run_explorer_query_cached(self.query)
+            views_module.run_explorer_query_cached(self.query, user=None)
             self.assertEqual(cache_set.call_count, 1)
             # refresh re-runs and re-stores even though the entry is warm
-            views_module.run_explorer_query_cached(self.query, refresh=True, timeout=99)
+            views_module.run_explorer_query_cached(self.query, refresh=True, timeout=99, user=None)
             self.assertEqual(cache_set.call_count, 2)
             self.assertEqual(cache_set.call_args.kwargs["timeout"], 99)
 
@@ -373,9 +373,9 @@ class DashboardCacheWarmerTests(TestCase):
         seen_caps = []
         real = views_module.run_explorer_query_cached
 
-        def spy(query, timeout=None, refresh=False):
+        def spy(query, timeout=None, refresh=False, user=None):
             seen_caps.append(db_time_cap.explorer_cap_ms())
-            return real(query, timeout=timeout, refresh=refresh)
+            return real(query, timeout=timeout, refresh=refresh, user=user)
 
         with override_settings(EXPLORER_QUERY_MAX_EXECUTION_MS=20000, EXPLORER_QUERY_CACHE_SECONDS=555), \
                 mock.patch.object(views_module, "connections", _ExplorerToDefault()), \

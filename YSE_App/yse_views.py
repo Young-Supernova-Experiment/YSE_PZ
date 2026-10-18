@@ -19,6 +19,7 @@ from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonRespons
 from YSE_App.queries.raw_sql import DAYS_SINCE_DISC_SQL
 from YSE_App.queries.yse_python_queries import annotate_recent_mag
 from YSE_App.services.visibility import filter_listed_transients, visible_photometry_ids_q
+from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
 
 @login_required
 def select_yse_fields(request):
@@ -264,6 +265,7 @@ def yse_sky(request):
             if 'yse_app_transient' not in query.sql.lower(): raise Http404('Invalid Query')
             if 'name' not in query.sql.lower(): raise Http404('Invalid Query')
             if not query.sql.lower().startswith('select'): raise Http404('Invalid Query')
+            if not dashboard_sql_is_supported(query.sql, request.user): raise Http404('Invalid Query')
             try:
                 cursor = connections['explorer'].cursor()
                 cursor.execute(query.sql.replace('%','%%'), ())
