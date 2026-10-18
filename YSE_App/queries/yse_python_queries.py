@@ -343,3 +343,111 @@ HAVING sep < 3.3
     qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(90)).filter(name__in=(x[0] for x in cursor))
 
     return qs
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard queries rewritten from saved SQL (#720)
+#
+# Each one selects the same transients as the saved SQL query named in its
+# docstring (``YSE_App/queries/dashboard_saved_queries.py`` holds that SQL), but
+# only from photometry the viewer may see, so a row cannot appear or vanish
+# because of a point they cannot read. Staff with access to everything and
+# ``user=None`` keep the all-data selection. The caller still applies
+# ``filter_listed_transients``.
+# --------------------------------------------------------------------------- #
+
+def _visible_points(user=None):
+    """``TransientPhotData`` limited to the points ``user`` may see (all points for ``user=None``)."""
+    from YSE_App.services.visibility import visible_photometry_ids_q
+
+    points = TransientPhotData.objects.all()
+    if user is None:
+        return points
+    visible = visible_photometry_ids_q(user)
+    return points if visible is None else points.filter(visible)
+
+
+def _with_snr(points):
+    from django.db.models import ExpressionWrapper
+
+    return points.annotate(
+        dash_snr=ExpressionWrapper(F('flux') / F('flux_err'), output_field=FloatField()))
+
+
+@python_query_reg
+def yse_magnitude_limited_sample(user=None):
+    """YSE Magnitude-Limited Sample (min mag < 18.6): YSE-tagged 201x/202x names whose brightest clean point is < 18.6.
+
+    A clean point has a magnitude, flux/flux_err > 3 and no data-quality flag.
+    """
+    from django.db.models import Min
+
+    bright = _with_snr(_visible_points(user)).filter(
+        mag__isnull=False, dash_snr__gt=3, data_quality__isnull=True,
+    ).order_by().values('photometry__transient_id').annotate(
+        dash_min_mag=Min('mag')).filter(dash_min_mag__lt=18.6).values('photometry__transient_id')
+    return Transient.objects.filter(pk__in=bright, tags__name='YSE').filter(
+        Q(name__startswith='202') | Q(name__startswith='201'))
+
+
+def _recent_detection_ids(user, mag_err, first_days, latest_days, min_span_days):
+    """Ids of transients with more than two qualifying points, first seen within
+    ``first_days`` and last seen within ``latest_days`` (calendar days, like TO_DAYS).
+
+    ``min_span_days`` > 0 also requires the last point to be on a later day than the first.
+    """
+    from django.db.models import Count, Max, Min
+
+    today = datetime.datetime.utcnow().date()
+    midnight = lambda d: datetime.datetime(d.year, d.month, d.day, tzinfo=datetime.timezone.utc)
+    latest_cut = midnight(today - datetime.timedelta(days=latest_days - 1))
+    first_cut = midnight(today - datetime.timedelta(days=first_days - 1))
+    qualifying = _with_snr(_visible_points(user)).filter(
+        Q(dash_snr__gt=2) | Q(mag_err__lt=mag_err) | (Q(mag_err__isnull=True) & Q(mag__isnull=False)))
+    rows = qualifying.order_by().values('photometry__transient_id').annotate(
+        dash_first=Min('obs_date'), dash_last=Max('obs_date'), dash_n=Count('obs_date'),
+    ).filter(dash_last__gte=latest_cut, dash_first__gte=first_cut, dash_n__gt=2).values_list(
+        'photometry__transient_id', 'dash_first', 'dash_last')
+    return [tid for tid, first, last in rows
+            if (last.date() - first.date()).days >= min_span_days]
+
+
+@python_query_reg
+def fast_and_young_targets(user=None):
+    """Fast & Young Target Search: unclassified, first detection within 8 days, last within 3, more than one day apart."""
+    ids = _recent_detection_ids(user, mag_err=0.2, first_days=8, latest_days=3, min_span_days=1)
+    return Transient.objects.filter(pk__in=ids, TNS_spec_class__isnull=True).order_by('-pk')
+
+
+@python_query_reg
+def new_transients_last_two_days(user=None):
+    """New Transients Last Two Days: not a classified SN Ia, first detection within 15 days, last within 2."""
+    ids = _recent_detection_ids(user, mag_err=0.35, first_days=15, latest_days=2, min_span_days=0)
+    return Transient.objects.filter(pk__in=ids).filter(
+        Q(TNS_spec_class__isnull=True) | ~Q(TNS_spec_class='SN Ia'))
+
+
+@python_query_reg
+def interesting_new_targets(user=None):
+    """Interesting New Targets: status New with a host, E(B-V) < 0.5, and a brightest visible magnitude < 17
+    or a redshift (own or host) in (0, 0.01] with a projected host offset < 40 kpc."""
+    from django.db.models import ExpressionWrapper, Min, OuterRef, Subquery
+    from django.db.models.functions import ACos, Abs, Coalesce, Cos, Power, Radians, Sin
+
+    brightest = Subquery(
+        _visible_points(user).filter(photometry__transient_id=OuterRef('pk'), mag__isnull=False)
+        .order_by().values('photometry__transient_id').annotate(m=Min('mag')).values('m')[:1],
+        output_field=FloatField())
+    z = Coalesce('redshift', 'host__redshift')
+    offset_kpc = ExpressionWrapper(
+        ACos(Sin(Radians(F('dec'))) * Sin(Radians(F('host__dec')))
+             + Cos(Radians(F('dec'))) * Cos(Radians(F('host__dec')))
+             * Cos(Radians(Abs(F('ra') - F('host__ra')))))
+        * (3e+5 * F('dash_z') / 73) / Power(1.0 + F('dash_z'), 2) * 1000,
+        output_field=FloatField())
+    return (Transient.objects.filter(status_id=1, host__isnull=False, mw_ebv__lt=0.5)
+            .annotate(dash_min_mag=brightest, dash_z=ExpressionWrapper(z, output_field=FloatField()))
+            .filter(dash_min_mag__isnull=False)
+            .annotate(dash_offset_kpc=offset_kpc)
+            .filter(Q(dash_min_mag__lt=17)
+                    | (Q(dash_z__gt=0) & Q(dash_z__lte=0.01) & Q(dash_offset_kpc__lt=40))))
