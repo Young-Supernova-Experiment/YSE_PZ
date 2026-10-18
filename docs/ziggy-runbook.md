@@ -889,6 +889,40 @@ This copies each header's program onto its points that have none, and never chan
 
 **Expected:** `headers: H; points to link: N`, then `written: N`.
 
+### Dashboard queries as viewer-scoped Python queries (2026-10-18, #720) no migration; one command per database, plus a mapping for the queries only the database knows
+
+**Why.** Since #716 a saved SQL query that reads photometry or spectra is refused for anyone who cannot see all data, so sections such as the magnitude-limited sample and Fast & Young are empty for them. Python queries select only from the viewer's visible data (#710), so the same selections now exist as Python queries:
+
+| Saved SQL query (title) | Python query |
+|---|---|
+| YSE Magnitude-Limited Sample (min mag < 18.6) | `yse_magnitude_limited_sample` |
+| Fast & Young Target Search | `fast_and_young_targets` |
+| New Transients Last Two Days | `new_transients_last_two_days` |
+| Interesting New Targets | `interesting_new_targets` |
+
+`best_spectrum_id` (derived from spectra) can no longer be read by saved queries that feed pages for viewers who do not see all data. Explorer itself is unchanged.
+
+**1. Dry run (changes nothing):**
+
+```
+<PYTHON> manage.py switch_dashboard_queries
+```
+
+**Expected:** one `SWITCH` line per dashboard section that uses one of the four queries, then `UNMAPPED` lines for every other saved query on a dashboard that still reads photometry or spectra (with its id, title and the tables). Send Ryan the `UNMAPPED` lines. Their SQL is only in the production database, so each needs a Python query written by someone who can read it; the section is switched once that exists (`--map "<id or title>=<python name>"`, or `--mapping-file map.json`). Candidates named in the repository: `YSE Forced Phot Only` and `Auto Ignore` (SQL only in the database); `YSE Volume-Limited Sample (z < 0.06)` reads no photometry and needs nothing.
+
+**2. Apply:**
+
+```
+<PYTHON> manage.py switch_dashboard_queries --apply
+<PYTHON> manage.py dedupe_dashboard_queries
+```
+
+The first writes a JSON backup (path printed) and switches the sections; the SQL queries stay in Explorer. The second removes a duplicate section if a user already had the Python query. **Expected:** `Switched N section(s)`, then `Duplicate groups: 0` (or a short list that is removed).
+
+**Undo:** `<PYTHON> manage.py switch_dashboard_queries --revert <backup.json> --apply`.
+
+**Check:** a signed-in user who is in no collaboration group opens their dashboard: the four sections list transients (from public data), none empty with a failure notice.
+
 <a id="staff-visibility"></a>
 
 ### Staff see only the data they have access to (2026-10-18, #706) check the script accounts below; no migration
@@ -3021,6 +3055,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v82, **one command per database** (`manage.py switch_dashboard_queries`, dry run by default; no migration). Dashboard SQL queries as viewer-scoped Python queries ([#720](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/720)): the magnitude-limited sample, Fast & Young, New Transients Last Two Days and Interesting New Targets exist as Python queries that select only from photometry the viewer may see; the command repoints dashboard sections to them (SQL stays in Explorer) and lists the saved queries that still need a Python equivalent; `best_spectrum_id` is no longer readable by page-feeding queries for viewers who do not see all data. Steps in the section "Dashboard queries as viewer-scoped Python queries".
 * 2026-10-18 v81, **nothing required now** (docs only; the flag stays off). Access rules documentation ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 6): user guide `docs/data-access-rules.md`, developer notes `docs/access-rules-engine.md`, and the steps to enable `DATA_ACCESS_GRANTS_ENABLED` on yse\_experimental first, with `backfill_photstat_scopes --apply` ([section "Enable access rules"](#enable-access-rules)).
 * 2026-10-18 v80, **migration applied by the deploy; one optional command** (`manage.py migrate_point_programs`, dry run by default). Access is per point ([#714](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/714)): every read returns exactly the visible points; migration `0047_point_program_link` adds a nullable, indexed `allocation_id` on photometry points (no FK constraint: online on MySQL); standing grants follow each point's program ([section "Access is per point"](#per-point-access)). No new package.
 * 2026-10-18 v79, **check the script accounts** (no migration). Staff see only the data they have access to ([#706](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/706)): staff and superusers no longer bypass collaboration groups or access rules on any data path; only `DATA_SERVICE_READER_USERNAMES` (the `[main] dblogin` account plus `[site_settings] DATA_SERVICE_READERS`) read all data; add any other cron or script account that must keep reading everything ([section "Staff see only the data they have access to"](#staff-visibility)). No new package.

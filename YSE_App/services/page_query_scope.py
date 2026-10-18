@@ -54,6 +54,11 @@ DEFAULT_ALLOWED_TABLES = frozenset(
     }
 )
 
+#: Transient columns a viewer-scoped page query may not read (#720). They are
+#: derived from spectra, whose visibility is decided per spectrum by the
+#: application, so a scoped viewer must not select on or receive them.
+DENIED_COLUMNS = frozenset({"best_spectrum_id"})
+
 # Non-application tables that must never back a page query.
 _DENIED_PREFIXES = (
     "auth_", "authtoken_", "axes_", "otp_", "auditlog_", "django_", "sessions_",
@@ -96,6 +101,11 @@ def disallowed_tables(sql: str, allowed: Optional[Iterable[str]] = None) -> list
     return sorted(found)
 
 
+def disallowed_columns(sql: str) -> list:
+    """Sorted column names in ``sql`` that a viewer-scoped page query may not read."""
+    return sorted({t.lower() for t in _TOKEN_RE.findall(sql or "") if t.lower() in DENIED_COLUMNS})
+
+
 def viewer_is_scoped(user) -> bool:
     """True when ``user`` is a page viewer whose data access is limited.
 
@@ -112,6 +122,12 @@ def page_query_table_refusal(sql: str, user) -> Optional[str]:
     """Why ``user`` may not use ``sql`` to feed a page, or None."""
     if not viewer_is_scoped(user):
         return None
+    bad_columns = disallowed_columns(sql)
+    if bad_columns:
+        return (
+            "the query reads %s; a saved query that feeds a page may not read columns derived "
+            "from spectra for viewers who do not see all data" % ", ".join(bad_columns)
+        )
     bad = disallowed_tables(sql)
     if not bad:
         return None
@@ -151,11 +167,17 @@ def selection_only_result(sql: str, user, field_names, rows):
     viewer only gets identifying columns back (#715). Other viewers and queries
     are returned unchanged.
     """
-    if not viewer_is_scoped(user) or not reads_extra_tables(sql):
+    if not viewer_is_scoped(user):
         return field_names, rows
-    keep = [i for i, f in enumerate(field_names) if str(f).lower() in _IDENTIFYING_COLUMNS]
-    if not keep:
-        keep = [0] if field_names else []
+    if not reads_extra_tables(sql):
+        # ``SELECT *`` over the transient table must not return a spectrum-derived column (#720).
+        keep = [i for i, f in enumerate(field_names) if str(f).lower() not in DENIED_COLUMNS]
+        if len(keep) == len(field_names):
+            return field_names, rows
+    else:
+        keep = [i for i, f in enumerate(field_names) if str(f).lower() in _IDENTIFYING_COLUMNS]
+        if not keep:
+            keep = [0] if field_names else []
     return (
         [field_names[i] for i in keep],
         [tuple(row[i] for i in keep) for row in rows],
