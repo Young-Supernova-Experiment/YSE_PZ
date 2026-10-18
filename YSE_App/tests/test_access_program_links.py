@@ -207,7 +207,8 @@ class LinkTests(_Fixture):
         night, _ = access_actions.program_action(self.prog_pi, self.alloc, effect="allow", grantee_user=self.deputy,
                                                  night_start=start, night_end=start + datetime.timedelta(days=4))
         stop = self.now - datetime.timedelta(hours=36)  # between the two points of a set (taken 1 and 2 days ago)
-        StandingAccessGrant.objects.filter(pk__in=[program.pk, night.pk]).update(stopped_at=stop)
+        StandingAccessGrant.objects.filter(pk__in=[program.pk, night.pk]).update(  # as if made earlier and stopped
+            created_at=stop - datetime.timedelta(days=10), stopped_at=stop)
         phot = self.phot(groups=(self.g,))
         after_stop = TransientPhotData.objects.filter(photometry=phot, obs_date__gte=stop).get()
         before_stop = TransientPhotData.objects.filter(photometry=phot, obs_date__lt=stop).get()

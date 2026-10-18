@@ -224,8 +224,9 @@ class ApiTests(_Fixture):
         resp = client.post(url, {"effect": "allow", "user": self.outsider.username}, content_type="application/json")
         self.assertEqual(resp.json()["written"]["created"], 1)
         remove = reverse("api-access-dataset-rules-remove", args=["spectrum", self.spec.pk])
+        # the outsider now sees the spectrum (the allow) but may not change its access
         self.assertEqual(self.client_for(self.outsider).post(remove, {"user": self.outsider.username},
-                                                             content_type="application/json").status_code, 404)
+                                                             content_type="application/json").status_code, 403)
         resp = client.post(remove, {"user": self.outsider.username}, content_type="application/json")
         self.assertEqual(resp.json()["removed"], 0)  # forward: earlier data stay visible
         resp = client.post(remove, {"user": self.outsider.username, "backwards": True},
