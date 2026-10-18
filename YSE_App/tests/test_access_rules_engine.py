@@ -471,18 +471,20 @@ class ActionTests(_Fixture):
         with self.assertRaises(ValidationError):
             access_actions.dataset_action(self.pi_user, dataset, effect=ALLOW, grantee_group=self.public)
 
-    def test_dataset_allow_then_shared_points_stay_shared(self):
+    def test_a_pi_may_restrict_shared_data(self):
         before = access_rules.current_version()
         result = access_actions.dataset_action(self.pi_user, self.sets["g"], effect=ALLOW, grantee_user=self.outsider)
         self.assertEqual(result.created, 2)
         self.assertGreater(access_rules.current_version(), before)
         self.assertTrue(self.all_points("g") <= self.points_of(self.outsider))
+        # restricting data already shared with them (Ryan, 2026-10-17): the allow becomes a deny
         result = access_actions.dataset_action(self.pi_user, self.sets["g"], effect=DENY, grantee_user=self.outsider)
-        self.assertEqual((result.created, result.unchanged), (0, 2))
-        self.assertTrue(self.all_points("g") <= self.points_of(self.outsider))
-        # the group is on the dataset: a deny for it now would take back shared data, so it is not written
+        self.assertEqual((result.created, result.overridden), (0, 2))
+        self.assertFalse(self.all_points("g") & self.points_of(self.outsider))
+        # and from the group on the dataset itself
         result = access_actions.dataset_action(self.pi_user, self.sets["g"], effect=DENY, grantee_group=self.g)
-        self.assertEqual((result.created, result.kept_shared), (0, 2))
+        self.assertEqual(result.created, 2)
+        self.assertFalse(self.all_points("g") & self.points_of(self.member))
 
     def test_deny_then_allow_upgrades(self):
         access_actions.dataset_action(self.pi_user, self.specs["o"], effect=DENY, grantee_user=self.outsider)

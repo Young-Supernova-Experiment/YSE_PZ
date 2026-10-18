@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>Data access: {{ allocation.name }}</h1>
-	<p class="text-muted small mb-0">{{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|date:"Y-m-d" }} to {{ allocation.end_date|date:"Y-m-d" }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
+	<p class="text-muted small mb-0"><a href="{% url 'access_dashboard' %}">Dashboard</a> &middot; {{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|date:"Y-m-d" }} to {{ allocation.end_date|date:"Y-m-d" }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
 </section>
 
 <section class="content">
@@ -60,11 +60,12 @@
 								<td><small>{% if g.stopped_at %}{{ g.stopped_at|date:"Y-m-d" }}{% else %}-{% endif %}</small></td>
 								<td>
 									{% if not g.stopped_at %}
-									<form method="post" class="d-inline">
+									<form method="post" class="form-inline">
 										{% csrf_token %}
 										<input type="hidden" name="action" value="stop">
 										<input type="hidden" name="grant_id" value="{{ g.id }}">
-										<button type="submit" class="btn btn-sm btn-outline-secondary" title="Data taken from now on are not covered; data already shared stay shared">Stop</button>
+										{% include "YSE_App/access_direction.html" with id="yse-stop" n1=g.id n2=0 %}
+										<button type="submit" class="btn btn-sm btn-outline-secondary">Stop</button>
 									</form>
 									{% endif %}
 								</td>
@@ -123,4 +124,9 @@
 		</div>
 	</div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+{% include "YSE_App/access_direction_script.html" %}
 {% endblock %}

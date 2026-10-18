@@ -108,13 +108,15 @@ class ProgramPageTests(_Fixture):
         self.assertContains(resp, "may now see 5 new items")  # 4 points and 1 spectrum
         grant = StandingAccessGrant.objects.get(allocation=self.alloc)
         self.assertEqual(grant.created_as, "program_deputy")
-        # a restriction for the group already on the data: kept shared, and the page says why
+        # a restriction for the group already on the data is written (a PI may restrict shared data)
         resp = client.post(url, {"action": "grant", "effect": "deny", "grantee_kind": "group", "group": self.g.pk,
                                  "scope": "program"}, follow=True)
-        self.assertContains(resp, "stay shared")
+        self.assertContains(resp, "may not see 5 new items")
         resp = client.post(url, {"action": "stop", "grant_id": grant.pk}, follow=True)
+        self.assertContains(resp, "going forward")
         grant.refresh_from_db()
         self.assertIsNotNone(grant.stopped_at)
+        self.assertTrue(R.objects.filter(standing_grant=grant).exists())  # forward: earlier data keep it
         # deputies cannot manage deputies; the PI can
         resp = client.post(url, {"action": "add_deputy", "username": self.outsider.username}, follow=True)
         self.assertContains(resp, "Not changed")
@@ -145,7 +147,6 @@ class TransientPageTests(_Fixture):
         self.assertContains(resp, "You may not set access")
         resp = self.client_for(self.pi_user).get(self.url)
         self.assertContains(resp, "yse-access-nights")
-        self.assertNotContains(resp, "Remove (staff)")
 
     def test_night_action_covers_every_set_of_that_night(self):
         nights = access_pages.object_nights(self.transient, self.sets, [self.spec])
@@ -157,19 +158,27 @@ class TransientPageTests(_Fixture):
         covered = set(R.objects.filter(grantee_user=self.outsider).values_list("photometry_id", flat=True))
         self.assertEqual(covered, {self.sets[0].pk, self.sets[1].pk, None})  # both sets and the spectrum
 
-    def test_dataset_action_and_staff_removal(self):
+    def test_dataset_action_and_turning_it_off(self):
         pi = self.client_for(self.pi_user)
         pi.post(self.url, {"action": "dataset", "kind": "photometry", "dataset_id": self.sets[0].pk,
                            "effect": "allow", "grantee_kind": "group", "group": self.o.pk})
         self.assertEqual(R.objects.filter(photometry=self.sets[0], grantee_group=self.o).count(), 2)
-        resp = pi.post(self.url, {"action": "remove", "kind": "photometry", "dataset_id": self.sets[0].pk,
-                                  "grantee_group_id": self.o.pk}, follow=True)
+        off = {"action": "remove_allow", "kind": "photometry", "dataset_id": self.sets[0].pk,
+               "grantee_group_id": self.o.pk}
+        resp = pi.post(self.url, off, follow=True)  # forward by default: earlier data stay visible
+        self.assertContains(resp, "going forward")
+        self.assertEqual(R.objects.filter(photometry=self.sets[0], grantee_group=self.o).count(), 2)
+        resp = self.client_for(self.outsider).post(self.url, dict(off, direction="backward"), follow=True)
         self.assertContains(resp, "Not changed")
-        resp = self.client_for(self.staff).get(self.url)
-        self.assertContains(resp, "Remove (staff)")
-        self.client_for(self.staff).post(self.url, {"action": "remove", "kind": "photometry",
-                                                    "dataset_id": self.sets[0].pk, "grantee_group_id": self.o.pk})
+        resp = pi.post(self.url, dict(off, direction="backward"), follow=True)
+        self.assertContains(resp, "removed backwards from 2 items")
         self.assertFalse(R.objects.filter(photometry=self.sets[0]).exists())
+        pi.post(self.url, {"action": "dataset", "kind": "spectrum", "dataset_id": self.spec.pk,
+                           "effect": "deny", "grantee_kind": "user", "username": self.outsider.username})
+        resp = pi.post(self.url, {"action": "lift", "kind": "spectrum", "dataset_id": self.spec.pk,
+                                  "grantee_username": self.outsider.username}, follow=True)
+        self.assertContains(resp, "Restriction lifted")
+        self.assertFalse(R.objects.filter(transient_spectrum=self.spec).exists())
 
     def test_link_on_the_photometry_tab(self):
         html = Template("{% load access_rules_tags %}{% access_rules_enabled as on %}{{ on }}").render(Context())
@@ -211,15 +220,19 @@ class ApiTests(_Fixture):
         self.assertEqual(self.client_for(self.outsider).get(url).status_code, 404)  # cannot see it
         client = self.client_for(self.pi_user)
         resp = client.post(url, {"effect": "deny", "group": self.g.name}, content_type="application/json")
-        self.assertEqual(resp.json()["written"]["kept_shared"], 1)
+        self.assertEqual(resp.json()["written"]["created"], 1)  # shared data may be restricted
         resp = client.post(url, {"effect": "allow", "user": self.outsider.username}, content_type="application/json")
         self.assertEqual(resp.json()["written"]["created"], 1)
-        self.assertEqual(client.get(url).json()["rules"][0]["allow"], 1)
         remove = reverse("api-access-dataset-rules-remove", args=["spectrum", self.spec.pk])
-        self.assertEqual(client.post(remove, {"user": self.outsider.username},
-                                     content_type="application/json").status_code, 403)
-        resp = self.client_for(self.staff).post(remove, {"user": self.outsider.username},
-                                                content_type="application/json")
+        # the outsider now sees the spectrum (the allow) but may not change its access
+        self.assertEqual(self.client_for(self.outsider).post(remove, {"user": self.outsider.username},
+                                                             content_type="application/json").status_code, 403)
+        resp = client.post(remove, {"user": self.outsider.username}, content_type="application/json")
+        self.assertEqual(resp.json()["removed"], 0)  # forward: earlier data stay visible
+        resp = client.post(remove, {"user": self.outsider.username, "backwards": True},
+                           content_type="application/json")
+        self.assertEqual(resp.json()["removed"], 1)
+        resp = client.post(remove, {"group": self.g.name, "effect": "deny"}, content_type="application/json")
         self.assertEqual(resp.json()["removed"], 1)
 
     def test_nights(self):

@@ -823,6 +823,27 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
 
+<a id="access-dashboard"></a>
+
+### Data access dashboard; restricting shared data; turning sharing off forward or backwards (2026-10-18, #648 PR 6a) migration applied by the deploy; nothing else required (hidden while the flag is off)
+
+**Ryan's decisions (2026-10-17):**
+- A PI, their deputies, or the program's PI or deputies may restrict any non-public data from anyone, including data already shared.
+- Turning sharing off applies **going forward** by default: data taken before the change stay visible to that grantee. "Turning off" means stopping a standing grant, turning off an allow, or removing a group from a dataset's own groups.
+- A **backwards** choice also removes the earlier data. It asks for confirmation.
+- Public data, including anything reported to TNS, are never restricted.
+
+**Removing a group from a dataset's own groups** now writes `kept` allow rules for the points shared with that group before the removal. This happens from every path: uploads, the API, the admin and the dashboard. The rules are dated when each point was shared, so people who were members then keep them. Reads use these rules only once `DATA_ACCESS_GRANTS_ENABLED` is on. Until then a removal still hides the data, as today.
+
+**Dashboard** (`/data_access/`, with the flag on), for each PI, deputy or program deputy:
+- their programs' standing access, with a forward/backwards Stop;
+- their restricted datasets: groups (remove forward/backwards), grantees (turn off forward/backwards, lift a restriction), and the automatic-publishing opt-in (#691);
+- administrators get no opt-in toggles here.
+
+New API endpoints are `/api/access/datasets/<kind>/<id>/groups/remove/` and `.../autopublish/`. Stop and rule removal take `backwards`.
+
+**Migration:** `0046_access_rule_kept` only adds a choice (no SQL).
+
 <a id="access-pages"></a>
 
 ### Access rule pages and API (2026-10-17, #648 PR 5) nothing required (hidden while the flag is off)
@@ -2893,6 +2914,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v76, **migration applied by the deploy; nothing else required** (dashboard hidden while `DATA_ACCESS_GRANTS_ENABLED` is off). Ryan's access decisions ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 6a): PIs may restrict shared data; turning sharing off is forward by default with a backwards option; removing a group from a dataset writes `kept` rules for the earlier points; data access dashboard with the autopublish opt-ins; migration `0046_access_rule_kept` (choices only) ([section "Data access dashboard"](#access-dashboard)). No new package.
 * 2026-10-17 v75, **nothing required** (no migration, no flag). Upload checks trust PIs and deputies for their own data ([#707](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/707)): when an upload targets an existing photometry set or spectrum, that dataset's PIs and data-sharing deputies, and its program's PI and program deputies, pass the upload checks for it (replace, add, re-share). Other users, new datasets and bulk ingest are unchanged.
 * 2026-10-17 v74, **nothing required** (hidden while `DATA_ACCESS_GRANTS_ENABLED` is off; no migration). Access rule pages and API ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 5): program page with standing access and program deputies, per-object night and dataset actions, staff rule removal, `/api/access/` endpoints ([section "Access rule pages and API"](#access-pages)). No new package.
 * 2026-10-17 v73, **nothing required** (flag stays off; no migration). Standing access grants ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648)): stopping one applies going forward in time; points taken before the stop are still covered when they are uploaded or linked to the program later ([section "Per-point access rules engine"](#access-rules-engine)). No new package.

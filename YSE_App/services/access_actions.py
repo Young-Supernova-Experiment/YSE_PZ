@@ -13,17 +13,30 @@ and API (PR 5) call these functions; the admin (staff) writes rows directly.
   (:func:`object_night_action`): the data's PIs and their deputies
   (``data_sharing.share_role``), the program's PI or deputies when the
   dataset is linked to a program, or staff (:func:`dataset_role`).
-* Deleting a rule (:func:`delete_rule`): staff only, to fix a mistake; logged.
+* Turning sharing off (:func:`stop_standing_grant`, :func:`remove_rules`,
+  :func:`remove_dataset_group`): the same people. Staff may also delete a
+  rule in the admin.
 
-**What is written**
+**What is written** (Ryan, 2026-10-17, replacing the "once shared, stays shared" reading)
 
 * An allow creates the rule, or turns the grantee's deny into an allow.
-* Once a point is shared it stays shared: a deny is not written for a point
-  the grantee can already see (the group is on the dataset, or it already has
-  an allow; for a user, the point is visible to them now). At ingest
-  (a standing grant applied to a new point) a deny is written even when the
-  dataset's own groups include the grantee: the point was never shared
-  before the restriction.
+* A restriction (deny) may be put on any non-public data, also data the
+  grantee can already see: it creates the rule, or turns the grantee's allow
+  into a deny.
+* Turning sharing off goes **forward in time** by default: data taken before
+  the change stay visible to that grantee. A **backwards** option also removes
+  access to the earlier data:
+  - stopping a standing grant: forward keeps the rules it wrote (and keeps
+    covering data taken before the stop); backwards deletes them;
+  - removing an allow from data: forward changes nothing for data already
+    taken; backwards deletes the allow rules;
+  - removing a group from a dataset's own groups: forward writes ``kept``
+    allow rules for the group on the points shared with it before the change
+    (dated when they were shared, so former members keep them too); backwards
+    writes none.
+* Standing grants applied at ingest or to newly linked data never replace an
+  explicit rule for the same grantee (the first rule wins; night grants are
+  applied before program-wide ones).
 * Public data (no collaboration group other than Public) gets no rules from
   an action: it can never be restricted, and everyone may see it already. At
   ingest the rule is written anyway, because a new dataset's groups are set
@@ -59,6 +72,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.models.data_access_grant_models import (
     AS_GROUP_DEPUTY,
+    AS_KEPT,
     AS_PI,
     AS_PROGRAM_DEPUTY,
     AS_STAFF,
@@ -153,19 +167,19 @@ class WriteResult:
     created: int = 0
     upgraded: int = 0  # a deny that became an allow
     unchanged: int = 0
-    kept_shared: int = 0  # a deny not written: the grantee can already see the point
+    overridden: int = 0  # an allow that became a deny (a restriction of shared data)
     public: int = 0  # public data: no rule needed
     transients: frozenset = frozenset()
 
     def add(self, other: "WriteResult") -> "WriteResult":
         return WriteResult(
             self.created + other.created, self.upgraded + other.upgraded, self.unchanged + other.unchanged,
-            self.kept_shared + other.kept_shared, self.public + other.public,
+            self.overridden + other.overridden, self.public + other.public,
             frozenset(self.transients | other.transients))
 
     def as_dict(self):
         return {"created": self.created, "upgraded": self.upgraded, "unchanged": self.unchanged,
-                "kept_shared": self.kept_shared, "public": self.public}
+                "overridden": self.overridden, "public": self.public}
 
 
 # ------------------------------------------------------------------- writes
@@ -177,38 +191,8 @@ def _restricted_dataset_ids(through, fk: str, ids) -> set:
         group__name=PUBLIC_COLLABORATION_GROUP_NAME).values_list(fk, flat=True))
 
 
-def _visible_to_grantee(model, ids, grantee_group, grantee_user) -> set:
-    """The rows among ``ids`` the grantee can already see (a deny would not hide them: they stay shared)."""
-    from YSE_App.models import DataAccessRule, TransientPhotData, TransientPhotometry, TransientSpectrum
-    from YSE_App.services import visibility
-
-    ids = list(ids)
-    if not ids:
-        return set()
-    rows = model.objects.filter(pk__in=ids)
-    if grantee_user is not None:
-        if visibility.user_sees_everything(grantee_user):
-            return set(ids)
-        if model is TransientPhotData:
-            rows = rows.filter(visibility.visible_photometry_ids_q(grantee_user))
-        else:
-            rows = rows.filter(pk__in=TransientSpectrum.objects.filter(
-                visibility.spectrum_visible_q(grantee_user)).values("pk"))
-        return set(rows.values_list("pk", flat=True))
-    target = "transient_phot_data_id" if model is TransientPhotData else "transient_spectrum_id"
-    allowed = set(DataAccessRule.objects.filter(**{target + "__in": ids}, grantee_group_id=grantee_group.pk,
-                                                effect=EFFECT_ALLOW).values_list(target, flat=True))
-    if model is TransientPhotData:
-        sets = TransientPhotometry.groups.through.objects.filter(group_id=grantee_group.pk)
-        rows = rows.filter(photometry_id__in=sets.values("transientphotometry_id"))
-    else:
-        specs = TransientSpectrum.groups.through.objects.filter(group_id=grantee_group.pk)
-        rows = rows.filter(pk__in=specs.values("transientspectrum_id"))
-    return allowed | set(rows.values_list("pk", flat=True))
-
-
 def _write(model, ids, *, effect, grantee_group, grantee_user, granted_by, granted_as, standing_grant=None,
-           at_ingest=False) -> WriteResult:
+           at_ingest=False, skip_public=False) -> WriteResult:
     from YSE_App.models import DataAccessRule, TransientPhotData, TransientPhotometry, TransientSpectrum
 
     result = WriteResult()
@@ -233,7 +217,7 @@ def _write(model, ids, *, effect, grantee_group, grantee_user, granted_by, grant
                     .values_list("pk", "transient_id")}
             restricted = _restricted_dataset_ids(TransientSpectrum.groups.through, "transientspectrum_id", rows)
             public = {pk for pk in rows if pk not in restricted}
-        if at_ingest:
+        if at_ingest and not skip_public:
             # A new dataset gets its groups just after it is saved (the m2m comes second), so at
             # ingest every point gets the rule; one on data that stay public never hides them.
             public = set()
@@ -242,27 +226,25 @@ def _write(model, ids, *, effect, grantee_group, grantee_user, granted_by, grant
         if not todo:
             continue
         existing = {getattr(r, target): r for r in DataAccessRule.objects.filter(**{target + "__in": todo}, **grantee)}
-        if effect == EFFECT_DENY and not at_ingest:
-            shared = _visible_to_grantee(model, [pk for pk in todo if pk not in existing], grantee_group,
-                                         grantee_user)
-        else:
-            shared = set()
         new = []
         for pk in todo:
             row = existing.get(pk)
             if row is not None:
-                if effect == EFFECT_ALLOW and row.effect == EFFECT_DENY and not at_ingest:
-                    row.effect = EFFECT_ALLOW
+                if row.effect != effect and not at_ingest:
+                    # An explicit action replaces the grantee's rule: deny -> allow shares, allow -> deny
+                    # restricts data already shared (a PI may restrict any non-public data).
+                    if effect == EFFECT_ALLOW:
+                        result.upgraded += 1
+                    else:
+                        result.overridden += 1
+                    row.effect = effect
                     row.granted_by = granted_by
                     row.granted_as = granted_as
-                    row.save(update_fields=["effect", "granted_by", "granted_as", "updated_at"])
-                    result.upgraded += 1
+                    row.standing_grant = standing_grant
+                    row.save(update_fields=["effect", "granted_by", "granted_as", "standing_grant", "updated_at"])
                     transients.add(rows[pk][1])
                 else:
                     result.unchanged += 1
-                continue
-            if pk in shared:
-                result.kept_shared += 1
                 continue
             phot_id, tid = rows[pk]
             new.append(DataAccessRule(
@@ -280,7 +262,7 @@ def _write(model, ids, *, effect, grantee_group, grantee_user, granted_by, grant
 def _after_write(result: WriteResult, grantee_group) -> None:
     from YSE_App.services import access_rules, photstat
 
-    if not (result.created or result.upgraded):
+    if not (result.created or result.upgraded or result.overridden):
         return
     access_rules.bump_version()
     if grantee_group is not None and access_rules.enabled():
@@ -301,14 +283,18 @@ def _audit(instance, actor, description: dict) -> None:
 
 def write_rules(*, points: Iterable[int] = (), spectra: Iterable[int] = (), effect: str, grantee_group=None,
                 grantee_user=None, granted_by=None, granted_as: str, standing_grant=None,
-                at_ingest: bool = False) -> WriteResult:
-    """Write rules for point ids ``points`` and spectrum ids ``spectra`` (no permission check: callers check)."""
+                at_ingest: bool = False, skip_public: bool = False) -> WriteResult:
+    """Write rules for point ids ``points`` and spectrum ids ``spectra`` (no permission check: callers check).
+
+    ``at_ingest``: a standing grant applied to new (or newly linked) data: an existing rule for
+    the grantee is left alone. Otherwise an explicit action: it replaces the grantee's rule.
+    """
     from YSE_App.models import TransientPhotData, TransientSpectrum
 
     _check_grantee(grantee_group, grantee_user)
     _check_effect(effect)
     kw = dict(effect=effect, grantee_group=grantee_group, grantee_user=grantee_user, granted_by=granted_by,
-              granted_as=granted_as, standing_grant=standing_grant, at_ingest=at_ingest)
+              granted_as=granted_as, standing_grant=standing_grant, at_ingest=at_ingest, skip_public=skip_public)
     with transaction.atomic(), _quiet_signals():
         result = _write(TransientPhotData, points, **kw).add(_write(TransientSpectrum, spectra, **kw))
         _after_write(result, grantee_group)
@@ -381,19 +367,34 @@ def program_action(actor, allocation, *, effect: str, grantee_group=None, grante
     return grant, result
 
 
-def stop_standing_grant(actor, grant) -> None:
-    """Stop a standing grant: points taken after now are no longer covered; rules already written stay.
+def stop_standing_grant(actor, grant, *, backwards: bool = False) -> int:
+    """Stop a standing grant. Returns the number of rules deleted (backwards only).
 
-    Points taken before the stop are still covered when they arrive or are linked to the program later.
+    Forward (the default): data taken after now are no longer covered; the rules it wrote stay,
+    and data taken before the stop are still covered when they arrive or are linked later.
+    ``backwards``: also delete every rule it wrote, so earlier data lose (an allow) or regain
+    (a restriction) access too; the grant then covers nothing.
     """
+    from YSE_App.models import DataAccessRule
+
     if program_role(actor, grant.allocation) is None:
         raise PermissionDenied({"message": "Only the program's PI, its program deputies or an administrator may "
                                            "stop this."})
-    if grant.stopped_at is not None:
-        return
-    grant.stopped_at = timezone.now()
-    grant.stopped_by = actor
-    grant.save(update_fields=["stopped_at", "stopped_by"])
+    deleted = 0
+    with transaction.atomic():
+        if grant.stopped_at is None:
+            grant.stopped_at = timezone.now()
+            grant.stopped_by = actor
+            grant.save(update_fields=["stopped_at", "stopped_by"])
+        if backwards:
+            # A backwards stop covers no data at all: mark it stopped at its own creation
+            # (``_program_grants`` and ``covers_obs_date`` then skip it).
+            if grant.stopped_at > grant.created_at:
+                grant.stopped_at = grant.created_at
+                grant.save(update_fields=["stopped_at"])
+            deleted = _delete_rules(DataAccessRule.objects.filter(standing_grant=grant),
+                                    grant.grantee_group_id)
+    return deleted
 
 
 def _require_dataset_role(actor, dataset) -> str:
@@ -468,11 +469,154 @@ def delete_rule(actor, rule) -> None:
     """Staff only: delete one rule made by mistake (django-auditlog records the deletion)."""
     if not is_staff(actor):
         raise PermissionDenied({"message": "Only an administrator may remove an access rule."})
+    from YSE_App.models import DataAccessRule
+
+    _delete_rules(DataAccessRule.objects.filter(pk=rule.pk), rule.grantee_group_id)
+
+
+def _delete_rules(rules, grantee_group_id=None) -> int:
+    """Delete ``rules`` (each deletion audited), bump the version, refresh the group's PhotStat scopes."""
     from YSE_App.services import access_rules, photstat
 
-    rule.delete()
-    if rule.grantee_group_id and rule.transient_phot_data_id and access_rules.enabled():
-        photstat.invalidate_scopes([(rule.transient_id, rule.grantee_group_id)])
+    transients = set(rules.filter(transient_phot_data__isnull=False).values_list("transient_id", flat=True))
+    with transaction.atomic(), _quiet_signals():
+        n, _ = rules.delete()
+        if n:
+            access_rules.bump_version()
+            if grantee_group_id and access_rules.enabled():
+                photstat.invalidate_scopes([(t, grantee_group_id) for t in transients])
+    return n
+
+
+def remove_rules(actor, dataset, *, effect: str, grantee_group=None, grantee_user=None, backwards: bool = False,
+                 night_start=None, night_end=None) -> int:
+    """Turn off one grantee's rules of ``effect`` on one dataset (optionally one night of it).
+
+    * An allow (turning sharing off): forward (the default) changes nothing for data already
+      taken, which stay visible; ``backwards`` deletes the allow rules.
+    * A restriction (lifting it): the deny rules are deleted (it shares, so it is never "forward").
+
+    Returns the number of rules deleted. Whoever may set access for the dataset (:func:`dataset_role`).
+    """
+    from YSE_App.models import DataAccessRule, TransientPhotometry
+
+    if dataset_role(actor, dataset) is None:
+        raise PermissionDenied({"message": "Only the data's PIs, their deputies, the program's PI or deputies, or "
+                                           "an administrator may change access to these data."})
+    _check_grantee(grantee_group, grantee_user)
+    _check_effect(effect)
+    if effect == EFFECT_ALLOW and not backwards:
+        return 0
+    if isinstance(dataset, TransientPhotometry):
+        rules = DataAccessRule.objects.filter(photometry_id=dataset.pk).filter(
+            _night_q("transient_phot_data__obs_date", night_start, night_end))
+    else:
+        rules = DataAccessRule.objects.filter(transient_spectrum_id=dataset.pk)
+    rules = rules.filter(effect=effect).filter(
+        **({"grantee_group": grantee_group} if grantee_group is not None else {"grantee_user": grantee_user}))
+    n = _delete_rules(rules, getattr(grantee_group, "pk", None))
+    _audit(dataset, actor, {"removed": effect, "backwards": backwards, "rules": n,
+                            "grantee_group": getattr(grantee_group, "pk", None),
+                            "grantee_user": getattr(grantee_user, "pk", None)})
+    return n
+
+
+# ------------------------------------------------------- dataset groups (#648, PR 6a)
+
+_group_removal = threading.local()
+
+
+def _keep_suppressed() -> bool:
+    return getattr(_group_removal, "backwards", 0) > 0
+
+
+def remove_dataset_group(actor, dataset, group, *, backwards: bool = False) -> int:
+    """Remove ``group`` from a dataset's own groups. Returns the number of ``kept`` rules written.
+
+    Forward (the default): the points shared with the group before now stay visible to it (and
+    to people who were members when they were shared), through ``kept`` allow rules.
+    ``backwards``: the group loses the earlier data too (no rules written).
+    """
+    from YSE_App.services import data_sharing
+
+    if dataset_role(actor, dataset) is None:
+        raise PermissionDenied({"message": "Only the data's PIs, their deputies, the program's PI or deputies, or "
+                                           "an administrator may change the groups of these data."})
+    if data_sharing.is_public_dataset(dataset) or not dataset.groups.filter(pk=group.pk).exists():
+        return 0
+    from YSE_App.models import DataAccessRule
+
+    before = DataAccessRule.objects.filter(grantee_group=group, granted_as=AS_KEPT).count()
+    depth = getattr(_group_removal, "backwards", 0)
+    _group_removal.backwards = depth + (1 if backwards else 0)
+    try:
+        dataset.groups.remove(group)
+    finally:
+        _group_removal.backwards = depth
+    written = DataAccessRule.objects.filter(grantee_group=group, granted_as=AS_KEPT).count() - before
+    _audit(dataset, actor, {"group_removed": group.pk, "backwards": backwards, "kept_rules": written})
+    return written
+
+
+def keep_after_group_removal(model, pairs, shared_at, at=None) -> int:
+    """Forward default when groups are removed from datasets: ``kept`` allows for the earlier points.
+
+    ``pairs``: ``(dataset_id, group_id)`` removed; ``shared_at``: ``{pair: share time or None}`` from
+    ``DatasetGroupShare`` (``None``: shared before tracking). Each kept rule is dated when its point
+    was shared with the group (the later of the share time and the point's creation), so the
+    leaving-member rule still applies. Datasets left with no restricting group are public: nothing
+    to keep. Called from ``access_history`` (the ``m2m_changed`` receiver); skipped for a backwards
+    removal. Returns the number of rules written.
+    """
+    from django.db.models import OuterRef, Subquery
+
+    from YSE_App.models import DataAccessRule, TransientPhotData, TransientPhotometry, TransientSpectrum
+    from YSE_App.services import access_rules
+
+    if _keep_suppressed() or not pairs:
+        return 0
+    at = at or timezone.now()
+    is_phot = model is TransientPhotometry
+    through = model.groups.through
+    fk = "transientphotometry_id" if is_phot else "transientspectrum_id"
+    restricted = set(through.objects.filter(**{fk + "__in": {d for d, _g in pairs}}).exclude(
+        group__name=PUBLIC_COLLABORATION_GROUP_NAME).values_list(fk, flat=True))
+    written = 0
+    with transaction.atomic(), _quiet_signals():
+        for dataset_id, group_id in sorted(pairs):
+            if dataset_id not in restricted:
+                continue
+            if is_phot:
+                targets = list(TransientPhotData.objects.filter(photometry_id=dataset_id, obs_date__lt=at)
+                               .values_list("pk", "photometry__transient_id"))
+                rows = [DataAccessRule(transient_phot_data_id=pk, photometry_id=dataset_id, transient_id=tid,
+                                       grantee_group_id=group_id, effect=EFFECT_ALLOW, granted_as=AS_KEPT)
+                        for pk, tid in targets]
+            else:
+                targets = list(TransientSpectrum.objects.filter(pk=dataset_id, obs_date__lt=at)
+                               .values_list("pk", "transient_id"))
+                rows = [DataAccessRule(transient_spectrum_id=pk, transient_id=tid, grantee_group_id=group_id,
+                                       effect=EFFECT_ALLOW, granted_as=AS_KEPT) for pk, tid in targets]
+            if not rows:
+                continue
+            # A rule the group already has (an allow, or a restriction) stays as it is.
+            DataAccessRule.objects.bulk_create(rows, batch_size=CHUNK, ignore_conflicts=True)
+            target = "transient_phot_data" if is_phot else "transient_spectrum"
+            new = DataAccessRule.objects.filter(granted_as=AS_KEPT, grantee_group_id=group_id,
+                                                **{target + "_id__in": [pk for pk, _t in targets]},
+                                                updated_at__gte=at)
+            source = TransientPhotData if is_phot else TransientSpectrum
+            new.update(updated_at=Subquery(source.objects.filter(pk=OuterRef(target + "_id"))
+                                           .values("created_date")[:1]))
+            share = shared_at.get((dataset_id, group_id))
+            if share is not None:
+                DataAccessRule.objects.filter(granted_as=AS_KEPT, grantee_group_id=group_id,
+                                              **{target + "_id__in": [pk for pk, _t in targets]},
+                                              updated_at__lt=share).update(updated_at=share)
+            written += len(rows)
+        if written:
+            access_rules.bump_version()
+    return written
 
 
 # ---------------------------------------------------------------- at ingest
@@ -484,7 +628,11 @@ def _program_grants(allocation_id):
 
     # Night grants first: at ingest the first rule for a grantee wins, so the
     # more specific night action beats the program-wide one.
+    from django.db.models import F
+
+    # A grant stopped backwards (stopped_at at or before its creation) covers no data at all.
     grants = list(StandingAccessGrant.objects.filter(allocation_id=allocation_id)
+                  .exclude(stopped_at__lte=F("created_at"))
                   .select_related("grantee_group", "grantee_user", "created_by"))
     grants.sort(key=lambda g: (g.night_start is None, g.created_at, g.pk))
     return grants
@@ -493,11 +641,9 @@ def _program_grants(allocation_id):
 def _apply(grants, *, linked: bool = False, **target) -> WriteResult:
     """Write the grants' rules for one target.
 
-    At ingest (``linked=False``) only points created after each grant count, and a deny is
-    written even where the dataset's own groups include the grantee (the point was never
-    shared before). For a dataset linked to the program later (``linked=True``, PR 3) every
-    matching point counts, as for the action itself, and a deny is not written for points the
-    grantee can already see (they stay shared).
+    At ingest (``linked=False``) only points created after each grant count. For a dataset
+    linked to the program later (``linked=True``, PR 3) every matching point counts. Either
+    way an explicit rule the grantee already has on a point is left alone.
     """
     total = WriteResult()
     for grant in grants:
@@ -509,7 +655,7 @@ def _apply(grants, *, linked: bool = False, **target) -> WriteResult:
         total = total.add(write_rules(
             points=points, spectra=spectra, effect=grant.effect, grantee_group=grant.grantee_group,
             grantee_user=grant.grantee_user, granted_by=grant.created_by, granted_as=grant.created_as,
-            standing_grant=grant, at_ingest=not linked))
+            standing_grant=grant, at_ingest=True, skip_public=linked))
     return total
 
 

@@ -1,5 +1,7 @@
 """Pages for read-time access rules (#648, PR 5). All return 404 while ``DATA_ACCESS_GRANTS_ENABLED`` is off.
 
+* ``/data_access/``: the dashboard: the user's programs and standing grants, their datasets with
+  grantees and groups (turn off going forward or backwards), and automatic-publishing opt-ins.
 * ``/data_access/programs/``: the programs (allocations) the user may set access for.
 * ``/data_access/programs/<id>/``: one program: its standing grants (stop), a program or
   night action, and (for the program's PI or staff) its program deputies.
@@ -39,6 +41,67 @@ def _error_text(exc) -> str:
     if isinstance(detail, (list, tuple)):
         return " ".join(str(v) for v in detail)
     return str(detail or exc)
+
+
+TURN_OFF_ACTIONS = ("stop", "remove_allow", "lift", "remove_group", "autopublish")
+
+
+def _backwards(post) -> bool:
+    return (post.get("direction") or "forward") == "backward"
+
+
+def _post_dataset(post, transient=None):
+    model = TransientSpectrum if post.get("kind") == "spectrum" else TransientPhotometry
+    qs = model.objects.all() if transient is None else model.objects.filter(transient=transient)
+    return get_object_or_404(qs, pk=post.get("dataset_id") or 0)
+
+
+def _post_grantee(post):
+    if post.get("grantee_group_id"):
+        return pages.resolve_grantee(group=post.get("grantee_group_id"))
+    return pages.resolve_grantee(user=post.get("grantee_username"))
+
+
+def turn_off(request, action, *, allocation=None, transient=None) -> str:
+    """The turn-off and opt-in actions shared by the dashboard, program and object pages; returns the message."""
+    from django.contrib.auth.models import Group
+
+    from YSE_App.services import autopublish_optin
+
+    post = request.POST
+    backwards = _backwards(post)
+    when = ("including data taken earlier" if backwards else
+            "going forward: data taken before now stay visible to them")
+    if action == "stop":
+        grants = StandingAccessGrant.objects.all() if allocation is None else StandingAccessGrant.objects.filter(
+            allocation=allocation)
+        grant = get_object_or_404(grants.select_related("allocation__principal_investigator"),
+                                  pk=post.get("grant_id") or 0)
+        n = access_actions.stop_standing_grant(request.user, grant, backwards=backwards)
+        return ("Stopped backwards: %d rule%s it wrote removed, so earlier data are no longer covered." % (
+            n, "" if n == 1 else "s")) if backwards else (
+            "Stopped going forward: data taken from now on are not covered; earlier data keep the access it gave.")
+    dataset = _post_dataset(post, transient)
+    if action == "autopublish":
+        enabled = post.get("enabled") == "1"
+        state = autopublish_optin.set_opt_in(request.user, dataset, enabled)
+        return "Automatic publishing %s for this dataset." % ("allowed" if state else "turned off")
+    if action == "remove_group":
+        group = get_object_or_404(Group, pk=post.get("group_id") or 0)
+        n = access_actions.remove_dataset_group(request.user, dataset, group, backwards=backwards)
+        return "Group %s removed from the dataset, %s%s." % (
+            group.name, when, "" if backwards else " (%d item%s kept)" % (n, "" if n == 1 else "s"))
+    group, user = _post_grantee(post)
+    label = pages.grantee_label(group, user)
+    if action == "lift":
+        n = access_actions.remove_rules(request.user, dataset, effect="deny", grantee_group=group, grantee_user=user)
+        return "Restriction lifted for %s on %d item%s." % (label, n, "" if n == 1 else "s")
+    n = access_actions.remove_rules(request.user, dataset, effect="allow", grantee_group=group, grantee_user=user,
+                                    backwards=backwards)
+    if not backwards:
+        return ("Access for %s turned off going forward: the data already taken stay visible to them. Choose "
+                "'backwards' to remove those too." % label)
+    return "Access for %s removed backwards from %d item%s." % (label, n, "" if n == 1 else "s")
 
 
 def _grantee(post):
@@ -97,12 +160,8 @@ def program(request, allocation_id):
                     note=request.POST.get("note", ""))
                 messages.success(request, "Saved; it also applies to data taken later. " + pages.describe(
                     result, effect, pages.grantee_label(group, user)))
-            elif action == "stop":
-                grant = get_object_or_404(StandingAccessGrant, pk=request.POST.get("grant_id") or 0,
-                                          allocation=allocation)
-                access_actions.stop_standing_grant(request.user, grant)
-                messages.success(request, "Stopped. Data taken from now on are not covered; rules already written "
-                                          "stay (shared data stay shared).")
+            elif action in TURN_OFF_ACTIONS:
+                messages.success(request, turn_off(request, action, allocation=allocation))
             elif action == "add_deputy":
                 from django.contrib.auth.models import User
 
@@ -163,16 +222,8 @@ def transient_rules(request, transient_id):
                 result = access_actions.object_night_action(request.user, transient, start, end, effect=effect,
                                                             grantee_group=group, grantee_user=user)
                 messages.success(request, pages.describe(result, effect, pages.grantee_label(group, user)))
-            elif action == "remove":
-                group = user = None
-                if request.POST.get("grantee_group_id"):
-                    group, user = pages.resolve_grantee(group=request.POST.get("grantee_group_id"))
-                else:
-                    group, user = pages.resolve_grantee(user=request.POST.get("grantee_username"))
-                n = pages.delete_rules(request.user, kind=request.POST.get("kind", ""),
-                                       dataset_id=int(request.POST.get("dataset_id") or 0),
-                                       grantee_group=group, grantee_user=user)
-                messages.success(request, "%d rule%s removed (logged)." % (n, "" if n == 1 else "s"))
+            elif action in TURN_OFF_ACTIONS:
+                messages.success(request, turn_off(request, action, transient=transient))
             else:
                 messages.error(request, "Unknown action.")
         except (ValidationError, PermissionDenied) as exc:
@@ -186,5 +237,34 @@ def transient_rules(request, transient_id):
         "nights": pages.object_nights(transient, phot_sets, spectra),
         "rules": pages.rule_summary(phot_sets, spectra),
         "groups": pages.grantee_choices(),
+        "is_staff": access_actions.is_staff(request.user),
+    })
+
+
+@login_required
+def dashboard(request):
+    """One page for a PI, deputy or program deputy: programs, standing grants, datasets, grantees, opt-ins."""
+    pages.require_enabled()
+    page = reverse("access_dashboard")
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        try:
+            if action in TURN_OFF_ACTIONS:
+                messages.success(request, turn_off(request, action))
+            else:
+                messages.error(request, "Unknown action.")
+        except (ValidationError, PermissionDenied) as exc:
+            messages.error(request, "Not changed: %s" % _error_text(exc))
+        return redirect(page)
+    allocations = list(pages.managed_allocations(request.user, own_only=True))
+    grants = list(StandingAccessGrant.objects.filter(allocation__in=allocations, stopped_at__isnull=True)
+                  .select_related("allocation", "grantee_group", "grantee_user", "created_by"))
+    datasets = pages.dashboard_datasets(request.user)
+    return render(request, "YSE_App/access_dashboard.html", {
+        "allocations": allocations,
+        "grants": grants,
+        "datasets": datasets,
+        "forward_help": pages.FORWARD_HELP,
+        "backward_help": pages.BACKWARD_HELP,
         "is_staff": access_actions.is_staff(request.user),
     })
