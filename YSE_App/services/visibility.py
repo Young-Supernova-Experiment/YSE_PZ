@@ -281,7 +281,9 @@ def is_service_reader(user) -> bool:
         return False
     from django.conf import settings
 
-    return getattr(user, 'username', None) in set(getattr(settings, 'DATA_SERVICE_READER_USERNAMES', ()) or ())
+    readers = set(getattr(settings, 'DATA_SERVICE_READER_USERNAMES', ()) or ())
+    readers |= set(getattr(settings, 'API_SERVICE_USERNAMES', ()) or ())  # the cron account (#524)
+    return getattr(user, 'username', None) in readers
 
 
 def user_sees_everything(user) -> bool:

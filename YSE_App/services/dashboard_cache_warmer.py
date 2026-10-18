@@ -75,7 +75,7 @@ def warm_dashboard_saved_queries(*, timeout: Optional[int] = None, uncapped: boo
                 continue
             start = time.perf_counter()
             try:
-                names = run_explorer_query_cached(query, timeout=timeout, refresh=True)
+                names = run_explorer_query_cached(query, timeout=timeout, refresh=True, user=None)
             except Exception as exc:  # one bad query must not stop the others
                 elapsed = (time.perf_counter() - start) * 1000.0
                 logger.warning("dashboard warm: query %s (%s) failed after %.0f ms: %s",
