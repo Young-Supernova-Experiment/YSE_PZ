@@ -243,6 +243,7 @@ class EquivalenceTests(_Fixture):
                     expected = (
                         user.is_authenticated and (
                             visibility.user_sees_everything(user)
+                            or user.is_staff or user.is_superuser  # collaboration surfaces stay open to staff (#706)
                             or _old_phot(user, transient.pk).exists()
                             or _old_spec(user, transient.pk).exists()))
                     self.assertEqual(user_can_view_transient(user, transient.pk), bool(expected), key)
