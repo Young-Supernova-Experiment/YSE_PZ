@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>Data access: {{ transient.name }}</h1>
-	<p class="text-muted small mb-0"><a href="{% url 'transient_detail' transient.slug %}">Back to {{ transient.name }}</a></p>
+	<p class="text-muted small mb-0"><a href="{% url 'transient_detail' transient.slug %}">Back to {{ transient.name }}</a> &middot; <a href="{% url 'access_dashboard' %}">Dashboard</a></p>
 </section>
 
 <section class="content">
@@ -102,7 +102,7 @@
 				<div class="box-body">
 					{% if rules %}
 					<table class="table table-sm mb-0" id="yse-access-rules">
-						<thead><tr><th>Dataset</th><th>Grantee</th><th>Allowed</th><th>Restricted</th>{% if is_staff %}<th></th>{% endif %}</tr></thead>
+						<thead><tr><th>Dataset</th><th>Grantee</th><th>Allowed</th><th>Restricted</th><th></th></tr></thead>
 						<tbody>
 						{% for r in rules %}
 							<tr>
@@ -110,18 +110,29 @@
 								<td>{{ r.grantee }}</td>
 								<td>{{ r.allow }}</td>
 								<td>{{ r.deny }}</td>
-								{% if is_staff %}
 								<td>
-									<form method="post" class="d-inline" onsubmit="return confirm('Remove these rules? Only for mistakes; it is logged.');">
+									{% if r.allow %}
+									<form method="post" class="form-inline d-inline">
 										{% csrf_token %}
-										<input type="hidden" name="action" value="remove">
+										<input type="hidden" name="action" value="remove_allow">
 										<input type="hidden" name="kind" value="{{ r.kind }}">
 										<input type="hidden" name="dataset_id" value="{{ r.dataset_id }}">
 										{% if r.grantee_group_id %}<input type="hidden" name="grantee_group_id" value="{{ r.grantee_group_id }}">{% else %}<input type="hidden" name="grantee_username" value="{{ r.grantee_username }}">{% endif %}
-										<button type="submit" class="btn btn-sm btn-outline-danger">Remove (staff)</button>
+										{% include "YSE_App/access_direction.html" with id="yse-allow-"|add:r.kind n1=r.dataset_id n2=forloop.counter %}
+										<button type="submit" class="btn btn-sm btn-outline-secondary">Turn off</button>
 									</form>
+									{% endif %}
+									{% if r.deny %}
+									<form method="post" class="d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="lift">
+										<input type="hidden" name="kind" value="{{ r.kind }}">
+										<input type="hidden" name="dataset_id" value="{{ r.dataset_id }}">
+										{% if r.grantee_group_id %}<input type="hidden" name="grantee_group_id" value="{{ r.grantee_group_id }}">{% else %}<input type="hidden" name="grantee_username" value="{{ r.grantee_username }}">{% endif %}
+										<button type="submit" class="btn btn-sm btn-outline-primary">Lift restriction</button>
+									</form>
+									{% endif %}
 								</td>
-								{% endif %}
 							</tr>
 						{% endfor %}
 						</tbody>
@@ -138,4 +149,9 @@
 		</div>
 	</div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+{% include "YSE_App/access_direction_script.html" %}
 {% endblock %}

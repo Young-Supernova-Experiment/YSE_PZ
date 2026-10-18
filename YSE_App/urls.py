@@ -427,6 +427,7 @@ urlpatterns = [
             name='data_access_decide'),
     re_path(r'^data_sharing_deputies/$', collaboration_views.data_sharing_deputies, name='data_sharing_deputies'),
     # Read-time access rules (#648, PR 5); 404 unless DATA_ACCESS_GRANTS_ENABLED
+    re_path(r'^data_access/$', access_views.dashboard, name='access_dashboard'),
     re_path(r'^data_access/programs/$', access_views.programs, name='access_programs'),
     re_path(r'^data_access/programs/(?P<allocation_id>[0-9]+)/$', access_views.program, name='access_program'),
     # Background job queue (#263) and notifications (#266)
@@ -593,6 +594,10 @@ api_url_patterns = [
             api_views.AccessDatasetRulesAPIView.as_view(), name='api-access-dataset-rules'),
     re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/rules/remove/$',
             api_views.AccessDatasetRulesRemoveAPIView.as_view(), name='api-access-dataset-rules-remove'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/groups/remove/$',
+            api_views.AccessDatasetGroupRemoveAPIView.as_view(), name='api-access-dataset-group-remove'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/autopublish/$',
+            api_views.AccessDatasetAutopublishAPIView.as_view(), name='api-access-dataset-autopublish'),
     re_path(r'^api/access/transients/(?P<transient_id>[0-9]+)/nights/$',
             api_views.AccessTransientNightsAPIView.as_view(), name='api-access-transient-nights'),
     # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
