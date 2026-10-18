@@ -103,10 +103,9 @@ def _old_transient_access_q(user):
 
 
 def _old_object_visible(user, obj):
+    # The group rule; staff no longer bypass it for photometry and spectra (#706).
     if not user.is_authenticated:
         return False
-    if user.is_staff or user.is_superuser:
-        return True
     obj_names = set(obj.groups.values_list("name", flat=True))
     return not obj_names or bool(set(_old_names(user)) & obj_names)
 
@@ -244,6 +243,7 @@ class EquivalenceTests(_Fixture):
                     expected = (
                         user.is_authenticated and (
                             visibility.user_sees_everything(user)
+                            or user.is_staff or user.is_superuser  # collaboration surfaces stay open to staff (#706)
                             or _old_phot(user, transient.pk).exists()
                             or _old_spec(user, transient.pk).exists()))
                     self.assertEqual(user_can_view_transient(user, transient.pk), bool(expected), key)

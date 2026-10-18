@@ -48,6 +48,9 @@ def _point(phot, band, days_ago, mag, user, discovery=False):
     )
 
 
+# The 'staff' fixture account is a service reader here (it reads all data); plain staff see only
+# what their groups allow since #706 (tests/test_staff_visibility.py).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['rise692_staff'])
 class _Fixture(TestCase):
     @classmethod
     def setUpTestData(cls):

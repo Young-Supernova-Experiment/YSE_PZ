@@ -107,6 +107,8 @@ class DashboardSqlGuardTests(SimpleTestCase):
         self.assertFalse(dashboard_sql_is_supported("describe YSE_App_hostphotometry_groups;\r\n\r\n"))
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['pdash_guard_user'])
 class PersonalDashboardSectionGuardTests(TestCase):
     @classmethod
     def setUpTestData(cls):

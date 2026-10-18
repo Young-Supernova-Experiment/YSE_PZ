@@ -73,11 +73,18 @@ class ScopeTests(ReportBase):
             self.assertNotIn(self.spec.pk, spec, user.username)
             self.assertTrue(phot and spec)  # the public sets stay
 
-    def test_pi_deputy_and_staff_get_restricted_too(self):
-        for user in (self.pi_user, self.deputy, self.staff):
+    def test_pi_and_deputy_get_restricted_too(self):
+        for user in (self.pi_user, self.deputy):
             phot, spec = self.scope_ids(user)
             self.assertIn(self.phot.pk, phot, user.username)
             self.assertIn(self.spec.pk, spec, user.username)
+        # staff outside the group no longer see the data, so they cannot send it (#706)
+        phot, spec = self.scope_ids(self.staff)
+        self.assertNotIn(self.phot.pk, phot)
+        self.assertNotIn(self.spec.pk, spec)
+        self.staff.groups.add(self.owners)  # a staff member who sees it may send it as an administrator
+        phot, spec = self.scope_ids(self.staff)
+        self.assertIn(self.phot.pk, phot)
 
     def test_pi_must_also_see_the_data(self):
         self.pi_user.groups.clear()  # visible_q no longer shows the set
@@ -105,7 +112,7 @@ class ManualReportTests(ReportBase):
     def test_discovery_payload_by_role(self):
         self.as_candidate()
         expected = {self.member: PUBLIC_FLUX, self.outsider: PUBLIC_FLUX, self.pi_user: RESTRICTED_FLUX,
-                    self.deputy: RESTRICTED_FLUX, self.staff: RESTRICTED_FLUX}
+                    self.deputy: RESTRICTED_FLUX, self.staff: PUBLIC_FLUX}  # staff: only what they see (#706)
         for user, flux in expected.items():
             payload = tns.build_payload(self.service, self.transient, tns.KIND_DISCOVERY,
                                         scope=ReportScope.for_user(user))
@@ -119,11 +126,11 @@ class ManualReportTests(ReportBase):
         self.assertEqual(self.flux_of_discovery(sub.payload), RESTRICTED_FLUX)
 
     def test_classification_refuses_a_spectrum_the_user_may_not_send(self):
-        for user in (self.member, self.outsider):
+        for user in (self.member, self.outsider, self.staff):  # staff outside the group: not theirs (#706)
             with self.assertRaises(tns.PayloadError):
                 tns.build_classification_report(self.service, self.transient, spectrum=self.spec,
                                                 classification="SN Ia", scope=ReportScope.for_user(user))
-        for user in (self.pi_user, self.deputy, self.staff):
+        for user in (self.pi_user, self.deputy):
             report = tns.build_classification_report(self.service, self.transient, spectrum=self.spec,
                                                      classification="SN Ia", scope=ReportScope.for_user(user))
             self.assertEqual(report["_yse"]["spectrum_id"], self.spec.pk)
@@ -142,7 +149,7 @@ class ManualReportTests(ReportBase):
 
     def test_dialog_lists_only_sendable_spectra_and_counts_the_rest(self):
         self.service.groups.clear()
-        for user, n_spectra, omitted in ((self.member, 1, 1), (self.pi_user, 2, None), (self.staff, 2, None)):
+        for user, n_spectra, omitted in ((self.member, 1, 1), (self.pi_user, 2, None), (self.staff, 1, None)):
             ctx = report_dialog_context(user, self.transient)
             self.assertEqual(len(ctx["sharing_spectra"]), n_spectra, user.username)
             self.assertEqual((ctx["sharing_omitted"] or {}).get("spectra"), omitted and 1, user.username)
@@ -188,7 +195,7 @@ class ManualReportTests(ReportBase):
         self.assertEqual(self.flux_of_discovery(sub.payload), PUBLIC_FLUX)
 
     def test_hermes_message_by_role(self):
-        for user, n_points in ((self.member, 3), (self.pi_user, 5), (self.staff, 5)):
+        for user, n_points in ((self.member, 3), (self.pi_user, 5), (self.staff, 3)):
             message = hermes_feed.build_message(self.transient, "t", scope=ReportScope.for_user(user))
             self.assertEqual(len(message["data"]["photometry"]), n_points, user.username)
         self.assertEqual(len(hermes_feed.build_message(self.transient, "t")["data"]["photometry"]), 3)

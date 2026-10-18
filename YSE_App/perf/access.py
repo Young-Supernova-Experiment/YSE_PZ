@@ -2,7 +2,7 @@
 Non-staff fixtures for the access-filtered dashboard and API paths (#451, #452).
 
 Every other perf fixture logs in as staff (``create_test_user`` defaults to
-``is_staff=True``), and staff bypass ``filter_transients_by_user_access``, so the
+``is_staff=True``); staff no longer bypass ``filter_transients_by_user_access`` (#706), but the
 per-transient visibility cost never showed up in a query count. These helpers
 seed a collaboration member who is not staff and transients whose photometry
 or spectra are public, private to the member's group, or private to another

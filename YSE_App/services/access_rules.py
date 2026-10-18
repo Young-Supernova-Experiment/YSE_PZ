@@ -8,7 +8,8 @@ is exactly today's collaboration-group rule, with the same SQL.
 **Precedence** for one user U and one photometry point or spectrum (Ryan,
 #648, 2026-10-17):
 
-1. Staff see everything (callers check ``user_sees_everything`` first).
+1. Service readers (``visibility.user_sees_everything``: the configured cron and script
+   accounts) see everything; staff follow the rules like everyone else (#706).
 2. Public data (no collaboration group, or for a Public member only Public)
    can never be restricted.
 3. A rule for U personally decides (one per point and user).
@@ -164,7 +165,9 @@ def summary_for(user) -> Optional[RulesSummary]:
     """The user's :class:`RulesSummary`, or ``None`` when no rule can apply (flag off, staff, anonymous)."""
     if not enabled() or user is None or not getattr(user, "is_authenticated", False):
         return None
-    if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+    from YSE_App.services.visibility import user_sees_everything
+
+    if user_sees_everything(user):  # service readers only; staff follow the rules like everyone (#706)
         return None
     memo = getattr(user, "_yse_access_rules_memo", None)
     now = time.monotonic()

@@ -13,6 +13,7 @@ from .models import *
 from .serializers import *
 from .data import PhotometryService, SpectraService, ObservingResourceService
 from YSE_App.services.visibility import filter_listed_transients, filter_transients_by_user_access
+from YSE_App.services.visibility import user_sees_everything as _sees_all_data  # service readers only (#706)
 from YSE_App.filters.transient_search import TransientSearchFilterSet
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
@@ -633,8 +634,11 @@ class AnalysisRunViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mix
         qs = (ExternalServiceRun.objects.filter(service__kind=ExternalService.KIND_ANALYSIS)
               .select_related("service", "service__analysis", "transient", "created_by").prefetch_related("files"))
         user = self.request.user
-        if not (user.is_staff or user.is_superuser):
-            visible = filter_transients_by_user_access(
+        if not _sees_all_data(user):
+            from YSE_App.services.visibility import filter_transients_by_data_access
+
+            # fit results are derived from photometry: the data rule, staff included (#706)
+            visible = filter_transients_by_data_access(
                 user, Transient.objects.filter(service_runs__service__kind=ExternalService.KIND_ANALYSIS).distinct())
             qs = qs.filter(Q(created_by=user) | Q(transient__in=visible))
         transient = self.request.query_params.get("transient")

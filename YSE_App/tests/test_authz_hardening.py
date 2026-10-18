@@ -324,9 +324,12 @@ class TransientSummaryVisibilityTests(TestCase):
         return {t.name for t in resp.context["transients"]}
 
     def check_branch(self, slug):
-        self.assertIn("sumvis-sn", self.names(self.staff, slug))
         self.assertIn("sumvis-sn", self.names(self.member, slug))
         self.assertNotIn("sumvis-sn", self.names(self.outsider, slug))
+        # staff outside the group: like the outsider (#706); a service reader sees it
+        self.assertNotIn("sumvis-sn", self.names(self.staff, slug))
+        with override_settings(DATA_SERVICE_READER_USERNAMES=["sumvis_staff"]):
+            self.assertIn("sumvis-sn", self.names(self.staff, slug))
 
     def test_status_branch(self):
         self.check_branch("New")

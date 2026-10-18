@@ -6,7 +6,7 @@ from unittest import mock
 import requests
 from django.core.cache import cache
 from django.db import connection
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 
 from YSE_App import view_utils
@@ -181,6 +181,8 @@ class TransientSummaryPageTests(TestCase):
         self.assertEqual(n_two, n_six)
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['detail_summary_plots'])
 class SummaryPlotCacheTests(TestCase):
     def setUp(self):
         cache.clear()

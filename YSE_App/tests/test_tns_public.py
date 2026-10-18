@@ -26,6 +26,7 @@ class ReportedDataBecomePublicTests(ss.SharingBase):
         self.private = Group.objects.create(name="tnspub-private")
         self.header = self.transient.transientphotometry_set.first()
         self.header.groups.set([self.private])
+        self.staff.groups.add(self.private)  # staff report only data they may see (#706)
         self.spectrum = self.transient.transientspectrum_set.first()
         self.spectrum.groups.set([self.private])
         self.point_ids = set(TransientPhotData.objects.filter(photometry=self.header).values_list("pk", flat=True))

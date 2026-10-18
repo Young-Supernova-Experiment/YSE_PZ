@@ -10,7 +10,7 @@ import itertools
 from unittest import mock
 
 from django.db import connection
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -970,6 +970,8 @@ class _ExplorerToDefault:
         return connections["default" if alias == "explorer" else alias]
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['speed_explorer_cache_user'])
 class ExplorerQueryCacheReuseTests(TestCase):
     """P13: one Explorer SQL run serves the dashboard section and transient_summary."""
 

@@ -86,7 +86,9 @@ class ViewerRuleTests(TestCase):
         staff = create_test_user('pqs_staff', is_staff=True)
         member = create_test_user('pqs_plain', is_staff=False)
         self.assertFalse(pqs.viewer_is_scoped(None))
-        self.assertFalse(pqs.viewer_is_scoped(staff))
+        self.assertTrue(pqs.viewer_is_scoped(staff))  # staff see only what they have access to (#706)
+        with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_staff']):
+            self.assertFalse(pqs.viewer_is_scoped(staff))
         self.assertTrue(pqs.viewer_is_scoped(member))
         self.assertTrue(pqs.viewer_is_scoped(AnonymousUser()))
         with override_settings(PAGE_QUERY_TABLE_POLICY='off'):
@@ -96,7 +98,9 @@ class ViewerRuleTests(TestCase):
         staff = create_test_user('pqs_staff2', is_staff=True)
         member = create_test_user('pqs_plain2', is_staff=False)
         self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL))
-        self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL, staff))
+        self.assertIn('yse_app_transientphotdata', dashboard_sql_rejection_reason(RAW_PHOT_SQL, staff))  # #706
+        with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_staff2']):
+            self.assertIsNone(dashboard_sql_rejection_reason(RAW_PHOT_SQL, staff))
         self.assertIn('yse_app_transientphotdata', dashboard_sql_rejection_reason(RAW_PHOT_SQL, member))
         self.assertIsNone(dashboard_sql_rejection_reason(META_SQL, member))
 
@@ -108,7 +112,8 @@ class ViewerRuleTests(TestCase):
         query = Query.objects.create(title='pqs raw', sql=RAW_PHOT_SQL, snapshot=False, created_by_user=owner)
         cache.set(views_module.explorer_query_cache_key(query.id), ['staff-only-result'])
         self.addCleanup(cache.clear)
-        self.assertEqual(views_module.run_explorer_query_cached(query, user=owner), ['staff-only-result'])
+        with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_owner']):  # a service reader (#706)
+            self.assertEqual(views_module.run_explorer_query_cached(query, user=owner), ['staff-only-result'])
         with self.assertRaises(pqs.PageQueryRefused):
             views_module.run_explorer_query_cached(query, user=member)
 
@@ -119,7 +124,9 @@ class ViewerRuleTests(TestCase):
         sql = "SELECT t.name, d.salt_x1 FROM YSE_App_transient t JOIN YSE_App_v_derived d ON d.id = t.id"
         with override_settings(PAGE_QUERY_EXTRA_ALLOWED_TABLES='YSE_App_v_derived'):
             self.assertEqual(pqs.selection_only_result(sql, member, names, rows), (['name'], [('a',), ('b',)]))
-            self.assertEqual(pqs.selection_only_result(sql, staff, names, rows), (names, rows))
+            self.assertEqual(pqs.selection_only_result(sql, staff, names, rows), (['name'], [('a',), ('b',)]))
+            with override_settings(DATA_SERVICE_READER_USERNAMES=['pqs_staff4']):
+                self.assertEqual(pqs.selection_only_result(sql, staff, names, rows), (names, rows))
             self.assertEqual(pqs.selection_only_result(sql, None, names, rows), (names, rows))
         # no extra table read: unchanged
         self.assertEqual(pqs.selection_only_result(META_SQL, member, names, rows), (names, rows))
@@ -130,6 +137,7 @@ class ViewerRuleTests(TestCase):
     QUERY_API_CACHE_SECONDS=0,
     QUERY_API_ALLOWED_QUERIES=['pqs meta', 'pqs raw'],
     API_SERVICE_USERNAMES=['pqs_cron'],
+    DATA_SERVICE_READER_USERNAMES=['pqs_api_owner'],  # the staff owner reads all data as a service reader (#706)
     QUERY_API_VISIBILITY_FILTER=True,
 )
 class QueryApiScopeTests(TestCase):

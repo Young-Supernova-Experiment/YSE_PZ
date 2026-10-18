@@ -1784,7 +1784,7 @@ def _filter_viewer(filterset):
     """The user a filter set runs for: ``request.user`` of the ``request=`` it was built with.
 
     Without a request the filter runs for no one (public data only), never
-    for staff, so a missing request cannot widen a filter (#692).
+    for service readers, so a missing request cannot widen a filter (#692).
     """
     from django.contrib.auth.models import AnonymousUser
 
@@ -1802,7 +1802,7 @@ def annotate_search_fields(qs, user=None, with_recent_mag=False):
     is the only value that needs a subquery; the rest are single-valued joins.
 
     The searchable magnitudes are what ``user`` may see (#607, #692): disc_mag
-    reads only visible photometry for a non-staff viewer, and
+    reads only visible photometry for any viewer who is not a service reader, and
     ``with_recent_mag`` adds ``search_recent_mag`` from the viewer's stat scope.
     ``user=None`` means no viewer: only public (ungrouped) photometry.
     """

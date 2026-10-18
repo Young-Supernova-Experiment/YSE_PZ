@@ -34,8 +34,8 @@ def group_access_plot_cache_token(user: User) -> str:
 
     if not user.is_authenticated:
         return "anon"
-    if user.is_staff or user.is_superuser:
-        return "staff"
+    if user_sees_everything(user):
+        return "service"  # service readers (#706); staff share plots by group membership like everyone
     from YSE_App.services import access_rules
 
     # Read-time rules (#648): the rules version, and a per-user part for personal rules
@@ -77,10 +77,11 @@ def object_visible_to_user(user: User, obj) -> bool:
     """
     if not user.is_authenticated:
         return False
-    if user.is_staff or user.is_superuser:
-        return True
     if _dataset_model(obj) is not None:
-        return dataset_visible_to_user(user, obj)
+        # Data: staff follow the rule like everyone (#706); only service readers see everything.
+        return user_sees_everything(user) or dataset_visible_to_user(user, obj)
+    if user.is_staff or user.is_superuser:
+        return True  # observing resources and other administrative objects
     if not object_has_groups(obj):
         return True
     names = set(user_group_names(user))
@@ -110,10 +111,14 @@ def shared_groups_for_transient(user: User, transient_id: int) -> QuerySet[Group
 
 
 def user_can_view_transient(user: User, transient_id: int) -> bool:
-    """True if user may access this transient's collaboration surfaces (comments, etc.)."""
+    """True if user may access this transient's collaboration surfaces (comments, interests, etc.).
+
+    Staff keep these (moderation and coordination are administrative, #706); the transient's
+    *data* follow :func:`photometry_visible_q` / :func:`spectrum_visible_q` for staff too.
+    """
     if not user.is_authenticated:
         return False
-    if user.is_staff or user.is_superuser:
+    if _collaboration_admin(user):
         return True
     from YSE_App.data import PhotometryService, SpectraService
 
@@ -197,16 +202,29 @@ def transient_access_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
 def filter_transients_by_user_access(
     user: User, transients: Union[QuerySet, Iterable],
 ):
-    """Post-filter transients (e.g. after SQL Explorer) by photometry/spectrum access.
+    """Post-filter transients by photometry/spectrum access, for collaboration surfaces.
 
     Same rows as calling :func:`user_can_view_transient` per transient, in a
     fixed number of queries: a QuerySet gets the :func:`transient_access_q`
     condition (no query until it is evaluated) and an iterable of transients
-    is checked with one query for all of them. Staff and superusers see
-    everything; anonymous users see nothing.
+    is checked with one query for all of them. Staff and service readers see
+    everything here (comments, interests, favorites, annotations; #706 keeps
+    these administrative); anonymous users see nothing. Surfaces that show
+    data derived from photometry use :func:`filter_transients_by_data_access`.
     """
-    if user.is_staff or user.is_superuser:
+    if _collaboration_admin(user):
         return transients
+    return _filter_by_access(user, transients)
+
+
+def filter_transients_by_data_access(user: User, transients: Union[QuerySet, Iterable]):
+    """:func:`filter_transients_by_user_access` without the staff shortcut (#706): for data-derived surfaces."""
+    if user_sees_everything(user):
+        return transients
+    return _filter_by_access(user, transients)
+
+
+def _filter_by_access(user: User, transients: Union[QuerySet, Iterable]):
     if isinstance(transients, QuerySet):
         if not user.is_authenticated:
             return transients.none()
@@ -228,7 +246,8 @@ def filter_transients_by_user_access(
 #
 # Ryan's rule (issue #607, 2026-10-11): an object with a TNS name is public
 # and is always listed; any other object is listed only when the user may see
-# some of its data (``transient_access_q``); staff see everything. Basic
+# some of its data (``transient_access_q``); service readers see everything (staff do
+# not, #706). Basic
 # information (name, position, status) is shown for every listed object, and
 # photometry, spectra and every value derived from them keep their group
 # restrictions (``services.photstat_visibility``).
@@ -248,9 +267,33 @@ def user_group_ids(user: User) -> List[int]:
     return list(user.groups.values_list('id', flat=True))
 
 
+def _collaboration_admin(user) -> bool:
+    """Staff, superusers and service readers: they see every transient's collaboration surfaces (not its data)."""
+    return bool(user is not None and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)
+                                      or user_sees_everything(user)))
+
+
+def is_service_reader(user) -> bool:
+    """A cron or script account that reads all data (#706): active, authenticated, and named in
+    ``settings.DATA_SERVICE_READER_USERNAMES`` (the ``[main] dblogin`` ingest account plus
+    ``[site_settings] DATA_SERVICE_READERS``). No query."""
+    if user is None or not getattr(user, 'is_authenticated', False) or not getattr(user, 'is_active', False):
+        return False
+    from django.conf import settings
+
+    readers = set(getattr(settings, 'DATA_SERVICE_READER_USERNAMES', ()) or ())
+    readers |= set(getattr(settings, 'API_SERVICE_USERNAMES', ()) or ())  # the cron account (#524)
+    return getattr(user, 'username', None) in readers
+
+
 def user_sees_everything(user) -> bool:
-    """Staff and superusers bypass collaboration-group restrictions."""
-    return bool(user is not None and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
+    """Whether ``user`` bypasses data restrictions: only service readers (#706).
+
+    Staff and superusers see only the data they have access to, like everyone
+    else (Ryan, 2026-10-17); they keep their administrative actions, which are
+    checked separately (``is_staff`` / ``data_sharing.share_role`` staff override).
+    """
+    return is_service_reader(user)
 
 
 def _extra_access_grants_q(user: User) -> Optional[Q]:
@@ -275,8 +318,8 @@ def _extra_photometry_grants_q(user: User) -> Optional[Q]:
 # plug in at ``_photometry_access_rules`` / ``_spectrum_access_rules``
 # (``services.access_rules``); both return ``NO_RULES`` with the flag off or no
 # applicable rule, so the conditions (and their SQL) are exactly the group rule.
-# These functions never bypass staff: callers that let staff see
-# everything check ``user_sees_everything`` first, as before.
+# These functions never bypass anyone: callers that let service readers see
+# everything check ``user_sees_everything`` first.
 
 
 class AccessRules(NamedTuple):
@@ -306,7 +349,7 @@ NO_RULES = AccessRules()
 def _photometry_access_rules(user: User) -> AccessRules:
     """Per-point rules on ``TransientPhotometry`` sets for ``user`` (#648, ``services.access_rules``).
 
-    ``NO_RULES`` with ``DATA_ACCESS_GRANTS_ENABLED`` off, for staff, anonymous
+    ``NO_RULES`` with ``DATA_ACCESS_GRANTS_ENABLED`` off, for service readers, anonymous
     users and users to whom no rule applies. At set level a set is visible
     only when every one of its points is.
     """
@@ -326,7 +369,7 @@ def photometry_points_visible_q(user: User) -> Optional[Q]:
     """Condition on ``TransientPhotData`` for a user with per-point rules (#648), else ``None``.
 
     ``None`` means "use the set-level rule" (no rule applies, the flag is off,
-    staff or anonymous); then point reads keep their old SQL exactly.
+    service reader or anonymous); then point reads keep their old SQL exactly.
     """
     from YSE_App.services import access_rules
 
@@ -445,8 +488,9 @@ def filter_listed_transients(user: User, transients: Union[QuerySet, Iterable]):
     """The objects ``user`` may see listed: every list, table, API and export (#607).
 
     Same calling convention as :func:`filter_transients_by_user_access`: a
-    QuerySet stays lazy, an iterable is checked with one query. Staff and
-    superusers see everything; anonymous users see nothing (machine clients
+    QuerySet stays lazy, an iterable is checked with one query. Service
+    readers see everything; staff and superusers are listed what anyone with
+    their groups is (#706); anonymous users see nothing (machine clients
     authenticate with a token or Basic auth and are users like any other).
     Use :func:`filter_transients_by_user_access` instead for surfaces that
     show the object's *data* (comments, annotations, interests, runs).

@@ -82,6 +82,8 @@ class _ExplorerToDefault:
 
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['checklist_flow_user'])
 class DeployChecklistFlowTests(TestCase):
     @classmethod
     def setUpTestData(cls):

@@ -806,7 +806,7 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 
 ### One visibility policy for transient lists, per-scope photometry statistics (2026-10-16, #607) migration applied by the deploy; one backfill required per database
 
-**What changes.** Non-staff users now see the same transients on the search page, the dashboards, the API and the exports: every object with a TNS name, plus the objects whose data they may see (`docs/transient-search.md`, section "Who sees which transients and which values"). Values derived from photometry (Last Det., Last Obs., Peak Mag, filters, sorting, `/api/transientphotstats/`, the export, Bazin magnitudes) come only from photometry they may see. Staff see what they saw before.
+**What changes.** Non-staff users now see the same transients on the search page, the dashboards, the API and the exports: every object with a TNS name, plus the objects whose data they may see (`docs/transient-search.md`, section "Who sees which transients and which values"). Values derived from photometry (Last Det., Last Obs., Peak Mag, filters, sorting, `/api/transientphotstats/`, the export, Bazin magnitudes) come only from photometry they may see. Staff see what they saw before (until #706: staff now see only what they have access to; [section](#staff-visibility)).
 
 **Migration:** `0042_transient_photstat_scope` adds one new table, `YSE_App_transientphotstatscope`. It changes no existing table and the deploy applies it. **No new package.**
 
@@ -822,6 +822,30 @@ LOGIN_REQUIRED_MIDDLEWARE = False
 **Re-run `--apply`** (optional) after deleting a group in the admin, or after photometry was uploaded through yse\_test while it still runs older code (both stacks share the database and only the newer code writes the scope rows).
 
 **Explorer grants (only if you limited them, [Step E](#authz-flags)):** a search that a non-staff user saves as a dashboard query reads the new table; add `SELECT` on `YSE_App_transientphotstatscope` for the Explorer MySQL user, as for `YSE_App_transientphotstat`.
+
+<a id="staff-visibility"></a>
+
+### Staff see only the data they have access to (2026-10-18, #706) check the script accounts below; no migration
+
+**What changes.** Ryan's decision (2026-10-17): staff and superusers see only the photometry, spectra and derived values they have access to, the same as other users. That applies to transient lists, the dashboards and search, PhotStat values (Last Det., Peak Mag), plots and fits, the detail page, exports, saved queries and `/query_api/` rows, the REST API, annotations and analysis runs.
+
+Staff keep their administrative actions:
+- deciding data-access requests;
+- the Django admin;
+- SQL Explorer access (it reads the database directly, as before);
+- the access-rule actions they have as administrators (#648);
+- moderation of comments, follow-ups and logs, which keep their staff view.
+
+**Service readers.** Only the accounts in `DATA_SERVICE_READER_USERNAMES` read all data. These are:
+- the `[main] dblogin` ingest account, as before;
+- the comma-separated usernames in `[site_settings] DATA_SERVICE_READERS` (empty by default).
+
+**What David should check, on each stack's `settings.ini` (usernames only, never passwords):**
+1. List the accounts the crons and scripts authenticate as. Look at the `[main] dblogin` / `dbpassword` users of `YSE_App/data_ingest/*` and any external script that reads `/api/...`, `/query_api/...`, `/download_photometry/...` or the bulk photometry download.
+2. If such an account is **not** `[main] dblogin` and must keep reading all data, add it to `DATA_SERVICE_READERS` under `[site_settings]`. One case is a pipeline that reads restricted photometry it is not a group member for. Restart gunicorn.
+3. Accounts that only write (uploads, `api_writers`) need nothing: writing is unchanged.
+
+**Expected:** staff who are not in a collaboration group no longer see its restricted photometry, spectra or derived values. The crons keep working.
 
 <a id="access-dashboard"></a>
 
@@ -2931,6 +2955,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v79, **check the script accounts** (no migration). Staff see only the data they have access to ([#706](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/706)): staff and superusers no longer bypass collaboration groups or access rules on any data path; only `DATA_SERVICE_READER_USERNAMES` (the `[main] dblogin` account plus `[site_settings] DATA_SERVICE_READERS`) read all data; add any other cron or script account that must keep reading everything ([section "Staff see only the data they have access to"](#staff-visibility)). No new package.
 * 2026-10-18 v78, **nothing required** (no migration; one check recommended). Saved Explorer queries that feed pages are viewer-scoped ([#715](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/715)): for viewers who do not see all data, page-feeding queries may read only transient metadata tables; queries over photometry, spectra or their statistics are refused for them (staff, service accounts and the cache warmer unchanged). Rollback switch `PAGE_QUERY_TABLE_POLICY: off`. See the section "Saved Explorer queries that feed pages" above.
 * 2026-10-17 v77, **nothing required** (no migration). Data reported to TNS become and stay public ([#708](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/708)): after TNS confirms a report (manual dialog, autopublish, legacy DECam form; never the sandbox), exactly the photometry points and spectra that were sent get the Public group and lose their other collaboration groups; a photometry set of which only some points were sent is split (the sent points move to a new public header, the rest stay restricted). Reports queued before this deploy do not record their points, so earlier reports are not touched (`mark_tns_imports_public` covers TNS imports). Staff can no longer opt data in to autopublish (PIs and deputies only; existing opt-ins stay, staff may still opt out).
 * 2026-10-18 v76, **migration applied by the deploy; nothing else required** (dashboard hidden while `DATA_ACCESS_GRANTS_ENABLED` is off). Ryan's access decisions ([#648](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/648), PR 6a): PIs may restrict shared data; turning sharing off is forward by default with a backwards option; removing a group from a dataset writes `kept` rules for the earlier points; data access dashboard with the autopublish opt-ins; migration `0046_access_rule_kept` (choices only) ([section "Data access dashboard"](#access-dashboard)). No new package.

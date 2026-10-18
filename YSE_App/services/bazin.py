@@ -464,7 +464,7 @@ def detections_by_transient(transient_ids: Iterable[int], user=None):
 
     With ``user``, only the photometry that user may see (#607): a fitted
     value never comes from points the viewer cannot see. ``None`` (the
-    background job, staff pages) fits everything.
+    background job, service readers) fits everything.
 
     Returns ``{transient_id: {'token': str, 'bands': {band_id: (band_name, [(mjd, mag, magerr), ...])}}}``.
     ``token`` (``"<n usable rows>:<latest modified_date>"``) identifies the
@@ -515,7 +515,7 @@ def _fit_cache_key(transient_id: int, token: str, scope: str = 'all') -> str:
 
 
 def _scope_token(user) -> str:
-    """Cache scope of a viewer's fits: ``all`` for staff / no user, else the group-access token."""
+    """Cache scope of a viewer's fits: ``all`` for service readers / no user, else the group-access token."""
     if user is None:
         return 'all'
     from YSE_App.services.visibility import group_access_plot_cache_token, user_sees_everything

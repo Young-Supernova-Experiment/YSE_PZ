@@ -2,7 +2,7 @@
 
 * Listing (``services.visibility.filter_listed_transients``): a TNS-named
   object is always listed; any other object only when the user may see some
-  of its data; staff see everything; anonymous users nothing.
+  of its data; service readers (cron and script accounts) see everything; staff are users like any other (#706); anonymous users nothing.
 * Derived values: per-scope ``TransientPhotStatScope`` rows (option (a)); a
   viewer with hidden photometry sees the best scope they may see, never the
   all-data row; before the backfill, no value at all.
@@ -69,6 +69,9 @@ def _point(photometry, band, days_ago, mag, user):
     )
 
 
+# The 'staff' fixture account is a service reader here (it reads all data); plain staff see only
+# what their groups allow since #706 (tests/test_staff_visibility.py).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['vis607_staff'])
 class _VisibilityFixture(TestCase):
     @classmethod
     def setUpTestData(cls):

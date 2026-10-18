@@ -14,7 +14,7 @@ Covers two regressions Ryan Foley found on yse_test (develop vs production):
 
 import datetime
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from YSE_App.models import Transient
@@ -61,6 +61,8 @@ class LastObsDateColumnTests(TestCase):
         self.assertEqual(cell, expected)
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['dash_sort_user'])
 class DashboardDeferredSectionTests(TestCase):
     @classmethod
     def setUpTestData(cls):
