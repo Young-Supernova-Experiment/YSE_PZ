@@ -182,7 +182,7 @@ class SearchExportTests(SearchFixture):
         self.assertIn('2026prv', outsider_names)  # TNS-named: listed for everyone (#607)
         self.assertLessEqual(outsider_names, member_names)
         _, staff_names = _names(Client_logged_in(self.user).get(self.url, {}))
-        self.assertEqual(staff_names, self.all_names | {'PS26hid'})
+        self.assertEqual(staff_names, outsider_names)  # staff outside the group: like the outsider (#706)
 
     def test_group_filter_cannot_leak_for_non_staff(self):
         self.client.force_login(self.outsider)

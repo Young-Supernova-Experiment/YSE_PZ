@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from django.core.cache import cache
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from explorer.models import Query
 
 from YSE_App.common.filter_display import (
@@ -81,6 +81,8 @@ class MagnitudeFormatTests(TestCase):
         self.assertEqual(format_magnitude_with_error(18.324, 0.0891), '18.32 ± 0.09')
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['pdash_pagination_user'])
 class PersonalDashboardPaginationTests(TestCase):
     def setUp(self):
         self.user = create_test_user(username='pdash_pagination_user')

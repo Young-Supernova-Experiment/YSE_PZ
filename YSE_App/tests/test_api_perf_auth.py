@@ -7,7 +7,7 @@ from unittest import mock
 from django.contrib.auth.models import AnonymousUser, Group, User
 from django.db import connection
 from django.http import HttpResponse
-from django.test import Client, RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rest_framework.authtoken.models import Token
 
@@ -85,6 +85,8 @@ class QueryCountTests(ApiListFixture):
                 self.assertEqual(small, large, "%s: %d queries for 2 rows, %d for 6" % (url, small, large))
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['api_perf_user'])
 class OutputUnchangedTests(ApiListFixture):
     def test_json_identical_without_pk_only_optimization(self):
         """The pk-only field must render byte-identical JSON to the old per-row load."""

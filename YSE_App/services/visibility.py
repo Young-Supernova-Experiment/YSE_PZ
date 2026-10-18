@@ -111,10 +111,14 @@ def shared_groups_for_transient(user: User, transient_id: int) -> QuerySet[Group
 
 
 def user_can_view_transient(user: User, transient_id: int) -> bool:
-    """True if user may access this transient's collaboration surfaces (comments, etc.)."""
+    """True if user may access this transient's collaboration surfaces (comments, interests, etc.).
+
+    Staff keep these (moderation and coordination are administrative, #706); the transient's
+    *data* follow :func:`photometry_visible_q` / :func:`spectrum_visible_q` for staff too.
+    """
     if not user.is_authenticated:
         return False
-    if user_sees_everything(user):
+    if _collaboration_admin(user):
         return True
     from YSE_App.data import PhotometryService, SpectraService
 
@@ -198,16 +202,29 @@ def transient_access_q(user: User, names: Optional[Iterable[str]] = None) -> Q:
 def filter_transients_by_user_access(
     user: User, transients: Union[QuerySet, Iterable],
 ):
-    """Post-filter transients (e.g. after SQL Explorer) by photometry/spectrum access.
+    """Post-filter transients by photometry/spectrum access, for collaboration surfaces.
 
     Same rows as calling :func:`user_can_view_transient` per transient, in a
     fixed number of queries: a QuerySet gets the :func:`transient_access_q`
     condition (no query until it is evaluated) and an iterable of transients
-    is checked with one query for all of them. Service readers see
-    everything (staff do not, #706); anonymous users see nothing.
+    is checked with one query for all of them. Staff and service readers see
+    everything here (comments, interests, favorites, annotations; #706 keeps
+    these administrative); anonymous users see nothing. Surfaces that show
+    data derived from photometry use :func:`filter_transients_by_data_access`.
     """
+    if _collaboration_admin(user):
+        return transients
+    return _filter_by_access(user, transients)
+
+
+def filter_transients_by_data_access(user: User, transients: Union[QuerySet, Iterable]):
+    """:func:`filter_transients_by_user_access` without the staff shortcut (#706): for data-derived surfaces."""
     if user_sees_everything(user):
         return transients
+    return _filter_by_access(user, transients)
+
+
+def _filter_by_access(user: User, transients: Union[QuerySet, Iterable]):
     if isinstance(transients, QuerySet):
         if not user.is_authenticated:
             return transients.none()
@@ -248,6 +265,12 @@ def user_group_ids(user: User) -> List[int]:
     if not getattr(user, 'is_authenticated', False):
         return []
     return list(user.groups.values_list('id', flat=True))
+
+
+def _collaboration_admin(user) -> bool:
+    """Staff, superusers and service readers: they see every transient's collaboration surfaces (not its data)."""
+    return bool(user is not None and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)
+                                      or user_sees_everything(user)))
 
 
 def is_service_reader(user) -> bool:

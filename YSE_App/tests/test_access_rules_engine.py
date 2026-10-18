@@ -307,9 +307,13 @@ class PrecedenceTests(_Fixture):
                       _pks(SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(outsider,
                                                                                          self.transient.pk)))
 
-    def test_staff_and_anonymous_are_unaffected(self):
+    def test_service_readers_and_anonymous_are_unaffected(self):
         self.rule(self.points[("g", 0)], DENY, group=self.g)
-        self.assertIsNone(visible_photometry_ids_q(self.fresh(self.staff)))
+        self.rule(self.points[("g", 1)], ALLOW, user=self.staff)
+        with override_settings(DATA_SERVICE_READER_USERNAMES=[self.staff.username]):
+            self.assertIsNone(visible_photometry_ids_q(self.fresh(self.staff)))
+        # staff follow the rules like everyone else (#706)
+        self.assertEqual(self.points_of(self.staff), self.all_points("pub") | {self.points[("g", 1)].pk})
         self.assertEqual(visibility._photometry_access_rules(AnonymousUser()), visibility.NO_RULES)
 
 

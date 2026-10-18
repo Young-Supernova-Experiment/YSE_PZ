@@ -103,10 +103,9 @@ def _old_transient_access_q(user):
 
 
 def _old_object_visible(user, obj):
+    # The group rule; staff no longer bypass it for photometry and spectra (#706).
     if not user.is_authenticated:
         return False
-    if user.is_staff or user.is_superuser:
-        return True
     obj_names = set(obj.groups.values_list("name", flat=True))
     return not obj_names or bool(set(_old_names(user)) & obj_names)
 

@@ -134,6 +134,8 @@ def assert_page_load(
 @override_settings(
     PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
 )
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['perf_detail_user'])
 class TransientDetailPagePerformanceTests(TestCase):
     """Transient object page: /transient_detail/<slug>/"""
 

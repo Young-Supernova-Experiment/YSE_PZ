@@ -17,7 +17,7 @@ from unittest import mock
 from django.core.cache import cache
 from django.db import connections
 from django.http import QueryDict
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -60,6 +60,8 @@ def run_sql(sql):
         cursor.close()
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class CompileEquivalenceTests(SearchFixture):
 
 

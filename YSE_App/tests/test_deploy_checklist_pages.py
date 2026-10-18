@@ -43,6 +43,8 @@ def _sort_param(prefix: str) -> str:
 
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['checklist_page_user'])
 class DeployChecklistPageTests(TestCase):
     @classmethod
     def setUpTestData(cls):

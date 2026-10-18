@@ -270,12 +270,16 @@ class PersonalDashboardAccessTests(TestCase):
                 self.assertEqual(sync[uq.id][5], len(self.expected))
         self.assertLess(len(self.expected), len(self.names))
 
-    def test_staff_section_count_is_unchanged(self):
+    def test_service_reader_section_count_is_unchanged(self):
+        # Staff alone no longer see every row (#706); a service reader does.
         staff_uq = UserQuery.objects.create(user=self.owner, query=self.query, **audit_fields(self.owner))
         client = Client()
         client.force_login(self.owner)
-        row = client.get(reverse("personaldashboard_section", args=[staff_uq.id])).context["transient_cat"]
+        with override_settings(DATA_SERVICE_READER_USERNAMES=[self.owner.username]):
+            row = client.get(reverse("personaldashboard_section", args=[staff_uq.id])).context["transient_cat"]
         self.assertEqual(row[5], len(self.names))
+        row = client.get(reverse("personaldashboard_section", args=[staff_uq.id])).context["transient_cat"]
+        self.assertLess(row[5], len(self.names))
 
     def test_section_filters_pks_not_names(self):
         with CaptureQueriesContext(connection) as ctx:
@@ -432,6 +436,8 @@ class PageFirstCountTests(TestCase):
         self.assertEqual(self._qs().values("pk").count(), len(ACCESS_MIX))
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['dacc_ord_owner'])
 class RecentPhotOrderingTests(TestCase):
     """Last Mag / Last Obs. Date sort on TransientPhotStat and keep the displayed values (#454)."""
 

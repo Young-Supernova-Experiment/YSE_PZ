@@ -4,7 +4,7 @@ Synthetic data only.
 """
 
 from django.contrib.auth.models import AnonymousUser, Group
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -29,6 +29,9 @@ def _ctx(user):
     return {"request": request}
 
 
+# The 'staff' fixture account is a service reader here (it reads all data); plain staff see only
+# what their groups allow since #706 (tests/test_staff_visibility.py).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['sv693_staff'])
 class SerializerVisibilityTests(TestCase):
     @classmethod
     def setUpTestData(cls):

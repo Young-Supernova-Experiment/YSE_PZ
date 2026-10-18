@@ -74,13 +74,12 @@ class _Fixture(TestCase):
                                 .values_list("pk", flat=True)),
             "service_spectra": set(SpectraService.GetAuthorizedTransientSpectrum_ByUser(user)
                                    .values_list("pk", flat=True)),
-            "access": set(visibility.filter_transients_by_user_access(user, Transient.objects.filter(pk__in=tids))
+            "access": set(visibility.filter_transients_by_data_access(user, Transient.objects.filter(pk__in=tids))
                           .values_list("pk", flat=True)),
             "listed": set(visibility.filter_listed_transients(user, Transient.objects.filter(pk__in=tids))
                           .values_list("pk", flat=True)),
             "hidden": visibility.transients_with_hidden_photometry(user, tids),
             "peak": {tid: getattr(row, "peak_mag", None) for tid, row in stats.items()},
-            "can_view": {tid: visibility.user_can_view_transient(user, tid) for tid in tids},
             "objects": {p.pk: visibility.object_visible_to_user(user, p) for p, _s in self.sets.values()},
         }
 
@@ -130,8 +129,11 @@ class StaffLikeOutsiderTests(_Fixture):
         phot = self.sets["private"][0]
         self.assertEqual(data_sharing.share_role(self.staff, phot), data_sharing.ROLE_STAFF)
         client = Client()
-        client.force_login(self.staff)
+        client.force_login(self.superuser)
         self.assertEqual(client.get(reverse("admin:YSE_App_transientphotometry_changelist")).status_code, 200)
+        # collaboration surfaces (comments, interests) stay open to staff; data do not
+        self.assertTrue(visibility.user_can_view_transient(self.staff, self.private_t.pk))
+        self.assertFalse(visibility.user_can_view_transient(self.outsider, self.private_t.pk))
 
 
 @SERVICE

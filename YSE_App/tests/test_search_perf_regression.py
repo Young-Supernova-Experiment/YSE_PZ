@@ -15,7 +15,7 @@ import json
 import os
 from pathlib import Path
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from YSE_App.perf.search_filters import (
     ACCEPTANCE_PARAMS,
@@ -45,6 +45,8 @@ class AcceptancePredicateTests(TestCase):
         self.assertFalse(expected_match(-12.0, 18.9, 3, 5.1))
 
 
+# The benchmark account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=["perf_benchmark_search"])
 class SearchAcceptanceRegressionTests(TestCase):
     def test_acceptance_search_returns_the_expected_rows_within_budget(self):
         n_transients = configured_n_transients()

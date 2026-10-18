@@ -166,11 +166,9 @@ def _base_qs():
 
 
 def _visible_filter(qs, user):
-    from YSE_App.services.visibility import user_sees_everything
-
     if user is None or not user.is_authenticated:
         return qs.none()
-    if user_sees_everything(user):  # service readers only; staff see their groups' values (#706)
+    if user.is_staff or user.is_superuser:
         return qs
     return qs.filter(groups__isnull=True) | qs.filter(groups__in=user.groups.all())
 
