@@ -113,7 +113,7 @@ master_pos_wait source_pos_wait wait_for_executed_gtid_set wait_until_sql_thread
 sys_eval sys_exec user current_user session_user system_user current_role version database
 schema connection_id last_insert_id found_rows row_count name_const uuid_short
 statement_digest statement_digest_text icu_version roles_graphml ps_current_thread_id
-ps_thread_id format_bytes format_pico_time
+ps_thread_id format_bytes format_pico_time current_schema current_database current_catalog
 """.split())
 
 
@@ -308,7 +308,7 @@ def _parse(sql: str):
         _refuse('the query is longer than %d characters' % MAX_SQL_CHARS)
     if '\x00' in sql:
         _refuse('the query contains a NUL character')
-    if re.search(r'/\*[!+M]', sql):
+    if re.search(r'/\*(!|\+|M!)', sql):
         _refuse('MySQL executable comments and optimizer hints are not allowed')
     try:
         statements = sqlglot.parse(sql, read='mysql')
@@ -344,9 +344,10 @@ def _function_name(node) -> str:
     if isinstance(node, exp.Anonymous):
         return str(node.name or '').lower()
     try:
-        return str(node.sql_name() or '').lower()
+        name = str(node.sql_name() or '').lower()
     except Exception:  # pragma: no cover - sqlglot internals
-        return node.key.lower()
+        name = ''
+    return name or str(node.key).lower()
 
 
 def _check_nodes(root) -> None:
@@ -358,7 +359,7 @@ def _check_nodes(root) -> None:
             _refuse('%s is not allowed' % node.key.upper())
         if isinstance(node, exp.Func):
             name = _function_name(node)
-            if name in _FORBIDDEN_FUNCTIONS:
+            if name in _FORBIDDEN_FUNCTIONS or str(node.key).lower() in _FORBIDDEN_FUNCTIONS:
                 _refuse('the function %s is not allowed' % name.upper())
             if isinstance(node, exp.Anonymous):
                 if isinstance(node.parent, exp.Dot) or name not in _BUILTIN_FUNCTIONS:

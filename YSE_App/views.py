@@ -62,7 +62,8 @@ from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
 from django.contrib.auth.models import AnonymousUser
-from YSE_App.services.page_query_scope import PageQueryRefused, check_page_query
+from YSE_App.services.page_query_scope import PageQueryRefused, page_query_cache_suffix, page_query_sql
+from YSE_App.services.explorer_scope import viewer_time_cap
 from YSE_App.services.dashboard_queries import (
     dashboard_sql_is_supported,
     dashboard_sql_rejection_reason,
@@ -282,25 +283,29 @@ def run_explorer_query_cached(query, timeout=None, refresh=False, *, user):
     seconds (default ``EXPLORER_QUERY_CACHE_SECONDS``). ``refresh=True`` runs
     the query even when a cached entry exists (the cache warmer).
 
-    ``user`` is the viewer the result is for (required, #715): a viewer who does
-    not see all data may only run queries over transient metadata tables
-    (:class:`PageQueryRefused` otherwise, checked before the shared cache is
-    read). ``user=None`` marks an internal caller (the cache warmer).
+    ``user`` is the viewer the result is for (required, #715): for a viewer who
+    does not see all data the query is rewritten to their visible rows and its
+    result is cached for them alone (#723, ``services.explorer_scope``);
+    :class:`PageQueryRefused` when it cannot be, raised before any cache is
+    read. ``user=None`` marks an internal caller (the cache warmer), which
+    fills the unscoped entry.
     """
-    check_page_query(query.sql, user)
+    # Rewritten to the viewer's visible rows (#723), before the cache is read.
+    run_sql, viewer_cap_ms = page_query_sql(query.sql, user)
     if timeout is None:
         timeout = explorer_query_cache_seconds()
-    cache_key = explorer_query_cache_key(query.id)
+    cache_key = explorer_query_cache_key(query.id) + page_query_cache_suffix(user)
     names = None if refresh else cache.get(cache_key)
     if names is None:
         # The explorer connection is capped at EXPLORER_QUERY_MAX_EXECUTION_MS
         # when it is opened (YSE_App.common.db_time_cap, #233); a capped run
         # surfaces here as QueryTimeout naming the budget.
-        cursor = connections['explorer'].cursor()
+        conn = connections['explorer']
+        cursor = conn.cursor()
         try:
-            with translate_query_timeout(explorer_cap_ms()):
-                cursor.execute(query.sql.replace('%', '%%'), ())
-            names = [row[0] for row in cursor.fetchall()]
+            with translate_query_timeout(viewer_cap_ms or explorer_cap_ms()), viewer_time_cap(conn, viewer_cap_ms):
+                cursor.execute(run_sql.replace('%', '%%'), ())
+                names = [row[0] for row in cursor.fetchall()]
         finally:
             cursor.close()
         cache.set(cache_key, names, timeout=timeout)
@@ -329,21 +334,22 @@ def run_explorer_query_rows_cached(query, timeout=None, *, user):
     """
     import hashlib
 
-    check_page_query(query.sql, user)
+    run_sql, viewer_cap_ms = page_query_sql(query.sql, user)  # #723, before the cache is read
 
     if timeout is None:
         timeout = query_api_cache_seconds()
     digest = hashlib.sha1(query.sql.encode('utf-8')).hexdigest()[:16]
-    cache_key = f'explorer_query_rows_{QUERY_CACHE_VERSION}_{query.id}_{digest}'
+    cache_key = f'explorer_query_rows_{QUERY_CACHE_VERSION}_{query.id}_{digest}' + page_query_cache_suffix(user)
     cached = cache.get(cache_key) if timeout else None
     if cached is not None:
         return cached
-    cursor = connections['explorer'].cursor()
+    conn = connections['explorer']
+    cursor = conn.cursor()
     try:
-        with translate_query_timeout(explorer_cap_ms()):
-            cursor.execute(query.sql.replace('%', '%%'), ())
-        field_names = [c[0] for c in cursor.description]
-        rows = [tuple(row) for row in cursor.fetchall()]
+        with translate_query_timeout(viewer_cap_ms or explorer_cap_ms()), viewer_time_cap(conn, viewer_cap_ms):
+            cursor.execute(run_sql.replace('%', '%%'), ())
+            field_names = [c[0] for c in cursor.description]
+            rows = [tuple(row) for row in cursor.fetchall()]
     finally:
         cursor.close()
     result = (field_names, rows)
