@@ -318,6 +318,17 @@ FOLLOWUP_NOTICE_COLLAPSE_SECONDS = _int_setting(
     'YSE_FOLLOWUP_NOTICE_COLLAPSE_SECONDS', 'site_settings', 'FOLLOWUP_NOTICE_COLLAPSE_SECONDS', 600
 )
 
+# Automatic TNS and ZTF refresh for a new classical-night follow-up (#114;
+# YSE_App/services/followup_enrich.py). On by default; an object queried within the window is
+# skipped. Optional env YSE_FOLLOWUP_AUTO_ENRICH=0 or [site_settings] FOLLOWUP_AUTO_ENRICH: False,
+# and FOLLOWUP_ENRICH_WINDOW_HOURS (default 24).
+_enrich_env = os.environ.get('YSE_FOLLOWUP_AUTO_ENRICH', '').strip().lower()
+if _enrich_env:
+    FOLLOWUP_AUTO_ENRICH = _enrich_env not in ('0', 'false', 'no', 'off')
+else:
+    FOLLOWUP_AUTO_ENRICH = config.getboolean('site_settings', 'FOLLOWUP_AUTO_ENRICH', fallback=True)
+FOLLOWUP_ENRICH_WINDOW_HOURS = config.getfloat('site_settings', 'FOLLOWUP_ENRICH_WINDOW_HOURS', fallback=24.0)
+
 # django_cron's default CacheLock lives in the 'default' cache, which is the
 # per-process LocMemCache unless REDIS_URL is set, so two `runcrons` processes
 # never see each other's lock and a slow job overlaps the next pass (#472).
