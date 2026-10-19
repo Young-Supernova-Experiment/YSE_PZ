@@ -28,7 +28,9 @@ from YSE_App.tests.fixtures_minimal import (
 
 
 def _follow(user, telescope):
-    profile, _ = Profile.objects.get_or_create(user=user)
+    profile, _ = Profile.objects.get_or_create(user=user, defaults={
+        "phone_country_code": "1", "phone_area": "831", "phone_first_three": "555", "phone_last_four": "0100",
+        "phone_provider_str": "txt.example.com", **audit_fields(user)})
     return UserTelescopeToFollow.objects.create(profile=profile, telescope=telescope, **audit_fields(user))
 
 

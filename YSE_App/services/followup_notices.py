@@ -185,9 +185,20 @@ def notify_request_added(row, *, recipients: Optional[List[User]] = None):
     )
 
 
+def _status_name(followup) -> str:
+    """Name of the current status; tolerates a status object assigned to ``status_id`` (the API does)."""
+    raw = followup.status_id
+    if not raw:
+        return ""
+    name = getattr(raw, "name", None)
+    if name is not None:
+        return name
+    return followup.status.name
+
+
 def notify_status_changed(followup, old_status: str, *, actor_id=None, skip_ids=()):
     """``followup_status`` notices to the requesters of ``followup``; returns the rows created."""
-    new_status = followup.status.name if followup.status_id else ""
+    new_status = _status_name(followup)
     if not old_status or old_status == new_status:
         return []
     skip = {actor_id} | set(skip_ids)
