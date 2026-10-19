@@ -70,6 +70,7 @@
                     {% if has_gw_candidate_tag %}
                         <li class="nav-item"><a class="nav-link" href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW Info</a></li>
                     {% endif %}
+                    <li class="nav-item"><a class="nav-link" href="#history_tab" data-toggle="tab" id="history_tab_header">History</a></li>
                     <li class="nav-item d-none">
                         <a class="nav-link" href="#summary_tab" data-toggle="tab" id="yse-comments-tab-legacy">Comments (on Summary)</a>
                     </li>
@@ -283,6 +284,11 @@
                             {% else %}
                             {% include "YSE_App/transient_detail_gw_tab.html" %}
                             {% endif %}
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="history_tab">
+                        <div id="history_tab_content">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> The change history loads when you open this tab.</p>
                         </div>
                     </div>
             </div>
@@ -822,6 +828,12 @@
                         'gw',
                         "{% url 'transient_detail_gw_fragment' transient.id %}",
                         '#gw_tab_content'
+                    );
+                } else if (target === '#history_tab') {
+                    yseLoadDetailFragment(
+                        'history',
+                        "{% url 'transient_detail_history_fragment' transient.id %}",
+                        '#history_tab_content'
                     );
                 }
             });

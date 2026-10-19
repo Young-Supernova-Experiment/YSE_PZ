@@ -14,7 +14,8 @@ Ryan's rules (2026-10-18), shared by hosts (``Host.redshift``) and transients
 * **Every value records its source** in ``redshift_source``.
 
 Every automatic writer (NED, DESI, the TNS re-sync, the upload endpoints) asks
-:func:`can_replace` before writing and writes through :func:`apply_redshift`.
+:func:`can_replace` before writing and writes through :func:`apply_redshift`, which also
+records the change in the change log (``services.change_log``, #737).
 """
 
 from __future__ import annotations
@@ -131,8 +132,13 @@ def can_replace(obj, new_source: Optional[str], new_value=0.0) -> bool:
     return decide(obj, new_value, new_source).write
 
 
-def apply_redshift(obj, value, error, source: Optional[str], *, user=None, save: bool = True) -> Decision:
-    """Set ``redshift``/``redshift_err``/``redshift_source`` on ``obj`` if precedence allows."""
+def apply_redshift(obj, value, error, source: Optional[str], *, user=None, save: bool = True,
+                   service: str = "") -> Decision:
+    """Set ``redshift``/``redshift_err``/``redshift_source`` on ``obj`` if precedence allows.
+
+    A saved write is recorded in the change log (#737) as one entry by ``service`` (the
+    writer's ExternalService slug; default: the source label), with the system as actor.
+    """
     decision = decide(obj, value, source)
     if not decision.write:
         return decision
@@ -147,11 +153,23 @@ def apply_redshift(obj, value, error, source: Optional[str], *, user=None, save:
         if hasattr(obj, "modified_date"):
             fields.append("modified_date")
         obj.save(update_fields=fields)
+        from YSE_App.services import change_log
+
+        change_log.record_change(obj, "redshift", decision.old, obj.redshift, service=service or (source or ""),
+                                 category="redshift", source=obj.redshift_source, old_source=decision.old_source,
+                                 note=decision.reason)
     return decision
 
 
-def set_override(obj, value, error=None, *, source: str = SOURCE_MANUAL, user=None, save: bool = True):
-    """Set a redshift by hand and mark it as an override (wins over every catalogue)."""
+def set_override(obj, value, error=None, *, source: str = SOURCE_MANUAL, user=None, save: bool = True,
+                 actor=None, service: str = "manual"):
+    """Set a redshift by hand and mark it as an override (wins over every catalogue).
+
+    Saved, it is recorded in the change log (#737) with ``actor`` (None: unknown/system).
+    """
+    from YSE_App.services import change_log
+
+    before = change_log.redshift_state(obj)
     obj.redshift = None if value is None else float(value)
     obj.redshift_err = None if error is None else float(error)
     obj.redshift_source = (source or SOURCE_MANUAL)[:64]
@@ -160,16 +178,21 @@ def set_override(obj, value, error=None, *, source: str = SOURCE_MANUAL, user=No
         obj.modified_by = user
     if save:
         obj.save()
+        change_log.record_redshift_edit(obj, before, actor=actor, service=service)
     return obj
 
 
-def clear_override(obj, *, user=None, save: bool = True):
+def clear_override(obj, *, user=None, save: bool = True, actor=None, service: str = "manual"):
     """Drop the override flag; the value stays (as ``manual``) until a catalogue outranks it."""
+    from YSE_App.services import change_log
+
+    before = change_log.redshift_state(obj)
     obj.redshift_override = False
     if user is not None and hasattr(obj, "modified_by"):
         obj.modified_by = user
     if save:
         obj.save()
+        change_log.record_redshift_edit(obj, before, actor=actor, service=service)
     return obj
 
 

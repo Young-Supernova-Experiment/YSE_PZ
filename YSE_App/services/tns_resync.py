@@ -34,7 +34,8 @@ Each applied re-sync is recorded as an ``ExternalServiceRun`` of the ``tns`` ser
 (``transient``, ``status``, ``finished_at``, ``result``): that is the per-transient
 "last TNS sync" the sweep and the backfill resume from. A re-sync that changes nothing
 updates the transient's previous no-change run instead of adding a row, so the table
-grows with changes, not with checks. Dry runs write nothing.
+grows with changes, not with checks. Each changed field is also one change-log entry
+(``services.change_log``, #737) linked to that run. Dry runs write nothing.
 """
 
 from __future__ import annotations
@@ -218,6 +219,8 @@ def record_classification_difference(transient: Optional[Transient], *, tns_clas
     This is the one place a classification difference is recorded. Today it returns the
     entry stored in the run's ``result["classification"]``; once the decision-trail table
     (``ClassificationEvent``, Stage 5) lands, it also writes that row here with source ``TNS``.
+    Each change of ``TNS_spec_class`` / ``best_spec_class`` is already a ``classification``
+    row of the change log (#737, :func:`_log_field_changes`), which Stage 5 can build on.
     """
     tns_class = (tns_class or "").strip()
     previous_tns_class = (previous_tns_class or "").strip()
@@ -646,6 +649,7 @@ def resync_object(transient_or_name: TransientOrName, *, dry_run: bool = True, c
     if dry_run:
         return result
 
+    old_redshift_source = transient.redshift_source
     if updates:
         for attr, value in updates.items():
             setattr(transient, attr, value)
@@ -653,8 +657,25 @@ def resync_object(transient_or_name: TransientOrName, *, dry_run: bool = True, c
         transient.save(update_fields=list(updates) + ["modified_by", "modified_date"])
     if phot or specs:
         _upload_data(transient, phot, specs, user)
-    _record(transient, result, user, started=started)
+    run = _record(transient, result, user, started=started)
+    if updates:
+        _log_field_changes(transient, result, old_redshift_source, run)
     return result
+
+
+def _log_field_changes(transient: Transient, result: ResyncResult, old_redshift_source, run):
+    """One change-log entry per field the re-sync changed (#737), linked to the ``tns`` run."""
+    from YSE_App.models.change_log_models import ValueChange
+    from YSE_App.services import change_log
+
+    for attr, (old, new) in sorted(result.fields.items()):
+        if attr == "redshift":
+            change_log.record_change(transient, "redshift", old, new, service=SERVICE_SLUG, run=run,
+                                     category=ValueChange.CATEGORY_REDSHIFT, source=REDSHIFT_SOURCE,
+                                     old_source=old_redshift_source)
+        else:
+            change_log.record_change(transient, attr, old, new, service=SERVICE_SLUG, run=run,
+                                     category=ValueChange.CATEGORY_CLASSIFICATION, source="TNS")
 
 
 # --- selection -----------------------------------------------------------------

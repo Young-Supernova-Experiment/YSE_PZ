@@ -10,6 +10,8 @@ Examples::
   manage.py redshift_override --transient 2025abc --z 0.0312 --err 0.0005
   manage.py redshift_override --host 1234 --z 0.051 --source "YSE spectrum"
   manage.py redshift_override --transient 2025abc --clear     # back to normal precedence
+
+Each set or clear is one entry in the change log (#737).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from YSE_App.models.host_models import Host
 from YSE_App.models.transient_models import Transient
-from YSE_App.services import redshift_precedence as rp
+from YSE_App.services import change_log, redshift_precedence as rp
 
 
 class Command(BaseCommand):
@@ -41,10 +43,10 @@ class Command(BaseCommand):
         if obj is None:
             raise CommandError("not found")
         if opts["clear"]:
-            rp.clear_override(obj)
+            rp.clear_override(obj, service=change_log.SERVICE_COMMAND)
             self.stdout.write("override cleared; z=%r (%s)" % (obj.redshift, obj.redshift_source or "no source"))
             return
         if opts["z"] is None:
             raise CommandError("--z is required unless --clear")
-        rp.set_override(obj, opts["z"], opts["err"], source=opts["source"])
+        rp.set_override(obj, opts["z"], opts["err"], source=opts["source"], service=change_log.SERVICE_COMMAND)
         self.stdout.write("override set: z=%r +/- %r (%s)" % (obj.redshift, obj.redshift_err, obj.redshift_source))

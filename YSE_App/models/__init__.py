@@ -51,3 +51,4 @@ from YSE_App.models.group_models import (GroupInvitation, GroupInvitationUse, Gr
                                          UserPreference)
 from YSE_App.models.night_plan_models import NightPlan, PlannedBlock
 from YSE_App.models.observed_block_models import ObservedBlock, OutcomeReason
+from YSE_App.models.change_log_models import ValueChange  # noqa: F401

@@ -49,7 +49,9 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         return transient
 
     def update(self, instance, validated_data):
+        from YSE_App.services import change_log
 
+        redshift_before = change_log.redshift_state(instance)
         instance.status = validated_data.get('status', instance.status)
         instance.obs_group = validated_data.get('obs_group', instance.obs_group)
         instance.non_detect_band = validated_data.get('non_detect_band', instance.non_detect_band)
@@ -104,8 +106,17 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
                         instance.tags.add(tag_result.first())
 
         instance.save()
+        # redshift or override edited by hand through the API: one change-log entry (#737)
+        change_log.record_redshift_edit(instance, redshift_before, actor=_request_user(self),
+                                        service=change_log.SERVICE_API)
 
         return instance
+
+
+def _request_user(serializer):
+    request = serializer.context.get('request') if hasattr(serializer, 'context') else None
+    user = getattr(request, 'user', None)
+    return user if getattr(user, 'is_authenticated', False) else None
 
 
 class AlternateTransientNamesSerializer(serializers.HyperlinkedModelSerializer):

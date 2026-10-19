@@ -872,6 +872,9 @@ _PERSONAL_DATA_TABLES = (
     'YSE_App_accessrulesversion',
     # Which restricted datasets a PI opted in to automatic TNS / Hermes publishing (#691).
     'YSE_App_autopublishoptin',
+    # The change log (#737) names who set or cleared each override (actor); the app shows
+    # entries per transient with the actor as a username only.
+    'YSE_App_valuechange',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
