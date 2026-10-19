@@ -114,7 +114,18 @@ def execute_after_save(sender, instance, created, *args, **kwargs):
 		from YSE_App.services.followup_notices import notify_followup_created_safely
 
 		notify_followup_created_safely(instance)
-	
+
+
+@receiver(models.signals.post_save, sender=TransientFollowupRequest)
+def notify_after_request_added(sender, instance, created, raw=False, **kwargs):
+	"""Another request on an existing follow-up: tell its followers and earlier requesters (issue #69)."""
+
+	if created and not raw:
+		from YSE_App.services.followup_notices import notify_request_added_safely
+
+		notify_request_added_safely(instance)
+
+
 class HostFollowup(Followup):
 	### Entity relationships ###
 	host = models.ForeignKey(Host, on_delete=models.CASCADE)

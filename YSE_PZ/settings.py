@@ -303,6 +303,14 @@ YSE_HOME_CLASSICAL_DAYS_AHEAD = _int_setting(
     'YSE_HOME_CLASSICAL_DAYS_AHEAD', 'site_settings', 'CLASSICAL_DAYS_AHEAD', 30
 )
 
+# Follow-up notices (#69): a person who is told a night request was updated is not told
+# again about the same follow-up within this many seconds (repeat submits, priority edits).
+# Optional env YSE_FOLLOWUP_NOTICE_COLLAPSE_SECONDS or [site_settings]
+# FOLLOWUP_NOTICE_COLLAPSE_SECONDS in settings.ini; default 600; 0 = never collapse.
+FOLLOWUP_NOTICE_COLLAPSE_SECONDS = _int_setting(
+    'YSE_FOLLOWUP_NOTICE_COLLAPSE_SECONDS', 'site_settings', 'FOLLOWUP_NOTICE_COLLAPSE_SECONDS', 600
+)
+
 # django_cron's default CacheLock lives in the 'default' cache, which is the
 # per-process LocMemCache unless REDIS_URL is set, so two `runcrons` processes
 # never see each other's lock and a slow job overlaps the next pass (#472).
