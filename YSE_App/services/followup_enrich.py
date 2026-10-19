@@ -13,8 +13,9 @@ On by default (Ryan, 2026-10-18); ``FOLLOWUP_AUTO_ENRICH = False`` turns it off.
 follow-ups are untouched. TNS rate limits and transport errors, and a failed ZTF submission, retry
 through the job queue; nothing here ever runs in the request.
 
-Not done: a Prost host match. It exists only inside the TNS upload cron, not as a function that can be
-called for one object, so objects without a host still get none.
+* host: with ``PROST_HOST_MATCH_ENABLED`` (off by default), a Prost host match
+  (``services.prost_hosts.match_transient``, #439) for an object without a host. A Prost failure is
+  reported, recorded as a ``prost-host`` run, and left to the enrichment sweep; it does not retry the job.
 """
 
 from __future__ import annotations
@@ -142,11 +143,32 @@ def enrich(transient, followup=None, *, hours=None) -> dict:
             report["ztf"] = "%s (%s): %s" % (outcome.kind, outcome.via, outcome.message)
             if outcome.kind == "failed":
                 retry = retry or JobRetry(outcome.message)
+    # host (#439)
+    report["host"] = _host_step(transient)
     if retry is not None:
         # a retry redoes only what is still due: finished steps are inside the window by then
         logger.info("follow-up enrichment for %s will retry: %s", transient.name, report)
         raise retry
     return report
+
+
+def _host_step(transient) -> str:
+    from YSE_App.services import enrichment, prost_hosts
+
+    if not prost_hosts.enabled():
+        return "skipped: PROST_HOST_MATCH_ENABLED is off"
+    transient.refresh_from_db(fields=["host"])
+    if transient.host_id:
+        return "skipped: has a host"
+    service = enrichment.get("prost")
+    due = list(enrichment.select(service, ids=[transient.pk]))  # honours the retry policy
+    if not due:
+        return "skipped: Prost ran recently"
+    try:
+        summary = enrichment.run(service, due, dry_run=False)
+    except enrichment.EnrichmentError as exc:
+        return "not run: %s" % exc
+    return summary.lines[0] if summary.lines else ", ".join(sorted(summary.counts)) or "nothing"
 
 
 @job(KIND, max_attempts=3, backoff_seconds=900)

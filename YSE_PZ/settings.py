@@ -259,6 +259,9 @@ CRON_CLASSES = [
     # NED/DESI host redshifts (#436, #437): queues the redshifts.sweep job; no-op unless
     # REDSHIFT_CATALOG_CRON_ENABLED is set under [redshifts] in settings.ini.
     'YSE_App.data_ingest.Redshift_Catalogs.RedshiftCatalogSweep',
+    # Enrichment framework (#439): queues the enrich.sweep job for the services named in
+    # ENRICH_SWEEP_SERVICES; no-op unless ENRICH_SWEEP_CRON_ENABLED ([enrichment]).
+    'YSE_App.data_ingest.Enrichment.EnrichmentSweep',
     # Instrument logs and weather (#309): queue the facility-API log pull and the
     # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
     'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
@@ -1436,6 +1439,27 @@ DESI_HOST_MATCH_ARCSEC = config.getfloat('redshifts', 'DESI_HOST_MATCH_ARCSEC', 
 DESI_MIN_DELTACHI2 = config.getfloat('redshifts', 'DESI_MIN_DELTACHI2', fallback=25.0)
 DESI_REQUEST_INTERVAL_SECONDS = config.getfloat('redshifts', 'DESI_REQUEST_INTERVAL_SECONDS', fallback=1.0)
 DESI_TIMEOUT_SECONDS = config.getfloat('redshifts', 'DESI_TIMEOUT_SECONDS', fallback=60.0)
+# Enrichment framework (#439; YSE_App/services/enrichment.py, runbook "Enrichment framework"), under
+# [enrichment] in settings.ini. Everything that newly runs is off by default:
+# ENRICH_SWEEP_CRON_ENABLED queues the enrich.sweep job every ENRICH_SWEEP_CRON_MINUTES for the
+# services named in ENRICH_SWEEP_SERVICES (comma-separated registry names; empty = none).
+# PROST_HOST_MATCH_ENABLED lets the TNS gap import (#438) and the follow-up enrichment (#114)
+# run Prost for objects without a host. BLAST_ENABLED allows the Blast service to run at all.
+ENRICH_SWEEP_CRON_ENABLED = _flag('YSE_ENRICH_SWEEP_CRON', 'enrichment', 'ENRICH_SWEEP_CRON_ENABLED', False)
+ENRICH_SWEEP_CRON_MINUTES = config.getint('enrichment', 'ENRICH_SWEEP_CRON_MINUTES', fallback=60)
+ENRICH_SWEEP_SERVICES = _list_setting('YSE_ENRICH_SWEEP_SERVICES', 'enrichment', 'ENRICH_SWEEP_SERVICES')
+ENRICH_SWEEP_MAX_PER_SERVICE = config.getint('enrichment', 'ENRICH_SWEEP_MAX_PER_SERVICE', fallback=100)
+ENRICH_SWEEP_BUDGET_SECONDS = config.getint('enrichment', 'ENRICH_SWEEP_BUDGET_SECONDS', fallback=900)
+PROST_HOST_MATCH_ENABLED = _flag('YSE_PROST_HOST_MATCH', 'enrichment', 'PROST_HOST_MATCH_ENABLED', False)
+PROST_PATH = _str_setting('YSE_PROST_PATH', 'main', 'prost_path')
+PS1_CUTOUT_RETRY_DAYS = config.getfloat('enrichment', 'PS1_CUTOUT_RETRY_DAYS', fallback=30.0)
+PS1_CUTOUT_MAX_ATTEMPTS = config.getint('enrichment', 'PS1_CUTOUT_MAX_ATTEMPTS', fallback=3)
+BLAST_ENABLED = _flag('YSE_BLAST_ENABLED', 'enrichment', 'BLAST_ENABLED', False)
+BLAST_API_URL = _str_setting('YSE_BLAST_API_URL', 'enrichment', 'BLAST_API_URL') or 'https://blast.scimma.org/api'
+BLAST_API_TOKEN = _str_setting('YSE_BLAST_API_TOKEN', 'enrichment', 'BLAST_API_TOKEN')
+BLAST_REQUEST_INTERVAL_SECONDS = config.getfloat('enrichment', 'BLAST_REQUEST_INTERVAL_SECONDS', fallback=1.0)
+BLAST_TIMEOUT_SECONDS = config.getfloat('enrichment', 'BLAST_TIMEOUT_SECONDS', fallback=30.0)
+BLAST_RECHECK_DAYS = config.getfloat('enrichment', 'BLAST_RECHECK_DAYS', fallback=30.0)
 # Other feeds: Hermes / SCiMMA, Einstein Probe, JPL Scout (#280; docs/feeds-*.md).
 # All keys optional, under [feeds] in settings.ini. Sources are FeedSource rows
 # (admin), credentials EncryptedCredential rows; nothing secret lives here.

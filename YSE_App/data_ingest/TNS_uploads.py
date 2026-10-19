@@ -131,29 +131,14 @@ def get_ps_score(RA, DEC):
 
     return output
     
-PROST_RUN_PREFIX = 'prost-'
-PROST_STALE_SECONDS = 24 * 3600
-
-
-def make_prost_run_dir(base, stale_seconds=PROST_STALE_SECONDS):
-    """Create and return a unique per-run scratch directory under ``base``.
-
-    The base directory is created if missing but is never removed. Stale
-    ``prost-*`` subdirectories older than ``stale_seconds`` (left by aborted
-    runs) are removed; nothing else under ``base`` is touched.
-    """
-    os.makedirs(base, exist_ok=True)
-    cutoff = time.time() - stale_seconds
-    try:
-        for name in os.listdir(base):
-            path = os.path.join(base, name)
-            if (name.startswith(PROST_RUN_PREFIX) and os.path.isdir(path)
-                    and not os.path.islink(path)
-                    and os.path.getmtime(path) < cutoff):
-                rmtree(path, ignore_errors=True)
-    except OSError:
-        pass
-    return tempfile.mkdtemp(dir=base, prefix=PROST_RUN_PREFIX)
+# Prost scratch handling and the matching itself live in YSE_App.services.prost_hosts (#439);
+# these names stay importable from here.
+from YSE_App.services.prost_hosts import (  # noqa: E402,F401
+    PROST_RUN_PREFIX,
+    PROST_STALE_SECONDS,
+    make_prost_run_dir,
+)
+from YSE_App.services import prost_hosts as _prost_hosts  # noqa: E402
 
 
 class processTNS:
@@ -657,94 +642,21 @@ class processTNS:
             print("astro_prost not installed; skipping host association")
             return None
 
-        # Each run gets its own unique directory under the configured base, so
-        # overlapping runs never touch each other's files (#617).
-        output_dir = make_prost_run_dir(
-            getattr(self, 'prost_path', '') or self.ghost_path)
-
-        # define priors for properties
-        priorfunc_z = halfnorm(loc=0.0001, scale=0.5)
-        priorfunc_offset = uniform(loc=0, scale=5)
-        priorfunc_absmag = uniform(loc=-30, scale=20)
-
-
-        likefunc_offset = gamma(a=0.75)
-        likefunc_absmag = SnRateAbsmag(a=-25, b=20)
-
-        priors = {
-            "offset": priorfunc_offset,
-            "absmag": priorfunc_absmag
-        }
-        likes = {
-            "offset": likefunc_offset,
-            "absmag": likefunc_absmag
-        }
-
-        transient_catalog = pd.DataFrame(
-            {'IAUID': objs,
-             'RA': [t.ra.deg for t in transient_positions],
-             'Dec': [t.dec.deg for t in transient_positions]
-             }
+        # The matching is YSE_App.services.prost_hosts.associate (#439): same priors and
+        # catalogues; each run gets its own scratch directory under the configured base (#617).
+        return _prost_hosts.associate(
+            objs,
+            [t.ra.deg for t in transient_positions],
+            [t.dec.deg for t in transient_positions],
+            getattr(self, 'prost_path', '') or self.ghost_path,
+            transient_redshift=transient_redshift,
+            associate_fn=associate_sample,
+            absmag_cls=SnRateAbsmag,
         )
 
-        # add the redshift info from the transient if it exists
-        if transient_redshift is not None:
-            priors['redshift'] = priorfunc_z
-            transient_catalog['redshift'] = transient_redshift
-
-        catalogs = ["glade", "decals", "panstarrs", "skymapper"]
-        transient_coord_cols = ("RA", "Dec")
-        # transient_name_col = "IAUID"
-        parallel = False
-        save = True
-        progress_bar = False
-        cat_cols = False
-
-        try:
-            hosts = associate_sample(
-                transient_catalog,
-                coord_cols=transient_coord_cols,
-                priors=priors,
-                likes=likes,
-                catalogs=catalogs,
-                parallel=parallel,
-                save=save,
-                save_path=output_dir,
-                progress_bar=progress_bar,
-                cat_cols=cat_cols,
-                verbose=0,
-                best_redshift=True
-            )
-        finally:
-            # Remove only this run's directory, never the configured base.
-            rmtree(output_dir, ignore_errors=True)
-
-        return hosts
-
-    
     def getProstHosts(self,jd,sc,prost_host):
-        if prost_host['host_name'].to_numpy()[0]:
-            host_name = prost_host['host_name'].to_numpy()[0]
-        else:
-            host_name = str(prost_host['host_objID'].to_numpy()[0])
+        return _prost_hosts.host_dict(prost_host), ''
 
-        hostdict = {}; hostcoords = ''
-        hostdict = {'name':host_name,
-                    'ra':prost_host['host_ra'].to_numpy()[0],
-                    'dec':prost_host['host_dec'].to_numpy()[0]}
-
-
-        # a weird issue with photo-z that really seem like spec-z.  Let's trust accurate zphot.
-        if 'host_redshift_info' in prost_host.keys() and prost_host['host_redshift_info'].to_numpy()[0] == 'SPEC':
-            hostdict['redshift'] = prost_host['host_redshift_mean'].to_numpy()[0]
-            hostdict['redshift_err'] = prost_host['host_redshift_std'].to_numpy()[0]
-            hostdict['redshift_source'] = 'Prost'  # provenance (#436, #437)
-        else:
-            hostdict['photo_z_internal'] = prost_host['host_redshift_mean'].to_numpy()[0]
-            hostdict['photo_z_err_internal'] = prost_host['host_redshift_std'].to_numpy()[0]
-
-        return hostdict,hostcoords
-        
     def UpdateFromTNS(self,ndays=None,allowed_statuses=['New','Following','Watch','FollowupRequested','Interesting'],doTNS=True):
 
         if ndays:

@@ -748,7 +748,8 @@ def import_missing(since: datetime.datetime, *, dry_run: bool = True, client=Non
                    deadline: Optional[float] = None) -> List[ResyncResult]:
     """Import the TNS objects made public since ``since`` that we lack (gap import).
 
-    ``until`` drops objects TNS says were discovered on or after it.
+    ``until`` drops objects TNS says were discovered on or after it. With
+    ``PROST_HOST_MATCH_ENABLED``, each imported object without a host gets a queued Prost match (#439).
     """
     client = client or default_client()
     throttle = throttle or Throttle()
@@ -765,9 +766,22 @@ def import_missing(since: datetime.datetime, *, dry_run: bool = True, client=Non
             disc = _aware((client.get_object(name) or {}).get("discoverydate"))
             if disc is not None and disc >= until:
                 continue
-        results.append(resync_object(name, dry_run=dry_run, client=client, user=user, spectra=spectra,
-                                     throttle=throttle))
+        result = resync_object(name, dry_run=dry_run, client=client, user=user, spectra=spectra,
+                               throttle=throttle)
+        results.append(result)
+        if not dry_run and result.action == "imported" and result.transient_id:
+            _queue_host_match(result.transient_id)
     return results
+
+
+def _queue_host_match(transient_id):
+    """Queue a Prost host match for a newly imported object (#439; only with PROST_HOST_MATCH_ENABLED)."""
+    from YSE_App.services import prost_hosts
+
+    if not prost_hosts.enabled():
+        return None
+    transient = Transient.objects.filter(pk=transient_id).first()
+    return prost_hosts.queue_match(transient)
 
 
 # --- the regular job -------------------------------------------------------------
