@@ -2997,3 +2997,20 @@ def ztf_forced_phot(request,slug):
     outcome = ztf_forced.submit_forced_phot(transient, request.user)
     return JsonResponse({'msg': outcome.message}, status=outcome.http_status)
 
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def desi_lookup(request, slug):
+    """The DESI button (#738). POST queues a DESI lookup for this object (its host's redshift, or a host
+    match when it has none); GET returns the latest result. Same permission as the ZTF button
+    (any signed-in user); rate-limited per object and per user in ``services.desi_hosts``."""
+    from YSE_App.services import desi_hosts
+
+    transient = get_object_or_404(Transient.objects.select_related('host'), slug=slug)
+    if request.method == 'POST':
+        status, message, job = desi_hosts.request_lookup(transient, request.user)
+        body = desi_hosts.lookup_status(transient) if job is not None else {}
+        body.update({'msg': message, 'job_id': getattr(job, 'pk', None)})
+        return JsonResponse(body, status=status)
+    return JsonResponse(desi_hosts.lookup_status(transient))
+

@@ -321,6 +321,11 @@
                                             <button style="margin-bottom:5px;" type="button" class="ztfrequest">
                                                 Request ZTF Forced Phot</span>
                                             </button>
+                                            <button style="margin-bottom:5px;" type="button" class="desirequest" id="desirequest"
+                                                    title="{% if transient.host_id %}Check DESI for the host redshift{% else %}Look for a DESI host galaxy near this object{% endif %}">
+                                                Request DESI Lookup
+                                            </button>
+                                            <span id="desi_status" class="text-muted" style="margin-left:6px;" aria-live="polite"></span>
                                             </div>
                                             {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows hint_compact=True %}
                                             {# Stored SALT3 fit + Refit (#315); loaded by yseFitStatus in transient_detail.html #}

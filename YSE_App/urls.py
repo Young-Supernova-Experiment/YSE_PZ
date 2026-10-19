@@ -242,6 +242,7 @@ urlpatterns = [
     re_path(r'^add_transient_phot/', data_utils.add_transient_phot, name='add_transient_phot'),
     re_path(r'^add_transient_spec/', data_utils.add_transient_spec, name='add_transient_spec'),
     re_path(r'^ztf_forced_phot/(?P<slug>.*)/$', views.ztf_forced_phot, name='ztf_forced_phot'),
+    re_path(r'^desi_lookup/(?P<slug>[^/]+)/$', views.desi_lookup, name='desi_lookup'),
     re_path(r'^get_host/(?P<ra>\d+\.\d+)/(?P<dec>[+-]?\d+\.\d+)/(?P<sep>\d+\.?\d*)/$', data_utils.get_host, name='get_host'),
     re_path(r'^get_rising_transients_box/(?P<ra>\d+\.\d+)/(?P<dec>[+-]?\d+\.\d+)/(?P<ra_width>\d+\.?\d*)/(?P<dec_width>\d+\.?\d*)/$',
         data_utils.get_rising_transients_box, name='get_rising_transients_box'),

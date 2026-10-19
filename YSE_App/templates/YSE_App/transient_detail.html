@@ -1735,6 +1735,35 @@
                 });
             });
 
+            // DESI lookup (#738): queue it, then poll the result a few times.
+            $(document).on('click', '.desirequest', function(event){
+                var url = "{% url 'desi_lookup' transient.slug %}";
+                var $btn = $(this);
+                var $status = $('#desi_status');
+                function poll(n){
+                    $.get(url).done(function(json){
+                        if (json.pending && n > 0){
+                            $status.text('DESI lookup running...');
+                            setTimeout(function(){ poll(n - 1); }, 5000);
+                        } else if (json.result){
+                            $status.text('DESI: ' + json.result);
+                            if (!json.pending && json.when){ $btn.prop('disabled', false); }
+                        } else if (json.pending){
+                            $status.text('DESI lookup is queued; check back shortly.');
+                        }
+                    });
+                }
+                $btn.prop('disabled', true);
+                $.post(url, {csrfmiddlewaretoken: "{{ csrf_token }}"}).done(function(json){
+                    $status.text(json.msg);
+                    poll(12);
+                }).fail(function(xhr){
+                    $status.text((xhr.responseJSON && xhr.responseJSON.msg) ||
+                        ('error: DESI lookup failed (HTTP ' + xhr.status + '); nothing was queued'));
+                    $btn.prop('disabled', false);
+                });
+            });
+
             $('.submit_to_tns').on('click', function(event){
 
                 {% if tns_sandbox_url %}
