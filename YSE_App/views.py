@@ -612,7 +612,7 @@ def personaldashboard_section(request, user_query_id):
 
 # Columns the transient summary table sorts by (#506); a leading "-" reverses.
 _TRANSIENT_SUMMARY_SORT_FIELDS = frozenset({
-    'name', 'ra', 'dec', 'disc_date', 'redshift', 'mw_ebv', 'point_source_probability',
+    'name', 'ra', 'dec', 'disc_date', 'redshift', 'best_redshift', 'mw_ebv', 'point_source_probability',
     'status', 'obs_group__name', 'best_spec_class__name', 'last_obs_date', 'last_mag',
 })
 
@@ -680,6 +680,10 @@ def transient_summary(request,status_or_query_name,
             transients = order_by_recent_phot(
                 transients, sort.lstrip('-'), sort.startswith('-'), user=request.user
             )
+        elif sort.lstrip('-') == 'best_redshift':
+            from YSE_App.services.redshift_sql import annotate_best_redshift
+
+            transients = annotate_best_redshift(transients).order_by(sort, 'pk')
         else:
             transients = transients.order_by(sort)
             
@@ -2938,11 +2942,15 @@ def search_export_csv(request):
     from YSE_App.services.photstat_visibility import STAT_EXPORT_FIELDS, annotate_stat_fields
 
     qs, stat = annotate_stat_fields(qs, request.user, STAT_EXPORT_FIELDS)
+    from YSE_App.services.redshift_sql import annotate_best_redshift
+
+    qs = annotate_best_redshift(qs)  # full precedence list (#736)
     columns = [
         ('name', 'name'), ('ra', 'ra'), ('dec', 'dec'), ('gal_l', 'gal_l'), ('gal_b', 'gal_b'),
         ('disc_date', 'disc_date'), ('status', 'status__name'), ('obs_group', 'obs_group__name'),
         ('best_spec_class', 'best_spec_class__name'), ('photo_class', 'photo_class__name'),
-        ('redshift', 'redshift'), ('host_redshift', 'host__redshift'), ('mw_ebv', 'mw_ebv'),
+        ('redshift', 'redshift'), ('host_redshift', 'host__redshift'), ('best_redshift', 'best_redshift'),
+        ('mw_ebv', 'mw_ebv'),
         ('peak_mag', stat['peak_mag']), ('last_det_mag', stat['last_detected_mag']),
         ('last_det_mjd', stat['last_detected_mjd']), ('num_det', stat['num_det_global']),
     ]

@@ -8,12 +8,13 @@ from django.db.models import F, Q
 from YSE_App.common.quality_mask import legacy_good
 from django.db.models.functions import Length, Substr
 from django.db.models import Count, OuterRef, Prefetch, Subquery, Value, Max, Min
-from django.db.models.functions import Greatest, Coalesce
+from django.db.models.functions import Greatest
 from django_tables2 import A
 from django.db import models
 from django.db.models.query import QuerySet
 from .data import PhotometryService
 from .models.transient_models import batch_nearest_survey_fields
+from YSE_App.services.redshift_sql import annotate_best_redshift
 import time
 import django_filters
 from astropy.coordinates import SkyCoord
@@ -654,7 +655,7 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
     peak_mag = PeakMagColumn(accessor='peak_mag',
                              verbose_name='Peak Mag',orderable=True)
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
 
     #mw_ebv = tables.Column(accessor='mw_ebv',
     #						   verbose_name='MW E(B-V)',orderable=True)
@@ -706,9 +707,7 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
@@ -838,7 +837,7 @@ class FieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tables.Ta
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
     ztf_field = tables.Column(accessor='nearest_ztf_field',
                               verbose_name='ZTF Field',orderable=False)
     ztf_sep = tables.Column(accessor='nearest_ztf_field_sep',
@@ -886,9 +885,7 @@ class FieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tables.Ta
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
@@ -931,7 +928,7 @@ class AdjustFieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tab
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
     yse_field = tables.Column(accessor='nearest_yse_field',
                               verbose_name='YSE Field',orderable=False)
     yse_sep = tables.Column(accessor='nearest_yse_field_sep',
@@ -979,9 +976,7 @@ class AdjustFieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tab
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
@@ -1024,7 +1019,7 @@ class YSETransientTable(RecentPhotOrderMixin, tables.Table):
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
     requested_followup_resources = tables.Column(accessor='pk',verbose_name='Req. Followup')
     successful_followup_resources = tables.Column(accessor='pk',verbose_name='Followed By')
     followup_comments = tables.Column(accessor='pk',verbose_name='Followup Comments')
@@ -1070,9 +1065,7 @@ class YSETransientTable(RecentPhotOrderMixin, tables.Table):
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def render_requested_followup_resources(self, value, record):
@@ -1123,7 +1116,7 @@ class YSEFullTransientTable(RecentPhotOrderMixin, tables.Table):
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
     context_class = tables.Column(accessor='context_class',
                                   verbose_name='QUB Class.',orderable=True)
 
@@ -1166,9 +1159,7 @@ class YSEFullTransientTable(RecentPhotOrderMixin, tables.Table):
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def render_requested_followup_resources(self, value, record):
@@ -1216,7 +1207,7 @@ class YSERisingTransientTable(RecentPhotOrderMixin, tables.Table):
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
     context_class = tables.Column(accessor='context_class',
                                   verbose_name='QUB Class.',orderable=True)
     dm_g = tables.TemplateColumn('{{ record.dm_g|floatformat:3 }}',
@@ -1265,9 +1256,7 @@ class YSERisingTransientTable(RecentPhotOrderMixin, tables.Table):
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
     def render_requested_followup_resources(self, value, record):
@@ -1320,7 +1309,7 @@ class NewTransientTable(RecentPhotOrderMixin, tables.Table):
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     best_redshift = tables.Column(accessor='z_or_hostz',
-                                  verbose_name='Redshift',orderable=True,order_by='host__redshift')
+                                  verbose_name='Redshift',orderable=True,order_by='best_redshift')
     ps_score = tables.Column(accessor='point_source_probability',
                              verbose_name='PS Score',orderable=True)
 
@@ -1362,9 +1351,7 @@ class NewTransientTable(RecentPhotOrderMixin, tables.Table):
 
     def order_best_redshift(self, queryset, is_descending):
 
-        queryset = queryset.annotate(
-            best_redshift=Coalesce('redshift', 'host__redshift'),
-        )
+        queryset = annotate_best_redshift(queryset)  # full precedence list (#736)
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
