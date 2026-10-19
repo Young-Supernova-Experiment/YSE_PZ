@@ -229,7 +229,8 @@ CRON_CLASSES = [
 	'YSE_App.data_ingest.TNS_uploads.TNS_updates',
 	'YSE_App.data_ingest.TNS_uploads.TNS_Ignore_updates',
 	'YSE_App.data_ingest.TNS_uploads.TNS_recent',
-	'YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime',
+	# TNS_recent_realtime was removed (#438): it ran only at 00:00 and 08:00 with a
+	# 10-minute window; TNS_emails, TNS_recent and the TNS re-sync below cover it.
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
     'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
@@ -252,6 +253,9 @@ CRON_CLASSES = [
     # no-ops unless enabled under [sharing] in settings.ini.
     'YSE_App.data_ingest.Sharing_Jobs.TNSRetrieval',
     'YSE_App.data_ingest.Sharing_Jobs.AutoPublishSweep',
+    # Regular TNS re-sync (#438): queues the tns.resync_sweep job; no-op unless
+    # TNS_RESYNC_CRON_ENABLED is set under [sharing] in settings.ini.
+    'YSE_App.data_ingest.TNS_Resync.TNSResync',
     # Instrument logs and weather (#309): queue the facility-API log pull and the
     # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
     'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
@@ -1379,6 +1383,22 @@ SHARING_TNS_RETRIEVAL_STATUSES = [
 SHARING_TNS_RETRIEVAL_RADIUS_ARCSEC = config.getfloat('sharing', 'TNS_RETRIEVAL_RADIUS_ARCSEC', fallback=3.0)
 SHARING_TNS_RETRIEVAL_MAX_PER_RUN = config.getint('sharing', 'TNS_RETRIEVAL_MAX_PER_RUN', fallback=50)
 SHARING_TNS_REQUEST_INTERVAL_SECONDS = config.getfloat('sharing', 'TNS_REQUEST_INTERVAL_SECONDS', fallback=1.0)
+# TNS re-sync (#438; YSE_App/services/tns_resync.py): the hourly sweep imports objects made
+# public in the last TNS_RESYNC_GAP_DAYS that we lack, then re-syncs up to TNS_RESYNC_MAX_PER_RUN
+# transients whose last re-sync is older than TNS_RESYNC_ACTIVE_DAYS (New, Following, Watch,
+# FollowupRequested, Interesting) or TNS_RESYNC_OTHER_DAYS (every other status). Off by default.
+# TNS_RESYNC_SERVICE: slug of a production TNS SharingService to use (default: the [main] TNS bot).
+TNS_RESYNC_CRON_ENABLED = (
+    os.environ.get('YSE_TNS_RESYNC_CRON', '').strip() == '1'
+    or config.getboolean('sharing', 'TNS_RESYNC_CRON_ENABLED', fallback=False)
+)
+TNS_RESYNC_CRON_MINUTES = config.getint('sharing', 'TNS_RESYNC_CRON_MINUTES', fallback=60)
+TNS_RESYNC_MAX_PER_RUN = config.getint('sharing', 'TNS_RESYNC_MAX_PER_RUN', fallback=50)
+TNS_RESYNC_ACTIVE_DAYS = config.getfloat('sharing', 'TNS_RESYNC_ACTIVE_DAYS', fallback=2.0)
+TNS_RESYNC_OTHER_DAYS = config.getfloat('sharing', 'TNS_RESYNC_OTHER_DAYS', fallback=30.0)
+TNS_RESYNC_GAP_DAYS = config.getfloat('sharing', 'TNS_RESYNC_GAP_DAYS', fallback=3.0)
+TNS_RESYNC_BUDGET_SECONDS = config.getint('sharing', 'TNS_RESYNC_BUDGET_SECONDS', fallback=900)
+TNS_RESYNC_SERVICE = config.get('sharing', 'TNS_RESYNC_SERVICE', fallback='')
 # Other feeds: Hermes / SCiMMA, Einstein Probe, JPL Scout (#280; docs/feeds-*.md).
 # All keys optional, under [feeds] in settings.ini. Sources are FeedSource rows
 # (admin), credentials EncryptedCredential rows; nothing secret lives here.

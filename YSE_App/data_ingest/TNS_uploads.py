@@ -1738,84 +1738,21 @@ class TNS_recent(CronJobBase):
         print('TNS -> YSE_PZ took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
 
 class TNS_recent_realtime(CronJobBase):
+    """Removed (#438); kept only so an old ``runcrons`` crontab line stays harmless.
+
+    It searched TNS for objects made public in the last ``tns_fastupdates_nminutes`` (10)
+    minutes but was scheduled only at 00:00 and 08:00, so it covered about 20 minutes a
+    day. ``TNS_emails`` (every 3 minutes) already imports new objects within minutes,
+    ``TNS_recent`` covers the last ``tns_recent_ndays`` twice a day, and the TNS re-sync
+    sweep (``TNS_Resync.TNSResync``) imports anything public in the last
+    ``TNS_RESYNC_GAP_DAYS`` that is still missing. Not in ``CRON_CLASSES``.
+    """
 
     RUN_AT_TIMES = ['00:00', '08:00']
 
     schedule = Schedule(run_at_times=RUN_AT_TIMES)
     code = 'YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime'
-        
+
     def do(self):
-
-        code = 'YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime'
-        
-        # execute only if run as a script
-        print("checking for recent TNS events at {}".format(datetime.now().isoformat()))
-        usagestring = "TNS_Synopsis.py <options>"
-
-        tstart = time.time()
-        tnsproc = processTNS()
-
-        # read in the options from the param file and the command line
-        # some convoluted syntax here, making it so param file is not required
-        parser = tnsproc.add_options(usage=usagestring)
-        options,  args = parser.parse_known_args()
-        options.settingsfile = "%s/settings.ini"%djangoSettings.PROJECT_DIR
-        
-        config = configparser.ConfigParser()
-        config.read(options.settingsfile)
-
-        parser = tnsproc.add_options(usage=usagestring,config=config)
-        options,  args = parser.parse_known_args()
-        tnsproc.hostmatchrad = options.hostmatchrad
-
-        tnsproc.login = options.login
-        tnsproc.password = options.password
-        tnsproc.dblogin = options.dblogin
-        tnsproc.dbpassword = options.dbpassword
-        tnsproc.dbemailpassword = options.dbemailpassword
-        tnsproc.dburl = options.dburl
-        tnsproc.status = options.status
-        tnsproc.settingsfile = options.settingsfile
-        tnsproc.clobber = options.clobber
-        tnsproc.noupdatestatus = options.noupdatestatus
-        tnsproc.redohost = True
-        tnsproc.nedradius = options.nedradius
-        tnsproc.tnsapi = options.tnsapi
-        tnsproc.tnsapikey = options.tnsapikey
-        tnsproc.tns_bot_id = options.tns_bot_id
-        tnsproc.tns_bot_name = options.tns_bot_name
-        tnsproc.ztfurl = options.ztfurl
-        tnsproc.ghost_path = options.ghost_path
-        tnsproc.ndays = float(options.tns_recent_ndays)
-        tnsproc.tns_fastupdates_nminutes = float(options.tns_fastupdates_nminutes)
-
-        # in case of code failures
-        smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
-        from_addr = "%s@gmail.com" % options.SMTP_LOGIN
-        subject = "TNS Transient Upload Failure in GetRecentEvents"
-        html_msg = f"Alert : YSE_PZ Failed to upload transients in {code}\n"
-        html_msg += "Error : %s at line number %s"
-
-        # check for instance of code already running
-        try:
-            me = singleton.SingleInstance(flavor_id="5")
-        except singleton.SingleInstanceException:
-            print("Sending error email")
-            sendemail(from_addr, options.dbemail, subject,
-                      f"multiple instances of {code} are running",
-                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
-
-
-        try:
-            tnsproc.noupdatestatus = True
-            nsn = tnsproc.GetRecentEvents(ndays=tnsproc.tns_fastupdates_nminutes/60./24.)
-        except Exception as e:
-            print("Sending error email")
-            exc_type, exc_obj, exc_tb = sys.exc_info()
-            nsn = 0
-            sendemail(from_addr, options.dbemail, subject,
-                      html_msg%(e,exc_tb.tb_lineno),
-                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-
-        print('TNS -> YSE_PZ took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
+        print("TNS_recent_realtime was removed (#438); remove its crontab line. Nothing to do.")
+        return "removed"

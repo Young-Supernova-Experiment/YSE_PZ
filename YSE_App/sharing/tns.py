@@ -501,6 +501,17 @@ def strip_private(payload: dict) -> dict:
 
 # --- the client ---------------------------------------------------------------
 
+def _rate_limited(response, body) -> "TNSRateLimited":
+    """The :class:`TNSRateLimited` for a 429 ``response``, waiting for TNS's reset time."""
+    reset = response.headers.get("x-rate-limit-reset") or response.headers.get("Retry-After") or "60"
+    try:
+        retry_after = max(5, int(float(reset)))
+    except ValueError:
+        retry_after = 60
+    return TNSRateLimited("TNS rate limit reached; retry in %ds" % retry_after, retry_after=retry_after,
+                          response=body)
+
+
 class TNSClient:
     """Thin wrapper over the TNS API (form-encoded POSTs with the tns_marker User-Agent)."""
 
@@ -547,13 +558,7 @@ class TNSClient:
         except ValueError:
             body = {"raw": (response.text or "")[:2000]}
         if status == 429:
-            reset = response.headers.get("x-rate-limit-reset") or response.headers.get("Retry-After") or "60"
-            try:
-                retry_after = max(5, int(float(reset)))
-            except ValueError:
-                retry_after = 60
-            raise TNSRateLimited("TNS rate limit reached; retry in %ds" % retry_after, retry_after=retry_after,
-                                 response=body)
+            raise _rate_limited(response, body)
         if status >= 500:
             raise TNSTransportError("TNS HTTP %d" % status, response=body, status_code=status)
         if status == 404 and allow_404:
@@ -584,11 +589,33 @@ class TNSClient:
         query = {"ra": "%.6f" % ra, "dec": "%.6f" % dec, "radius": str(radius_arcsec), "units": "arcsec",
                  "objname": "", "internal_name": ""}
         query.update(extra)
+        return self.search_query(query)
+
+    def search_query(self, query: dict) -> List[dict]:
+        """``get/search`` with any query, e.g. ``public_timestamp`` plus paging (#438)."""
         reply = self._post(SEARCH, {"data": json.dumps(query)})
         data = reply.get("data")
         if isinstance(data, dict):
             data = data.get("reply", [])
         return [d for d in (data or []) if isinstance(d, dict)]
+
+    def get_file_text(self, url: str) -> str:
+        """Download a TNS file (a spectrum's ``asciifile``) as text, with the API calls' errors (#438)."""
+        try:
+            response = requests.post(url, headers=self.headers, data={"api_key": self.api_key},
+                                     timeout=self.timeout)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            raise TNSTransportError("TNS unreachable: %s" % exc) from exc
+        except requests.RequestException as exc:
+            raise TNSTransportError("TNS request failed: %s" % exc) from exc
+        status = response.status_code
+        if status == 429:
+            raise _rate_limited(response, None)
+        if status >= 500:
+            raise TNSTransportError("TNS HTTP %d" % status, status_code=status)
+        if status >= 400:
+            raise TNSError("TNS HTTP %d for a file download" % status, status_code=status)
+        return response.text or ""
 
     def get_object(self, objname: str, photometry: bool = False, spectra: bool = False) -> dict:
         query = {"objname": objname, "photometry": "1" if photometry else "0", "spectra": "1" if spectra else "0"}

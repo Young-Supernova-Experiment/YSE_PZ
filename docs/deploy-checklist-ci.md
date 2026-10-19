@@ -84,7 +84,7 @@ naming a repo module, fails the inventory.
 
 | Crontab script | Class (`CRON_CLASSES`) | Exercised in CI |
 | --- | --- | --- |
-| `tns_updates_realtime.bash` | `TNS_uploads.TNS_recent_realtime` *(inferred)* | yes — XFAIL: `search()`/`get()` return a list on any request error and `GetRecentEvents` reads `.status_code` (`AttributeError`); this cron's try/except is commented out (follow-up bug) |
+| `tns_updates_realtime.bash` | `TNS_uploads.TNS_recent_realtime` *(inferred)* | **removed** from `CRON_CLASSES` (#438); the class is a no-op kept so the old crontab line is harmless; remove the line. `TNS_Resync.TNSResync` (hourly TNS re-sync, off by default) is smoke-tested like the others |
 | `tags.bash` | `Apply_Tags.Tags` | yes |
 | `yse_obs.bash` | `YSE_observations.SurveyObs` | yes — XFAIL: `uploaddict` unbound when IMAP fails (follow-up bug) |
 | `yse_ingest.bash` | `QUB_data.YSE` *(inferred)* | yes (dust map stubbed) |
