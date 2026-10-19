@@ -1565,13 +1565,12 @@ def get_all_transients_box(request, ra, dec, ra_width, dec_width):
 
 
 def _query_api_service_account(user):
-    """Staff, superusers and the cron / script accounts (#524)."""
-    from YSE_App.common.authz import is_trusted_writer
+    """Service readers only (#725): the ``[main] dblogin`` cron account and
+    ``DATA_SERVICE_READER_USERNAMES``. Staff, superusers and ``api_writers``
+    accounts are scoped like everyone else."""
+    from YSE_App.services.visibility import is_service_reader
 
-    if is_trusted_writer(user):
-        return True
-    return bool(user.is_authenticated and user.is_active
-                and user.username in getattr(djangoSettings, 'API_SERVICE_USERNAMES', ()))
+    return is_service_reader(user)
 
 
 def _query_api_may_run(user, query):
@@ -1628,8 +1627,8 @@ def query_api(request,query_name):
 
     Saved queries: only those :func:`_query_api_may_run` allows (#524); others
     are a 404, like an unknown title. Rows are limited to transients the caller
-    may view unless the caller is staff or a service account
-    (``QUERY_API_VISIBILITY_FILTER``).
+    may view unless the caller is a service reader (#725;
+    ``QUERY_API_VISIBILITY_FILTER``); everyone else goes through the Explorer rewrite layer.
     """
     title = unquote(query_name)
     filter_rows = (getattr(djangoSettings, 'QUERY_API_VISIBILITY_FILTER', True)

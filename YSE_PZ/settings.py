@@ -672,7 +672,7 @@ QUERY_API_ALLOWED_QUERIES = list(QUERY_API_DEFAULT_ALLOWED_QUERIES) + _title_lis
     or config.get('site_settings', 'QUERY_API_ALLOWED_QUERIES', fallback='')
 )
 # Rows of /query_api/ results are limited to transients the caller may view,
-# except for staff, superusers and service accounts (#524). Default True;
+# except for service readers (#524, #725). Default True;
 # env YSE_QUERY_API_VISIBILITY_FILTER=0 (or [site_settings] False) turns it off.
 _qavf = os.environ.get('YSE_QUERY_API_VISIBILITY_FILTER', '').strip()
 QUERY_API_VISIBILITY_FILTER = (

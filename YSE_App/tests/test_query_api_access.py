@@ -3,8 +3,9 @@
 * Saved queries: titles on ``QUERY_API_ALLOWED_QUERIES``, the caller's own
   queries, and any query for SQL Explorer users and service accounts. Anything
   else is a 404, the same as an unknown title.
-* Rows are limited to transients the caller may view, except for staff,
-  superusers and service accounts (the cron accounts).
+* Rows are limited to transients the caller may view, except for service
+  readers (the cron accounts; #725). Staff, superusers and ``api_writers``
+  accounts are scoped like everyone else.
 * The titles the crons and scripts request are on the built-in list.
 
 Synthetic users, groups and transients only.
@@ -67,8 +68,12 @@ class QueryApiAccessTests(TestCase):
         cls.member = create_non_staff_user('qaa_member', (MEMBER_GROUP_NAME,))
         cls.cron = create_test_user('qaa_cron', is_staff=False)
         cls.writer = create_test_user('qaa_writer', is_staff=False)
+        cls.staff = create_test_user('qaa_staff', is_staff=True)
+        cls.superuser = create_test_user('qaa_super', is_staff=True)
+        cls.superuser.is_superuser = True
+        cls.superuser.save()
         cls.writer.groups.add(Group.objects.get_or_create(name=settings.API_WRITERS_GROUP)[0])
-        for user in (cls.owner, cls.member, cls.cron, cls.writer):
+        for user in (cls.owner, cls.staff, cls.superuser, cls.member, cls.cron, cls.writer):
             user.set_password(_PASSWORD)
             user.save()
         sql = "SELECT t.name, t.ra FROM YSE_App_transient t WHERE t.name LIKE 'qaa%' ORDER BY t.name"
@@ -115,12 +120,13 @@ class QueryApiAccessTests(TestCase):
         self.assertEqual(self._names(self._get(self.member, self.own)), self.member_names)
 
     def test_explorer_user_may_run_any_query(self):
-        self.assertEqual(self._names(self._get(self.owner, self.unpublished)), self.all_names)
+        self.assertEqual(self._get(self.owner, self.unpublished).status_code, 200)
 
-    def test_service_accounts_may_run_any_query(self):
-        for user in (self.cron, self.writer):
-            with self.subTest(user=user.username):
-                self.assertEqual(self._names(self._get(user, self.unpublished)), self.all_names)
+    def test_service_reader_may_run_any_query(self):
+        self.assertEqual(self._names(self._get(self.cron, self.unpublished)), self.all_names)
+
+    def test_api_writer_is_not_a_service_account(self):
+        self.assertEqual(self._get(self.writer, self.unpublished).status_code, 404)
 
     def test_anonymous_is_refused(self):
         response = self.client.get('/query_api/%s/' % quote(self.published.title))
@@ -140,10 +146,19 @@ class QueryApiAccessTests(TestCase):
         self.assertNotIn(self.dataset.by_suffix['nodata'].name, names)
         self.assertIn(self.dataset.by_suffix['memberphot'].name, names)
 
-    def test_staff_and_service_accounts_get_every_row(self):
-        for user in (self.owner, self.cron, self.writer):
+    def test_service_reader_gets_every_row(self):
+        self.assertEqual(self._names(self._get(self.cron, self.published)), self.all_names)
+
+    def test_data_service_reader_username_gets_every_row(self):
+        with override_settings(API_SERVICE_USERNAMES=[], DATA_SERVICE_READER_USERNAMES=['qaa_writer']):
+            self.assertEqual(self._names(self._get(self.writer, self.published)), self.all_names)
+
+    def test_staff_superuser_and_api_writer_get_scoped_rows(self):
+        for user in (self.staff, self.superuser, self.writer):
             with self.subTest(user=user.username):
-                self.assertEqual(self._names(self._get(user, self.published)), self.all_names)
+                names = self._names(self._get(user, self.published))
+                self.assertLess(len(names), len(self.all_names))
+                self.assertNotIn(self.dataset.by_suffix['otherphot'].name, names)
 
     def test_transient_id_column_is_used_when_present(self):
         with override_settings(QUERY_API_ALLOWED_QUERIES=['qaa by id']):

@@ -154,7 +154,8 @@ class _ExplorerToDefault:
         return connections['default' if alias == 'explorer' else alias]
 
 
-@override_settings(QUERY_API_CACHE_SECONDS=300)
+# The cron account is a service reader (#725): its rows are unscoped and the saved SQL runs as written.
+@override_settings(QUERY_API_CACHE_SECONDS=300, API_SERVICE_USERNAMES=['query_api_cache_user'])
 class QueryApiCacheTests(TestCase):
     @classmethod
     def setUpTestData(cls):
