@@ -2976,95 +2976,16 @@ def search_export_csv(request):
 #    return JsonResponse(context) #HttpResponse('')
 
     
-ZTF_FORCED_PHOT_LOG_PREFIX = 'ZTF Forced Phot'
-
-
-def _ztf_forced_phot_via_allocation(request, transient):
-    """Submit through the first usable 'ztf' allocation; None when there is none (legacy path)."""
-    from YSE_App.facilities import FacilityValidationError
-    from YSE_App.services import facility_requests as fr
-
-    allocation = fr.allocations_for_user(request.user).filter(facility='ztf').order_by('-end_date').first()
-    if allocation is None:
-        return None
-    existing = fr.open_request_for(allocation, transient)
-    if existing is not None:
-        return 'error: a ZTF forced-photometry request is already %s (submitted %s)' % (
-            existing.get_state_display().lower(), (existing.submitted_at or existing.created_date).strftime('%Y-%m-%d %H:%M UT'))
-    try:
-        req = fr.submit_request(allocation, transient, request.user, {})
-    except (FacilityValidationError, fr.FacilityRequestError) as exc:
-        return 'error: %s' % exc
-    return 'success: ZTF forced photometry request %d is %s; the light curve is ingested when the service finishes' % (
-        req.pk, req.get_state_display().lower())
+from YSE_App.services.ztf_forced import ZTF_FORCED_PHOT_LOG_PREFIX  # noqa: E402,F401
 
 
 @login_required
 def ztf_forced_phot(request,slug):
-
-
-    from YSE_App.data_ingest import ZTF_Forced_Phot
+    """Request ZTF forced photometry; the allocation path, throttle and legacy script live in
+    ``services.ztf_forced`` (shared with the automatic follow-up enrichment, #114)."""
+    from YSE_App.services import ztf_forced
 
     transient = Transient.objects.get(slug=slug)
-
-    # A 'ztf' allocation open to the user (#301) submits through the facility adapter: the request
-    # is recorded, polled and ingested by the queue, and an open request replaces the 12 h throttle.
-    facility_msg = _ztf_forced_phot_via_allocation(request, transient)
-    if facility_msg is not None:
-        if facility_msg.startswith('success'):
-            Log.objects.create(
-                created_by=request.user, modified_by=request.user, transient=transient,
-                comment='%s requested by %s via the facility queue: %s' % (
-                    ZTF_FORCED_PHOT_LOG_PREFIX, request.user.username, facility_msg))
-        return JsonResponse({'msg': facility_msg})
-
-    # make sure this request wasn't run w/i the last 12 hours. Only earlier forced-phot
-    # comments count (#399): any comment on the transient used to block the request.
-    now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
-    old_log = Log.objects.filter(
-        transient=transient, comment__startswith=ZTF_FORCED_PHOT_LOG_PREFIX,
-        modified_date__gt=now - datetime.timedelta(0.5)).order_by('-modified_date').first()
-    if old_log is not None:
-        hours_ago = (now - old_log.modified_date).total_seconds() / 3600.
-        return JsonResponse({'msg': 'error: forced phot was requested %.1f hours ago (must be >12)' % hours_ago})
-
-    # run ZTF forced phot script; a failure is reported to the page instead of a bare 500 (#399)
-    try:
-        ztf = ZTF_Forced_Phot.ZTF_Forced_Phot(
-            ztf_email_address=ZTF_Forced_Phot.ztf_account_address(),ztf_email_password=djangoSettings.SMTP_PASSWORD,
-            ztf_email_imapserver='imap.gmail.com',ztf_user_address=ZTF_Forced_Phot.ztf_account_address(),
-            ztf_user_password=djangoSettings.ZTFPASS)
-
-        log_file_name = ztf.run_ztf_fp(
-            all_jd=False, days=60, decl=transient.dec, directory_path=djangoSettings.ZTFTMPDIR,
-            do_plot=False, emailcheck=0, fivemindelay=60, jdend=None,
-            jdstart=None, logfile=None, mjdend=None, mjdstart=None,
-            plotfile=None, ra=transient.ra, skip_clean=False, source_name=slug,
-            verbose=False)
-    except Exception as exc:  # noqa: BLE001 - network, IMAP or config failure inside the legacy script
-        logger.exception('ZTF forced phot request failed for %s', slug)
-        # A submit error (ZTF's reply text, credentials scrubbed) or a filesystem error
-        # (it names the path) says what to fix; anything else shows only its type (#411).
-        if isinstance(exc, (ZTF_Forced_Phot.ZTFForcedPhotSubmitError, OSError)):
-            detail = '%s: %s' % (type(exc).__name__, exc)
-        else:
-            detail = type(exc).__name__
-        return JsonResponse(
-            {'msg': 'error: ZTF forced photometry request failed (%s); nothing was submitted' % detail},
-            status=502)
-    if not log_file_name:
-        return JsonResponse(
-            {'msg': 'error: ZTF did not accept the forced photometry request (no job log returned); nothing was submitted'},
-            status=502)
-
-    # then need to do some logging
-    commentstr = """%s requested by %s
-log_file_name=%s
-job_submitted=%s"""%(ZTF_FORCED_PHOT_LOG_PREFIX,request.user.username,log_file_name,now.isoformat())
-
-    Log.objects.create(
-        created_by=request.user,modified_by=request.user,
-        transient=transient,comment=commentstr)
-
-    return JsonResponse({'msg': 'success: ZTF forced photometry requested; a comment was added to this transient'})
+    outcome = ztf_forced.submit_forced_phot(transient, request.user)
+    return JsonResponse({'msg': outcome.message}, status=outcome.http_status)
 
