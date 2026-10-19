@@ -26,7 +26,17 @@ One source vocabulary and one precedence list serve both `Host.redshift` and `Tr
 
 An automatic writer replaces a value only when its rank is at least the current one. The same rank counts, so a catalogue can refresh its own value. A blank source ranks below our own and above TNS, so NED and DESI replace stale GHOST or legacy values, and TNS never replaces a value it did not write. An upload without a `redshift_source` counts as blank.
 
-`best_redshift(transient)` gives the value to use under these rules: an override first, then the higher-ranked of the transient's and the host's spec-z, then the host photo-z. The tables and `Transient.z_or_hostz()` still prefer the transient's own value.
+`best_redshift(transient)` gives the value to use under these rules: an override first, then the higher-ranked of the transient's and the host's spec-z (the transient's on a tie), then the host photo-z.
+
+## Where the best redshift is shown (#736)
+
+Everything that shows, sorts, filters or exports a transient's redshift uses that one answer:
+
+- **Python:** `Transient.z_or_hostz()` and `Transient.best_z()` (the full `BestRedshift`: value, error, source, origin, override) call `best_redshift()`. The detail Summary tab (Redshift, with its source and "from host" when the host's value won, and Best Distance), the summary cards, the light-curve axes and the summary search use them.
+- **SQL:** `YSE_App/services/redshift_sql.py` (`annotate_best_redshift`) is the same list as a `Case`/`When` over `redshift_override`, the lower-cased `redshift_source` of the transient and of the host, and the host photo-z. It drives the table Redshift columns and their sort, the search `redshift_min` / `redshift_max` / `has_redshift` filters and `best_redshift` ordering, the `/summary/` card sort (`?sort=best_redshift`) and the search CSV (`best_redshift` column, next to the raw `redshift` and `host_redshift`).
+- **Equivalence:** `YSE_App/tests/test_best_redshift_display.py` checks the SQL expression against `best_redshift()` on a mixed fixture (override, NED, DESI, own, TNS, legacy, photo-z only). Change a rank in `redshift_precedence.py` and in `redshift_sql._rank_expression` together.
+- **Cost:** the expression reads columns of the host join the tables already make; it adds no query and no migration.
+- A host photo-z now fills the Redshift column when neither the transient nor the host has a spec-z, and counts for `has_redshift`.
 
 ## Setting an override
 

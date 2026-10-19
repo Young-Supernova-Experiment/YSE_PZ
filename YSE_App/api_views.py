@@ -1011,7 +1011,7 @@ class SummarySearchAPIView(generics.GenericAPIView):
                 'slug': r['transient'].slug,
                 'status': str(r['transient'].status),
                 'spec_class': str(r['transient'].best_spec_class) if r['transient'].best_spec_class_id else None,
-                'redshift': r['transient'].redshift,
+                'redshift': r['transient'].z_or_hostz(),
                 'score': r['score'],
                 'snippet': r['snippet'],
                 'summary_modified': r['transient'].summary_modified,
