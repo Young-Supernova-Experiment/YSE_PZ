@@ -357,7 +357,8 @@ class HermesFeed(FeedProvider):
         if message.redshift is not None and transient.redshift is None and self.option("update_redshift", True):
             from YSE_App.services import redshift_precedence
 
-            redshift_precedence.apply_redshift(transient, message.redshift, None, redshift_precedence.SOURCE_HERMES)
+            redshift_precedence.apply_redshift(transient, message.redshift, None, redshift_precedence.SOURCE_HERMES,
+                                               service="hermes")
 
     def apply_classification(self, message: FeedMessage, transient, user) -> None:
         """Set ``best_spec_class`` (matching a TransientClass by name) and leave a comment."""
@@ -365,16 +366,24 @@ class HermesFeed(FeedProvider):
 
         label = message.classification.strip()
         cls = TransientClass.objects.filter(name__iexact=label).first()
-        changed = []
+        changed, before = [], {}
         if cls is not None and transient.best_spec_class_id != cls.id:
+            before["best_spec_class"] = transient.best_spec_class
             transient.best_spec_class = cls
             changed.append("best_spec_class")
         if cls is None and transient.TNS_spec_class != label:
+            before["TNS_spec_class"] = transient.TNS_spec_class
             transient.TNS_spec_class = label[:64]
             changed.append("TNS_spec_class")
         if changed:
             transient.modified_by_id = user.id
             transient.save(update_fields=changed + ["modified_by", "modified_date"])
+            from YSE_App.services import change_log
+
+            for attr in changed:  # one change-log entry per field (#737); the feed is the system
+                change_log.record_change(transient, attr, before[attr], getattr(transient, attr),
+                                         service=change_log.SERVICE_HERMES, category="classification",
+                                         source="Hermes")
         z = " at z=%.4f" % message.redshift if message.redshift is not None else ""
         self.add_comment(transient, "Hermes classification: %s%s by %s%s" % (
             label, z, message.reporter or "unknown reporter", " (%s)" % message.url if message.url else ""), user)

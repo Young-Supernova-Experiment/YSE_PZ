@@ -52,6 +52,7 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         from YSE_App.services import change_log
 
         redshift_before = change_log.redshift_state(instance)
+        edit_before = change_log.edit_state(instance)
         instance.status = validated_data.get('status', instance.status)
         instance.obs_group = validated_data.get('obs_group', instance.obs_group)
         instance.non_detect_band = validated_data.get('non_detect_band', instance.non_detect_band)
@@ -109,6 +110,7 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         # redshift or override edited by hand through the API: one change-log entry (#737)
         change_log.record_redshift_edit(instance, redshift_before, actor=_request_user(self),
                                         service=change_log.SERVICE_API)
+        change_log.record_edit(instance, edit_before, actor=_request_user(self))
 
         return instance
 

@@ -3,7 +3,11 @@
 Every automatic writer records through :func:`record_change` (redshift writes do it
 inside :func:`redshift_precedence.apply_redshift`, overrides inside
 :func:`redshift_precedence.set_override` / ``clear_override`` and the API through
-:func:`record_redshift_edit`). A write that changes nothing records nothing.
+:func:`record_redshift_edit`, other hand edits through :func:`record_edit`), and the
+upload endpoints (``add_transient`` and the host util, including the TNS cron's Prost
+hosts) through :func:`record_upload` with the uploader as actor. A value and its
+uncertainty go through :func:`record_value`: a change of the uncertainty alone is an
+entry of its own. A write that changes nothing records nothing.
 
 Writers that record an ``ExternalServiceRun`` only after the work is done wrap the work
 in :func:`collecting` and then :func:`attach_run` the collected rows to the run.
@@ -30,6 +34,8 @@ log = logging.getLogger(__name__)
 SERVICE_API = "api"
 SERVICE_MANUAL = "manual"
 SERVICE_COMMAND = "redshift_override command"
+SERVICE_UPLOAD = "upload"  # the upload endpoints (add_transient, host and GW uploads); actor = the uploader
+SERVICE_HERMES = "hermes"
 MANUAL_SERVICES = frozenset({SERVICE_API, SERVICE_MANUAL, SERVICE_COMMAND})
 
 DEFAULT_LIMIT = 200
@@ -83,22 +89,25 @@ def is_restricted(source: Optional[str], service: str) -> bool:
 
     if service in MANUAL_SERVICES:
         return True
+    if service == SERVICE_UPLOAD and not (source or "").strip():
+        return True  # an upload without a source: provenance unknown, maybe our own data
     return bool((source or "").strip()) and rp.source_rank(source) == rp.RANK_OWN
 
 
 def record_change(obj, field: str, old, new, *, service: str, category: str, source: Optional[str] = "",
                   old_source: Optional[str] = "", actor=None, run=None, restricted: Optional[bool] = None,
-                  note: str = "", tolerance: float = 1e-9) -> Optional[ValueChange]:
+                  note: str = "", tolerance: float = 1e-9, force: bool = False) -> Optional[ValueChange]:
     """Record one change of ``obj.<field>`` (``obj`` a saved Transient or Host); None when nothing changed.
 
-    ``actor`` None means the system. Never raises: a failure to record is logged and the
-    writer carries on (the value itself is already saved).
+    ``actor`` None means the system. ``force`` skips the no-change check (the caller made
+    it). Never raises: a failure to record is logged and the writer carries on (the value
+    itself is already saved).
     """
     target = _target(obj)
     if target is None:
         return None
     source, old_source = (source or "")[:64], (old_source or "")[:64]
-    if _same(old, new, tolerance) and source == old_source:
+    if not force and _same(old, new, tolerance) and source == old_source:
         return None
     if restricted is None:
         restricted = is_restricted(source, service)
@@ -115,6 +124,137 @@ def record_change(obj, field: str, old, new, *, service: str, category: str, sou
     for bucket in _collectors.get():
         bucket.append(row)
     return row
+
+
+def record_value(obj, field: str, err_field: Optional[str], old, new, old_err, new_err, *, service: str,
+                 category: str, source: Optional[str] = "", old_source: Optional[str] = "",
+                 compare_source: bool = True, tolerance: float = 1e-9, **kwargs) -> Optional[ValueChange]:
+    """A value and its uncertainty: one entry for the value (or its source), else one for the error alone.
+
+    ``compare_source=False`` for fields without a stored source (``source`` then only labels
+    the entry). Nothing is recorded when value, error and source are all unchanged.
+    """
+    source, old_source = source or "", old_source or ""
+    value_changed = not _same(old, new, tolerance)
+    source_changed = compare_source and source != old_source
+    if not compare_source:
+        old_source = ""
+    if value_changed or source_changed:
+        return record_change(obj, field, old, new, service=service, category=category, source=source,
+                             old_source=old_source, tolerance=tolerance, force=True, **kwargs)
+    if err_field and not _same(old_err, new_err, tolerance):
+        return record_change(obj, err_field, old_err, new_err, service=service, category=category, source=source,
+                             old_source=old_source, tolerance=tolerance, force=True,
+                             note=kwargs.pop("note", "") or "uncertainty only", **kwargs)
+    return None
+
+
+# (field, error field, source field, category) recorded for uploads, per target
+_UPLOAD_FIELDS = {
+    "transient": (
+        ("redshift", "redshift_err", "redshift_source", ValueChange.CATEGORY_REDSHIFT),
+        ("TNS_spec_class", None, None, ValueChange.CATEGORY_CLASSIFICATION),
+        ("best_spec_class", None, None, ValueChange.CATEGORY_CLASSIFICATION),
+    ),
+    "host": (
+        ("redshift", "redshift_err", "redshift_source", ValueChange.CATEGORY_REDSHIFT),
+        ("photo_z", "photo_z_err", "photo_z_source", ValueChange.CATEGORY_PHOTO_Z),
+        ("photo_z_internal", "photo_z_err_internal", None, ValueChange.CATEGORY_PHOTO_Z),
+    ),
+}
+
+
+def record_upload(obj, fields: dict, *, actor=None, service: str = SERVICE_UPLOAD, source_hint: str = "",
+                  created: bool = False) -> List[ValueChange]:
+    """Record what an upload's ``fields`` change on ``obj`` (read ``obj`` *before* the update is applied).
+
+    ``created``: ``obj`` was just created from ``fields``, so every given value is new.
+    ``source_hint`` labels fields that carry no source of their own (a classification from
+    the TNS cron: ``TNS``; a Prost host: ``Prost``).
+    """
+    target = _target(obj)
+    if target is None or not fields:
+        return []
+    out = []
+    for field, err_field, source_field, category in _UPLOAD_FIELDS[target]:
+        if field not in fields and (err_field is None or err_field not in fields):
+            continue
+        old = None if created else getattr(obj, field, None)
+        old_err = None if (created or not err_field) else getattr(obj, err_field, None)
+        new = fields.get(field, old)
+        new_err = fields.get(err_field, old_err) if err_field else None
+        if source_field:
+            old_source = "" if created else (getattr(obj, source_field, None) or "")
+            source = (fields.get(source_field) or "") if source_field in fields else (
+                source_hint if created else old_source)
+        else:
+            old_source = source = source_hint
+        if created and new is None and new_err is None:
+            continue
+        out.append(record_value(obj, field, err_field, old, new, old_err, new_err, service=service,
+                                category=category, source=source, old_source=old_source,
+                                compare_source=bool(source_field), actor=actor))
+    return [c for c in out if c is not None]
+
+
+_EDIT_ATTRS = {
+    "transient": ("TNS_spec_class", "best_spec_class_id", "host_id"),
+    "host": ("photo_z", "photo_z_err", "photo_z_source", "photo_z_internal", "photo_z_err_internal"),
+}
+
+
+def edit_state(obj) -> dict:
+    """The classification / host-link / photo-z values of ``obj`` before a hand edit (see :func:`record_edit`)."""
+    target = _target(obj)
+    return {a: getattr(obj, a, None) for a in _EDIT_ATTRS.get(target, ())} if target else {}
+
+
+def _class_name(class_id) -> Optional[str]:
+    if not class_id:
+        return None
+    from YSE_App.models.enum_models import TransientClass
+
+    return TransientClass.objects.filter(pk=class_id).values_list("name", flat=True).first()
+
+
+def record_edit(obj, before: dict, *, actor=None, service: str = SERVICE_API) -> List[ValueChange]:
+    """Record a hand edit (API) of the classification, host link or photo-z (redshift: :func:`record_redshift_edit`)."""
+    target = _target(obj)
+    if target is None or not before:
+        return []
+    after = edit_state(obj)
+    out = []
+    kw = dict(service=service, actor=actor, restricted=True)
+    if target == "transient":
+        if (before["TNS_spec_class"] or "") != (after["TNS_spec_class"] or ""):
+            out.append(record_change(obj, "TNS_spec_class", before["TNS_spec_class"], after["TNS_spec_class"],
+                                     category=ValueChange.CATEGORY_CLASSIFICATION, force=True, **kw))
+        if before["best_spec_class_id"] != after["best_spec_class_id"]:
+            out.append(record_change(obj, "best_spec_class", _class_name(before["best_spec_class_id"]),
+                                     _class_name(after["best_spec_class_id"]),
+                                     category=ValueChange.CATEGORY_CLASSIFICATION, force=True, **kw))
+        if before["host_id"] != after["host_id"]:
+            out.append(record_change(obj, "host", host_label(before["host_id"]), host_label(after["host_id"]),
+                                     category=ValueChange.CATEGORY_HOST, force=True, **kw))
+    else:
+        out.append(record_value(obj, "photo_z", "photo_z_err", before["photo_z"], after["photo_z"],
+                                before["photo_z_err"], after["photo_z_err"], category=ValueChange.CATEGORY_PHOTO_Z,
+                                source=after["photo_z_source"], old_source=before["photo_z_source"], **kw))
+        out.append(record_value(obj, "photo_z_internal", "photo_z_err_internal", before["photo_z_internal"],
+                                after["photo_z_internal"], before["photo_z_err_internal"],
+                                after["photo_z_err_internal"], category=ValueChange.CATEGORY_PHOTO_Z,
+                                compare_source=False, **kw))
+    return [c for c in out if c is not None]
+
+
+def host_label(host_id) -> Optional[str]:
+    """``"<name> (host <id>)"`` for a host link entry (None for no host)."""
+    if not host_id:
+        return None
+    from YSE_App.models.host_models import Host
+
+    name = Host.objects.filter(pk=host_id).values_list("name", flat=True).first()
+    return "%s (host %s)" % (name or "", host_id)
 
 
 @contextmanager

@@ -146,8 +146,8 @@ def run_batch(hosts, ctx=None):
         #T.host.photo_z_posterior = posterior[i] #Gautham suggested we add it to the host model
         host.photo_z_source = 'SDSS'
         host.save() #takes a long time and then my query needs to be reset which is also a long time
-        change_log.record_change(host, 'photo_z', old[0], z, service='sdss-photoz', source='SDSS',
-                                 old_source=old[2], category=ValueChange.CATEGORY_PHOTO_Z)  # #737
+        change_log.record_value(host, 'photo_z', 'photo_z_err', old[0], z, old[1], z_err, service='sdss-photoz',
+                                source='SDSS', old_source=old[2], category=ValueChange.CATEGORY_PHOTO_Z)  # #737
         outcomes[pk] = Outcome(UPDATED, "photo_z %.4f +- %.4f (SDSS)" % (z, z_err),
                                data={"photo_z": z, "photo_z_err": z_err, "photo_z_source": "SDSS"})
     return outcomes
