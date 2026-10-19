@@ -107,6 +107,8 @@ class Transient(BaseModel):
 	redshift = models.FloatField(null=True, blank=True)
 	redshift_err = models.FloatField(null=True, blank=True)
 	redshift_source = models.CharField(max_length=64, null=True, blank=True)
+	# Set by hand: wins over every catalogue and is never overwritten (#436, #437). NULL = False.
+	redshift_override = models.BooleanField(null=True, blank=True, default=False)
 	non_detect_date = models.DateTimeField(null=True, blank=True)
 	non_detect_limit = models.FloatField(null=True, blank=True)
 	mw_ebv = models.FloatField(null=True, blank=True)

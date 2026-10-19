@@ -747,7 +747,8 @@ class YSE(CronJobBase):
                 hostdict = {'name':s['sherlock_object_id'][:64],
                             'ra':s['sherlock_host_ra'],
                             'dec':s['sherlock_host_dec'],
-                            'redshift':redshift}
+                            'redshift':redshift,
+                            'redshift_source':'Sherlock' if redshift is not None else None}
             if type(s['rb_factor_image']) == np.ma.core.MaskedConstant:
                 rb_factor = None
             else:
@@ -1245,7 +1246,8 @@ class YSE_Stack(CronJobBase):
                 hostdict = {'name':s['sherlock_object_id'][:64],
                             'ra':s['sherlock_host_ra'],
                             'dec':s['sherlock_host_dec'],
-                            'redshift':redshift}
+                            'redshift':redshift,
+                            'redshift_source':'Sherlock' if redshift is not None else None}
             if type(s['rb_factor_image']) == np.ma.core.MaskedConstant:
                 rb_factor = None
             else:

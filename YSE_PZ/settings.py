@@ -256,6 +256,9 @@ CRON_CLASSES = [
     # Regular TNS re-sync (#438): queues the tns.resync_sweep job; no-op unless
     # TNS_RESYNC_CRON_ENABLED is set under [sharing] in settings.ini.
     'YSE_App.data_ingest.TNS_Resync.TNSResync',
+    # NED/DESI host redshifts (#436, #437): queues the redshifts.sweep job; no-op unless
+    # REDSHIFT_CATALOG_CRON_ENABLED is set under [redshifts] in settings.ini.
+    'YSE_App.data_ingest.Redshift_Catalogs.RedshiftCatalogSweep',
     # Instrument logs and weather (#309): queue the facility-API log pull and the
     # weather refresh jobs; no-ops unless enabled under [observatory] in settings.ini.
     'YSE_App.data_ingest.Instrument_Logs.InstrumentLogPull',
@@ -1410,6 +1413,29 @@ TNS_RESYNC_OTHER_DAYS = config.getfloat('sharing', 'TNS_RESYNC_OTHER_DAYS', fall
 TNS_RESYNC_GAP_DAYS = config.getfloat('sharing', 'TNS_RESYNC_GAP_DAYS', fallback=3.0)
 TNS_RESYNC_BUDGET_SECONDS = config.getint('sharing', 'TNS_RESYNC_BUDGET_SECONDS', fallback=900)
 TNS_RESYNC_SERVICE = config.get('sharing', 'TNS_RESYNC_SERVICE', fallback='')
+# Host redshifts from NED and DESI (#436, #437; YSE_App/services/redshift_catalogs.py and
+# docs/redshift-precedence.md), under [redshifts] in settings.ini. The hourly sweep (and the
+# lookup queued when a host is associated) is off until REDSHIFT_CATALOG_CRON_ENABLED.
+REDSHIFT_CATALOG_CRON_ENABLED = (
+    os.environ.get('YSE_REDSHIFT_CATALOG_CRON', '').strip() == '1'
+    or config.getboolean('redshifts', 'REDSHIFT_CATALOG_CRON_ENABLED', fallback=False)
+)
+REDSHIFT_CATALOG_CRON_MINUTES = config.getint('redshifts', 'REDSHIFT_CATALOG_CRON_MINUTES', fallback=60)
+REDSHIFT_CATALOG_SERVICES = config.get('redshifts', 'REDSHIFT_CATALOG_SERVICES', fallback='ned,desi')
+REDSHIFT_CATALOG_MAX_PER_RUN = config.getint('redshifts', 'REDSHIFT_CATALOG_MAX_PER_RUN', fallback=100)
+REDSHIFT_CATALOG_RECHECK_DAYS = config.getfloat('redshifts', 'REDSHIFT_CATALOG_RECHECK_DAYS', fallback=90.0)
+REDSHIFT_CATALOG_BUDGET_SECONDS = config.getint('redshifts', 'REDSHIFT_CATALOG_BUDGET_SECONDS', fallback=900)
+NED_API_URL = config.get('redshifts', 'NED_API_URL', fallback='https://ned.ipac.caltech.edu/NED::API')
+NED_HOST_MATCH_ARCSEC = config.getfloat('redshifts', 'NED_HOST_MATCH_ARCSEC', fallback=3.0)
+NED_REQUEST_INTERVAL_SECONDS = config.getfloat('redshifts', 'NED_REQUEST_INTERVAL_SECONDS', fallback=1.0)
+NED_TIMEOUT_SECONDS = config.getfloat('redshifts', 'NED_TIMEOUT_SECONDS', fallback=30.0)
+DESI_TAP_URL = config.get('redshifts', 'DESI_TAP_URL', fallback='https://datalab.noirlab.edu/tap/sync')
+DESI_TABLE = config.get('redshifts', 'DESI_TABLE', fallback='desi_dr1.zpix')
+DESI_SOURCE_LABEL = config.get('redshifts', 'DESI_SOURCE_LABEL', fallback='DESI DR1')
+DESI_HOST_MATCH_ARCSEC = config.getfloat('redshifts', 'DESI_HOST_MATCH_ARCSEC', fallback=1.5)
+DESI_MIN_DELTACHI2 = config.getfloat('redshifts', 'DESI_MIN_DELTACHI2', fallback=25.0)
+DESI_REQUEST_INTERVAL_SECONDS = config.getfloat('redshifts', 'DESI_REQUEST_INTERVAL_SECONDS', fallback=1.0)
+DESI_TIMEOUT_SECONDS = config.getfloat('redshifts', 'DESI_TIMEOUT_SECONDS', fallback=60.0)
 # Other feeds: Hermes / SCiMMA, Einstein Probe, JPL Scout (#280; docs/feeds-*.md).
 # All keys optional, under [feeds] in settings.ini. Sources are FeedSource rows
 # (admin), credentials EncryptedCredential rows; nothing secret lives here.

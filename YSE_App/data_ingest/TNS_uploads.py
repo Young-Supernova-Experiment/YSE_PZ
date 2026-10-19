@@ -12,8 +12,6 @@ import urllib.request
 from bs4 import BeautifulSoup
 from datetime import datetime
 from enum import Enum
-from astroquery.ned import Ned
-Ned.TIMEOUT = 5
 import astropy.units as u
 from astropy import coordinates
 import numpy as np
@@ -184,8 +182,6 @@ class processTNS:
                             help='if set, update photometry from ZTF')
         parser.add_argument('--redohost', default=False, action="store_true",
                             help='if set, repeat search to find host matches (slow-ish)')
-        parser.add_argument('--nedradius', default=5, type=float,
-                            help='NED search radius, in arcmin')
         parser.add_argument('--ndays', default=None, type=int,
                             help='number of days before today update events')
 
@@ -336,7 +332,9 @@ class processTNS:
             if not TransientDict['obs_group']:
                 TransientDict['obs_group'] = 'Unknown'
             z = jd['redshift']
-            if z: TransientDict['redshift'] = float(z)
+            if z:
+                TransientDict['redshift'] = float(z)
+                TransientDict['redshift_source'] = 'TNS'  # provenance (#436, #437)
             evt_type = jd['object_type']['name']
             if evt_type:
                 TransientDict['best_spec_class'] = evt_type
@@ -740,94 +738,13 @@ class processTNS:
         if 'host_redshift_info' in prost_host.keys() and prost_host['host_redshift_info'].to_numpy()[0] == 'SPEC':
             hostdict['redshift'] = prost_host['host_redshift_mean'].to_numpy()[0]
             hostdict['redshift_err'] = prost_host['host_redshift_std'].to_numpy()[0]
+            hostdict['redshift_source'] = 'Prost'  # provenance (#436, #437)
         else:
             hostdict['photo_z_internal'] = prost_host['host_redshift_mean'].to_numpy()[0]
             hostdict['photo_z_err_internal'] = prost_host['host_redshift_std'].to_numpy()[0]
 
         return hostdict,hostcoords
         
-    def getNEDData(self,jd,sc,ned_table):
-
-        gal_candidates = 0
-        radius = 5
-        while (radius < 11 and gal_candidates < 21):
-            try:
-                print("Radius: %s" % radius)
-                gal_candidates = len(ned_table)
-                radius += 1
-                print("Result length: %s" % gal_candidates)
-            except Exception as e:
-                radius += 1
-                print("NED exception: %s" % e.args)
-
-        galaxy_names,noz_galaxy_names = [],[]
-        galaxy_zs,noz_galaxy_zs = [],[]
-        galaxy_seps,noz_galaxy_seps = [],[]
-        galaxies_with_z,noz_galaxies_with_z = [],[]
-        galaxy_ras,noz_galaxy_ras = [],[]
-        galaxy_decs,noz_galaxy_decs = [],[]
-        galaxy_mags,noz_galaxy_mags = [],[]
-        if ned_table is not None:
-            print("NED Matches: %s" % len(ned_table))
-
-            galaxy_candidates = np.asarray([entry.decode("utf-8") for entry in ned_table["Type"]])
-            galaxies_indices = np.where(galaxy_candidates == 'G')
-            galaxies = ned_table[galaxies_indices]
-
-            print("Galaxy Candidates: %s" % len(galaxies))
-
-            # Get Galaxy name, z, separation for each galaxy with z
-            for l in range(len(galaxies)):
-                if isinstance(galaxies[l]["Redshift"], float):
-                    galaxies_with_z.append(galaxies[l])
-                    galaxy_names.append(galaxies[l]["Object Name"])
-                    galaxy_zs.append(galaxies[l]["Redshift"])
-                    galaxy_seps.append(galaxies[l]["Separation"])
-                    galaxy_ras.append(galaxies[l]["RA"])
-                    galaxy_decs.append(galaxies[l]["DEC"])
-                    galaxy_mags.append(galaxies[l]["Magnitude and Filter"])
-
-                noz_galaxies_with_z.append(galaxies[l])
-                noz_galaxy_names.append(galaxies[l]["Object Name"])
-                noz_galaxy_zs.append(galaxies[l]["Redshift"])
-                noz_galaxy_seps.append(galaxies[l]["Separation"])
-                noz_galaxy_ras.append(galaxies[l]["RA"])
-                noz_galaxy_decs.append(galaxies[l]["DEC"])
-                noz_galaxy_mags.append(galaxies[l]["Magnitude and Filter"])
-
-            print("Galaxies with z: %s" % len(galaxies_with_z))
-            # Get Dust in LoS for each galaxy with z
-            if len(galaxies_with_z) > 0:
-                for l in range(len(galaxies_with_z)):
-                    co_l = coordinates.SkyCoord(ra=galaxies_with_z[l]["RA"],
-                                                dec=galaxies_with_z[l]["DEC"],
-                                                unit=(u.deg, u.deg), frame='fk4', equinox='J2000.0')
-
-            else:
-                print("No NED Galaxy hosts with z")
-
-        # put in the hosts
-        hostcoords = ''; hosturl = ''; ned_mag = ''
-        galaxy_z_times_seps = np.array(galaxy_seps)*np.array(np.abs(galaxy_zs))
-        hostdict = {}
-        for z,name,ra,dec,sep,mag,gzs in zip(galaxy_zs,galaxy_names,galaxy_ras,
-                                             galaxy_decs,galaxy_seps,galaxy_mags,
-                                             galaxy_z_times_seps):
-            if gzs == np.min(galaxy_z_times_seps):
-                cosmo = FlatLambdaCDM(70,0.3)
-                if sep*60/cosmo.arcsec_per_kpc_proper(z).value < 100:
-                    hostdict = {'name':name,'ra':ra,'dec':dec,'redshift':z}
-            hostcoords += f'ra={ra:.7f}, dec={dec:.7f}\n'
-
-        # if this didn't work, let's get the nearest potential host
-        if 'name' not in hostdict.keys():
-            for z,name,ra,dec,sep,mag in zip(noz_galaxy_zs,noz_galaxy_names,noz_galaxy_ras,
-                                             noz_galaxy_decs,noz_galaxy_seps,noz_galaxy_mags):
-                if sep == np.min(noz_galaxy_seps):
-                    hostdict = {'name':name,'ra':ra,'dec':dec,'redshift':None}
-            
-        return hostdict,hostcoords
-
     def UpdateFromTNS(self,ndays=None,allowed_statuses=['New','Following','Watch','FollowupRequested','Interesting'],doTNS=True):
 
         if ndays:
@@ -1029,11 +946,11 @@ class processTNS:
         else: nsn = 0
         return nsn
 
-    def GetAndUploadAllData(self,objs,ras,decs,doProst=True,doEBV=True,doTNS=True): #doNED=True
+    def GetAndUploadAllData(self,objs,ras,decs,doProst=True,doEBV=True,doTNS=True):
         TransientUploadDict = {}
         assert len(ras) == len(decs)
 
-        ebvall,nedtables = [],[]
+        ebvall = []
         ebvtstart = time.time()
         ebv_timeout,ned_timeout = False,False
         if doProst:
@@ -1096,23 +1013,7 @@ class processTNS:
             scall = SkyCoord(ras,decs,frame="fk5",unit=(u.hourangle,u.deg))
 
                 
-        #    signal.signal(signal.SIGALRM, handler)              
-        #    try:
-        #        signal.alarm(600)
-        #        for sc in scall:
-        #            try:
-        #                ned_region_table = \
-        #                    Ned.query_region(
-        #                        sc, radius=self.nedradius*u.arcmin,
-        #                        equinox='J2000.0')
-        #            except:
-        #                ned_region_table = None
-        #            nedtables += [ned_region_table]
-        #    except:
-        #        print('NED timeout!')
-        #        ned_timeout = True
-
-            print('E(B-V)/NED time: %.1f seconds'%(time.time()-ebvtstart))
+            print('E(B-V) time: %.1f seconds'%(time.time()-ebvtstart))
             signal.alarm(0)
         
         tstart = time.time()
@@ -1172,11 +1073,6 @@ class processTNS:
             else:
                 prost_host = None
                 
-            #if doNED:
-            #    if not ned_timeout:
-            #        nedtable = nedtables[iobj]
-            #    else: nedtable = None
-            #else: nedtable = None
             
             print("Object: %s\nRA: %s\nDEC: %s" % (obj,ras[iobj],decs[iobj]))
 
@@ -1447,7 +1343,6 @@ class TNS_emails(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = options.redohost
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
@@ -1533,7 +1428,6 @@ class TNS_updates(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = False #True
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
@@ -1615,7 +1509,6 @@ class TNS_Ignore_updates(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = False #True
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
@@ -1696,7 +1589,6 @@ class TNS_recent(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = True
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id

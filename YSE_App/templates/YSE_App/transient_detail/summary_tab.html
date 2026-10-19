@@ -68,6 +68,9 @@
                                                             {% if transient.redshift_err %}
                                                                 +/- {{ transient.redshift_err }}
                                                             {% endif %}
+                                                            {% if transient.redshift_source or transient.redshift_override %}
+                                                                <small>({{ transient.redshift_source|default:"source unknown" }}{% if transient.redshift_override %}, override{% endif %})</small>
+                                                            {% endif %}
                                                     {% else %}
                                                         Unknown
                                                     {% endif %}
@@ -381,6 +384,9 @@
 
                                                             {% if transient.host.redshift_err %}
                                                                 +/- {{ transient.host.redshift_err }}
+                                                            {% endif %}
+                                                            {% if transient.host.redshift_source or transient.host.redshift_override %}
+                                                                <small>({{ transient.host.redshift_source|default:"source unknown" }}{% if transient.host.redshift_override %}, override{% endif %})</small>
                                                             {% endif %}
                                                         {% endif %}
                                                     {% else %}

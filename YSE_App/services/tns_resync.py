@@ -20,8 +20,8 @@ Rules applied to an existing transient:
 * ``TNS_spec_class`` follows TNS. ``best_spec_class`` is set from TNS only when we have
   none, or when ours is the previous TNS classification (no better one of ours).
   Differences are recorded by :func:`record_classification_difference`.
-* ``redshift`` is written only when empty or when it came from TNS
-  (``redshift_source == "TNS"``).
+* ``redshift`` is written only when :mod:`YSE_App.services.redshift_precedence` allows it:
+  when empty or when it came from TNS, never over an override (#436, #437).
 * New TNS photometry points and spectra go through the normal upload path
   (``data_utils._add_transient_data_stage`` inside ``photstat.deferred_updates()``),
   as the TNS cron's service account, so they get the TNS header, the Public group and
@@ -63,6 +63,7 @@ from YSE_App.models.sharing_models import SharingService, is_tns_name
 from YSE_App.models.spectra_models import TransientSpectrum
 from YSE_App.models.enum_models import TransientClass
 from YSE_App.models.transient_models import AlternateTransientNames, Transient
+from YSE_App.services import redshift_precedence
 from YSE_App.sharing import tns
 
 log = logging.getLogger(__name__)
@@ -464,8 +465,9 @@ def _field_changes(transient: Transient, jd: dict, result: ResyncResult) -> dict
     except (TypeError, ValueError):
         z = None
     if z is not None:
-        ours_from_tns = (transient.redshift_source or "").strip() == REDSHIFT_SOURCE
-        if transient.redshift is None or (ours_from_tns and abs(transient.redshift - z) > 1e-6):
+        # one precedence list for every writer (#436, #437): TNS fills an empty redshift or
+        # refreshes its own, never an override or a value from a higher-ranked source
+        if redshift_precedence.decide(transient, z, REDSHIFT_SOURCE).write:
             updates["redshift"] = z
             updates["redshift_source"] = REDSHIFT_SOURCE
             result.fields["redshift"] = (transient.redshift, z)
