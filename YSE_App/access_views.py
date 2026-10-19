@@ -260,7 +260,14 @@ def dashboard(request):
     grants = list(StandingAccessGrant.objects.filter(allocation__in=allocations, stopped_at__isnull=True)
                   .select_related("allocation", "grantee_group", "grantee_user", "created_by"))
     datasets = pages.dashboard_datasets(request.user)
+    from YSE_App.models import DataAccessRequest
+    from YSE_App.services import data_access as dar
+
+    accepted = [r for r in dar.requests_to_decide(request.user, pending_only=False).filter(
+        status=DataAccessRequest.STATUS_ACCEPTED).order_by("-decided_at", "-id")[:100]
+        if dar.can_revoke(request.user, r)][:50]
     return render(request, "YSE_App/access_dashboard.html", {
+        "accepted_requests": accepted,
         "allocations": allocations,
         "grants": grants,
         "datasets": datasets,

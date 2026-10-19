@@ -2082,7 +2082,8 @@ class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixi
 
     Filters ``?box=mine|inbox``, ``?status=``, ``?transient=``, ``?kind=``. ``POST`` creates
     (``transient``, ``dataset_kind``, ``owner_group``, optional ``target_group`` / ``message`` /
-    ``dataset_id``); ``POST .../<id>/accept/`` and ``.../decline/`` (optional ``note``) decide.
+    ``dataset_id``); ``POST .../<id>/accept/`` and ``.../decline/`` (optional ``note``) decide;
+    ``POST .../<id>/revoke/`` (optional ``direction``: ``forward`` default / ``backwards``) takes back an accepted one.
     """
 
     serializer_class = DataAccessRequestSerializer
@@ -2130,6 +2131,20 @@ class DataAccessRequestViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixi
     @action(detail=True, methods=["post"])
     def decline(self, request, pk=None):
         return self._decide(request, False)
+
+    @action(detail=True, methods=["post"])
+    def revoke(self, request, pk=None):
+        """Revoke an accepted request. Body: optional ``direction`` (``forward`` default, or ``backwards``)
+        and ``note``. Same people as accept / decline."""
+        from YSE_App.services import data_access as dar
+
+        obj = self.get_object()
+        data = request.data if hasattr(request.data, "get") else {}
+        direction = (data.get("direction") or "forward").strip().lower()
+        if direction not in ("forward", "backward", "backwards"):
+            raise serializers.ValidationError({"direction": "Use 'forward' or 'backwards'."})
+        dar.revoke(obj, request.user, backwards=direction.startswith("backward"), note=data.get("note", "") or "")
+        return Response(self.get_serializer(obj).data)
 class SharingServiceViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only ``/api/sharingservices/``: the enabled services the user may report through (no secrets)."""
     serializer_class = SharingServiceSerializer

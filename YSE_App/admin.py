@@ -856,7 +856,8 @@ class DataAccessRequestAdmin(admin.ModelAdmin):
 	list_filter = ("status", "decided_as", "dataset_kind", "owner_group")
 	search_fields = ("transient__name", "requester__username", "message", "note")
 	raw_id_fields = ("transient", "requester", "decided_by")
-	readonly_fields = ("granted_dataset_ids", "decided_as", "created_by", "created_date", "modified_by", "modified_date")
+	readonly_fields = ("granted_dataset_ids", "added_dataset_ids", "decided_as", "revoked_by", "revoked_at",
+	                   "revoke_direction", "created_by", "created_date", "modified_by", "modified_date")
 @admin.register(SharingSubmission)
 class SharingSubmissionAdmin(admin.ModelAdmin):
 	list_display = ("id", "service", "transient", "kind", "status", "tns_name", "external_id", "attempts",

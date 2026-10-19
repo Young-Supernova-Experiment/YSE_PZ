@@ -29,6 +29,7 @@ class DataAccessRequestSerializer(serializers.ModelSerializer):
     owner_group_name = serializers.CharField(source="owner_group.name", read_only=True)
     target_group_name = serializers.CharField(source="target_group.name", read_only=True)
     decided_by = serializers.StringRelatedField(read_only=True)
+    revoked_by = serializers.StringRelatedField(read_only=True)
     granted_count = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -37,11 +38,11 @@ class DataAccessRequestSerializer(serializers.ModelSerializer):
             "id", "requester", "requester_id", "transient", "transient_name", "dataset_kind", "dataset_id",
             "owner_group", "owner_group_name", "target_group", "target_group_name", "message", "status",
             "decided_by", "decided_at", "note", "granted_dataset_ids", "granted_count",
-            "created_date", "modified_date",
+            "revoked_by", "revoked_at", "revoke_direction", "created_date", "modified_date",
         )
         read_only_fields = (
             "id", "requester", "requester_id", "transient_name", "owner_group_name", "target_group_name",
             "status", "decided_by", "decided_at", "note", "granted_dataset_ids", "granted_count",
-            "created_date", "modified_date",
+            "revoked_by", "revoked_at", "revoke_direction", "created_date", "modified_date",
         )
         extra_kwargs = {"target_group": {"required": False, "allow_null": True}}

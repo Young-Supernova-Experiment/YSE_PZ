@@ -452,10 +452,13 @@ def _grant(request: DataAccessRequest, rows=None) -> List[int]:
     if rows is None:
         rows = request_datasets(request)
     granted = []
+    added = []
     for row in rows:
         if not row.groups.filter(pk=request.target_group_id).exists():
             row.groups.add(request.target_group)
+            added.append(row.pk)
         granted.append(row.pk)
+    request.added_dataset_ids = added
     return granted
 
 
@@ -494,6 +497,90 @@ def decide(request: DataAccessRequest, user: User, accept: bool, *, note: str = 
     if notify_requester:
         notify_decision(request)
     return request
+
+
+def can_revoke(user: User, request: DataAccessRequest) -> bool:
+    """Whoever may decide the request may revoke it once accepted (staff as administrators)."""
+    return request.is_accepted and user_can_decide(user, request)
+
+
+@transaction.atomic
+def revoke(request: DataAccessRequest, user: User, *, backwards: bool = False, note: str = "",
+           notify_requester: bool = True) -> DataAccessRequest:
+    """Take back an accepted request: remove the target group from the datasets acceptance added it to.
+
+    Who may: the same deciders as :func:`decide` (the data's PIs and deputies, with the program's PI and
+    deputies for linked data) and staff as administrators. The removal is
+    ``access_actions.remove_dataset_group`` (#712), so the forward / backwards semantics and the audit
+    trail are that function's, not reimplemented here:
+
+    * forward (default): points shared with the group before now stay visible to it; later points are not;
+    * ``backwards``: the group also loses the earlier points.
+
+    Only datasets acceptance newly added the group to are touched (a group that already held a dataset
+    through another share keeps it); rows accepted before ``added_dataset_ids`` existed fall back to
+    ``granted_dataset_ids``. A dataset the actor may not change, a public dataset, and a dataset where the
+    group is the only remaining one (removal would publish it) are left alone. With the access-rules flag
+    off the kept rules are not read, so a forward revoke hides the data at once, as removing the group always did.
+    """
+    from YSE_App.services import access_actions
+
+    if not user_can_decide(user, request):
+        raise PermissionDenied({"message": "Only the data's PIs and the deputies they designated (or an "
+                                           "administrator) may revoke this request."})
+    if not request.is_accepted:
+        raise ValidationError({"status": "Only an accepted request can be revoked (this one is %s)." % request.status})
+    model = _model(request.dataset_kind)
+    ids = request.added_dataset_ids
+    if not isinstance(ids, list):
+        ids = request.granted_dataset_ids if isinstance(request.granted_dataset_ids, list) else []
+    target = request.target_group
+    removed = skipped = 0
+    for row in model.objects.filter(pk__in=ids).prefetch_related("groups"):
+        group_ids = {g.pk for g in row.groups.all()}
+        if target.pk not in group_ids:
+            continue
+        if group_ids == {target.pk} or data_sharing.is_public_dataset(row):
+            skipped += 1
+            continue
+        if access_actions.dataset_role(user, row) is None:
+            skipped += 1
+            continue
+        access_actions.remove_dataset_group(user, row, target, backwards=backwards)
+        removed += 1
+    if ids and not removed:
+        raise PermissionDenied({"message": "You may not change access to any of the datasets this request shared."})
+    request.status = DataAccessRequest.STATUS_REVOKED
+    request.revoked_by = user
+    request.revoked_at = timezone.now()
+    request.revoke_direction = (DataAccessRequest.DIRECTION_BACKWARDS if backwards
+                                else DataAccessRequest.DIRECTION_FORWARD)
+    if note:
+        request.note = (note or "").strip()
+    request.modified_by = user
+    request.save()
+    logger.info("data access request %s revoked by user id %s (%s, %d dataset(s), %d skipped)", request.pk, user.pk,
+                request.revoke_direction, removed, skipped)
+    invalidate_pending_counts([u.pk for u in named_deciders_for(request)])
+    if notify_requester:
+        notify_revoked(request)
+    return request
+
+
+def notify_revoked(request: DataAccessRequest):
+    """Notice to the requester through their own notification preferences (the owner-group Slack mirror is deferred)."""
+    transient = request.transient
+    text = "%s revoked the access it gave %s on %s (%s).%s" % (
+        request.owner_group.name, request.target_group.name, transient.name,
+        "earlier data are hidden too" if request.revoke_direction == DataAccessRequest.DIRECTION_BACKWARDS
+        else "going forward: data taken before now stay visible, later data are not",
+        ("\nNote: %s" % request.note) if request.note else "",
+    )
+    return notify_service.notify(
+        [request.requester], text, "/transient_detail/%s/" % transient.slug, "data_access",
+        subject="Data access revoked on %s" % transient.name, transient=transient,
+        payload={"request_id": request.pk, "action": "revoked"}, created_by=request.revoked_by,
+    )
 
 
 def notify_decision(request: DataAccessRequest):
