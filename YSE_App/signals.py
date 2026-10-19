@@ -287,6 +287,16 @@ def favorite_activity_on_followup(sender, instance, created, **kwargs):
                       old_status=getattr(instance, '_favorite_old_status', ''))
 
 
+@receiver(post_save, sender=TransientFollowup, dispatch_uid="yse_followup_status_notice")
+def notify_on_followup_status_change(sender, instance, created, **kwargs):
+    """``followup_status`` notices to the requesters (#69); uses the old status noted above."""
+    if created or kwargs.get('raw'):
+        return
+    from YSE_App.services.followup_notices import notify_status_changed_safely
+
+    notify_status_changed_safely(instance, getattr(instance, '_favorite_old_status', ''))
+
+
 # ---- group profiles (#445, #440) -------------------------------------------
 # Every new auth Group gets a GroupProfile (active, no owners); system groups by
 # name (settings.YSE_SYSTEM_GROUP_NAMES) are marked is_system.

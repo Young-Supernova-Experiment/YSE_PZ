@@ -287,6 +287,11 @@ def _after_state_change(request: FacilityRequest) -> None:
         status = FollowupStatus.objects.filter(name=name).first()
         if status is not None and request.followup.status_id != status.pk:
             request.followup.status = status
+            # A system change: nobody is the actor, and the submitter is told by _notify below
+            # when this state notifies, so the status notice must not tell them twice (#69).
+            request.followup._notice_actor_id = None
+            request.followup._notice_skip_ids = (
+                {request.submitted_by_id} if request.state in NOTIFY_STATES else set())
             request.followup.save(update_fields=["status", "modified_date"])
     if request.state in NOTIFY_STATES:
         _notify(request)
