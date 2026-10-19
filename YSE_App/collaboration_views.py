@@ -247,6 +247,11 @@ def data_access_revoke(request, request_id):
             req.pk, "backwards" if backwards else "going forward", req.target_group.name,
             "no longer sees the earlier data either" if backwards else
             "keeps the data taken before now and does not see later data"))
+        skipped = getattr(req, "revoke_skipped", 0)
+        if skipped:
+            messages.warning(request, "%d dataset%s left unchanged (public, not yours to change, or shared with the "
+                                      "group before this request was accepted); remove the group by hand from the "
+                                      "data access dashboard if you intend that." % (skipped, "" if skipped == 1 else "s"))
     return redirect(_safe_next(request, fallback))
 
 

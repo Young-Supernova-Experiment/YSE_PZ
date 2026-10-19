@@ -520,7 +520,10 @@ def revoke(request: DataAccessRequest, user: User, *, backwards: bool = False, n
     Only datasets acceptance newly added the group to are touched (a group that already held a dataset
     through another share keeps it); rows accepted before ``added_dataset_ids`` existed fall back to
     ``granted_dataset_ids``. A dataset the actor may not change, a public dataset, and a dataset where the
-    group is the only remaining one (removal would publish it) are left alone. With the access-rules flag
+    group is the only remaining one (removal would publish it) are left alone. For a legacy row, a dataset is
+    changed only if its ``DatasetGroupShare`` for the group is dated at or after ``decided_at``; datasets with no
+    record (shared before tracking) or an earlier one are skipped and counted in ``request.revoke_skipped`` so the
+    decider can remove the group by hand from the dashboard. With the access-rules flag
     off the kept rules are not read, so a forward revoke hides the data at once, as removing the group always did.
     """
     from YSE_App.services import access_actions
@@ -532,14 +535,30 @@ def revoke(request: DataAccessRequest, user: User, *, backwards: bool = False, n
         raise ValidationError({"status": "Only an accepted request can be revoked (this one is %s)." % request.status})
     model = _model(request.dataset_kind)
     ids = request.added_dataset_ids
-    if not isinstance(ids, list):
+    legacy = not isinstance(ids, list)
+    if legacy:
         ids = request.granted_dataset_ids if isinstance(request.granted_dataset_ids, list) else []
     target = request.target_group
-    removed = skipped = 0
+    removed = skipped = legacy_skipped = 0
+    shared_at = {}
+    if legacy and ids:
+        # Accepted before added_dataset_ids existed: granted_dataset_ids also lists datasets the group already
+        # held. Only a share record dated at or after the acceptance proves the acceptance added the group.
+        from YSE_App.models import DatasetGroupShare
+
+        fk = "transient_spectrum_id" if request.dataset_kind == DataAccessRequest.KIND_SPECTRUM \
+            else "transient_photometry_id"
+        shared_at = dict(DatasetGroupShare.objects.filter(group_id=target.pk, **{fk + "__in": ids})
+                         .values_list(fk, "shared_at"))
     for row in model.objects.filter(pk__in=ids).prefetch_related("groups"):
         group_ids = {g.pk for g in row.groups.all()}
         if target.pk not in group_ids:
             continue
+        if legacy:
+            when = shared_at.get(row.pk)
+            if when is None or request.decided_at is None or when < request.decided_at:
+                legacy_skipped += 1
+                continue
         if group_ids == {target.pk} or data_sharing.is_public_dataset(row):
             skipped += 1
             continue
@@ -548,7 +567,9 @@ def revoke(request: DataAccessRequest, user: User, *, backwards: bool = False, n
             continue
         access_actions.remove_dataset_group(user, row, target, backwards=backwards)
         removed += 1
-    if ids and not removed:
+    request.revoke_skipped = skipped + legacy_skipped  # not stored: reported in the response and the page message
+    request.revoke_skipped_legacy = legacy_skipped
+    if ids and not removed and not legacy_skipped:
         raise PermissionDenied({"message": "You may not change access to any of the datasets this request shared."})
     request.status = DataAccessRequest.STATUS_REVOKED
     request.revoked_by = user
