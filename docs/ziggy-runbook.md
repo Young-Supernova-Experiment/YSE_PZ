@@ -863,6 +863,53 @@ After this, rule changes rebuild the affected scopes through the `photstat.sync_
 
 **Later, yse\_test and production:** repeat step 2 on that stack when Ryan asks. Step 3 is only needed once per database. Run it again after any period in which the flag was off on every stack while rules changed.
 
+<a id="tns-resync"></a>
+
+### TNS re-sync and backfill (2026-10-18, #438) one crontab line to remove; backfill and the hourly sweep optional (off by default)
+
+**What changes on deploy.** Nothing runs by itself. The deploy adds `manage.py tns_resync` (backfill, dry run by default) and the `TNS_Resync.TNSResync` cron (in `CRON_CLASSES`, a no-op until `TNS_RESYNC_CRON_ENABLED` is set). It applies only differences from TNS: the TNS classification (`best_spec_class` only when ours is empty or was the earlier TNS class), the redshift when ours is empty or came from TNS, and new photometry points and spectra. New data are public and carry the TNS reference, the same as the TNS cron's imports. Each re-sync is recorded as a run of the `tns` external service (created on first use), so the sweep and the backfill resume. No migration, no new package.
+
+**`TNS_recent_realtime` is removed** from `CRON_CLASSES`. It ran only at 00:00 and 08:00 with a 10-minute window. `TNS_emails`, `TNS_recent` and the gap import of the new sweep cover it. The class stays as a no-op, so an old crontab line is harmless, but please remove it:
+
+```bash
+crontab -l | grep -n "realtime"          # -> the tns_updates_realtime.bash line, if any
+crontab -e                               # delete that line
+```
+
+**Required before any `--apply`:** the `[main] dblogin` cron account must be staff, a superuser or in `api_writers`; this is already needed for the TNS crons (v68). The command uses the `[main]` TNS bot keys, or `[sharing] TNS_RESYNC_SERVICE` (a production TNS sharing service), and never the sandbox.
+
+**Backfill, per database (both test stacks share one), dry run first.** Find the cron gaps first (django_cron keeps 30 days of logs, so older gaps come from your notes):
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from django_cron.models import CronJobLog as L; [print(l.code, l.start_time) for l in L.objects.filter(code__contains='TNS_recent').order_by('start_time')]"
+```
+
+1. Gap import of objects made public while the crons were down (for example since 2025-01-01):
+
+```bash
+<PYTHON> manage.py tns_resync --missing-only --since 2025-01-01            # counts only
+<PYTHON> manage.py tns_resync --missing-only --since 2025-01-01 --apply
+```
+**Expected:** `Gap import: N TNS objects public since ..., M not in YSE-PZ`, then one `imported` line per object.
+
+2. Re-sync of the existing TNS-named transients, in batches (each run skips the transients done in the last 7 days, so repeat the same line until it reports `Re-sync: 0 transients`):
+
+```bash
+<PYTHON> manage.py tns_resync --since 2025-01-01 --max 200                 # what would change
+<PYTHON> manage.py tns_resync --since 2025-01-01 --max 500 --apply
+<PYTHON> manage.py tns_resync --max 500 --apply                            # then everything else, oldest sync first
+```
+**Expected:** lines such as `2025abc: updated: TNS_spec_class None -> 'SN Ia'; 3 new photometry points` and a `Done:` summary with the number of TNS requests. Requests are spaced by `TNS_REQUEST_INTERVAL_SECONDS` (1 s); on a TNS rate limit the command waits and continues. `--no-spectra` skips spectrum downloads, and `--status Ignore` limits the run to one status.
+
+**Hourly sweep (optional, after the backfill looks right).** Under the existing `[sharing]` section of `YSE_PZ/settings.ini`:
+
+```ini
+TNS_RESYNC_CRON_ENABLED: True
+```
+(or `YSE_TNS_RESYNC_CRON=1` for the cron), then restart. The job runner must be running (`run_jobs` crontab line, see above). Each hour one `tns.resync_sweep` job imports objects public in the last `TNS_RESYNC_GAP_DAYS` (3) that are missing, then re-syncs up to `TNS_RESYNC_MAX_PER_RUN` (50) transients: active statuses every `TNS_RESYNC_ACTIVE_DAYS` (2), others every `TNS_RESYNC_OTHER_DAYS` (30), within `TNS_RESYNC_BUDGET_SECONDS` (900). **Check:** `/yse_test/jobs/` lists `tns.resync_sweep` jobs as `done`, with a summary of what changed.
+
+Note: `manage.py expire_service_runs` also deletes old `tns` runs; those transients are then re-synced again, which is harmless.
+
 <a id="per-point-access"></a>
 
 ### Access is per point; program link on each photometry point (2026-10-18, #714) migration applied by the deploy; one optional command
@@ -3125,6 +3172,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v85, **remove the `tns_updates_realtime.bash` crontab line; backfill optional** (`manage.py tns_resync`, dry run by default; no migration, no new package). TNS re-sync ([#438](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/438)): re-sync of TNS classifications, redshifts, photometry and spectra for transients we have, gap import of objects reported while the crons were down, and an hourly `TNSResync` sweep that stays off until `TNS_RESYNC_CRON_ENABLED`; `TNS_recent_realtime` is removed from `CRON_CLASSES` ([section "TNS re-sync and backfill"](#tns-resync)).
 * 2026-10-18 v84, **check external readers of `/query_api/`** (no migration, no new package). `/query_api/` returns unscoped rows only to service readers ([#725](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/725)): the `[main] dblogin` cron account and `[site_settings] DATA_SERVICE_READERS`; staff, superusers and `api_writers` accounts go through the Explorer rewrite layer like everyone else and see only their data. The built-in cron titles (`DECAT_transients_mags`, `yse_transients_goodcell`, `all_yse_transients`, the QUB forced-photometry query) are unchanged. Check: any other account that polls `/query_api/` and must keep reading everything goes in `DATA_SERVICE_READERS` (see [section "Staff see only the data they have access to"](#staff-visibility)); these accounts also no longer run saved queries off the allowed list unless they have SQL Explorer access.
 * 2026-10-18 v83, **new package `sqlglot==26.33.0` on any venv the deploy does not install; check the Explorer database user grants** (no migration). SQL Explorer for everyone ([#723](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/723)): every Explorer query and every page-feeding saved query is rewritten to read only its viewer's rows (per point; service readers unchanged), so staff see only their data in Explorer and page queries over photometry run again, scoped and cached per viewer; with table-level Explorer grants add `SELECT (id, name)` on `auth_group`; `EXPLORER_OPEN_TO_ALL_USERS` (off) opens `/explorer/` to every signed-in user; rollback `EXPLORER_QUERY_SCOPE: off` ([section "SQL Explorer for everyone"](#explorer-for-everyone)).
 * 2026-10-18 v82, **one command per database** (`manage.py switch_dashboard_queries`, dry run by default; no migration). Dashboard SQL queries as viewer-scoped Python queries ([#720](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/720)): the magnitude-limited sample, Fast & Young, New Transients Last Two Days and Interesting New Targets exist as Python queries that select only from photometry the viewer may see; the command repoints dashboard sections to them (SQL stays in Explorer) and lists the saved queries that still need a Python equivalent; `best_spectrum_id` is no longer readable by page-feeding queries for viewers who do not see all data. Steps in the section "Dashboard queries as viewer-scoped Python queries".
