@@ -1368,11 +1368,9 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         try:
             model = sncosmo.Model(source='salt3')
         
-            if transient.redshift:
-                model.set(z=transient.redshift)
-                fitparams = ['t0', 'x0', 'x1', 'c']
-            elif transient.host and transient.host.redshift:
-                model.set(z=transient.host.redshift)
+            best_z = transient.best_z()  # full precedence list (#736)
+            if best_z.value is not None and best_z.origin != 'host photo-z':
+                model.set(z=best_z.value)
                 fitparams = ['t0', 'x0', 'x1', 'c']
             else:
                 fitparams = ['z', 't0', 'x0', 'x1', 'c']
@@ -1697,10 +1695,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     ax.xaxis[0].major_label_overrides = overridedict
 
     # add absolute mag axis
-    if transient.redshift: z = transient.redshift
-    elif transient.host and transient.host.redshift: z = transient.host.redshift
-    elif transient.host and transient.host.photo_z: z = transient.host.photo_z
-    else: z = None
+    z = transient.z_or_hostz()  # full precedence list, host photo-z last (#736)
     if z is not None:
         mu = cosmo.distmod(z).value
         ax.extra_y_ranges = {"Abs. Mag": Range1d(start=ax.y_range.start-mu, end=ax.y_range.end-mu)}

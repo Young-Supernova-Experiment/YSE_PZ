@@ -63,17 +63,17 @@
                                             <div class="form-group">
                                                 <strong>Redshift</strong>
                                                 <p class="text-muted">
-                                                    {% if transient.redshift %}
-                                                        {{ transient.redshift }}
-                                                            {% if transient.redshift_err %}
-                                                                +/- {{ transient.redshift_err }}
+                                                    {% with bz=transient.best_z %}
+                                                    {% if bz.value is not None %}
+                                                        {{ bz.value }}
+                                                            {% if bz.error %}
+                                                                +/- {{ bz.error }}
                                                             {% endif %}
-                                                            {% if transient.redshift_source or transient.redshift_override %}
-                                                                <small>({{ transient.redshift_source|default:"source unknown" }}{% if transient.redshift_override %}, override{% endif %})</small>
-                                                            {% endif %}
+                                                            <small>({{ bz.source|default:"source unknown" }}{% if bz.override %}, override{% endif %}{% if bz.origin != "transient" %}, from host{% endif %})</small>
                                                     {% else %}
                                                         Unknown
                                                     {% endif %}
+                                                    {% endwith %}
                                                 </p>
                                             </div>
                                         </div>
@@ -203,21 +203,17 @@
                                         <div class="col-4">
                                             <div class="form-group">
                                                 <strong>Best Distance</strong>
-                                                    {% if transient.redshift %}
-                                                        <p class="text-muted">Lum. Dist. = {{ transient.redshift|DL }} Mpc</p>
-                                                        <p class="text-muted">&mu; = {{ transient.redshift|distmod }}</p>
-                                                    {% elif transient.host.redshift %}
-                                                        <p class="text-muted">Lum. Dist. = {{ transient.host.redshift|DL }} Mpc</p>
-                                                        <p class="text-muted">&mu; = {{ transient.host.redshift|distmod }}</p>
-                                                    {% elif transient.host.photo_z %}
-                                                        <p class="text-muted">Lum. Dist. = {{ transient.host.photo_z|DL }} Mpc</p>
-                                                        <p class="text-muted">&mu; = {{ transient.host.photo_z|distmod }}</p>
+                                                    {% with bz=transient.best_z %}
+                                                    {% if bz.value is not None %}
+                                                        <p class="text-muted">Lum. Dist. = {{ bz.value|DL }} Mpc</p>
+                                                        <p class="text-muted">&mu; = {{ bz.value|distmod }}</p>
                                                     {% elif transient.host.photo_z_internal %}
                                                         <p class="text-muted">Lum. Dist. = {{ transient.host.photo_z_internal|DL }} Mpc</p>
                                                         <p class="text-muted">&mu; = {{ transient.host.photo_z_internal|distmod }}</p>
                                                     {% else %}
                                                         <p class="text-muted">Unknown</p>
                                                     {% endif %}
+                                                    {% endwith %}
                                             </div>
                                         </div>
                                         <div class="col-12">

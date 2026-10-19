@@ -48,7 +48,6 @@ from django.core.exceptions import ValidationError
 from django.db.models import CharField, DateTimeField, Exists, F, FloatField, Func, OuterRef, Q, Subquery, Value
 from django.db.models.functions import (
     ACos,
-    Coalesce,
     Cos,
     Degrees,
     Greatest,
@@ -80,6 +79,7 @@ from YSE_App.models import (
     TransientTag,
 )
 from YSE_App.models.phot_stat_models import datetime_to_mjd
+from YSE_App.services.redshift_sql import annotate_best_redshift as _annotate_best_redshift, has_best_redshift_q
 
 __all__ = [
     'TransientSearchFilterSet',
@@ -136,10 +136,8 @@ def annotate_gal_b(qs):
 
 
 def annotate_best_redshift(qs):
-    """The transient's redshift, else the host's (what the tables show)."""
-    if 'best_redshift' in qs.query.annotations:
-        return qs
-    return qs.annotate(best_redshift=Coalesce('redshift', 'host__redshift'))
+    """The best redshift under the full precedence list (what the tables show, #736)."""
+    return _annotate_best_redshift(qs)
 
 
 def annotate_separation(qs, ra_deg, dec_deg):
@@ -888,7 +886,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     def filter_has_redshift(self, qs, name, value):
         if value is None:
             return qs
-        has = Q(redshift__isnull=False) | Q(host__redshift__isnull=False)
+        has = has_best_redshift_q()
         return qs.filter(has) if value else qs.exclude(has)
 
     def filter_redshift_min(self, qs, name, value):
@@ -1063,9 +1061,9 @@ FILTER_HELP = {
     'spec_class': 'Spectroscopic class is one of these (repeat the parameter).',
     'photo_class': 'Photometric class is one of these (repeat the parameter).',
     'exclude_class': 'Neither class is one of these (repeat the parameter).',
-    'has_redshift': 'true: has a redshift (own, else host); false: has none.',
-    'redshift_min': 'Redshift (own, else host) at least this.',
-    'redshift_max': 'Redshift (own, else host) at most this.',
+    'has_redshift': 'true: has a redshift (override, best spec-z of transient and host, else host photo-z); false: has none.',
+    'redshift_min': 'Best redshift (precedence list: override, NED, DESI, own, ..., host photo-z) at least this.',
+    'redshift_max': 'Best redshift (precedence list) at most this.',
     'status': 'Status is one of these (repeat the parameter).',
     'status_in': 'Legacy comma-separated status names, e.g. New,Watch.',
     'obs_group': 'Observation group is one of these (repeat the parameter).',

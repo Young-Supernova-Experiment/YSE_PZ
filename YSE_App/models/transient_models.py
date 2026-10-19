@@ -304,12 +304,14 @@ class Transient(BaseModel):
 		else:
 			return None
 
+	def best_z(self):
+		"""The redshift to use under the full precedence list (#736): a ``BestRedshift``."""
+		from YSE_App.services.redshift_precedence import best_redshift
+
+		return best_redshift(self)
+
 	def z_or_hostz(self):
-		if self.redshift:
-			return self.redshift
-		elif self.host and self.host.redshift:
-			return self.host.redshift
-		else: return None
+		return self.best_z().value
 
 	def name_table_sort(self):
 		if len(self.name) > 4:
