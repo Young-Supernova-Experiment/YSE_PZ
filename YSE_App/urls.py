@@ -427,6 +427,8 @@ urlpatterns = [
             name='data_access_decide'),
     re_path(r'^data_sharing_deputies/$', collaboration_views.data_sharing_deputies, name='data_sharing_deputies'),
     # Read-time access rules (#648, PR 5); 404 unless DATA_ACCESS_GRANTS_ENABLED
+    re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/revoke/$', collaboration_views.data_access_revoke,
+            name='data_access_revoke'),
     re_path(r'^data_access/$', access_views.dashboard, name='access_dashboard'),
     re_path(r'^data_access/programs/$', access_views.programs, name='access_programs'),
     re_path(r'^data_access/programs/(?P<allocation_id>[0-9]+)/$', access_views.program, name='access_program'),

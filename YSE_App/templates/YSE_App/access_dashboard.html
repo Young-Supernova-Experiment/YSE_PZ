@@ -54,6 +54,37 @@
 			</div>
 
 			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Accepted access requests</strong> <span class="text-muted small">sharing you can revoke</span></div>
+				<div class="box-body">
+					{% if accepted_requests %}
+					<table class="table table-sm mb-0" id="yse-dashboard-requests">
+						<thead><tr><th>#</th><th>Object</th><th>Data</th><th>Requester &rarr; group</th><th>Revoke</th></tr></thead>
+						<tbody>
+						{% for r in accepted_requests %}
+							<tr data-request-id="{{ r.id }}">
+								<td>{{ r.id }}</td>
+								<td>{{ r.transient.name }}</td>
+								<td><small>{{ r.kind_label }}, {{ r.owner_group.name }}, {{ r.granted_count }} shared</small></td>
+								<td>{{ r.requester.username }} &rarr; {{ r.target_group.name }}</td>
+								<td>
+									<form method="post" action="{% url 'data_access_revoke' r.id %}" class="form-inline">
+										{% csrf_token %}
+										<input type="hidden" name="next" value="{% url 'access_dashboard' %}">
+										{% include "YSE_App/access_direction.html" with id="yse-revoke-req" n1=r.id n2=0 %}
+										<button type="submit" class="btn btn-sm btn-outline-danger">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">No accepted access requests to revoke.</p>
+					{% endif %}
+				</div>
+			</div>
+
+			<div class="box box-default box-solid">
 				<div class="box-header with-border"><strong>Your data</strong> <span class="text-muted small">restricted datasets you lead (newest first)</span></div>
 				<div class="box-body">
 					{% if datasets %}
