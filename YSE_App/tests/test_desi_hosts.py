@@ -40,7 +40,7 @@ class SelectHostTests(SimpleTestCase):
         self.assertEqual(desi_hosts.select_host([near_high_z, farther_low_z]).targetid, "2")
 
     def test_beyond_100_kpc_is_no_host(self):
-        self.assertIsNone(desi_hosts.select_host([_m(3, 200.0, 0.01)]))
+        self.assertIsNone(desi_hosts.select_host([_m(3, 600.0, 0.01)]))
 
     def test_empty(self):
         self.assertIsNone(desi_hosts.select_host([]))
@@ -48,7 +48,7 @@ class SelectHostTests(SimpleTestCase):
     def test_same_rule_as_ned(self):
         from YSE_App.services import ned
 
-        matches = [_m(1, 2.0, 0.5), _m(2, 5.0, 0.03), _m(3, 200.0, 0.01)]
+        matches = [_m(1, 2.0, 0.5), _m(2, 5.0, 0.03), _m(3, 600.0, 0.01)]
         chosen = ned.select_host(desi_hosts._as_ned_objects(matches))
         self.assertEqual(chosen.name, "DESI %s" % desi_hosts.select_host(matches).targetid)
 
@@ -90,7 +90,7 @@ class MatchTransientTests(TestCase):
         self.assertEqual((self.t.host.redshift, self.t.host.redshift_source), (0.0301, "NED"))
 
     def test_no_match_error_and_skips(self):
-        self.assertEqual(desi_hosts.match_transient(self.t, client=FakeDESI([_m(3, 200.0, 0.01)])).action,
+        self.assertEqual(desi_hosts.match_transient(self.t, client=FakeDESI([_m(3, 600.0, 0.01)])).action,
                          enrichment.NO_MATCH)
         self.assertEqual(desi_hosts.match_transient(self.t, client=FakeDESI(error="down")).action,
                          enrichment.ERROR)
