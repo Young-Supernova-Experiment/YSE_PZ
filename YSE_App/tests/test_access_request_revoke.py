@@ -136,6 +136,54 @@ class RevokeTests(_RevokeBase):
 
 
 @ON
+class RevokeLegacyTests(_RevokeBase):
+    """Requests accepted before added_dataset_ids existed: only datasets with a share record from the acceptance on."""
+
+    def legacy(self):
+        req = self.accepted()
+        req.added_dataset_ids = None
+        req.save()
+        return DataAccessRequest.objects.get(pk=req.pk)
+
+    def test_record_from_acceptance_is_removed(self):
+        from YSE_App.models import DatasetGroupShare
+
+        req = self.legacy()
+        self.assertTrue(DatasetGroupShare.objects.filter(
+            transient_photometry=self.secret, group=self.t_group, shared_at__gte=req.decided_at).exists())
+        dar.revoke(req, self.pi_user)
+        self.assertFalse(self.secret.groups.filter(pk=self.t_group.pk).exists())
+        self.assertFalse(self.phot.groups.filter(pk=self.t_group.pk).exists())
+        self.assertEqual(req.revoke_skipped, 0)
+
+    def test_no_record_or_earlier_record_is_skipped(self):
+        from YSE_App.models import DatasetGroupShare
+
+        req = self.legacy()
+        # secret: shared before tracking (no record); phot: an earlier record
+        DatasetGroupShare.objects.filter(transient_photometry=self.secret, group=self.t_group).delete()
+        DatasetGroupShare.objects.filter(transient_photometry=self.phot, group=self.t_group).update(
+            shared_at=req.decided_at - datetime.timedelta(days=1))
+        dar.revoke(req, self.pi_user, backwards=True)
+        req.refresh_from_db()
+        self.assertEqual(req.status, DataAccessRequest.STATUS_REVOKED)
+        self.assertEqual(req.revoke_skipped, 2)
+        self.assertTrue(self.secret.groups.filter(pk=self.t_group.pk).exists())
+        self.assertTrue(self.phot.groups.filter(pk=self.t_group.pk).exists())
+
+    def test_skipped_count_in_api_response(self):
+        from YSE_App.models import DatasetGroupShare
+
+        req = self.legacy()
+        DatasetGroupShare.objects.filter(transient_photometry=self.secret, group=self.t_group).delete()
+        client = Client()
+        client.force_login(self.pi_user)
+        resp = client.post("/api/dataaccessrequests/%d/revoke/" % req.pk, {}, content_type="application/json")
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["revoke_skipped"], 1)
+
+
+@ON
 class RevokePagesTests(_RevokeBase):
     def test_inbox_form_forward_default_and_backwards(self):
         req = self.accepted()
