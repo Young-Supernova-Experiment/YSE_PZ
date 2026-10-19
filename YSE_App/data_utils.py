@@ -47,7 +47,7 @@ from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
-from YSE_App.services import photstat, program_links
+from YSE_App.services import photstat, program_links, redshift_precedence
 from YSE_App.common.authz import bulk_ingest_denial, upload_denial
 from YSE_App.common.quality_mask import data_quality_mask
 from YSE_App.services.data_pis import apply_upload_pis
@@ -364,6 +364,7 @@ def add_transient_payload(transient_data, user):
                     #   for tag in transient['tags']:
                     #       tagobj = TransientTag.objects.get(name=tag)
                     #       taglist += [tagobj]
+                    redshift_precedence.filter_upload_fields(dbtransient[0], transientdict)  # #436, #437
                     dbtransient.update(**transientdict)
                     if 'tags' in transientkeys:
                         for tag in transient['tags']:
@@ -389,6 +390,7 @@ def add_transient_payload(transient_data, user):
                     transientdict['postage_stamp_ref_fits'] = dbtransient[0].postage_stamp_ref_fits
                     transientdict['postage_stamp_diff_fits'] = dbtransient[0].postage_stamp_diff_fits
 
+                redshift_precedence.filter_upload_fields(dbtransient[0], transientdict)  # #436, #437
                 dbtransient.update(**transientdict)
                 if 'tags' in transientkeys:
                     for tag in transient['tags']:
@@ -595,6 +597,7 @@ def add_gw_candidate(request):
                     else: transientdict['status'] = dbtransient[0].status
                 else: transientdict['status'] = dbtransient[0].status
 
+                redshift_precedence.filter_upload_fields(dbtransient[0], transientdict)  # #436, #437
                 dbtransient.update(**transientdict)
                 dbtransient = dbtransient[0]
             if 'tags' in transientkeys:
@@ -725,11 +728,17 @@ def add_transient_host_util(hostdict,transient,user):
     if not len(dbhost):
         dbhost = Host.objects.create(**dbhostdict)
     else: #if clobber:
+        # never replace an override or a higher-ranked redshift (NED, DESI, ...; #436, #437)
+        redshift_precedence.filter_upload_fields(dbhost[0], dbhostdict)
         dbhost.update(**dbhostdict)
         dbhost = dbhost[0]
 
+    new_host = transient.host_id != dbhost.pk
     transient.host = dbhost
     transient.save()
+    if new_host:
+        from YSE_App.services.redshift_catalogs import queue_host_lookup
+        queue_host_lookup(dbhost)
 
     return_dict = {"message":"host success"}
     return JsonResponse(return_dict)

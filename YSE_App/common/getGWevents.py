@@ -1,7 +1,7 @@
 #!/usr/bin/env python 
 # Python 2/3 compatibility
 from __future__ import print_function
-import re,sys,string,math,os,types,exceptions,glob
+import re,sys,string,math,os,types,glob
 from astropy.table import Table
 import numpy as np
 from astropy.coordinates import SkyCoord
@@ -35,6 +35,8 @@ filtdict = {"THACHER z":'Thacher - Imager - z',
 			"SWOPEDIRECT g":"Direct/4Kx4K - g",
 			"SWOPEDIRECT V":"Direct/4Kx4K - V",
 			"SWOPEDIRECT B":"Direct/4Kx4K - B'"}
+
+NED_RADIUS_ARCMIN = 5.0  # cone search around each candidate (the old --nedradius default)
 
 def mjd_to_date(mjd):
 	t = Time(mjd, format='mjd')
@@ -308,12 +310,15 @@ class GW2YSE:
 		ebvall,nedtables = [],[]
 		ebvtstart = time.time()
 		if doNED:
+			from YSE_App.services.ned import NEDClient
+			ned_client = NEDClient()
 			for sc in scall:
 				dust_table_l = IrsaDust.get_query_table(sc)
 				ebvall += [dust_table_l['ext SandF mean'][0]]
+				# NED::API cone search (#436): the legacy NED interfaces miss data after Jan 2026
 				try:
-					ned_region_table = Ned.query_region(sc, radius=self.nedradius*u.arcmin, equinox='J2000.0')
-				except:
+					ned_region_table = ned_client.cone_search(sc.ra.deg, sc.dec.deg, NED_RADIUS_ARCMIN)
+				except Exception:
 					ned_region_table = None
 				nedtables += [ned_region_table]
 			print('E(B-V)/NED time: %.1f seconds'%(time.time()-ebvtstart))
@@ -360,71 +365,19 @@ class GW2YSE:
 
 				
 	def getNEDData(self,jd,sc,ned_table):
+		"""The likely host from a NED::API cone search (``YSE_App.services.ned.select_host``)."""
+		from YSE_App.services.ned import select_host
 
-		gal_candidates = 0
-		radius = 5
-		while (radius < 11 and gal_candidates < 21): 
-			try:
-				print("Radius: %s" % radius)
-				gal_candidates = len(ned_table)
-				radius += 1
-				print("Result length: %s" % gal_candidates)
-			except Exception as e:
-				radius += 1
-				print("NED exception: %s" % e.args)
-
-		galaxy_names = []
-		galaxy_zs = []
-		galaxy_seps = []
-		galaxies_with_z = []
-		galaxy_ras = []
-		galaxy_decs = []
-		galaxy_mags = []
-		if ned_table is not None:
-			print("NED Matches: %s" % len(ned_table))
-
-			galaxy_candidates = np.asarray([entry.decode("utf-8") for entry in ned_table["Type"]])
-			galaxies_indices = np.where(galaxy_candidates == 'G')
-			galaxies = ned_table[galaxies_indices]
-
-			print("Galaxy Candidates: %s" % len(galaxies))
-
-			# Get Galaxy name, z, separation for each galaxy with z
-			for l in range(len(galaxies)):
-				if isinstance(galaxies[l]["Redshift"], float):
-					galaxies_with_z.append(galaxies[l])
-					galaxy_names.append(galaxies[l]["Object Name"])
-					galaxy_zs.append(galaxies[l]["Redshift"])
-					galaxy_seps.append(galaxies[l]["Separation"])
-					galaxy_ras.append(galaxies[l]["RA"])
-					galaxy_decs.append(galaxies[l]["DEC"])
-					galaxy_mags.append(galaxies[l]["Magnitude and Filter"])
-								
-			print("Galaxies with z: %s" % len(galaxies_with_z))
-			# Get Dust in LoS for each galaxy with z
-			if len(galaxies_with_z) > 0:
-				for l in range(len(galaxies_with_z)):
-					co_l = coordinates.SkyCoord(ra=galaxies_with_z[l]["RA"], 
-												dec=galaxies_with_z[l]["DEC"], 
-												unit=(u.deg, u.deg), frame='fk4', equinox='J2000.0')
-
-			else:
-				print("No NED Galaxy hosts with z")
-
-		# put in the hosts
-		hostcoords = ''; hosturl = ''; ned_mag = ''
-		galaxy_z_times_seps = np.array(galaxy_seps)*np.array(np.abs(galaxy_zs))
+		objects = ned_table or []
+		hostcoords = ''.join('ra=%.7f, dec=%.7f\n' % (o.ra, o.dec) for o in objects
+							 if o.usable and o.ra is not None and o.dec is not None)
+		best = select_host(objects)
 		hostdict = {}
-		for z,name,ra,dec,sep,mag,gzs in zip(galaxy_zs,galaxy_names,galaxy_ras,
-											 galaxy_decs,galaxy_seps,galaxy_mags,
-											 galaxy_z_times_seps):
-			if gzs == np.min(galaxy_z_times_seps):
-				hostdict = {'name':name,'ra':ra,'dec':dec,'redshift':z}
-				
-			hostcoords += 'ra=%.7f, dec=%.7f\n'%(ra,dec)
-
+		if best is not None:
+			hostdict = {'name': best.name, 'ra': best.ra, 'dec': best.dec, 'redshift': best.z,
+						'redshift_source': 'NED'}
 		return hostdict,hostcoords
-	
+
 	def UploadTransients(self,UploadDict):
 
 		url = '%s'%self.options.dburl.replace('/api','/add_gw_candidate')

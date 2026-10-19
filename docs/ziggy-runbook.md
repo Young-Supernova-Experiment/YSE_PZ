@@ -863,6 +863,37 @@ After this, rule changes rebuild the affected scopes through the `photstat.sync_
 
 **Later, yse\_test and production:** repeat step 2 on that stack when Ryan asks. Step 3 is only needed once per database. Run it again after any period in which the flag was off on every stack while rules changed.
 
+<a id="ned-desi-redshifts"></a>
+
+### Host redshifts from NED and DESI, with provenance (2026-10-18, #436, #437): migration applied by the deploy; backfill and the hourly sweep optional (off by default)
+
+**What changes on deploy.** Migration `0049_redshift_provenance` adds three nullable columns: `Host.redshift_source`, `Host.redshift_override` and `Transient.redshift_override`. They are online in MySQL 8, with no table copy, and safe for the shared `YSE_test` database. No new package: NED and Data Lab are queried with plain HTTP. One precedence list now governs every automatic redshift writer, including the TNS re-sync, the TNS crons and the upload endpoints (see `docs/redshift-precedence.md`):
+
+- An override set by hand always wins.
+- Otherwise NED > DESI > our own > other catalogues > no source > TNS > photo-z.
+
+Uploads therefore no longer overwrite a NED or DESI host redshift, or an override. The detail page shows each redshift's source.
+
+The deploy also adds `manage.py host_redshifts` (the backfill, dry run by default), `manage.py redshift_override` and the `Redshift_Catalogs.RedshiftCatalogSweep` cron. The cron is in `CRON_CLASSES` but does nothing until `REDSHIFT_CATALOG_CRON_ENABLED` is set. Each check is recorded as a run of the `ned-redshift` or `desi-redshift` external service (created on first use).
+
+**Before any `--apply`:** a host redshift that someone entered by hand and that must stay should be marked as an override first (`<PYTHON> manage.py redshift_override --host <id> --z <z>`). Older rows have no source, so NED and DESI rank above them.
+
+**Backfill, per database (both test stacks share one), dry run first:**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py host_redshifts --max 50                 # what would change
+<PYTHON> manage.py host_redshifts --max 500 --apply                         # repeat until "0 hosts"
+```
+**Expected:** lines such as `host 123 (...) [ned]: set z None (no source) -> 0.0312 (NED)`, then a `Done:` summary with the request counts. Requests are spaced 1 s apart per catalogue. Each run skips hosts checked in the last 30 days, so repeating the same line continues the backfill. `--services ned` limits the run to one catalogue, and `--only-empty` to hosts without a redshift.
+
+**Hourly sweep (optional, after the backfill looks right).** Add a new `[redshifts]` section to `YSE_PZ/settings.ini` (every other key has a default; see `public_settings.ini`):
+
+```ini
+[redshifts]
+REDSHIFT_CATALOG_CRON_ENABLED: True
+```
+Or set `YSE_REDSHIFT_CATALOG_CRON=1` for the cron. Then restart. The job runner must be running (the `run_jobs` crontab line). Each hour one `redshifts.sweep` job checks up to `REDSHIFT_CATALOG_MAX_PER_RUN` (100) hosts, starting with those never checked, then those last checked more than `REDSHIFT_CATALOG_RECHECK_DAYS` (90) ago. While the sweep is enabled, a new host association from an upload also queues one `redshifts.host_lookup` job. **Check:** `/yse_test/jobs/` lists `redshifts.sweep` jobs as `done`, with a summary of what changed.
+
 <a id="tns-resync"></a>
 
 ### TNS re-sync and backfill (2026-10-18, #438) one crontab line to remove; backfill and the hourly sweep optional (off by default)
@@ -3172,6 +3203,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v86, **migration `0049_redshift_provenance` applied by the deploy (nullable columns only); backfill optional** (`manage.py host_redshifts`, dry run by default; no new package). Host redshifts from NED::API and DESI via Astro Data Lab, with provenance and one precedence list ([#436](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/436), [#437](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/437)): an override set by hand wins (`manage.py redshift_override`); otherwise NED > DESI > our own > other catalogues > no source > TNS > photo-z; every automatic writer, including uploads and the TNS re-sync, follows it; the hourly `RedshiftCatalogSweep` stays off until `[redshifts] REDSHIFT_CATALOG_CRON_ENABLED` ([section "Host redshifts from NED and DESI"](#ned-desi-redshifts)).
 * 2026-10-18 v85, **remove the `tns_updates_realtime.bash` crontab line; backfill optional** (`manage.py tns_resync`, dry run by default; no migration, no new package). TNS re-sync ([#438](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/438)): re-sync of TNS classifications, redshifts, photometry and spectra for transients we have, gap import of objects reported while the crons were down, and an hourly `TNSResync` sweep that stays off until `TNS_RESYNC_CRON_ENABLED`; `TNS_recent_realtime` is removed from `CRON_CLASSES` ([section "TNS re-sync and backfill"](#tns-resync)).
 * 2026-10-18 v84, **check external readers of `/query_api/`** (no migration, no new package). `/query_api/` returns unscoped rows only to service readers ([#725](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/725)): the `[main] dblogin` cron account and `[site_settings] DATA_SERVICE_READERS`; staff, superusers and `api_writers` accounts go through the Explorer rewrite layer like everyone else and see only their data. The built-in cron titles (`DECAT_transients_mags`, `yse_transients_goodcell`, `all_yse_transients`, the QUB forced-photometry query) are unchanged. Check: any other account that polls `/query_api/` and must keep reading everything goes in `DATA_SERVICE_READERS` (see [section "Staff see only the data they have access to"](#staff-visibility)); these accounts also no longer run saved queries off the allowed list unless they have SQL Explorer access.
 * 2026-10-18 v83, **new package `sqlglot==26.33.0` on any venv the deploy does not install; check the Explorer database user grants** (no migration). SQL Explorer for everyone ([#723](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/723)): every Explorer query and every page-feeding saved query is rewritten to read only its viewer's rows (per point; service readers unchanged), so staff see only their data in Explorer and page queries over photometry run again, scoped and cached per viewer; with table-level Explorer grants add `SELECT (id, name)` on `auth_group`; `EXPLORER_OPEN_TO_ALL_USERS` (off) opens `/explorer/` to every signed-in user; rollback `EXPLORER_QUERY_SCOPE: off` ([section "SQL Explorer for everyone"](#explorer-for-everyone)).

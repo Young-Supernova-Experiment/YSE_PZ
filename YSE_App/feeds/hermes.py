@@ -355,8 +355,9 @@ class HermesFeed(FeedProvider):
                 message.object_id, message.reporter, (message.raw or {}).get("topic") or "Hermes",
                 " (%s)" % message.url if message.url else ""), user)
         if message.redshift is not None and transient.redshift is None and self.option("update_redshift", True):
-            transient.redshift = message.redshift
-            transient.save(update_fields=["redshift", "modified_date"])
+            from YSE_App.services import redshift_precedence
+
+            redshift_precedence.apply_redshift(transient, message.redshift, None, redshift_precedence.SOURCE_HERMES)
 
     def apply_classification(self, message: FeedMessage, transient, user) -> None:
         """Set ``best_spec_class`` (matching a TransientClass by name) and leave a comment."""

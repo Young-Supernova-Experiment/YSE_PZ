@@ -71,6 +71,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         instance.redshift = validated_data.get('redshift', instance.redshift)
         instance.redshift_err = validated_data.get('redshift_err', instance.redshift_err)
         instance.redshift_source = validated_data.get('redshift_source', instance.redshift_source)
+        # a redshift set by hand with the override wins over every catalogue (#436, #437)
+        instance.redshift_override = validated_data.get('redshift_override', instance.redshift_override)
         instance.non_detect_date = validated_data.get('non_detect_date', instance.non_detect_date)
         instance.non_detect_limit = validated_data.get('non_detect_limit', instance.non_detect_limit)
 
