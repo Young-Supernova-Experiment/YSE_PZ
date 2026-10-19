@@ -56,8 +56,9 @@ class _RevokeBase(_Fixture):
 class RevokeTests(_RevokeBase):
     def test_acceptance_records_what_it_added(self):
         req = self.accepted()
-        self.assertEqual(req.granted_dataset_ids, [self.secret.pk])
-        self.assertEqual(req.added_dataset_ids, [self.secret.pk])
+        both = {self.phot.pk, self.secret.pk}  # every restricted set the owner group holds on the object
+        self.assertEqual(set(req.granted_dataset_ids), both)
+        self.assertEqual(set(req.added_dataset_ids), both)
         self.assertEqual(self.visible(self.requester) & self.secret_ids(), self.secret_ids())
 
     def test_forward_keeps_earlier_data_and_hides_later(self):
@@ -91,7 +92,7 @@ class RevokeTests(_RevokeBase):
     def test_group_already_on_a_dataset_is_not_removed(self):
         self.secret.groups.add(self.t_group)  # shared before the request through another route
         req = self.accepted()
-        self.assertEqual(req.added_dataset_ids, [])
+        self.assertEqual(req.added_dataset_ids, [self.phot.pk])
         dar.revoke(req, self.pi_user, backwards=True)
         self.assertTrue(self.secret.groups.filter(pk=self.t_group.pk).exists())
 
