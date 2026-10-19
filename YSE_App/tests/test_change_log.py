@@ -9,6 +9,7 @@ from io import StringIO
 from unittest import mock
 
 from django.core.management import call_command
+from django.db.models import Q
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -221,3 +222,92 @@ class VisibilityTests(ChangeLogTestBase):
         source = get_template("YSE_App/transient_detail.html").template.source
         self.assertIn("transient_detail_history_fragment", source)
         self.assertIn('id="history_tab_content"', source)
+
+
+@override_settings(API_SERVICE_USERNAMES=[SERVICE_USERNAME], REDSHIFT_CATALOG_CRON_ENABLED=False)
+class UploadAndOtherWriterTests(ChangeLogTestBase):
+    """Follow-up to #737: the upload endpoints, the TNS cron's Prost hosts, error-only photo-z, Hermes, API edits."""
+
+    def _upload(self, entry, **flags):
+        from YSE_App.data_utils import add_transient_payload
+
+        doc = {"2026vca": dict({"name": "2026vca"}, **entry), "noupdatestatus": True}
+        doc.update(flags)
+        response = add_transient_payload(doc, self.uploader)
+        self.assertEqual(response.status_code, 200)
+
+    def setUp(self):
+        super().setUp()
+        self.uploader = create_test_user("changelog_uploader", is_staff=False)
+
+    def test_upload_redshift_and_classification_with_uploader_as_actor(self):
+        self._upload({"redshift": 0.05, "redshift_source": "Sherlock"})
+        self._upload({"redshift": 0.05, "redshift_source": "Sherlock"})  # same: nothing new
+        change = ValueChange.objects.get()
+        self.assertEqual((change.transient_id, change.field, change.new_value, change.source, change.service,
+                          change.actor, change.restricted),
+                         (self.transient.pk, "redshift", "0.05", "Sherlock", "upload", self.uploader, False))
+        self._upload({"TNS_spec_class": "SN Ia"}, TNS=True)
+        self._upload({"best_spec_class": "SN II"})
+        tns, ours = ValueChange.objects.filter(category="classification").order_by("pk")
+        self.assertEqual((tns.field, tns.source, tns.restricted), ("TNS_spec_class", "TNS", False))
+        self.assertEqual((ours.field, ours.new_value, ours.source, ours.restricted),
+                         ("best_spec_class", "SN II", "", True))  # no source: restricted
+
+    def test_tns_cron_host_link_photo_z_and_error_only_change(self):
+        from YSE_App.data_utils import add_transient_host_util
+
+        t = create_minimal_transient(self.cron, name="2026vch", ra=10.0, dec=1.0)
+        add_transient_host_util({"name": "SYNTH GAL Q", "ra": 10.0, "dec": 1.0, "photo_z_internal": 0.2,
+                                 "photo_z_err_internal": 0.05}, t, self.cron, source_hint="Prost")
+        add_transient_host_util({"name": "SYNTH GAL Q", "ra": 10.0, "dec": 1.0, "photo_z_internal": 0.2,
+                                 "photo_z_err_internal": 0.05}, t, self.cron, source_hint="Prost")  # no change
+        add_transient_host_util({"name": "SYNTH GAL Q", "ra": 10.0, "dec": 1.0, "photo_z_internal": 0.2,
+                                 "photo_z_err_internal": 0.04}, t, self.cron, source_hint="Prost")
+        t.refresh_from_db()
+        rows = list(ValueChange.objects.filter(Q(transient=t) | Q(host=t.host)).order_by("pk"))
+        self.assertEqual([(r.field, r.old_value, r.new_value, r.source, r.actor) for r in rows],
+                         [("photo_z_internal", None, "0.2", "Prost", self.cron),
+                          ("host", None, "SYNTH GAL Q (host %d)" % t.host_id, "Prost", self.cron),
+                          ("photo_z_err_internal", "0.05", "0.04", "Prost", self.cron)])
+        self.assertEqual(rows[2].note, "uncertainty only")
+
+    def test_photo_z_error_only_changes_are_recorded(self):
+        from YSE_App.data_ingest import Photo_Z, SDSS_Photo_Z
+
+        for err in (0.02, 0.03):
+            with mock.patch.object(Photo_Z, "predict_hosts", return_value={self.host.pk: (0.12, err)}):
+                enrichment.run(enrichment.get("photoz-ml"), [Host.objects.get(pk=self.host.pk)], dry_run=False,
+                               user=self.cron)
+        for err in (0.05, 0.05, 0.06):
+            with mock.patch.object(SDSS_Photo_Z, "fetch_photoz", return_value={self.host.pk: (0.2, err)}):
+                enrichment.run(enrichment.get("sdss-photoz"), [Host.objects.get(pk=self.host.pk)],
+                               dry_run=False, user=self.cron)
+        self.assertEqual(list(ValueChange.objects.order_by("pk").values_list("field", "new_value")),
+                         [("photo_z_internal", "0.12"), ("photo_z_err_internal", "0.03"),
+                          ("photo_z", "0.2"), ("photo_z_err", "0.06")])
+
+    def test_hermes_classification(self):
+        from YSE_App.feeds import hermes as hermes_mod
+        from YSE_App.feeds.base import FeedMessage
+
+        message = FeedMessage(feed="hermes", message_id="m1", kind="classification", object_id="2026vca",
+                              classification="SN Ia")
+        hermes_mod.HermesFeed().apply_classification(message, self.transient, self.cron)
+        hermes_mod.HermesFeed().apply_classification(message, self.transient, self.cron)
+        change = ValueChange.objects.get()
+        self.assertEqual((change.field, change.new_value, change.service, change.source, change.actor_id),
+                         ("best_spec_class", "SN Ia", "hermes", "Hermes", None))
+
+    def test_api_classification_and_host_edits(self):
+        from YSE_App.serializers.transient_serializers import TransientSerializer
+
+        request = RequestFactory().patch("/api/transients/%d/" % self.transient.pk)
+        request.user = self.uploader
+        serializer = TransientSerializer(self.transient, context={"request": request})
+        serializer.update(self.transient, {"best_spec_class": TransientClass.objects.get(name="SN II"),
+                                           "TNS_spec_class": "SN II", "host": None})
+        rows = {r.field: r for r in ValueChange.objects.all()}
+        self.assertEqual(set(rows), {"best_spec_class", "TNS_spec_class", "host"})
+        self.assertEqual(rows["host"].new_value, None)
+        self.assertTrue(all(r.actor == self.uploader and r.restricted for r in rows.values()))

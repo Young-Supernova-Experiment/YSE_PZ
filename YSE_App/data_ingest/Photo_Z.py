@@ -231,14 +231,15 @@ def run_batch(hosts, ctx=None):
             continue
         host.photo_z_internal, host.photo_z_err_internal = value
         to_update.append(host)
-        changes.append((host, old[0]))
+        changes.append((host, old))
         outcomes[pk] = Outcome(UPDATED, "photo_z_internal %.4f +- %.4f" % value,
                                data={"photo_z_internal": value[0], "photo_z_err_internal": value[1]})
     if to_update:
         Host.objects.bulk_update(to_update, ['photo_z_internal', 'photo_z_err_internal'])
-    for host, old_z in changes:  # change log (#737)
-        change_log.record_change(host, 'photo_z_internal', old_z, host.photo_z_internal, service='photoz-ml',
-                                 source='YSE ML photo-z', category=ValueChange.CATEGORY_PHOTO_Z)
+    for host, old in changes:  # change log (#737): the value, or the error alone
+        change_log.record_value(host, 'photo_z_internal', 'photo_z_err_internal', old[0], host.photo_z_internal,
+                                old[1], host.photo_z_err_internal, service='photoz-ml', source='YSE ML photo-z',
+                                compare_source=False, category=ValueChange.CATEGORY_PHOTO_Z)
     return outcomes
 
 

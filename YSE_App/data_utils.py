@@ -47,7 +47,9 @@ from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
-from YSE_App.services import photstat, program_links, redshift_precedence
+from YSE_App.services import change_log, photstat, program_links, redshift_precedence
+
+_UPLOADER = object()  # add_transient_host_util: record the uploader as the change-log actor (#737)
 from YSE_App.common.authz import bulk_ingest_denial, upload_denial
 from YSE_App.common.quality_mask import data_quality_mask
 from YSE_App.services.data_pis import apply_upload_pis
@@ -364,8 +366,11 @@ def add_transient_payload(transient_data, user):
                     #   for tag in transient['tags']:
                     #       tagobj = TransientTag.objects.get(name=tag)
                     #       taglist += [tagobj]
-                    redshift_precedence.filter_upload_fields(dbtransient[0], transientdict)  # #436, #437
+                    _existing = dbtransient[0]  # read before the update: the change log compares (#737)
+                    redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
                     dbtransient.update(**transientdict)
+                    change_log.record_upload(_existing, transientdict, actor=user,
+                                             source_hint="TNS" if transient_data.get("TNS") else "")
                     if 'tags' in transientkeys:
                         for tag in transient['tags']:
                             tagobj = TransientTag.objects.get(name=tag)
@@ -390,8 +395,11 @@ def add_transient_payload(transient_data, user):
                     transientdict['postage_stamp_ref_fits'] = dbtransient[0].postage_stamp_ref_fits
                     transientdict['postage_stamp_diff_fits'] = dbtransient[0].postage_stamp_diff_fits
 
-                redshift_precedence.filter_upload_fields(dbtransient[0], transientdict)  # #436, #437
+                _existing = dbtransient[0]  # read before the update: the change log compares (#737)
+                redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
                 dbtransient.update(**transientdict)
+                change_log.record_upload(_existing, transientdict, actor=user,
+                                         source_hint="TNS" if transient_data.get("TNS") else "")
                 if 'tags' in transientkeys:
                     for tag in transient['tags']:
                         if not len(dbtransient[0].tags.filter(name=tag)):
@@ -499,8 +507,9 @@ def _add_transient_data_stage(transient_data, user):
             add_transient_spec_util(transient['transientspectra'],dbtransient,user)
 
         if 'host' in transientkeys:
-            # host galaxy
-            add_transient_host_util(transient['host'],dbtransient,user)
+            # host galaxy; the TNS cron's hosts come from Prost (TNS_uploads.getProstHosts): change-log label
+            add_transient_host_util(transient['host'],dbtransient,user,
+                                    source_hint='Prost' if transient_data.get('TNS') else '')
 
     TransientPhotometry.objects.bulk_create(phot_entries)
 
@@ -597,8 +606,11 @@ def add_gw_candidate(request):
                     else: transientdict['status'] = dbtransient[0].status
                 else: transientdict['status'] = dbtransient[0].status
 
-                redshift_precedence.filter_upload_fields(dbtransient[0], transientdict)  # #436, #437
+                _existing = dbtransient[0]  # read before the update: the change log compares (#737)
+                redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
                 dbtransient.update(**transientdict)
+                change_log.record_upload(_existing, transientdict, actor=user,
+                                         source_hint="TNS" if transient_data.get("TNS") else "")
                 dbtransient = dbtransient[0]
             if 'tags' in transientkeys:
                 for tag in transient['tags']:
@@ -701,7 +713,16 @@ def add_gw_candidate_util(gwdict,transient,user):
     return_dict = {"message":"GW success"}
     return JsonResponse(return_dict)
 
-def add_transient_host_util(hostdict,transient,user):
+def add_transient_host_util(hostdict,transient,user,*,service=None,actor=_UPLOADER,source_hint=''):
+    """Create or update the host in ``hostdict`` and link it to ``transient``.
+
+    Every change it makes (the link, the host's redshift and photo-z) is recorded in the
+    change log (#737) by ``service`` (default ``upload``) with ``actor`` (default the
+    uploader). ``source_hint`` labels values that carry no source of their own (``Prost``
+    for the TNS cron's hosts and ``prost_hosts.match_transient``).
+    """
+    service = service or change_log.SERVICE_UPLOAD
+    actor = user if actor is _UPLOADER else actor
 
     if 'name' not in hostdict.keys():
         return_dict = {"message":"no host"}
@@ -727,16 +748,24 @@ def add_transient_host_util(hostdict,transient,user):
     dbhost = Host.objects.filter(name=dbhostdict['name'])
     if not len(dbhost):
         dbhost = Host.objects.create(**dbhostdict)
+        change_log.record_upload(dbhost, dbhostdict, actor=actor, service=service, source_hint=source_hint,
+                                 created=True)
     else: #if clobber:
         # never replace an override or a higher-ranked redshift (NED, DESI, ...; #436, #437)
-        redshift_precedence.filter_upload_fields(dbhost[0], dbhostdict)
+        existing = dbhost[0]
+        redshift_precedence.filter_upload_fields(existing, dbhostdict)
         dbhost.update(**dbhostdict)
+        change_log.record_upload(existing, dbhostdict, actor=actor, service=service, source_hint=source_hint)
         dbhost = dbhost[0]
 
-    new_host = transient.host_id != dbhost.pk
+    old_host_id = transient.host_id
+    new_host = old_host_id != dbhost.pk
     transient.host = dbhost
     transient.save()
     if new_host:
+        change_log.record_change(transient, 'host', change_log.host_label(old_host_id),
+                                 change_log.host_label(dbhost.pk), service=service, actor=actor,
+                                 category='host', source=source_hint, force=True)
         from YSE_App.services.redshift_catalogs import queue_host_lookup
         queue_host_lookup(dbhost)
 

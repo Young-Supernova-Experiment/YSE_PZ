@@ -173,23 +173,13 @@ def match_transient(transient, *, dry_run: bool = False, user=None, associate_fn
     from YSE_App import data_utils
     from YSE_App.services.enrichment import service_user
 
-    from YSE_App.models.change_log_models import ValueChange
-    from YSE_App.models.host_models import Host
-    from YSE_App.services import change_log
-
     user = user or service_user()
     redshift = {k: doc.pop(k) for k in ("redshift", "redshift_err", "redshift_source") if k in doc}
-    before = Host.objects.filter(name=doc["name"]).values("photo_z_internal").first() or {}
-    data_utils.add_transient_host_util(doc, transient, user)
+    # the upload path records the link and any photo-z it brings in the change log (#737)
+    data_utils.add_transient_host_util(doc, transient, user, service=SERVICE_SLUG, actor=None,
+                                       source_hint=rp.SOURCE_PROST)
     transient.refresh_from_db(fields=["host"])
     host = transient.host
-    if host is not None:  # change log (#737): the link, then any photo-z it brought
-        change_log.record_change(transient, "host", None, "%s (host %s)" % (host.name, host.pk), service=SERVICE_SLUG,
-                                 category=ValueChange.CATEGORY_HOST, source=rp.SOURCE_PROST)
-        if doc.get("photo_z_internal") is not None:
-            change_log.record_change(host, "photo_z_internal", before.get("photo_z_internal"),
-                                     host.photo_z_internal, service=SERVICE_SLUG,
-                                     category=ValueChange.CATEGORY_PHOTO_Z, source="Prost photo-z")
     if host is not None and redshift.get("redshift") is not None:
         decision = rp.apply_redshift(host, float(redshift["redshift"]),
                                      _float_or_none(redshift.get("redshift_err")), rp.SOURCE_PROST, user=user,
