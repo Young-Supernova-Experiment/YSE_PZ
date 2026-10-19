@@ -80,10 +80,12 @@ def notify_followup_created(followup, *, recipients: Optional[List[User]] = None
     if telescope is None:
         return []
     users = recipients if recipients is not None else telescope_followers(telescope)
+    exclude = [followup.created_by_id] if exclude_requester and followup.created_by_id else []
+    # Only people who may see the follow-up and list the transient (#730, same rule as the other notices).
+    users = _visible_recipients(users, followup, set(exclude))
     if not users:
         return []
     transient = followup.transient
-    exclude = [followup.created_by_id] if exclude_requester and followup.created_by_id else []
     base_url = notify_service.base_url()
     subject = "New %s request for %s" % (telescope.name, transient.name)
     text = "%s follow-up requested for %s by %s." % (telescope.name, transient.name, followup.created_by)

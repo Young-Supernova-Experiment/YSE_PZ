@@ -214,3 +214,40 @@ class StatusNoticeTests(_Base):
         self.assertEqual(self._recipients("followup_status"), ["fnu_alice", "fnu_bob"])
         self.assertFalse(observations._set_status(followup, "Successful", self.admin))
         self.assertEqual(self._rows("followup_status").count(), 2)
+
+
+class CreatedAndExpiryNoticeTests(_Base):
+    """#730: the new-request notice obeys follow-up visibility; the expiry cron has no actor."""
+
+    def test_new_request_reaches_ordinary_followers_of_a_public_followup(self):
+        self._request(self.alice)
+        self.assertEqual(self._recipients("followup_request"), ["fnu_carol"])  # Public only, no other grants
+
+    def test_new_request_skips_followers_who_cannot_see_the_followup(self):
+        team = Group.objects.create(name="fnu-created-team")
+        insider = self._member("fnu_insider")
+        insider.groups.add(team)
+        _follow(insider, self.telescope)
+        parent = TransientFollowup.objects.create(
+            transient=self.transient, status=self.requested, valid_start=self.now, valid_stop=self.stop,
+            classical_resource=self.resource, requested_by=self.alice, **audit_fields(self.alice))
+        # created public (no groups yet): Carol and the insider both see it
+        self.assertEqual(self._recipients("followup_request"), ["fnu_carol", "fnu_insider"])
+        Notification.objects.all().delete()
+        from YSE_App.services.followup_notices import notify_followup_created
+
+        parent.groups.set([team])
+        notify_followup_created(parent)
+        self.assertEqual(self._recipients("followup_request"), ["fnu_insider"])
+
+    def test_expiry_cron_tells_every_requester_including_the_last_modifier(self):
+        from YSE_App.services import observations
+
+        past_stop = self.now - datetime.timedelta(days=1)
+        parent, _c, _ = self._request(self.alice)
+        self._request(self.bob)
+        TransientFollowup.objects.filter(pk=parent.pk).update(valid_stop=past_stop, modified_by=self.bob)
+        Notification.objects.all().delete()
+        result = observations.expire_requests(self.now, apply=True, since=self.now - datetime.timedelta(days=30))
+        self.assertEqual(result["failed"], [parent.pk])
+        self.assertEqual(self._recipients("followup_status"), ["fnu_alice", "fnu_bob"])

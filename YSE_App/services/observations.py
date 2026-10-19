@@ -212,8 +212,12 @@ def _note(payload: Dict[str, Any]) -> str:
     return note
 
 
-def _set_status(followup, name: str, user) -> bool:
-    """Set the request's status through the normal save (notifications apply); True if changed."""
+def _set_status(followup, name: str, user, *, system: bool = False) -> bool:
+    """Set the request's status through the normal save (notifications apply); True if changed.
+
+    ``user`` is stamped as ``modified_by``. With ``system`` nobody is the actor of the change
+    (the expiry cron), so every requester is told (#730).
+    """
     if followup.status_id and followup.status.name == name:
         return False
     status = FollowupStatus.objects.filter(name=name).first()
@@ -221,6 +225,8 @@ def _set_status(followup, name: str, user) -> bool:
         status = FollowupStatus.objects.create(name=name, created_by=user, modified_by=user)
     followup.status = status
     followup.modified_by = user
+    if system:
+        followup._notice_actor_id = None
     followup.save(update_fields=["status", "modified_by", "modified_date"])
     return True
 
@@ -359,7 +365,7 @@ def expire_requests(now=None, *, apply: bool = False, since=None, actor=None) ->
             result["failed"].append(followup.id)
             target = "Failed"
         if apply:
-            _set_status(followup, target, actor or followup.modified_by)
+            _set_status(followup, target, actor or followup.modified_by, system=actor is None)
     return result
 
 
