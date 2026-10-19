@@ -108,12 +108,17 @@ class TransientFollowupRequest(BaseModel):
 
 @receiver(models.signals.post_save, sender=TransientFollowup)
 def execute_after_save(sender, instance, created, *args, **kwargs):
-	"""New follow-up: notify the users following its telescope (issue #69, via notify())."""
+	"""New follow-up: notify the users following its telescope (issue #69, via notify()) and,
+	for a classical night, queue the TNS and ZTF refresh (issue #114, after commit)."""
 
 	if created:
 		from YSE_App.services.followup_notices import notify_followup_created_safely
 
 		notify_followup_created_safely(instance)
+		if not kwargs.get("raw"):
+			from YSE_App.services.followup_enrich import schedule_enrichment_safely
+
+			schedule_enrichment_safely(instance)
 
 
 @receiver(models.signals.post_save, sender=TransientFollowupRequest)

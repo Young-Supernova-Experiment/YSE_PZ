@@ -910,6 +910,21 @@ TNS_RESYNC_CRON_ENABLED: True
 
 Note: `manage.py expire_service_runs` also deletes old `tns` runs; those transients are then re-synced again, which is harmless.
 
+<a id="followup-enrich"></a>
+
+### Automatic TNS and ZTF refresh on a follow-up request (2026-10-18, #114) job runner must be running; no migration, no new package
+
+**What changes on deploy.** Each new follow-up on a classical night (ToO and queued follow-ups are unchanged) queues one `followup.enrich` job after the request is saved. The job re-syncs the object from TNS (the #438 function, as the service account) and submits ZTF forced photometry the same way the transient page button does (a `ztf` allocation open to the requester first, then the legacy script). An object that was re-synced from TNS, or queried at ZTF, in the last 24 hours is skipped for that service. Each ZTF submission, from the button too, is now recorded as a run of the `ztf_forced` external service (created on first use); no migration. Failures (TNS rate limit or outage, failed ZTF submission) retry through the job queue, three attempts, and never delay the request. No Prost host match is run: it only exists inside the TNS upload cron.
+
+**Needed:** the job runner (`run_jobs` crontab line, see above), and for TNS the same bot keys and cron account as the [TNS re-sync](#tns-resync) step. **Check:** after a classical-night request, `/yse_test/jobs/` lists a `followup.enrich` job as `done`, with a summary of what the TNS and ZTF steps did.
+
+**Turn it off** (per stack) under the existing `[site_settings]` section of `YSE_PZ/settings.ini`, then restart:
+
+```ini
+FOLLOWUP_AUTO_ENRICH: False
+```
+(or `YSE_FOLLOWUP_AUTO_ENRICH=0` in the web environment). `FOLLOWUP_ENRICH_WINDOW_HOURS` (default 24) sets the skip window.
+
 <a id="per-point-access"></a>
 
 ### Access is per point; program link on each photometry point (2026-10-18, #714) migration applied by the deploy; one optional command
@@ -3172,6 +3187,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v86, **check that the job runner is running; nothing else required** (no migration, no new package). Automatic TNS and ZTF refresh on a new classical-night follow-up ([#114](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/114)): on by default (Ryan, 2026-10-18). See [Follow-up enrichment](#followup-enrich).
 * 2026-10-18 v85, **remove the `tns_updates_realtime.bash` crontab line; backfill optional** (`manage.py tns_resync`, dry run by default; no migration, no new package). TNS re-sync ([#438](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/438)): re-sync of TNS classifications, redshifts, photometry and spectra for transients we have, gap import of objects reported while the crons were down, and an hourly `TNSResync` sweep that stays off until `TNS_RESYNC_CRON_ENABLED`; `TNS_recent_realtime` is removed from `CRON_CLASSES` ([section "TNS re-sync and backfill"](#tns-resync)).
 * 2026-10-18 v84, **check external readers of `/query_api/`** (no migration, no new package). `/query_api/` returns unscoped rows only to service readers ([#725](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/725)): the `[main] dblogin` cron account and `[site_settings] DATA_SERVICE_READERS`; staff, superusers and `api_writers` accounts go through the Explorer rewrite layer like everyone else and see only their data. The built-in cron titles (`DECAT_transients_mags`, `yse_transients_goodcell`, `all_yse_transients`, the QUB forced-photometry query) are unchanged. Check: any other account that polls `/query_api/` and must keep reading everything goes in `DATA_SERVICE_READERS` (see [section "Staff see only the data they have access to"](#staff-visibility)); these accounts also no longer run saved queries off the allowed list unless they have SQL Explorer access.
 * 2026-10-18 v83, **new package `sqlglot==26.33.0` on any venv the deploy does not install; check the Explorer database user grants** (no migration). SQL Explorer for everyone ([#723](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/723)): every Explorer query and every page-feeding saved query is rewritten to read only its viewer's rows (per point; service readers unchanged), so staff see only their data in Explorer and page queries over photometry run again, scoped and cached per viewer; with table-level Explorer grants add `SELECT (id, name)` on `auth_group`; `EXPLORER_OPEN_TO_ALL_USERS` (off) opens `/explorer/` to every signed-in user; rollback `EXPLORER_QUERY_SCOPE: off` ([section "SQL Explorer for everyone"](#explorer-for-everyone)).
