@@ -945,7 +945,7 @@ Note: `manage.py expire_service_runs` also deletes old `tns` runs; those transie
 
 ### Automatic TNS and ZTF refresh on a follow-up request (2026-10-18, #114) job runner must be running; no migration, no new package
 
-**What changes on deploy.** Each new follow-up on a classical night (ToO and queued follow-ups are unchanged) queues one `followup.enrich` job after the request is saved. The job re-syncs the object from TNS (the #438 function, as the service account) and submits ZTF forced photometry the same way the transient page button does (a `ztf` allocation open to the requester first, then the legacy script). An object that was re-synced from TNS, or queried at ZTF, in the last 24 hours is skipped for that service. Each ZTF submission, from the button too, is now recorded as a run of the `ztf_forced` external service (created on first use); no migration. Failures (TNS rate limit or outage, failed ZTF submission) retry through the job queue, three attempts, and never delay the request. No Prost host match is run: it only exists inside the TNS upload cron.
+**What changes on deploy.** Each new follow-up on a classical night (ToO and queued follow-ups are unchanged) queues one `followup.enrich` job after the request is saved. The job re-syncs the object from TNS (the #438 function, as the service account) and submits ZTF forced photometry the same way the transient page button does (a `ztf` allocation open to the requester first, then the legacy script). An object that was re-synced from TNS, or queried at ZTF, in the last 24 hours is skipped for that service. Each ZTF submission, from the button too, is now recorded as a run of the `ztf_forced` external service (created on first use); no migration. Failures (TNS rate limit or outage, failed ZTF submission) retry through the job queue, three attempts, and never delay the request. With `PROST_HOST_MATCH_ENABLED` (off by default, see [Enrichment framework](#enrichment)) the job also runs a Prost host match for an object without a host.
 
 **Needed:** the job runner (`run_jobs` crontab line, see above), and for TNS the same bot keys and cron account as the [TNS re-sync](#tns-resync) step. **Check:** after a classical-night request, `/yse_test/jobs/` lists a `followup.enrich` job as `done`, with a summary of what the TNS and ZTF steps did.
 
@@ -955,6 +955,59 @@ Note: `manage.py expire_service_runs` also deletes old `tns` runs; those transie
 FOLLOWUP_AUTO_ENRICH: False
 ```
 (or `YSE_FOLLOWUP_AUTO_ENRICH=0` in the web environment). `FOLLOWUP_ENRICH_WINDOW_HOURS` (default 24) sets the skip window.
+
+<a id="enrichment"></a>
+
+### Enrichment framework: `manage.py enrich` and one sweep (2026-10-18, #439) nothing required; no migration, no new package
+
+**What changes on deploy.** One registry of enrichment services and one run log (`ExternalServiceRun`, one row per object and service; a check that changes nothing, or fails again, updates the previous row). Registered services: `tns`, `ned`, `desi`, `ztf-forced` (the #438, #436/#437 and #114 functions, unchanged), `prost`, `photoz-ml`, `sdss-photoz`, `ps1-cutouts`, `gaia-lc` and `blast`. GHOST is gone (#613) and is not a service. The deploy adds `manage.py enrich` (dry run by default) and the `Enrichment.EnrichmentSweep` cron (in `CRON_CLASSES`, a no-op until `ENRICH_SWEEP_CRON_ENABLED` is set).
+
+What runs differently by itself:
+
+- **`PS1_cutouts.YSE` no longer downloads again.** Same schedule, same files and rows. It skips hosts that already have PS1 (GPC1) cutout images, and a cutout that failed is retried after `PS1_CUTOUT_RETRY_DAYS` (30) and at most `PS1_CUTOUT_MAX_ATTEMPTS` (3) times in a row, instead of every 30 minutes.
+- `Photo_Z.YSE`, `SDSS_Photo_Z.YSE` and `Gaia_LC.GaiaLC` keep their schedules and selections. They now record each object's outcome as a run (`photoz-ml`, `sdss-photoz`, `gaia-lc`). TensorFlow and SciServer are imported only when a prediction runs.
+- The Prost matching in the TNS crons is now `YSE_App.services.prost_hosts` (the same priors, catalogues and scratch directory), so the crons behave as before.
+
+**Check (optional, per stack):**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py enrich --list
+```
+**Expected:** one line per service (`blast` shows `[needs BLAST_ENABLED]`).
+
+**Backfill a service over a selection (optional), dry run first.** The defaults select only objects that lack the service's data and are due by the run log, so repeating a line continues where it stopped:
+
+```bash
+<PYTHON> manage.py enrich --service prost --since 2025-01-01 --max 50            # lists what would run
+<PYTHON> manage.py enrich --service prost --since 2025-01-01 --max 200 --apply   # repeat until "0 transient(s)"
+<PYTHON> manage.py enrich --service ps1-cutouts --retry-failed --rerun --max 20 --apply
+<PYTHON> manage.py enrich --service sdss-photoz --max 1000 --apply --queue        # as enrich.objects jobs
+```
+**Expected:** `Applying prost: N transient(s)`, one line per change or error, then `Done: updated N, no_match N, ...`. Other options: `--names`, `--ids`, `--status`, `--until`, `--never-run`, `--all-candidates`. A Prost match links the host through the upload path; its spectroscopic redshift is written only where the redshift precedence list allows it (never over an override or a NED/DESI value). `ztf-forced` needs an explicit selection.
+
+**Prost for objects without a host (optional).** Under a new `[enrichment]` section of `YSE_PZ/settings.ini`, then restart:
+
+```ini
+[enrichment]
+PROST_HOST_MATCH_ENABLED: True
+```
+(or `YSE_PROST_HOST_MATCH=1`). Then the TNS gap import (#438) queues one `enrich.objects` job per imported object without a host, and the follow-up enrichment job (#114) runs a Prost match for an object without a host. `[main] prost_path` (or `ghost_path`) is the scratch directory, as for the TNS crons. **Check:** `/yse_test/jobs/` lists `enrich.objects` jobs as `done`.
+
+**Hourly sweep (optional).** Under `[enrichment]`:
+
+```ini
+ENRICH_SWEEP_CRON_ENABLED: True
+ENRICH_SWEEP_SERVICES: prost,ps1-cutouts
+```
+Then restart; the job runner must be running. Each hour one `enrich.sweep` job runs each listed service on up to `ENRICH_SWEEP_MAX_PER_SERVICE` (100) due objects: never run, a failure older than the service's retry wait, or a success older than its recheck period. It stops after `ENRICH_SWEEP_BUDGET_SECONDS` (900). Do not list `tns`, `ned` or `desi` there while their own sweeps are on.
+
+**Blast (optional; needs a Blast account).** The Blast API needs an account token. With one, under `[enrichment]`:
+
+```ini
+BLAST_ENABLED: True
+BLAST_API_TOKEN: <BLAST_TOKEN>
+```
+Then `<PYTHON> manage.py enrich --service blast --max 20 --apply`. Each transient with a TNS name gets a `blast` annotation (host name, position and redshift as Blast reports them, and the local and global SED fits: stellar mass, SFR, sSFR, age, metallicity, dust). The annotation has no groups, like the other catalogue annotations. No Host column is changed and no redshift is written. Requests are spaced `BLAST_REQUEST_INTERVAL_SECONDS` (1 s) apart.
 
 <a id="per-point-access"></a>
 
@@ -3218,6 +3271,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-18 v88, **nothing required** (no migration, no new package). Enrichment framework ([#439](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/439)): one registry of enrichment services with a per-object run log, `manage.py enrich` (dry run by default; `--service`, selection options, resumable, `--max`, `--queue`) and the `Enrichment.EnrichmentSweep` cron (off until `ENRICH_SWEEP_CRON_ENABLED`). `PS1_cutouts.YSE` stops downloading cutouts again (failures retried after 30 days, at most 3 times); `Photo_Z`, `SDSS_Photo_Z` and `Gaia_LC` keep their schedules and record each object's outcome. Prost matching is now a per-object function; with `PROST_HOST_MATCH_ENABLED` (off) the TNS gap import and the follow-up enrichment run it for objects without a host. Optional Blast annotation service (off; needs a Blast token). See [Enrichment framework](#enrichment).
 * 2026-10-18 v87, **migration `0049_redshift_provenance` applied by the deploy (nullable columns only); backfill optional** (`manage.py host_redshifts`, dry run by default; no new package). Host redshifts from NED::API and DESI via Astro Data Lab, with provenance and one precedence list ([#436](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/436), [#437](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/437)): an override set by hand wins (`manage.py redshift_override`); otherwise NED > DESI > our own > other catalogues > no source > TNS > photo-z; every automatic writer, including uploads and the TNS re-sync, follows it; the hourly `RedshiftCatalogSweep` stays off until `[redshifts] REDSHIFT_CATALOG_CRON_ENABLED` ([section "Host redshifts from NED and DESI"](#ned-desi-redshifts)).
 * 2026-10-18 v86, **check that the job runner is running; nothing else required** (no migration, no new package). Automatic TNS and ZTF refresh on a new classical-night follow-up ([#114](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/114)): on by default (Ryan, 2026-10-18). See [Follow-up enrichment](#followup-enrich).
 * 2026-10-18 v85, **remove the `tns_updates_realtime.bash` crontab line; backfill optional** (`manage.py tns_resync`, dry run by default; no migration, no new package). TNS re-sync ([#438](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/438)): re-sync of TNS classifications, redshifts, photometry and spectra for transients we have, gap import of objects reported while the crons were down, and an hourly `TNSResync` sweep that stays off until `TNS_RESYNC_CRON_ENABLED`; `TNS_recent_realtime` is removed from `CRON_CLASSES` ([section "TNS re-sync and backfill"](#tns-resync)).

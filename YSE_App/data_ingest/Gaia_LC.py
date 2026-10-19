@@ -11,6 +11,7 @@ import sys
 from requests.auth import HTTPBasicAuth
 import configparser
 from YSE_App.models import Transient, TransientTag, AlternateTransientNames
+from YSE_App.models.phot_models import TransientPhotometry
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import smtplib
@@ -24,7 +25,10 @@ def mjd_to_date(obs_mjd):
     return time.isot
 
 def get_gaia_list(look_back_days):
+    """Gaia alerts published in the last ``look_back_days`` (``None``: every alert)."""
     gaia_list = pd.read_csv('https://gsaweb.ast.cam.ac.uk/alerts/alerts.csv')
+    if look_back_days is None:
+        return gaia_list
     datelist = np.array([(datetime.datetime.now()-datetime.datetime.strptime(date, '%Y-%m-%d %H:%M:%S')).\
                          total_seconds()/86400 for date in gaia_list[' Date'].values])
     index = datelist<look_back_days
@@ -64,6 +68,93 @@ def sendemail(from_addr, to_addr,
             print("Send fail")
 
     
+def gaia_photometry(gaia_name, targets):
+    """The ``transientphotometry`` upload document for one Gaia alert, or None (no alert / no points)."""
+    data = get_gaia_phot(gaia_name,targets)
+    if data is None: return None
+    data = data[gaia_name]
+
+    PhotUploadAll = {"mjdmatchmin":0.01,
+                     "clobber":True}
+    photometrydict = {'instrument':'Gaia-Photometric',
+                      'obs_group':'GaiaAlerts',
+                      'photdata':{}}
+
+    for i,d in enumerate(data):
+        if not isinstance(data[i],float):
+            if data[i] == 'untrusted' or data[i].startswith('average') or \
+               data[i] == 'nan': continue
+        if float(data[i]) != float(data[i]): continue
+
+        flux = 10**(-0.4*(float(data[i])-27.5))
+        flux_err = 1.086*0.01*flux
+        phot_upload_dict = {'obs_date':data.index[i][0].replace(' ','T'),
+                            'band':'G',
+                            'groups':['Public'],
+                            'mag':float(data[i]),
+                            'mag_err':0.01,
+                            'flux':flux,
+                            'flux_err':flux_err,
+                            'flux_zero_point':27.5,
+                            'data_quality':0,
+                            'discovery_point':0,
+                            'forced':0,
+                            'diffim':1}
+        photometrydict['photdata'][i] = phot_upload_dict
+
+    PhotUploadAll['Gaia-Photometric'] = photometrydict
+    return PhotUploadAll
+
+
+def _points(PhotUploadAll):
+    return sum(len(v.get('photdata', {})) for v in PhotUploadAll.values() if isinstance(v, dict))
+
+
+def candidate_transients(missing_only=True):
+    """Transients with a Gaia alert name; ``missing_only``: those without Gaia photometry."""
+    qs = Transient.objects.filter(
+        pk__in=AlternateTransientNames.objects.filter(name__startswith='Gaia').values('transient_id'))
+    if missing_only:
+        qs = qs.exclude(pk__in=TransientPhotometry.objects.filter(
+            instrument__name='Gaia-Photometric').values('transient_id'))
+    return qs
+
+
+def make_context():
+    return {}
+
+
+def gaia_one(transient, ctx):
+    """Enrichment ``run_one`` for ``gaia-lc`` (backfill outside the cron's 7-day window).
+
+    Same upload document as the cron, through the same ``add_transient`` code path in-process
+    as the service account (public Gaia points, as before).
+    """
+    from YSE_App import data_utils
+    from YSE_App.common.authz import bulk_ingest_denial
+    from YSE_App.services.enrichment import NO_MATCH, UPDATED, EnrichmentError, Outcome
+
+    if 'targets' not in ctx:
+        ctx['targets'] = get_gaia_list(None)
+    alt = AlternateTransientNames.objects.filter(transient=transient, name__startswith='Gaia').order_by('pk').first()
+    if alt is None:
+        return Outcome(NO_MATCH, 'no Gaia alert name')
+    PhotUploadAll = gaia_photometry(alt.name, ctx['targets'])
+    if PhotUploadAll is None:
+        return Outcome(NO_MATCH, 'no light curve for %s' % alt.name)
+    user = ctx['user']
+    denial = bulk_ingest_denial(user)
+    if denial:
+        raise EnrichmentError('%s: %s' % (user.username, denial))
+    response = data_utils.add_transient_payload(
+        {transient.name: {'name': transient.name, 'transientphotometry': PhotUploadAll}, 'noupdatestatus': True},
+        user)
+    if response.status_code >= 400:
+        from YSE_App.services.enrichment import ERROR
+        return Outcome(ERROR, error='upload of %s refused: HTTP %d' % (transient.name, response.status_code))
+    return Outcome(UPDATED, '%d Gaia points (%s)' % (_points(PhotUploadAll), alt.name))
+
+
 class GaiaLC(CronJobBase):
 
     RUN_AT_TIMES = ['00:00','08:00']
@@ -85,7 +176,8 @@ class GaiaLC(CronJobBase):
         parser = self.add_options(config=config)
         options,  args = parser.parse_known_args()
         self.options = options
-        
+        nsn = 0
+
         try:
             self.main()
         except Exception as e:
@@ -143,65 +235,48 @@ class GaiaLC(CronJobBase):
         return(parser)
         
     def main(self):
+        """Gaia light curves of transients discovered in the last 7 days (as before #439).
 
-        # initialize the dictionary
-        transientdict = {}
-        
-        # not sure how many this will be, but 90 days seems safe-ish
+        Uploads go to /add_transient in batches of 10, as before; each transient's outcome is
+        also recorded as a run of the ``gaia-lc`` enrichment service.
+        """
         transients = AlternateTransientNames.objects.\
                      filter(name__startswith='Gaia').\
                      filter(transient__disc_date__gt=datetime.datetime.now()-datetime.timedelta(days=7))
         targets = get_gaia_list(7)
 
-        for i,t in enumerate(transients):
+        batch, outcomes = {}, []
+        for t in transients:
             print("Adding Gaia data for %s"%t.transient.name)
-            tdict = {'name':t.transient.name}            
-            data = get_gaia_phot(t.name,targets)
-            if data is None: continue
-            data = data[t.name]
-            
-            PhotUploadAll = {"mjdmatchmin":0.01,
-                             "clobber":True}
-            photometrydict = {'instrument':'Gaia-Photometric',
-                              'obs_group':'GaiaAlerts',
-                              'photdata':{}}
-            
-            for i,d in enumerate(data):
-                if not isinstance(data[i],float):
-                    if data[i] == 'untrusted' or data[i].startswith('average') or \
-                       data[i] == 'nan': continue
-                if float(data[i]) != float(data[i]): continue
+            PhotUploadAll = gaia_photometry(t.name, targets)
+            if PhotUploadAll is None:
+                continue
+            batch[t.transient.name] = {'name':t.transient.name, 'transientphotometry':PhotUploadAll}
+            outcomes.append((t.transient, _points(PhotUploadAll)))
+            if len(batch) >= 10:
+                self._send_and_record(batch, outcomes)
+                batch, outcomes = {}, []
+        self._send_and_record(batch, outcomes)
 
-                flux = 10**(-0.4*(float(data[i])-27.5))
-                flux_err = 1.086*0.01*flux
-                phot_upload_dict = {'obs_date':data.index[i][0].replace(' ','T'),
-                                    'band':'G',
-                                    'groups':['Public'],
-                                    'mag':float(data[i]),
-                                    'mag_err':0.01,
-                                    'flux':flux,
-                                    'flux_err':flux_err,
-                                    'flux_zero_point':27.5,
-                                    'data_quality':0,
-                                    'discovery_point':0,
-                                    'forced':0,
-                                    'diffim':1}
-                photometrydict['photdata'][i] = phot_upload_dict
-                
-            PhotUploadAll['Gaia-Photometric'] = photometrydict
-            transientdict[t.transient.name] = tdict
-            transientdict[t.transient.name]['transientphotometry'] = PhotUploadAll
+    def _send_and_record(self, batch, outcomes):
+        if not batch:
+            return
+        ok = self.send_data(batch)
+        try:
+            from YSE_App.services import enrichment
+            service = enrichment.get('gaia-lc')
+            user = enrichment.service_user()
+            for transient, npoints in outcomes:
+                outcome = (enrichment.Outcome(enrichment.UPDATED, '%d Gaia points uploaded' % npoints)
+                           if ok else enrichment.Outcome(enrichment.ERROR, error='upload to /add_transient failed'))
+                enrichment.record(service, transient, outcome, user)
+        except Exception as e:  # recording is bookkeeping; never fail the upload cron for it
+            print('Gaia LC: could not record runs: %s' % e)
 
-            if not i % 10 and i != 0:
-                self.send_data(transientdict)
-                transientdict = {}
-        
-        self.send_data(transientdict)
-    
     def send_data(self,TransientUploadDict):
 
         TransientUploadDict['noupdatestatus'] = True
-        self.UploadTransients(TransientUploadDict)
+        return self.UploadTransients(TransientUploadDict)
 
     def UploadTransients(self,TransientUploadDict):
 
@@ -213,6 +288,8 @@ class GaiaLC(CronJobBase):
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
             except: print(r.text)
             print("Process done.")
+            return r.status_code < 400
 
         except Exception as e:
             print("Error: %s"%e)
+            return False
