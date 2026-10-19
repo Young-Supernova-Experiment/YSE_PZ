@@ -210,12 +210,14 @@ def candidate_hosts():
 
 def run_batch(hosts, ctx=None):
     """Enrichment ``run_batch`` for ``photoz-ml``: predict and store; one Outcome per returned host."""
-    from YSE_App.services.enrichment import NO_MATCH, UPDATED, Outcome
+    from YSE_App.models.change_log_models import ValueChange
+    from YSE_App.services import change_log
+    from YSE_App.services.enrichment import NO_MATCH, UNCHANGED, UPDATED, Outcome
 
     hosts = list(hosts)
     by_pk = {h.pk: h for h in hosts}
     results = predict_hosts(hosts)
-    outcomes, to_update = {}, []
+    outcomes, to_update, changes = {}, [], []
     for pk, value in results.items():
         host = by_pk.get(pk)
         if host is None:
@@ -223,12 +225,20 @@ def run_batch(hosts, ctx=None):
         if value is None:
             outcomes[pk] = Outcome(NO_MATCH, "rejected by the quality filter")
             continue
+        old = (host.photo_z_internal, host.photo_z_err_internal)
+        if old == tuple(value):
+            outcomes[pk] = Outcome(UNCHANGED, "photo_z_internal %.4f +- %.4f" % value)
+            continue
         host.photo_z_internal, host.photo_z_err_internal = value
         to_update.append(host)
+        changes.append((host, old[0]))
         outcomes[pk] = Outcome(UPDATED, "photo_z_internal %.4f +- %.4f" % value,
                                data={"photo_z_internal": value[0], "photo_z_err_internal": value[1]})
     if to_update:
         Host.objects.bulk_update(to_update, ['photo_z_internal', 'photo_z_err_internal'])
+    for host, old_z in changes:  # change log (#737)
+        change_log.record_change(host, 'photo_z_internal', old_z, host.photo_z_internal, service='photoz-ml',
+                                 source='YSE ML photo-z', category=ValueChange.CATEGORY_PHOTO_Z)
     return outcomes
 
 

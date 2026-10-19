@@ -9,7 +9,8 @@ replaces an override or a higher-ranked value, and it records its source (``NED`
 
 Each check is recorded as an ``ExternalServiceRun`` of the ``ned-redshift`` or ``desi-redshift`` service
 (created on first use), targeted at the host, so the sweep and the backfill resume. A
-check that changes nothing re-uses the host's previous no-change run.
+check that changes nothing re-uses the host's previous no-change run. A change is also
+recorded in the change log (``services.change_log``, #737), linked to its run.
 
 * :func:`update_host` -- one host (dry run by default).
 * :func:`sweep` -- the regular job (``redshifts.sweep``, queued by the
@@ -36,7 +37,7 @@ from django.utils import timezone
 from YSE_App.jobs import JobRetry, enqueue, job
 from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
 from YSE_App.models.host_models import Host
-from YSE_App.services import desi, ned
+from YSE_App.services import change_log, desi, ned
 from YSE_App.services import redshift_precedence as rp
 
 log = logging.getLogger(__name__)
@@ -194,7 +195,8 @@ def check_host(host: Host, slug: str, *, client, dry_run: bool = True, user=None
     if dry_run:
         decision = rp.decide(host, result.new, result.source)
     else:
-        decision = rp.apply_redshift(host, result.new, result.new_err, result.source, user=user)
+        decision = rp.apply_redshift(host, result.new, result.new_err, result.source, user=user,
+                                     service=SERVICE_SLUGS[slug])
     result.reason = decision.reason
     if decision.write:
         result.action = "updated"
@@ -219,9 +221,10 @@ def update_host(host: Host, *, services: Optional[Sequence[str]] = None, dry_run
     results = []
     for slug in services:
         started = timezone.now()
-        result = check_host(host, slug, client=clients[slug], dry_run=dry_run, user=user)
+        with change_log.collecting() as changes:
+            result = check_host(host, slug, client=clients[slug], dry_run=dry_run, user=user)
         if not dry_run:
-            _record(host, result, user, started=started)
+            change_log.attach_run(changes, _record(host, result, user, started=started))
         results.append(result)
     return results
 

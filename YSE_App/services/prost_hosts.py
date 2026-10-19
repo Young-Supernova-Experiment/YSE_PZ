@@ -11,6 +11,7 @@ import (#438) and the follow-up enrichment (#114) for objects without a host.
 ``data_utils.add_transient_host_util`` (the same Host rows, the same NED/DESI lookup queue),
 but the spectroscopic redshift is written afterwards with
 ``redshift_precedence.apply_redshift``, so it never replaces an override or a higher-ranked value.
+The link, its photo-z and its redshift are recorded in the change log (#737).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from django.conf import settings
 
 log = logging.getLogger(__name__)
 
+SERVICE_SLUG = "prost-host"  # the enrichment registry's ExternalService slug
 PROST_RUN_PREFIX = "prost-"
 PROST_STALE_SECONDS = 24 * 3600
 CATALOGS = ("glade", "decals", "panstarrs", "skymapper")
@@ -171,14 +173,27 @@ def match_transient(transient, *, dry_run: bool = False, user=None, associate_fn
     from YSE_App import data_utils
     from YSE_App.services.enrichment import service_user
 
+    from YSE_App.models.change_log_models import ValueChange
+    from YSE_App.models.host_models import Host
+    from YSE_App.services import change_log
+
     user = user or service_user()
     redshift = {k: doc.pop(k) for k in ("redshift", "redshift_err", "redshift_source") if k in doc}
+    before = Host.objects.filter(name=doc["name"]).values("photo_z_internal").first() or {}
     data_utils.add_transient_host_util(doc, transient, user)
     transient.refresh_from_db(fields=["host"])
     host = transient.host
+    if host is not None:  # change log (#737): the link, then any photo-z it brought
+        change_log.record_change(transient, "host", None, "%s (host %s)" % (host.name, host.pk), service=SERVICE_SLUG,
+                                 category=ValueChange.CATEGORY_HOST, source=rp.SOURCE_PROST)
+        if doc.get("photo_z_internal") is not None:
+            change_log.record_change(host, "photo_z_internal", before.get("photo_z_internal"),
+                                     host.photo_z_internal, service=SERVICE_SLUG,
+                                     category=ValueChange.CATEGORY_PHOTO_Z, source="Prost photo-z")
     if host is not None and redshift.get("redshift") is not None:
         decision = rp.apply_redshift(host, float(redshift["redshift"]),
-                                     _float_or_none(redshift.get("redshift_err")), rp.SOURCE_PROST, user=user)
+                                     _float_or_none(redshift.get("redshift_err")), rp.SOURCE_PROST, user=user,
+                                     service=SERVICE_SLUG)
         summary += "; z %s (%s)" % (redshift["redshift"], decision.reason)
     doc.update(redshift)
     doc["host_id"] = getattr(host, "pk", None)

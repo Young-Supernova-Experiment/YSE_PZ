@@ -129,17 +129,25 @@ def candidate_hosts():
 
 def run_batch(hosts, ctx=None):
     """Enrichment ``run_batch`` for ``sdss-photoz``: one Outcome per host that matched SDSS."""
-    from YSE_App.services.enrichment import UPDATED, Outcome
+    from YSE_App.models.change_log_models import ValueChange
+    from YSE_App.services import change_log
+    from YSE_App.services.enrichment import UNCHANGED, UPDATED, Outcome
 
     by_pk = {h.pk: h for h in hosts}
     outcomes = {}
     for pk, (z, z_err) in fetch_photoz(list(by_pk.values())).items():
         host = by_pk[pk]
+        old = (host.photo_z, host.photo_z_err, host.photo_z_source)
+        if old == (z, z_err, 'SDSS'):
+            outcomes[pk] = Outcome(UNCHANGED, "photo_z %.4f +- %.4f (SDSS)" % (z, z_err))
+            continue
         host.photo_z = z
         host.photo_z_err = z_err
         #T.host.photo_z_posterior = posterior[i] #Gautham suggested we add it to the host model
         host.photo_z_source = 'SDSS'
         host.save() #takes a long time and then my query needs to be reset which is also a long time
+        change_log.record_change(host, 'photo_z', old[0], z, service='sdss-photoz', source='SDSS',
+                                 old_source=old[2], category=ValueChange.CATEGORY_PHOTO_Z)  # #737
         outcomes[pk] = Outcome(UPDATED, "photo_z %.4f +- %.4f (SDSS)" % (z, z_err),
                                data={"photo_z": z, "photo_z_err": z_err, "photo_z_source": "SDSS"})
     return outcomes

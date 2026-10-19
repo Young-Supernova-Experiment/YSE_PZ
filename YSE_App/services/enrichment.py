@@ -19,6 +19,9 @@ row; ``attempts`` on a failed run is then the number of failures in a row. Servi
 already record their own runs (``tns``, ``ned-redshift``, ``desi-redshift``, ``ztf_forced``)
 set ``records_itself`` and the framework only reads their runs.
 
+A value a service changes is recorded by the service in the change log
+(``services.change_log``, #737); the framework links those entries to the object's run.
+
 :func:`select` combines the candidates with the run log: an object is *due* when it was
 never run, its last run failed longer than ``retry_hours`` ago (and fewer than
 ``max_attempts`` times in a row), or its last success is older than ``recheck_days``. That
@@ -47,6 +50,7 @@ from django.utils import timezone
 
 from YSE_App.jobs import JobRetry, enqueue, job
 from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
+from YSE_App.services import change_log
 
 log = logging.getLogger(__name__)
 
@@ -403,14 +407,18 @@ def run(service: EnrichmentService, objs: Iterable, *, dry_run: bool = True, use
     if service.run_batch is not None:
         started = timezone.now()
         try:
-            outcomes = service.run_batch(objs, ctx) or {}
+            with change_log.collecting() as changes:
+                outcomes = service.run_batch(objs, ctx) or {}
         except (RateLimited, EnrichmentError):
             raise
         except Exception as exc:  # noqa: BLE001 - one remote query for all: nothing per object to record
             log.exception("enrich %s: batch of %d failed", service.name, len(objs))
             raise EnrichmentError("%s batch failed: %s: %s" % (service.name, type(exc).__name__, exc)) from exc
         pairs = [(o, outcomes.get(o.pk)) for o in objs if outcomes.get(o.pk) is not None]
-        record_many(service, pairs, user, started=started)
+        runs = record_many(service, pairs, user, started=started)
+        key = "transient_id" if service.target == TARGET_TRANSIENT else "host_id"
+        for pk, run_row in runs.items():
+            change_log.attach_run([c for c in changes if getattr(c, key) == pk], run_row)
         for obj, outcome in pairs:
             summary.add(obj, outcome)
         return summary
@@ -421,16 +429,17 @@ def run(service: EnrichmentService, objs: Iterable, *, dry_run: bool = True, use
             break
         throttle.wait()
         started = timezone.now()
-        try:
-            outcome = service.run_one(obj, ctx)
-        except (RateLimited, EnrichmentError):
-            raise
-        except Exception as exc:  # noqa: BLE001 - one object's failure must not stop the pass
-            log.exception("enrich %s: %s failed", service.name, _label(obj))
-            outcome = Outcome(ERROR, error="%s: %s" % (type(exc).__name__, exc))
+        with change_log.collecting() as changes:
+            try:
+                outcome = service.run_one(obj, ctx)
+            except (RateLimited, EnrichmentError):
+                raise
+            except Exception as exc:  # noqa: BLE001 - one object's failure must not stop the pass
+                log.exception("enrich %s: %s failed", service.name, _label(obj))
+                outcome = Outcome(ERROR, error="%s: %s" % (type(exc).__name__, exc))
         if outcome is None:
             continue
-        record(service, obj, outcome, user, started=started)
+        change_log.attach_run(changes, record(service, obj, outcome, user, started=started))
         summary.add(obj, outcome)
     return summary
 

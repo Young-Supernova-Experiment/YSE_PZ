@@ -49,3 +49,7 @@ Everything that shows, sorts, filters or exports a transient's redshift uses tha
 - **DESI:** an ADQL cone (`q3c_radial_query`) on `DESI_TABLE` (`desi_dr1.zpix`), within `DESI_HOST_MATCH_ARCSEC` (1.5"). Quality cuts: `zwarn = 0`, `spectype = 'GALAXY'`, `zcat_primary`, and `deltachi2 >= DESI_MIN_DELTACHI2` (25). For a later release, change `DESI_TABLE` and `DESI_SOURCE_LABEL` together.
 - Only hosts are written. A transient's own redshift is never set from a nearby galaxy.
 - Each check is an `ExternalServiceRun` of `ned-redshift` or `desi-redshift`, targeted at the host. The hourly sweep (`redshifts.sweep`) and the backfill (`manage.py host_redshifts`) both resume from these runs.
+
+## Change log
+
+Every write that changes a redshift is one `ValueChange` row (#737): the field, the old and new value and source, the writer (`ned-redshift`, `desi-redshift`, `tns`, `prost-host`, `Hermes`, `api`, `manual`, ...), its `ExternalServiceRun` when it has one, the time, and the actor (empty for the system). `apply_redshift`, `set_override` and `clear_override` record it themselves; a write that changes nothing records nothing. The same log holds TNS classification changes, Prost host links and photo-z updates. It is shown in the History tab of the transient page and at `GET /api/transients/<id>/history/`. Entries about catalogue values are shown to everyone who sees the object listed; overrides and values from our own spectra only to those who may see the object's data.

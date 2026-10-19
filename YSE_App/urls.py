@@ -19,6 +19,7 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
+from YSE_App import change_log_views
 from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import signup_views
@@ -160,6 +161,9 @@ urlpatterns = [
             analysis_views.transient_salt_fit_fragment, name='transient_detail_salt_fit_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/ngsf_fragment/$',
             analysis_views.transient_ngsf_fragment, name='transient_detail_ngsf_fragment'),
+    # History tab (#737): the change log of one transient and its host; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/history_fragment/$',
+            change_log_views.transient_history_fragment, name='transient_detail_history_fragment'),
     # Annotations tab (#317, #318): fragment, summary JSON and actions for one transient; before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_fragment/$',
             annotation_views.transient_annotations_fragment, name='transient_detail_annotations_fragment'),
@@ -569,6 +573,8 @@ api_url_patterns = [
         api_views.TransientCommentListCreate.as_view(),
         name='api-transient-comments',
     ),
+    re_path(r'^api/transients/(?P<transient_id>[0-9]+)/history/$',
+            change_log_views.TransientHistoryAPIView.as_view(), name='api-transient-history'),
     re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
     # AstroScheduler night planner (#655, #656, #658); 404 unless ASTROSCHEDULER_ENABLED (#654)
     re_path(r'^api/observing_nights/$', api_views.PlannerNightsAPIView.as_view(), name='api-planner-nights'),

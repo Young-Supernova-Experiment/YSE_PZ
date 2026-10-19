@@ -22,6 +22,10 @@ class HostSerializer(serializers.HyperlinkedModelSerializer):
 		return Host.objects.create(**validated_data)
 
 	def update(self, instance, validated_data):
+		from YSE_App.serializers.transient_serializers import _request_user
+		from YSE_App.services import change_log
+
+		redshift_before = change_log.redshift_state(instance)
 		instance.host_morphology_id = validated_data.get('host_morphology', instance.host_morphology)
 		instance.host_sed_id = validated_data.get('host_sed', instance.host_sed)
 		instance.band_sextract_id = validated_data.get('band_sextract', instance.band_sextract)
@@ -47,6 +51,8 @@ class HostSerializer(serializers.HyperlinkedModelSerializer):
 		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by)
 		
 		instance.save()
+		# redshift or override edited by hand through the API: one change-log entry (#737)
+		change_log.record_redshift_edit(instance, redshift_before, actor=_request_user(self), service="api")
 
 		return instance
 
