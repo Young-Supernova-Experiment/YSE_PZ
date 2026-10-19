@@ -7,6 +7,8 @@ tns            trans.  ``tns_resync.resync_object`` (#438); records its own ``tn
 ned / desi     host    ``redshift_catalogs.update_host`` (#436, #437); own runs
 ztf-forced     trans.  ``ztf_forced.submit_forced_phot`` (#114); needs an explicit selection
 prost          trans.  ``prost_hosts.match_transient``: a host for transients without one
+desi-hostless  trans.  ``desi_hosts.match_transient``: a DESI host for transients without one (#738);
+                       needs an explicit selection
 photoz-ml      host    ``Photo_Z.run_batch``: internal ML photo-z (cron ``Photo_Z.YSE``)
 sdss-photoz    host    ``SDSS_Photo_Z.run_batch``: SDSS photo-z (cron ``SDSS_Photo_Z.YSE``)
 ps1-cutouts    trans.  ``PS1_cutouts.cutout_one`` (cron ``PS1_cutouts.YSE``)
@@ -139,6 +141,20 @@ def _prost_one(transient, ctx):
     return prost_hosts.match_transient(transient, user=ctx.get("user"))
 
 
+# --- DESI host match for host-less transients (#738) ---------------------------------------
+
+def _desi_hostless_context():
+    from YSE_App.services import desi
+
+    return {"desi_client": desi.default_client()}
+
+
+def _desi_hostless_one(transient, ctx):
+    from YSE_App.services import desi_hosts
+
+    return desi_hosts.match_transient(transient, user=ctx.get("user"), client=ctx.get("desi_client"))
+
+
 # --- the ported crons ------------------------------------------------------------------------
 
 def _photoz_ml_candidates(missing_only):
@@ -251,6 +267,13 @@ register(EnrichmentService(
     description="Prost host match for transients without a host (#439).",
     target=TARGET_TRANSIENT, candidates=_prost_candidates, run_one=_prost_one,
     recheck_days=30.0, retry_hours=24.0 * 7, max_attempts=3,
+))
+register(EnrichmentService(
+    name="desi-hostless", slug="desi-hostless", title="DESI host match (host-less transients)",
+    description="DESI galaxy as the host of a transient without one, by NED's 100 kpc rule (#738).",
+    target=TARGET_TRANSIENT, candidates=_prost_candidates, run_one=_desi_hostless_one,
+    make_context=_desi_hostless_context, recheck_days=90.0, retry_hours=24.0 * 7, max_attempts=3,
+    rate_limit_seconds=1.0, needs_selection=True,
 ))
 register(EnrichmentService(
     name="photoz-ml", slug="photoz-ml", title="Host ML photo-z (SDSS magnitudes)",
