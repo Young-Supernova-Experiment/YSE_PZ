@@ -419,7 +419,9 @@ def _new_spectra(jd: dict, transient: Optional[Transient], client, throttle: Thr
 def resolve_transient(transient_or_name: TransientOrName) -> (Optional[Transient], str):
     """``(transient or None, TNS name to query)`` for a Transient, a name or an alternate name."""
     if isinstance(transient_or_name, Transient):
-        transient = transient_or_name
+        # read the current row: differences are computed against the database, not a stale instance
+        transient = (Transient.objects.select_related("best_spec_class").filter(pk=transient_or_name.pk).first()
+                     or transient_or_name)
     else:
         name = str(transient_or_name or "").strip()
         transient = Transient.objects.filter(name=name).first()
