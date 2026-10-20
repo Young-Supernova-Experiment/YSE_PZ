@@ -350,6 +350,7 @@ urlpatterns = [
 
     # User agreement, researcher profile and "My students" (#627, #628, #630)
     re_path(r'^agreement/$', profile_views.agreement, name='agreement'),
+    re_path(r'^research-consent/$', profile_views.research_consent, name='research_consent'),
     re_path(r'^profile/$', profile_views.researcher_profile, name='researcher_profile'),
     re_path(r'^profile/edit/$', profile_views.researcher_profile_edit, name='researcher_profile_edit'),
     re_path(r'^profile/confirm/$', profile_views.researcher_profile_confirm, name='researcher_profile_confirm'),

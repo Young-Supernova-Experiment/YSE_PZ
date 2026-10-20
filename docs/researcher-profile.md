@@ -1,7 +1,8 @@
 # User agreement, researcher profile and onboarding gate
 
 Issues #627 (profile and encrypted fields), #628 (mentorship and affiliation history),
-#629 (SciX metrics), #630 (agreement and onboarding gate), #631 (develop-direct promotion rule).
+#629 (SciX metrics), #630 (agreement and onboarding gate), #631 (develop-direct promotion rule),
+#743 (User Agreement v2), #744 (voluntary research consent form).
 Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profile and onboarding gate".
 
 ## Pages
@@ -9,6 +10,7 @@ Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profi
 | URL | What |
 | --- | --- |
 | `/agreement/` | Current agreement, one checkbox, Accept. Acceptances store only user, version and time (no IP or user agent). |
+| `/research-consent/` | The voluntary research consent form: one checkbox, Consent or Decline; Withdraw once consented. Never a gate. |
 | `/profile/` | Your profile; required and encrypted fields marked; "My students" for scientific staff and faculty. |
 | `/profile/edit/` | The form. Required fields depend on career level (below). |
 | user menu > My profile | Link from every page. |
@@ -16,6 +18,10 @@ Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profi
 Staff add agreement versions in the admin (User agreements). Saving a version as current makes
 every other version not current and asks every user to accept it on their next page view.
 `{acknowledgements_url}` in a body becomes this stack's Acknowledgements link.
+
+Version 2 (`0038_user_agreement_v2`, #743) is v1 without item 5 ("Use of platform data for
+research", now the separate consent form below) and without "(such as gender)" in the Privacy
+item. v1 and its acceptances stay on record; everyone accepts v2 once through the gate.
 
 ## Requirements
 
@@ -46,6 +52,45 @@ every other version not current and asks every user to accept it on their next p
   decrypt_value(ciphertext, field_name, key)
   ```
 
+## Research consent (#744)
+
+Voluntary and separate from the agreement. Text: `0040_seed_research_consent` (version 1, from
+Ryan Foley, verbatim). Models `ResearchConsentForm` (versions; `effective_date` is the go-live
+date) and `ResearchConsentRecord` (one row per consent, decline or withdrawal, with time and form
+version; never deleted). A user's state is their latest record. Service:
+`YSE_App/services/research_consent.py`.
+
+* **Prompt:** shown once, right after the user accepts an agreement, if they have never answered.
+  Consent and Decline both continue to the page they were going to. The page is exempt from the
+  gate, and the gate never sends anyone to it. My profile shows the state and links to the form
+  (consent later, or withdraw).
+* **Demographic fields** (`DEMOGRAPHIC_FIELDS`: country, gender) are offered on `/profile/edit/`
+  only to consenting users. Declining or withdrawing deletes their stored ciphertexts. Users who
+  have not answered keep stored values (and may delete them) but are never used for research.
+  `manage.py purge_unconsented_demographics` (dry run by default; `--apply`, `--older-than-days N`)
+  deletes them after a grace period that Ryan chooses. PhD year is career information required of
+  postdocs and above, so it is not a demographic field and is not deleted.
+* **Admin:** read-only for superusers (Research consent forms, Research consent records); other
+  staff cannot see them. No demographic value is ever shown.
+
+## Research datasets (#744)
+
+Every research dataset is built with `YSE_App/services/research_dataset.py` (`ResearchCohort`,
+`ActivitySource`, `build_dataset`). Before #744 there was no dataset export code, only the
+encryption. The rules:
+
+* Activity **before go-live** (the first form's `effective_date`, 00:00 UTC) is exempt, because it
+  was public, as on an internet forum. It is included anonymized for everyone, including users who
+  declined or withdrew (Ryan, 2026-10-20).
+* Activity **from go-live on** is included only for consenting users, inside their consent periods
+  (consent to the next withdrawal; a user may consent again). A user whose latest decision is
+  `withdrawn` has none of their post-go-live activity included.
+* **Demographics** (the latest ciphertext per encrypted field) only for users whose latest decision
+  is `consented`. They are exported as ciphertext and decrypted offline by the custodian.
+* **Anonymized:** users appear only as an HMAC-SHA256 pseudonym with a fresh salt per export. Only
+  the fields a source names are copied, and identifying fields (user, username, email, names) are
+  refused.
+
 ## History and deletion
 
 Every change to any profile field writes a `ProfileFieldHistory` row (field, plain value or a
@@ -67,7 +112,7 @@ earlier plain values in the history; deleting an encrypted field deletes all its
 
 ## Privacy
 
-All these tables are excluded from SQL Explorer (`EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES` and
+All these tables (including the two research consent tables) are excluded from SQL Explorer (`EXPLORER_SCHEMA_EXCLUDE_TABLE_PREFIXES` and
 `EXPLORER_SQL_BLACKLIST` in `YSE_PZ/settings.py`), have no REST API, and are not registered with
 django-auditlog. The Explorer MySQL user's grants are the hard barrier (runbook step D).
 
@@ -84,7 +129,7 @@ add_transient_phot, add_transient_spec, add_gw_candidate, add_yse_survey_obs/fie
 add_survey_obs, upload_spectrum, the downloads, get_transient and the box searches, query_api,
 change_status_for_query); `/slack/events/`; the external-service callback; `.json` status
 endpoints; AJAX/fetch requests and non-GET methods; static and media files; login, logout,
-password reset and change; the agreement, profile and acknowledgements pages; `/admin/` for
+password reset and change; the agreement, research consent, profile and acknowledgements pages; `/admin/` for
 superusers (other staff are gated like everyone else). Anonymous requests are untouched.
 
 A session that passed is remembered (agreement version, key state, rules version), so normal page

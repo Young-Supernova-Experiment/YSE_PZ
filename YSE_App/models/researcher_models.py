@@ -318,3 +318,71 @@ class AgreementAcceptance(models.Model):
 
     def __str__(self):
         return "Acceptance #%s" % self.pk
+
+
+# ---------------------------------------------------------------------------
+# Voluntary research consent (#744). Separate from the User Agreement and never a gate.
+# Like the tables above: no REST serializer, excluded from SQL Explorer, admin read-only.
+
+# Encrypted profile fields that are demographic: offered only to users who consent to the
+# study, and deleted when a user declines or withdraws. (PhD year is career information that
+# the profile requires of postdocs and above, so it is not in this list.)
+DEMOGRAPHIC_FIELDS = ("country", "gender")
+
+
+class ResearchConsentForm(models.Model):
+    """A version of the research consent form. ``effective_date`` is the form's go-live date.
+
+    Activity before the go-live date of the first form is exempt (it was visible to other
+    users, as on a public forum) and may be used anonymized; activity from that date on is
+    used only for users who consented, inside their consent periods.
+    """
+
+    version = models.CharField(max_length=32, unique=True)
+    title = models.CharField(max_length=200)
+    body = models.TextField(help_text="HTML shown on /research-consent/.")
+    effective_date = models.DateField(default=timezone.now, help_text="Go-live date of this form.")
+    is_current = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-effective_date", "-id")
+        verbose_name = "research consent form"
+
+    def __str__(self):
+        return "%s (%s)%s" % (self.title, self.version, " [current]" if self.is_current else "")
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if self.is_current:
+                type(self).objects.filter(is_current=True).exclude(pk=self.pk).update(is_current=False)
+
+
+class ResearchConsentRecord(models.Model):
+    """One consent decision, kept forever: the user's state is their latest record.
+
+    No IP address or user agent is stored.
+    """
+
+    CONSENTED = "consented"
+    DECLINED = "declined"
+    WITHDRAWN = "withdrawn"
+    DECISION_CHOICES = (
+        (CONSENTED, "Consented"),
+        (DECLINED, "Declined"),
+        (WITHDRAWN, "Withdrawn"),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="research_consent_records")
+    form = models.ForeignKey(ResearchConsentForm, on_delete=models.PROTECT, related_name="records")
+    decision = models.CharField(max_length=16, choices=DECISION_CHOICES)
+    decided_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("-decided_at", "-id")
+        indexes = [models.Index(fields=["user", "decided_at"], name="yse_rconsent_user_time")]
+        verbose_name = "research consent record"
+
+    def __str__(self):
+        return "Research consent record #%s" % self.pk

@@ -30,6 +30,8 @@ from YSE_App.models import (
 from YSE_App.models.researcher_models import (
     AffiliationHistory,
     AgreementAcceptance,
+    ResearchConsentForm,
+    ResearchConsentRecord,
     UserAgreement,
 )
 from YSE_App.models import Instrument, Observatory, Telescope
@@ -118,6 +120,9 @@ class EncryptionTests(TestCase):
 
     def test_profile_form_encrypts_validated_values(self):
         kp = test_keypair()
+        # Demographic fields are offered only to users who consented to the study (#744).
+        from YSE_App.services import research_consent
+        research_consent.record_decision(self.user, research_consent.CONSENTED)
         with with_key():
             resp = self.client.post(reverse("researcher_profile_edit"), dict(
                 BASE_POST, career_level="postdoc", orcid=VALID_ORCIDS[1], phd_year="2015",
@@ -509,7 +514,7 @@ class ProfileFormWidgetTests(TestCase):
 
 class ExplorerAndApiExclusionTests(TestCase):
     MODELS = (ResearcherProfile, EncryptedProfileValue, ProfileFieldHistory, Mentorship, AffiliationHistory,
-              ResearcherMetrics, UserAgreement, AgreementAcceptance)
+              ResearcherMetrics, UserAgreement, AgreementAcceptance, ResearchConsentForm, ResearchConsentRecord)
 
     def tables(self):
         names = [m._meta.db_table for m in self.MODELS]

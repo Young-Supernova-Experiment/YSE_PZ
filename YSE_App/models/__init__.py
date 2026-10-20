@@ -40,7 +40,7 @@ from YSE_App.models.analysis_models import AnalysisResultFile, AnalysisService
 from YSE_App.models.summary_models import TransientSummaryEmbedding, TransientSummaryHistory, TransientSummaryPreference
 from YSE_App.models.researcher_models import (
     AffiliationHistory, AgreementAcceptance, EncryptedProfileValue, Mentorship, ProfileFieldHistory,
-    ResearcherMetrics, ResearcherProfile, UserAgreement,
+    ResearchConsentForm, ResearchConsentRecord, ResearcherMetrics, ResearcherProfile, UserAgreement,
 )
 from YSE_App.models.group_models import (GroupInvitation, GroupInvitationUse, GroupMembershipRequest, GroupProfile,
                                          UserPreference)

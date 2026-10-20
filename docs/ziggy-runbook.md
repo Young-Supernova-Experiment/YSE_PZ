@@ -696,6 +696,38 @@ Expected: the same first line, then `written: N datasets`. **Check:** running th
 
 Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
+<a id="research-consent"></a>
+### User Agreement v2 and the voluntary research consent form (develop-direct PR; #743, #744) nothing required now; one purge later, only when Ryan says
+
+Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Three migrations run automatically on deploy and are safe on the shared `YSE_test` database:
+
+* `0038_user_agreement_v2`: adds User Agreement version 2 and makes it current (v1 and its acceptances stay). Idempotent.
+* `0039_research_consent`: two new tables, `YSE_App_researchconsentform` and `YSE_App_researchconsentrecord`. No change to existing tables.
+* `0040_seed_research_consent`: loads the consent form text as version 1. Its go-live date is the day this migration first runs. Idempotent.
+
+Experimental has its own `0038`-`0050` under other names; the develop -> experimental backport adds a merge migration. No new dependency.
+
+**Effect on deploy:** every signed-in browser user is asked to accept agreement v2 on their next page view (the existing gate). Right after accepting, they see the research consent form once, with Consent and Decline. Both choices continue, and the form never blocks the site. It is always available from My profile. Country and gender are offered only to users who consent. Declining or withdrawing deletes those stored values. Superusers see read-only consent records in the admin (no values). Both new tables are hidden from SQL Explorer. If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_researchconsentform` and `YSE_App_researchconsentrecord`.
+
+**Check (optional):**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from YSE_App.models import UserAgreement as A, ResearchConsentForm as F; print(list(A.objects.filter(is_current=True).values_list('version', flat=True)), list(F.objects.values_list('version', 'effective_date', 'is_current')))"
+```
+
+Expected: `['2'] [('1', datetime.date(<deploy day>), True)]`.
+
+**Later, ONLY when Ryan says the grace period is over: purge demographics of users who never answered.** Until then those users keep their stored values, but they are never used for research. First a dry run, which prints counts only and deletes nothing:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics
+# then, if Ryan confirms:
+cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --apply
+# optional: --older-than-days N  only values stored more than N days ago
+```
+
+Production: the migrations run with the others after the `develop -> master` merge. The purge also needs Ryan's go-ahead there.
+
 <a id="data-sharers"></a>
 ### Who may share private data: PIs and their deputies (develop-direct PR; #447) nothing required, but check PI links first
 
@@ -1690,6 +1722,7 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
+* 2026-10-20 v36, nothing required (the purge runs later, only when Ryan says). User Agreement v2 ([#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743)) and the voluntary research consent form ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)): migrations 0038-0040 (agreement v2, two new tables, form v1); everyone accepts v2 once; `purge_unconsented_demographics` (dry run by default) after the grace period ([section "User Agreement v2 and the voluntary research consent form"](#research-consent)).
 * 2026-10-15 v35, nothing required. Data-access requests with no PI notify superusers only, and `YSE_App_datasharingdelegate` is hidden from SQL Explorer; add it to table-level Explorer grant exclusions if you use them ([#650](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/650)).
 * 2026-10-13 v34, nothing required (link PI accounts first so PIs, not only staff, can decide). Only PIs and their deputies share private data ([#447](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/447)): migration 0037 (one new table, one nullable column); allocation-PI fallback; logged staff override; `/data_sharing_deputies/`; TNS references; PI tables visible in Explorer again ([section "Who may share private data"](#data-sharers)).
 * 2026-10-13 v33, nothing required (signup off by default). Self-service signup and team membership requests ([#448](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/448)): migration 0036 (one new table); turn on with `SELF_SIGNUP_ENABLED: True` when ready; optional `purge_group_membership_requests`. Public always offered in pickers ([#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)); PI contact fields staff-only in the API and PI table hidden from Explorer ([#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)) ([section "Self-service signup"](#self-signup)).

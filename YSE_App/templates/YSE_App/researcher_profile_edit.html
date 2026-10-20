@@ -61,11 +61,15 @@
 						{% endif %}
 						{% for item in encrypted_rows %}
 						<div class="mb-2">
+							{% if item.name in demographic_fields and not research_consented %}
+							<div class="yse-demographic-locked"><strong>{{ item.label }}</strong> <span class="small text-muted">Offered only if you <a href="{% url 'research_consent' %}?next={% url 'researcher_profile_edit' %}">consent to the research study</a>.</span></div>
+							{% else %}
 							{% if item.name == 'country' %}{% include 'YSE_App/partials/profile_field.html' with field=form.country locked=1 %}{% endif %}
 							{% if item.name == 'phd_year' %}{% include 'YSE_App/partials/profile_field.html' with field=form.phd_year locked=1 req='for postdocs and above' %}{% endif %}
 							{% if item.name == 'gender' %}
 								{% include 'YSE_App/partials/profile_field.html' with field=form.gender locked=1 %}
 								{% include 'YSE_App/partials/profile_field.html' with field=form.gender_self locked=1 wrapper_class='yse-gender-self' note=' ' %}
+							{% endif %}
 							{% endif %}
 							<div class="small text-muted">{% if item.row %}Stored: {{ item.row.display }}.{% elif key_available %}Nothing stored.{% endif %}
 							{% if item.row and key_available %}

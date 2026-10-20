@@ -9,6 +9,7 @@ from django.utils import timezone
 from YSE_App.models import Instrument
 from YSE_App.models.researcher_models import (
     CAREER_OTHER,
+    DEMOGRAPHIC_FIELDS,
     POSTDOC_AND_ABOVE,
     STUDENT_LEVELS,
     Mentorship,
@@ -55,6 +56,22 @@ class AgreementForm(forms.Form):
     next = forms.CharField(required=False, widget=forms.HiddenInput)
 
 
+class ResearchConsentChoiceForm(forms.Form):
+    """Consent, decline or withdraw (#744). Consenting needs the box ticked."""
+
+    ACTIONS = ("consent", "decline", "withdraw")
+
+    consent = forms.BooleanField(required=False, label="I consent to participate in this study")
+    action = forms.ChoiceField(choices=[(a, a) for a in ACTIONS])
+    next = forms.CharField(required=False, widget=forms.HiddenInput)
+
+    def clean(self):
+        data = super().clean()
+        if data.get("action") == "consent" and not data.get("consent"):
+            self.add_error("consent", "Tick the box to consent, or choose Decline.")
+        return data
+
+
 class ResearcherProfileForm(forms.ModelForm):
     """Plain fields are model fields; the encrypted ones are validated here, then encrypted by the view."""
 
@@ -84,10 +101,13 @@ class ResearcherProfileForm(forms.ModelForm):
             "observing_experience": forms.CheckboxSelectMultiple(attrs={"class": "yse-obs-experience"}),
         }
 
-    def __init__(self, *args, user=None, key_available=False, encrypted_status=None, advisor=None, **kwargs):
+    def __init__(self, *args, user=None, key_available=False, encrypted_status=None, advisor=None,
+                 research_consented=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.user = user
         self.key_available = key_available
+        # Demographic fields are offered only to users who consented to the research study (#744).
+        self.research_consented = research_consented
         self.encrypted_status = encrypted_status or {}
         self.current_advisor = advisor
         # Check boxes grouped by telescope (#638). Assigning grouped choices keeps the queryset
@@ -109,6 +129,9 @@ class ResearcherProfileForm(forms.ModelForm):
         if not key_available:
             for name in ("country", "phd_year", "gender", "gender_self",
                          "clear_country", "clear_phd_year", "clear_gender"):
+                self.fields[name].disabled = True
+        if not research_consented:
+            for name in ("country", "gender", "gender_self"):
                 self.fields[name].disabled = True
         if advisor is not None and not self.is_bound:
             self.initial.setdefault("advisor_name", advisor.mentor_label)
@@ -162,7 +185,7 @@ class ResearcherProfileForm(forms.ModelForm):
                 stored = "phd_year" in self.encrypted_status and not data.get("clear_phd_year")
                 if data.get("phd_year") is None and not stored and "phd_year" not in self.errors:
                     self.add_error("phd_year", "The PhD year is required for postdocs and above.")
-        if self.key_available and data.get("gender") == "self_describe" and not data.get("gender_self"):
+        if self.key_available and self.research_consented and data.get("gender") == "self_describe" and not data.get("gender_self"):
             self.add_error("gender_self", "Describe your gender, or choose another option.")
         advisor_user = active_user_or_none(data.get("advisor_user_id"))
         if advisor_user is not None and self.user is not None and advisor_user.pk == self.user.pk:
@@ -192,6 +215,10 @@ class ResearcherProfileForm(forms.ModelForm):
         gender = data.get("gender")
         if gender and "gender" not in to_clear:
             to_set["gender"] = ("self_describe:%s" % data["gender_self"]) if gender == "self_describe" else gender
+        if not self.research_consented:
+            # Without research consent a user may delete stored demographic values, never add them.
+            for name in DEMOGRAPHIC_FIELDS:
+                to_set.pop(name, None)
         return to_set, to_clear
 
 
