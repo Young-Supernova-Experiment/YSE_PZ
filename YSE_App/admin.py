@@ -831,7 +831,7 @@ class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
 # Encrypted values are write-only: the admin shows only "(encrypted, set on <date>)".
 from YSE_App.models.researcher_models import (  # noqa: E402
 	AffiliationHistory, AgreementAcceptance, EncryptedProfileValue, Mentorship, ProfileFieldHistory,
-	ResearcherMetrics, ResearcherProfile, UserAgreement,
+	ResearchConsentForm, ResearchConsentRecord, ResearcherMetrics, ResearcherProfile, UserAgreement,
 )
 from YSE_App.services import researcher_profile as _rp  # noqa: E402
 
@@ -958,6 +958,42 @@ class AgreementAcceptanceAdmin(_ReadOnlyAdmin):
 	list_display = ("user", "agreement", "accepted_at")
 	list_filter = ("agreement",)
 	search_fields = ("user__username",)
+
+
+class _SuperuserReadOnlyAdmin(_ReadOnlyAdmin):
+	"""Research consent (#744): superusers may look, nobody may add, change or delete here.
+
+	Consent records hold no demographic values; those stay encrypted and are never shown.
+	"""
+
+	def has_view_permission(self, request, obj=None):
+		return bool(request.user.is_active and request.user.is_superuser)
+
+	def has_module_permission(self, request):
+		return self.has_view_permission(request)
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(ResearchConsentForm)
+class ResearchConsentFormAdmin(_SuperuserReadOnlyAdmin):
+	list_display = ("version", "title", "effective_date", "is_current", "record_count")
+	fields = ("version", "title", "effective_date", "is_current", "body", "created_at")
+	readonly_fields = fields
+
+	def record_count(self, obj):
+		return obj.records.count()
+	record_count.short_description = "records"
+
+
+@admin.register(ResearchConsentRecord)
+class ResearchConsentRecordAdmin(_SuperuserReadOnlyAdmin):
+	list_display = ("user", "decision", "form", "decided_at")
+	list_filter = ("decision", "form")
+	search_fields = ("user__username",)
+	fields = ("user", "decision", "form", "decided_at")
+	readonly_fields = fields
 
 
 # ---------------------------------------------------------------------------

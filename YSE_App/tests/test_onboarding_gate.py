@@ -7,14 +7,14 @@ All users here are synthetic. The suite's runner turns the gate off globally
 from __future__ import annotations
 
 import base64
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 from django.contrib.auth.models import User
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import resolve, reverse
 
 from YSE_App import onboarding
-from YSE_App.models import AgreementAcceptance, Mentorship, ResearcherProfile, UserAgreement
+from YSE_App.models import AgreementAcceptance, Mentorship, ResearchConsentRecord, ResearcherProfile, UserAgreement
 from YSE_App.onboarding import OnboardingGateMiddleware
 from YSE_App.services import research_crypto
 
@@ -67,10 +67,12 @@ class GateFlowTests(TestCase):
         onboarding.invalidate_current_agreement()
 
     def test_seeded_agreement_is_current(self):
+        # v2 (#743) replaced v1, which stays on record but is no longer current.
         current = UserAgreement.objects.get(is_current=True)
-        self.assertEqual(current.version, "1")
-        self.assertIn("Only anonymized data will be used.", current.body)
+        self.assertEqual(current.version, "2")
+        self.assertNotIn("Use of platform data for research", current.body)
         self.assertIn("{acknowledgements_url}", current.body)
+        self.assertFalse(UserAgreement.objects.get(version="1").is_current)
 
     def test_new_user_goes_agreement_then_profile_then_through(self):
         resp = self.client.get(self.page)
@@ -90,8 +92,12 @@ class GateFlowTests(TestCase):
         self.assertFalse(AgreementAcceptance.objects.filter(user=self.user).exists())
 
         resp = self.client.post(reverse("agreement"), {"agree": "on", "next": self.page})
-        self.assertRedirects(resp, self.page, fetch_redirect_response=False)
+        # The voluntary research consent form comes next, once (#744); declining continues.
+        self.assertRedirects(resp, "%s?%s" % (reverse("research_consent"), urlencode({"next": self.page})),
+                             fetch_redirect_response=False)
         self.assertTrue(AgreementAcceptance.objects.filter(user=self.user).exists())
+        resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
+        self.assertRedirects(resp, self.page, fetch_redirect_response=False)
 
         resp = self.client.get(self.page)
         self.assertEqual(resp.status_code, 302)
@@ -109,7 +115,7 @@ class GateFlowTests(TestCase):
     def test_new_agreement_version_reprompts(self):
         onboard(self.user)
         self.assertEqual(self.client.get(self.page).status_code, 200)
-        UserAgreement.objects.create(version="2", title="v2", body="<p>New terms.</p>", is_current=True)
+        UserAgreement.objects.create(version="3", title="v3", body="<p>New terms.</p>", is_current=True)
         self.assertEqual(UserAgreement.objects.filter(is_current=True).count(), 1)
         resp = self.client.get(self.page)
         self.assertEqual(resp.status_code, 302)
@@ -130,6 +136,9 @@ class GateFlowTests(TestCase):
     def test_next_must_be_same_site(self):
         resp = self.client.post(reverse("agreement"), {"agree": "on", "next": "https://elsewhere.example/x"})
         self.assertEqual(resp.status_code, 302)
+        self.assertEqual(parse_qs(urlsplit(resp["Location"]).query)["next"], [reverse("dashboard")])
+        resp = self.client.post(reverse("research_consent"), {"action": "decline",
+                                                              "next": "https://elsewhere.example/x"})
         self.assertEqual(resp["Location"], reverse("dashboard"))
 
     def test_rollback_flag_disables_the_gate(self):
@@ -366,7 +375,12 @@ class GateUnderUrlPrefixTests(TestCase):
 
                 resp = self.browse("post", self.prefixed("agreement"), {"agree": "on", "next": url})
                 self.assertEqual(resp.status_code, 302)
-                self.assertEqual(resp["Location"], url)
+                if ResearchConsentRecord.objects.filter(user=self.user).exists():
+                    self.assertEqual(resp["Location"], url)  # the consent form is offered only once
+                else:
+                    self.assertRedirectsToStep(resp, "research_consent", url)
+                    resp = self.browse("post", self.prefixed("research_consent"), {"action": "decline", "next": url})
+                    self.assertEqual(resp["Location"], url)
 
                 profile_url = self.assertRedirectsToStep(self.browse("get", url), "researcher_profile_edit", url)
                 page = self.browse("get", profile_url)

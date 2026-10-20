@@ -471,6 +471,9 @@ class InviteGateFlowTests(GroupTestBase):
         self.assertFalse(self.newcomer.groups.filter(pk=self.team.pk).exists())
 
         resp = self.client.post(reverse("agreement"), {"agree": "on", "next": reverse("group_invite_accept")})
+        self.assertTrue(resp["Location"].startswith(reverse("research_consent")))  # offered once (#744)
+        resp = self.client.post(reverse("research_consent"), {"action": "decline",
+                                                              "next": reverse("group_invite_accept")})
         self.assertRedirects(resp, reverse("group_invite_accept"), fetch_redirect_response=False)
         resp = self.client.get(reverse("group_invite_accept"))
         self.assertTrue(resp["Location"].startswith(reverse("researcher_profile_edit")))

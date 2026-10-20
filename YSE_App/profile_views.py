@@ -19,8 +19,11 @@ from django.views.decorators.http import require_GET, require_POST
 
 from YSE_App import onboarding
 from YSE_App.models import AgreementAcceptance, Mentorship, ResearcherMetrics, ResearcherProfile, UserAgreement
-from YSE_App.models.researcher_models import ENCRYPTED_FIELDS, STUDENT_LEVELS
-from YSE_App.profile_forms import AgreementForm, ResearcherProfileForm, StudentForm, StudentUpdateForm
+from YSE_App.models.researcher_models import DEMOGRAPHIC_FIELDS, ENCRYPTED_FIELDS, STUDENT_LEVELS
+from YSE_App.profile_forms import (
+    AgreementForm, ResearchConsentChoiceForm, ResearcherProfileForm, StudentForm, StudentUpdateForm,
+)
+from YSE_App.services import research_consent as rc
 from YSE_App.services import research_crypto
 from YSE_App.services import researcher_profile as rp
 
@@ -49,7 +52,12 @@ def agreement(request):
             AgreementAcceptance.objects.get_or_create(user=request.user, agreement=current)
             onboarding.clear_session_flag(request)
             messages.success(request, "Thank you: you accepted the YSE-PZ User Agreement (%s)." % current.version)
-            return redirect(onboarding.safe_next(request, next_url))
+            destination = onboarding.safe_next(request, next_url)
+            if rc.needs_prompt(request.user):
+                # The voluntary research consent form, offered once (#744). Not a gate:
+                # consenting and declining both continue to ``destination``.
+                return redirect("%s?%s" % (reverse("research_consent"), urlencode({"next": destination})))
+            return redirect(destination)
     elif request.method in ("GET", "HEAD"):
         if accepted is not None and next_url:
             # Already accepted (a second tab, the Back button, a restored session):
@@ -72,6 +80,55 @@ def _encrypted_rows(user, key_available):
     status = rp.encrypted_status(user)
     labels = {"country": "Country", "phd_year": "PhD year", "gender": "Gender"}
     return [{"name": name, "label": labels[name], "row": status.get(name)} for name in ENCRYPTED_FIELDS], status
+
+
+@login_required
+def research_consent(request):
+    """The voluntary research consent form (#744): consent, decline, or later withdraw.
+
+    Never a gate: both choices continue to ``next`` (default: the profile page).
+    """
+    user = request.user
+    form_row = rc.current_form()
+    next_url = request.POST.get("next") or request.GET.get("next") or ""
+    continue_url = onboarding.safe_next(request, next_url, fallback=reverse("researcher_profile"))
+    state = rc.status(user)
+    if request.method == "POST":
+        if form_row is None:
+            return redirect(continue_url)
+        form = ResearchConsentChoiceForm(request.POST)
+        if form.is_valid():
+            action = form.cleaned_data["action"]
+            decision = {"consent": rc.CONSENTED, "decline": rc.DECLINED, "withdraw": rc.WITHDRAWN}[action]
+            try:
+                _record, deleted = rc.record_decision(user, decision, form=form_row)
+            except rc.ConsentError:
+                messages.info(request, "Nothing changed: that choice does not apply to your current status.")
+                return redirect(continue_url)
+            if decision == rc.CONSENTED:
+                messages.success(request, "Thank you for taking part. You can add the optional demographic "
+                                          "information on your profile.")
+            elif decision == rc.DECLINED:
+                messages.success(request, "You declined to take part in the study. You can change this on your "
+                                          "profile at any time.")
+            else:
+                messages.success(request, "You withdrew from the study. Your activity since the form went "
+                                          "live will not be used in any research dataset.")
+            if deleted:
+                messages.info(request, "Your stored demographic information was deleted.")
+            return redirect(continue_url)
+    elif request.method in ("GET", "HEAD"):
+        form = ResearchConsentChoiceForm(initial={"next": next_url})
+    else:
+        return HttpResponseBadRequest("GET or POST")
+    return render(request, "YSE_App/research_consent.html", {
+        "consent_form": form_row,
+        "form": form,
+        "state": state,
+        "latest": rc.latest_record(user),
+        "next_url": next_url,
+        "continue_url": continue_url,
+    })
 
 
 @login_required
@@ -100,6 +157,10 @@ def researcher_profile(request):
         "metrics": ResearcherMetrics.objects.filter(user=user).order_by("-fetched_at").first(),
         "confirm_due": confirm_due,
         "observing": list(profile.observing_experience.select_related("telescope")) if profile else [],
+        "research_form": rc.current_form(),
+        "research_state": rc.status(user),
+        "research_latest": rc.latest_record(user),
+        "demographic_fields": DEMOGRAPHIC_FIELDS,
     })
 
 
@@ -111,8 +172,9 @@ def researcher_profile_edit(request):
     encrypted_rows, status = _encrypted_rows(user, key_available)
     advisor = rp.current_advisor(user)
     next_url = request.POST.get("next") or request.GET.get("next") or ""
+    research_consented = rc.has_consented(user)
     form_kwargs = dict(user=user, key_available=key_available, encrypted_status=status, advisor=advisor,
-                       instance=profile)
+                       research_consented=research_consented, instance=profile)
     if request.method == "POST":
         # Snapshot first: ModelForm validation writes the new values onto ``profile``.
         before = rp.snapshot(profile) if profile.pk else {name: "" for name in rp.PLAIN_FIELDS}
@@ -140,6 +202,8 @@ def researcher_profile_edit(request):
         "is_new": not profile.pk,
         "next_url": next_url,
         "student_levels": sorted(STUDENT_LEVELS),
+        "research_consented": research_consented,
+        "demographic_fields": DEMOGRAPHIC_FIELDS,
     })
 
 
@@ -278,7 +342,7 @@ def researcher_student_update(request, mentorship_id):
 
 
 # The onboarding pages must never be gated themselves.
-for _view in ("agreement", "researcher_profile", "researcher_profile_edit", "researcher_profile_confirm",
+for _view in ("agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_profile_confirm",
               "researcher_advisor_suggest", "researcher_student_add", "researcher_student_update"):
     globals()[_view].onboarding_exempt = True
 del _view

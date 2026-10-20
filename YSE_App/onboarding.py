@@ -16,7 +16,8 @@ It never touches requests that crons, scripts, brokers and integrations make:
   add_yse_survey_*, the downloads, query_api, ...) and the views decorated with
   ``onboarding_exempt`` below;
 * the URL names in ``EXEMPT_URL_NAMES`` (Slack events, login/logout, signup and
-  its email confirmation link, password reset and change, the agreement, profile and acknowledgements pages);
+  its email confirmation link, password reset and change, the agreement, research consent, profile and
+  acknowledgements pages);
 * static and media files, ``.json`` endpoints (status and health polling),
   AJAX/fetch requests and non-GET methods;
 * ``/admin/`` for superusers (other staff go through the gate).
@@ -55,7 +56,7 @@ EXEMPT_URL_NAMES = frozenset({
     # self-service signup and its emailed confirmation link (#448)
     "signup", "signup_verify_email",
     # the onboarding pages themselves and the acknowledgements page they link to
-    "agreement", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
+    "agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
     "researcher_student_add", "researcher_student_update", "researcher_profile_confirm",
     "acknowledgements",
     # integrations and machine endpoints
