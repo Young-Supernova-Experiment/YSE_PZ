@@ -139,7 +139,7 @@ class GateFlowTests(TestCase):
         self.assertEqual(parse_qs(urlsplit(resp["Location"]).query)["next"], [reverse("dashboard")])
         resp = self.client.post(reverse("research_consent"), {"action": "decline",
                                                               "next": "https://elsewhere.example/x"})
-        self.assertEqual(resp["Location"], reverse("dashboard"))
+        self.assertEqual(resp["Location"], reverse("researcher_profile"))  # the consent page's fallback
 
     def test_rollback_flag_disables_the_gate(self):
         with override_settings(ONBOARDING_GATE_ENABLED=False):
