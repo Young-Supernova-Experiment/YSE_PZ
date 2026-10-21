@@ -97,7 +97,9 @@ class GateFlowTests(TestCase):
                              fetch_redirect_response=False)
         self.assertTrue(AgreementAcceptance.objects.filter(user=self.user).exists())
         resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
-        self.assertRedirects(resp, self.page, fetch_redirect_response=False)
+        # Declining still goes through the incomplete profile (#766), then on to the page.
+        self.assertRedirects(resp, "%s?%s" % (reverse("researcher_profile_edit"), urlencode({"next": self.page})),
+                             fetch_redirect_response=False)
 
         resp = self.client.get(self.page)
         self.assertEqual(resp.status_code, 302)
@@ -142,7 +144,9 @@ class GateFlowTests(TestCase):
         self.assertEqual(parse_qs(urlsplit(resp["Location"]).query)["next"], [reverse("dashboard")])
         resp = self.client.post(reverse("research_consent"), {"action": "decline",
                                                               "next": "https://elsewhere.example/x"})
-        self.assertEqual(resp["Location"], reverse("researcher_profile"))  # the consent page's fallback
+        # the consent page's fallback, reached through the incomplete profile (#766)
+        self.assertEqual(resp["Location"], "%s?%s" % (reverse("researcher_profile_edit"),
+                                                      urlencode({"next": reverse("researcher_profile")})))
 
     def test_rollback_flag_disables_the_gate(self):
         with override_settings(ONBOARDING_GATE_ENABLED=False):
@@ -383,7 +387,7 @@ class GateUnderUrlPrefixTests(TestCase):
                 else:
                     self.assertRedirectsToStep(resp, "research_consent", url)
                     resp = self.browse("post", self.prefixed("research_consent"), {"action": "decline", "next": url})
-                    self.assertEqual(resp["Location"], url)
+                    self.assertRedirectsToStep(resp, "researcher_profile_edit", url)  # incomplete profile (#766)
 
                 profile_url = self.assertRedirectsToStep(self.browse("get", url), "researcher_profile_edit", url)
                 page = self.browse("get", profile_url)
