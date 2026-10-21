@@ -30,6 +30,9 @@ from YSE_App.models import (
 from YSE_App.models.researcher_models import (
     AffiliationHistory,
     AgreementAcceptance,
+    ResearchConsentForm,
+    ResearchConsentPrompt,
+    ResearchConsentRecord,
     UserAgreement,
 )
 from YSE_App.models import Instrument, Observatory, Telescope
@@ -54,6 +57,13 @@ def test_keypair():
 
 def with_key():
     return override_settings(RESEARCH_PUBLIC_KEY=test_keypair()["public_pem"], RESEARCH_PUBLIC_KEY_PATH="")
+
+
+def consent(*users):
+    """Research fields are offered and required only with research consent (#744)."""
+    from YSE_App.services import research_consent
+    for user in users:
+        research_consent.record_decision(user, research_consent.CONSENTED)
 
 
 BASE_POST = {"full_name": "Test Person", "institution": "Example University", "department": "Physics"}
@@ -83,6 +93,10 @@ class OrcidAndRuleTests(TestCase):
         user = User.objects.create_user("rule_user")
         self.assertEqual(rp.missing_fields(user, key_available=False), ["profile"])
         profile = ResearcherProfile.objects.create(user=user, career_level="grad", **BASE_POST)
+        # Without research consent only the essential fields are required (#744).
+        self.assertEqual(rp.missing_fields(user, profile, key_available=True), [])
+        self.assertEqual(rp.required_fields("grad", True, research=False), ["full_name", "institution"])
+        consent(user)
         self.assertEqual(rp.missing_fields(user, profile, key_available=False), ["current_advisor"])
         Mentorship.objects.create(mentee=user, mentor_name="Free Form Advisor", kind=Mentorship.KIND_CURRENT_ADVISOR)
         self.assertEqual(rp.missing_fields(user, profile, key_available=False), [])
@@ -99,6 +113,7 @@ class EncryptionTests(TestCase):
     def setUp(self):
         research_crypto.reset_cache()
         self.user = User.objects.create_user("crypto_user", password="x")
+        consent(self.user)
         self.client.force_login(self.user)
 
     def tearDown(self):
@@ -219,6 +234,7 @@ class HistoryTests(TestCase):
     def setUp(self):
         research_crypto.reset_cache()
         self.user = User.objects.create_user("history_user", password="x")
+        consent(self.user)
         self.client.force_login(self.user)
 
     def post(self, **fields):
@@ -256,6 +272,7 @@ class MentorshipTests(TestCase):
         ResearcherProfile.objects.create(user=self.mentor, career_level="tenure_track_untenured",
                                          orcid=VALID_ORCIDS[2], **BASE_POST)
         self.student = User.objects.create_user("student_user", password="x")
+        consent(self.mentor, self.student)
 
     def test_constraint_requires_both_sides(self):
         with self.assertRaises(ValidationError):
@@ -446,6 +463,7 @@ class ProfileFormWidgetTests(TestCase):
             for name in inst_names:
                 self.insts.append(Instrument.objects.create(name=name, telescope=tel, **audit))
         self.user = User.objects.create_user("profile_user", password="x")
+        consent(self.user)
         self.client.force_login(self.user)
 
     def test_observing_experience_renders_grouped_checkboxes(self):
@@ -482,6 +500,7 @@ class ProfileFormWidgetTests(TestCase):
 
     def test_students_saved_linked_and_free_text(self):
         mentor = User.objects.create_user("mentor_form", password="x")
+        consent(mentor)
         ResearcherProfile.objects.create(user=mentor, career_level="tenured", orcid=VALID_ORCIDS[0], **BASE_POST)
         linked = User.objects.create_user("linked_student", password="x")
         self.client.force_login(mentor)
@@ -509,7 +528,8 @@ class ProfileFormWidgetTests(TestCase):
 
 class ExplorerAndApiExclusionTests(TestCase):
     MODELS = (ResearcherProfile, EncryptedProfileValue, ProfileFieldHistory, Mentorship, AffiliationHistory,
-              ResearcherMetrics, UserAgreement, AgreementAcceptance)
+              ResearcherMetrics, UserAgreement, AgreementAcceptance, ResearchConsentForm, ResearchConsentRecord,
+              ResearchConsentPrompt)
 
     def tables(self):
         names = [m._meta.db_table for m in self.MODELS]
@@ -570,6 +590,7 @@ class MetricsTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_superuser("metrics_admin", password="x")
         self.user = User.objects.create_user("metrics_user")
+        consent(self.user)
         ResearcherProfile.objects.create(user=self.user, career_level="tenured", orcid=VALID_ORCIDS[0], **BASE_POST)
 
     def add_token(self):

@@ -694,6 +694,70 @@ Expected: the same first line, then `written: N datasets`. **Check:** running th
 
 Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
+<a id="research-consent"></a>
+### User Agreement v2, research consent and the research export (develop-direct PRs; #743, #744, #746) optional notice setting; manual purge when notified; export only when Ryan asks
+
+Lands on `develop` first (`develop-direct/*` PRs merged by Ryan: #745, then the follow-up), then is merged back into `experimental`. Four migrations run automatically on deploy and are safe on the shared `YSE_test` database:
+
+* `0038_user_agreement_v2`: adds User Agreement version 2 and makes it current (v1 and its acceptances stay). Idempotent.
+* `0039_research_consent`: two new tables, `YSE_App_researchconsentform` and `YSE_App_researchconsentrecord`. No change to existing tables.
+* `0040_seed_research_consent`: loads the consent form text as version 1. Its go-live date is the day this migration first runs on that database (production: its deploy day). Idempotent.
+* `0041_research_consent_prompts`: one new table, `YSE_App_researchconsentprompt` (when the form was offered, for reminders), filled once for users who already accepted agreement v2. Idempotent.
+
+Experimental has its own `0038`-`0050` under other names; the develop -> experimental backport adds a merge migration. No new dependency.
+
+**Effect on deploy:**
+
+* Every signed-in browser user accepts agreement v2 once (the existing gate). They then see the research consent form, which offers Consent, Decline and Not now. It never blocks the site and is always available from My profile.
+* Users who have not answered are reminded once more, after 10 logins or 1 month (whichever comes first), then once a year at their first login. Anyone who answered is never reminded.
+* Only the essential profile fields are asked of everyone: name, publication name, acknowledgment text, institution, ORCID and observing experience. Everything else in the profile is research data, offered only to users who consent.
+* Declining or withdrawing deletes nothing automatically. The user is excluded from research at once, and the administrators below get an in-app notification and an email.
+* Superusers see read-only consent records in the admin (no values). The three new tables are hidden from SQL Explorer. If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_researchconsentform`, `YSE_App_researchconsentrecord` and `YSE_App_researchconsentprompt`.
+
+**Step A (optional): who is notified of opt-outs.** By default every active superuser is notified. To notify only some accounts (for example David), add to `<CHECKOUT>/YSE_PZ/settings.ini` and restart Apache:
+
+```ini
+[research]
+optout_notify_usernames: <USERNAME>[,<USERNAME>...]
+```
+
+(or export `YSE_RESEARCH_OPTOUT_NOTIFY_USERNAMES=<USERNAME>,...` in the web environment). Email arrives only while site email is on and the recipient has email on for "Interests and data access" in `/notifications/preferences/`.
+
+**Step B (each time you are notified): purge that user's research data by hand.** The notice names the user. First a dry run, which prints counts and deletes nothing:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --user <USERNAME>
+# then:
+cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --user <USERNAME> --apply
+```
+
+Without `--user` the command covers every user who declined or withdrew. What it deletes:
+
+* the encrypted values (country, PhD year, gender);
+* the research profile fields (career level, department, pronouns, interests, website, GitHub, time zone);
+* their field history;
+* the advisor and student rows the user entered themselves (rows the other person entered stay), affiliation history and SciX metrics.
+
+It keeps the username, names, email, institution, ORCID, observing experience, groups and roles, and all site activity. Consenting users and users who have not answered are never touched. A second run prints `Nothing to delete.`
+
+**Step C (only when Ryan asks): write the anonymized research database.**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py export_research_database --out <SECURE_DIR>/yse-research-<DATE>.sqlite
+```
+
+The command writes a new SQLite file readable only by its owner, and refuses to overwrite an existing file unless you pass `--force`. Hand the file to Ryan and do not leave copies on shared disks. The file holds no names, usernames, emails, ORCID iDs or credentials: people, also where comments mention them, appear only as random strings drawn fresh for each export, so two exports are hard to join.
+
+**Check (optional):**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py shell -c "from YSE_App.models import UserAgreement as A, ResearchConsentForm as F; print(list(A.objects.filter(is_current=True).values_list('version', flat=True)), list(F.objects.values_list('version', 'effective_date', 'is_current')))"
+```
+
+Expected: `['2'] [('1', datetime.date(<first deploy day>), True)]`.
+
+Production: the migrations run with the others after the `develop -> master` merge; Steps A-C apply there too (`/data/yse_pz/YSE_PZ`).
+
 <a id="data-sharers"></a>
 ### Who may share private data: PIs and their deputies (develop-direct PR; #447) nothing required, but check PI links first
 
@@ -3271,6 +3335,9 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-20 v93, **nothing new to run** (the deploy applies the migrations; the consent steps are in v91/v92). Develop backported into experimental again (develop-direct PRs [#745](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/745) and [#747](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/747): User Agreement v2 [#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743), research consent [#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744), research export [#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)). Develop's v36/v37 are v91/v92 here. Migrations `0038_user_agreement_v2` to `0041_research_consent_prompts` keep develop's names and are joined to experimental's `0050_value_change` by the empty merge migration `0051_merge_develop_consent`; on the shared `YSE_test` database whichever stack deploys first applies them. On experimental the research export also includes `value_changes`, `night_plans` and `observed_blocks` and the revoke fields of data access requests, under the same consent rules and pseudonyms.
+* 2026-10-20 v92 (develop v37), optional (Step A), then by hand each time you are notified (Step B). Research consent follow-ups ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)) and the research export ([#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)): migration 0041 (one new table). Opt-outs are no longer deleted automatically: administrators are notified (`optout_notify_usernames`, default every superuser) and run `purge_unconsented_demographics --user <USERNAME>` (dry run, then `--apply`). Reminders for users who have not answered. `export_research_database --out <file>` only when Ryan asks ([section "User Agreement v2, research consent and the research export"](#research-consent)).
+* 2026-10-20 v91 (develop v36), nothing required (the purge runs later, only when Ryan says). User Agreement v2 ([#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743)) and the voluntary research consent form ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)): migrations 0038-0040 (agreement v2, two new tables, form v1); everyone accepts v2 once; `purge_unconsented_demographics` (dry run by default) after the grace period ([section "User Agreement v2, research consent and the research export"](#research-consent)).
 * 2026-10-19 v90, **nothing required** (no migration, no new package, no flag). DESI for host-less transients and a per-object DESI button ([#738](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/738)): the new enrichment service `desi-hostless` (`manage.py enrich --service desi-hostless --names ...`; dry run by default, never swept, needs an explicit selection) queries DESI galaxies within `DESI_HOSTLESS_SEARCH_ARCMIN` (5) of a transient with no host, picks the host by NED's rule (smallest separation x z, within 100 kpc), links it like Prost does and writes the host's redshift only through the redshift precedence list; the link and redshift are in the change log. A transient's own redshift is never set from a nearby galaxy. The transient page has a "Request DESI Lookup" button (any signed-in user, like the ZTF button) that queues the host's DESI check, or the host match when there is no host, and shows the result. It is rate-limited: one request per object per `DESI_BUTTON_COOLDOWN_SECONDS` (600) and `DESI_BUTTON_MAX_PER_HOUR` (20) per user. The job runner must be running for the button to do anything.
 * 2026-10-19 v89, **migration `0050_value_change` applied by the deploy (one new table); nothing else required** (no new package, no flag). Change log of automatic updates ([#737](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/737)): every real change made by the TNS re-sync, NED/DESI, Prost, the photo-z services, Hermes and the enrichment framework, and every redshift override set or cleared (command or API), is one timestamped `ValueChange` row with its source, service, run and actor; checks that change nothing record nothing. Shown in a deferred "History" tab on the transient page and at `GET /api/transients/<id>/history/` (read-only). The table names who set an override, so it is on the SQL Explorer personal-data list (`YSE_App_valuechange`); if the Explorer MySQL user is granted tables one by one, do not grant it this table.
 * 2026-10-18 v88, **nothing required** (no migration, no new package). Enrichment framework ([#439](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/439)): one registry of enrichment services with a per-object run log, `manage.py enrich` (dry run by default; `--service`, selection options, resumable, `--max`, `--queue`) and the `Enrichment.EnrichmentSweep` cron (off until `ENRICH_SWEEP_CRON_ENABLED`). `PS1_cutouts.YSE` stops downloading cutouts again (failures retried after 30 days, at most 3 times); `Photo_Z`, `SDSS_Photo_Z` and `Gaia_LC` keep their schedules and record each object's outcome. Prost matching is now a per-object function; with `PROST_HOST_MATCH_ENABLED` (off) the TNS gap import and the follow-up enrichment run it for objects without a host. Optional Blast annotation service (off; needs a Blast token). See [Enrichment framework](#enrichment).

@@ -318,3 +318,105 @@ class AgreementAcceptance(models.Model):
 
     def __str__(self):
         return "Acceptance #%s" % self.pk
+
+
+# ---------------------------------------------------------------------------
+# Voluntary research consent (#744). Separate from the User Agreement and never a gate.
+# Like the tables above: no REST serializer, excluded from SQL Explorer, admin read-only.
+
+# Which researcher-profile data are kept for everyone and which are research data (Ryan,
+# 2026-10-20, #744). Essential: what running the site needs (username, display name,
+# publication and acknowledgment names, email, group memberships and roles, institution,
+# ORCID, and observing experience, which shows who can observe with which instrument). Everything else in the researcher profile is research data: offered only to users who
+# consent, never required from others, excluded from research once a user declines or
+# withdraws, and deleted by an administrator with ``purge_unconsented_demographics``.
+ESSENTIAL_PROFILE_FIELDS = (
+    "full_name", "preferred_name", "author_name_format", "acknowledgment_text", "institution", "orcid",
+    "observing_experience",
+)
+RESEARCH_PROFILE_FIELDS = (
+    "pronouns", "department", "career_level", "career_level_other", "research_interests", "website",
+    "github_username", "time_zone",
+)
+# All encrypted fields (country, PhD year, gender) are research data.
+RESEARCH_ENCRYPTED_FIELDS = ENCRYPTED_FIELDS
+# Kept for older imports: the encrypted research fields.
+DEMOGRAPHIC_FIELDS = RESEARCH_ENCRYPTED_FIELDS
+
+
+class ResearchConsentForm(models.Model):
+    """A version of the research consent form. ``effective_date`` is the form's go-live date.
+
+    Activity before the go-live date of the first form is exempt (it was visible to other
+    users, as on a public forum) and may be used anonymized; activity from that date on is
+    used only for users who consented, inside their consent periods.
+    """
+
+    version = models.CharField(max_length=32, unique=True)
+    title = models.CharField(max_length=200)
+    body = models.TextField(help_text="HTML shown on /research-consent/.")
+    effective_date = models.DateField(default=timezone.now, help_text="Go-live date of this form.")
+    is_current = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-effective_date", "-id")
+        verbose_name = "research consent form"
+
+    def __str__(self):
+        return "%s (%s)%s" % (self.title, self.version, " [current]" if self.is_current else "")
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if self.is_current:
+                type(self).objects.filter(is_current=True).exclude(pk=self.pk).update(is_current=False)
+
+
+class ResearchConsentRecord(models.Model):
+    """One consent decision, kept forever: the user's state is their latest record.
+
+    No IP address or user agent is stored.
+    """
+
+    CONSENTED = "consented"
+    DECLINED = "declined"
+    WITHDRAWN = "withdrawn"
+    DECISION_CHOICES = (
+        (CONSENTED, "Consented"),
+        (DECLINED, "Declined"),
+        (WITHDRAWN, "Withdrawn"),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="research_consent_records")
+    form = models.ForeignKey(ResearchConsentForm, on_delete=models.PROTECT, related_name="records")
+    decision = models.CharField(max_length=16, choices=DECISION_CHOICES)
+    decided_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("-decided_at", "-id")
+        indexes = [models.Index(fields=["user", "decided_at"], name="yse_rconsent_user_time")]
+        verbose_name = "research consent record"
+
+    def __str__(self):
+        return "Research consent record #%s" % self.pk
+
+
+class ResearchConsentPrompt(models.Model):
+    """When the consent form was offered to a user who has not answered yet (reminders, #744).
+
+    Second request: after 10 logins or 1 month from the first prompt, whichever comes first;
+    then once a year at the first login of the year. Users who answered are never reminded.
+    """
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="research_consent_prompt")
+    first_prompted_at = models.DateTimeField(default=timezone.now)
+    last_prompted_at = models.DateTimeField(default=timezone.now)
+    prompt_count = models.PositiveIntegerField(default=1)
+    logins_since_first = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "research consent prompt"
+
+    def __str__(self):
+        return "Research consent prompt #%s" % self.pk

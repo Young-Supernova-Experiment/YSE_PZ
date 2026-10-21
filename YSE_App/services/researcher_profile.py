@@ -24,7 +24,7 @@ from YSE_App.models.researcher_models import (
 from YSE_App.services import research_crypto
 
 # Bump to re-evaluate every session's cached "onboarding complete" flag after a rule change.
-RULES_VERSION = "1"
+RULES_VERSION = "2"  # 2: research fields required only with research consent (#744)
 
 PHD_YEAR_MIN = 1950
 
@@ -100,8 +100,18 @@ def encrypted_status(user: User) -> Dict[str, EncryptedProfileValue]:
     return status
 
 
-def required_fields(career_level: str, key_available: bool) -> List[str]:
-    """Required field names for a career level (``current_advisor`` is the Mentorship row)."""
+# Required from everyone, whatever their research consent (essential data, #744).
+ESSENTIAL_REQUIRED = ("full_name", "institution")
+
+
+def required_fields(career_level: str, key_available: bool, research: bool = True) -> List[str]:
+    """Required field names for a career level (``current_advisor`` is the Mentorship row).
+
+    ``research=False`` (no research consent): only the essential fields; everything else in the
+    profile is research data and is neither offered nor required (#744).
+    """
+    if not research:
+        return list(ESSENTIAL_REQUIRED)
     required = ["full_name", "institution", "department", "career_level"]
     if career_level == CAREER_OTHER:
         required.append("career_level_other")
@@ -115,8 +125,14 @@ def required_fields(career_level: str, key_available: bool) -> List[str]:
 
 
 def missing_fields(user: User, profile: Optional[ResearcherProfile] = None,
-                   key_available: Optional[bool] = None) -> List[str]:
-    """Required fields the user has not filled in (empty list = complete)."""
+                   key_available: Optional[bool] = None, research: Optional[bool] = None) -> List[str]:
+    """Required fields the user has not filled in (empty list = complete).
+
+    ``research`` defaults to whether the user has consented to the research study.
+    """
+    if research is None:
+        from YSE_App.services import research_consent
+        research = research_consent.has_consented(user)
     if key_available is None:
         key_available = research_crypto.key_available()
     if profile is None:
@@ -124,7 +140,7 @@ def missing_fields(user: User, profile: Optional[ResearcherProfile] = None,
     if profile is None:
         return ["profile"]
     missing = []
-    for name in required_fields(profile.career_level, key_available):
+    for name in required_fields(profile.career_level, key_available, research):
         if name == "phd_year":
             if not EncryptedProfileValue.objects.filter(user=user, field_name="phd_year").exists():
                 missing.append(name)
@@ -234,8 +250,10 @@ def my_students(user: User, include_past: bool = True):
 
 
 def can_manage_students(user: User) -> bool:
+    """Mentorships are research data: only consenting scientific staff and faculty manage students."""
+    from YSE_App.services import research_consent
     profile = get_profile(user)
-    return bool(profile and profile.can_mentor)
+    return bool(profile and profile.can_mentor and research_consent.has_consented(user))
 
 
 def labels(names: Iterable[str]) -> List[Tuple[str, str]]:
