@@ -553,6 +553,12 @@ if not _db_ssl_disabled:
         _db_options['ssl_mode'] = _db_ssl_mode.upper()
     if config.getboolean('database', 'DB_TLS_EXPLORER', fallback=False):
         _explorer_db_options = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _db_options.items()}
+# Client-side connect/read/write timeouts (#770; YSE_PZ/db_timeouts.py). Unset keeps
+# today's behaviour (no timeout); docs/ziggy-runbook.md gives recommended values.
+from YSE_PZ.db_timeouts import timeout_options as _db_timeout_options  # noqa: E402
+_db_ini = lambda key: config.get('database', key, fallback=None)  # noqa: E731
+_db_options.update(_db_timeout_options(_db_ini))
+_explorer_db_options.update(_db_timeout_options(_db_ini, explorer=True))
 DATABASES = {
     'explorer': {
         'ENGINE': 'django.db.backends.mysql',
