@@ -100,11 +100,6 @@ urlpatterns = [
         name='transient_detail_followup_rest_fragment',
     ),
     re_path(
-        r'^transient_detail/(?P<transient_id>[0-9]+)/comments_fragment/$',
-        views.transient_detail_comments_fragment,
-        name='transient_detail_comments_fragment',
-    ),
-    re_path(
         r'^transient_detail/(?P<transient_id>[0-9]+)/gw_fragment/$',
         views.transient_detail_gw_fragment,
         name='transient_detail_gw_fragment',

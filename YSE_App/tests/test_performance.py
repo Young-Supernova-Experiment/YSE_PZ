@@ -188,7 +188,6 @@ class TransientDetailPagePerformanceTests(TestCase):
     def test_transient_detail_rare_tab_fragments_return_200(self):
         tid = self.transient_loaded.id
         for path in (
-            f'/transient_detail/{tid}/comments_fragment/',
             f'/transient_detail/{tid}/spectra_tab_fragment/',
             f'/transient_detail/{tid}/summary_spectra_tools_fragment/',
         ):

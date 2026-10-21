@@ -1277,6 +1277,9 @@ NOTIFICATION_LIST_PAGE_SIZE = config.getint('site_settings', 'NOTIFICATION_LIST_
 # within this window share a notification and its delayed email/Slack
 # delivery; 0 sends every event on its own.
 FAVORITE_ACTIVITY_BATCH_MINUTES = config.getint('site_settings', 'FAVORITE_ACTIVITY_BATCH_MINUTES', fallback=60)
+# A new spectrum is announced to favoriters by a job this many seconds later,
+# once the upload has attached its groups, so visibility is decided per recipient (#761).
+FAVORITE_SPECTRUM_DELAY_SECONDS = config.getint('site_settings', 'FAVORITE_SPECTRUM_DELAY_SECONDS', fallback=120)
 # Retention (#320): the notifications.prune job / PruneNotifications cron deletes
 # read notifications, unread notifications and finished job rows older than
 # these many days (0 disables that part); the cron runs every

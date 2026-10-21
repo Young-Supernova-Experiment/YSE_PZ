@@ -35,7 +35,7 @@ DEFAULT_HANDLER_MODULES = ("YSE_App.services.notify", "YSE_App.brokers.jobs",
                            "YSE_App.feeds.jobs", "YSE_App.services.summaries",
                            "YSE_App.services.photstat_jobs", "YSE_App.services.tns_resync",
                            "YSE_App.services.followup_enrich", "YSE_App.services.redshift_catalogs",
-                           "YSE_App.services.enrichment")
+                           "YSE_App.services.enrichment", "YSE_App.services.favorites")
 
 _registry: Dict[str, "Handler"] = {}
 _lock = threading.Lock()
