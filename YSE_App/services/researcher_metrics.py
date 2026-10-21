@@ -160,7 +160,10 @@ def refresh_all(force: bool = False, limit: Optional[int] = None, http=None,
     limit = limit if limit is not None else int(getattr(settings, "RESEARCHER_METRICS_MAX_PER_RUN", 200))
     interval = float(getattr(settings, "RESEARCHER_METRICS_REQUEST_INTERVAL_SECONDS", 2.0))
     min_age = timedelta(days=int(getattr(settings, "RESEARCHER_METRICS_MIN_AGE_DAYS", 25)))
+    # SciX metrics are research data: only users who consented to the research study (#744).
+    from YSE_App.services.research_dataset import consenting_user_ids
     profiles = (ResearcherProfile.objects.exclude(orcid="").filter(user__is_active=True)
+                .filter(user_id__in=consenting_user_ids())
                 .select_related("user").order_by("user_id"))
     if usernames:
         profiles = profiles.filter(user__username__in=list(usernames))

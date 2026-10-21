@@ -495,3 +495,10 @@ def program_link_on_photometry(sender, instance, created, **kwargs):
 def program_link_on_spectrum(sender, instance, created, **kwargs):
     if created and not kwargs.get("raw") and _program_link_possible(instance):
         _link_new_dataset(instance)
+
+
+# Research consent reminders (#744): count logins and flag a due reminder for the gate.
+from django.contrib.auth.signals import user_logged_in  # noqa: E402
+from YSE_App.onboarding import on_user_logged_in  # noqa: E402
+
+user_logged_in.connect(on_user_logged_in, dispatch_uid="yse_research_consent_reminder")

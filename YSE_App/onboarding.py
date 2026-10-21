@@ -16,9 +16,9 @@ It never touches requests that crons, scripts, brokers and integrations make:
   add_yse_survey_*, the downloads, query_api, ...) and the views decorated with
   ``onboarding_exempt`` below;
 * the URL names in ``EXEMPT_URL_NAMES`` (Slack events, login/logout, signup and
-  its email confirmation link, password reset and change, the agreement, profile
-  and acknowledgements pages, and on experimental the two-factor pages and the
-  feedback POST);
+  its email confirmation link, password reset and change, the agreement, research
+  consent, profile and acknowledgements pages, and on experimental the two-factor
+  pages and the feedback POST);
 * DRF views wherever they are routed;
 * static and media files, ``.json`` endpoints (status and health polling),
   AJAX/fetch requests and non-GET methods;
@@ -26,6 +26,11 @@ It never touches requests that crons, scripts, brokers and integrations make:
 
 ``ONBOARDING_GATE_ENABLED = False`` (settings.ini ``[site_settings]`` or env
 ``YSE_ONBOARDING_GATE=0``) turns the whole gate off.
+
+Research consent reminders (#744): at login, a user who has never answered the research consent
+form and is due a reminder (``research_consent.reminder_due``) gets a session flag; the first page
+view that passes the gate then redirects once to ``/research-consent/?next=...``. Every choice
+there, including "Not now", continues to the page, so this is never a gate.
 
 A session that has passed stores the agreement version, the key state and the
 rules version it passed with, so a page view normally costs no queries; a new
@@ -45,6 +50,7 @@ from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 
 SESSION_KEY = "_yse_onboarding_ok"
+REMIND_KEY = "_yse_research_consent_remind"
 CURRENT_AGREEMENT_CACHE_KEY = "yse:onboarding:current_agreement_id"
 CURRENT_AGREEMENT_CACHE_SECONDS = 60
 
@@ -58,7 +64,7 @@ EXEMPT_URL_NAMES = frozenset({
     # self-service signup and its emailed confirmation link (#448)
     "signup", "signup_verify_email",
     # the onboarding pages themselves and the acknowledgements page they link to
-    "agreement", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
+    "agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
     "researcher_student_add", "researcher_student_update", "researcher_profile_confirm",
     "acknowledgements",
     # integrations and machine endpoints
@@ -204,7 +210,7 @@ class OnboardingGateMiddleware:
         token = _session_token(agreement_id)
         session = getattr(request, "session", None)
         if session is not None and session.get(SESSION_KEY) == token:
-            return None
+            return _consent_reminder(request)
         step = pending_step(request)
         if step == "agreement":
             return redirect_with_next("agreement", request)
@@ -212,4 +218,30 @@ class OnboardingGateMiddleware:
             return redirect_with_next("researcher_profile_edit", request)
         if session is not None:
             session[SESSION_KEY] = token
+        return _consent_reminder(request)
+
+
+def _consent_reminder(request):
+    """Redirect once to the research consent form when the login flagged a reminder (#744)."""
+    session = getattr(request, "session", None)
+    if session is None or not session.get(REMIND_KEY):
         return None
+    session.pop(REMIND_KEY, None)
+    from YSE_App.services import research_consent
+    if not research_consent.reminder_due(request.user):
+        return None
+    research_consent.record_prompt(request.user)
+    return redirect_with_next("research_consent", request)
+
+
+def on_user_logged_in(sender, request, user, **kwargs):
+    """Count the login toward the reminder schedule and flag a due reminder (#744)."""
+    try:
+        from YSE_App.services import research_consent
+        research_consent.note_login(user)
+        session = getattr(request, "session", None)
+        if session is not None and research_consent.reminder_due(user):
+            session[REMIND_KEY] = True
+    except Exception:  # a reminder must never break a login
+        import logging
+        logging.getLogger(__name__).exception("research consent reminder check failed")
