@@ -1005,6 +1005,31 @@ TNS_RESYNC_CRON_ENABLED: True
 
 Note: `manage.py expire_service_runs` also deletes old `tns` runs; those transients are then re-synced again, which is harmless.
 
+<a id="duplicates"></a>
+
+### Duplicate transients are reported, merged only by hand (2026-10-21, #752, #753, #754) nothing required; no migration, no new package
+
+**What changes on deploy.** The `CheckDuplicates` cron no longer deletes or merges anything. It finds the same candidate pairs as before (an internal `1...` name at the position of another transient; a transient whose name is another one's slug) and sends each new pair once as a notification to the reviewers (default: every active superuser), with the merge command in the text. Uploads (`/add_transient`, broker saves) that find several transients with the same name update the oldest and report the others instead of deleting them. A failed check is reported the same way (no more SMTP from the cron).
+
+**Optional: who gets the reports.** Under the existing `[site_settings]` section of `YSE_PZ/settings.ini`, then restart:
+
+```ini
+DUPLICATE_REPORT_USERNAMES: <USERNAME_1>,<USERNAME_2>
+```
+
+**Reviewing a pair** (on either stack's checkout, with its python):
+
+```bash
+cd /data/yse_pz/YSE_PZ_experimental
+venv/bin/python manage.py transient_duplicates list
+venv/bin/python manage.py transient_duplicates merge <DUPLICATE_ID> <KEEP_ID>          # dry run
+venv/bin/python manage.py transient_duplicates merge <DUPLICATE_ID> <KEEP_ID> --yes    # merge
+```
+
+Expected: `list` ends with `N candidate pair(s)`. The dry run prints both transients, the rows that a merge would NOT move (they are deleted or unlinked with the duplicate), and `dry run: nothing changed`. With `--yes` it prints `merged: alternate_names=..., photometry=..., spectra=..., tags=...`. **Check:** the duplicate's page is gone and the kept transient lists the old name under alternate names. A merge is one transaction: on any error nothing is changed.
+
+**Old automatic behaviour (not recommended):** `DUPLICATE_AUTO_MERGE: True` under `[site_settings]` (or `YSE_DUPLICATE_AUTO_MERGE=1` in the cron environment) makes the cron merge every pair it finds, using the same transactional merge.
+
 <a id="followup-enrich"></a>
 
 ### Automatic TNS and ZTF refresh on a follow-up request (2026-10-18, #114) job runner must be running; no migration, no new package
@@ -3335,6 +3360,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-21 v94, **nothing required** (no migration, no new package; one optional setting). Duplicate transients ([#752](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/752), [#753](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/753), [#754](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/754)): the `CheckDuplicates` cron only reports candidate pairs (notification to `DUPLICATE_REPORT_USERNAMES`, default every active superuser) and uploads no longer delete same-name transients; a person merges a pair with `manage.py transient_duplicates merge <DUPLICATE_ID> <KEEP_ID> --yes` (dry run without `--yes`; one transaction). `DUPLICATE_AUTO_MERGE` (off) restores unattended merging ([section "Duplicate transients"](#duplicates)).
 * 2026-10-20 v93, **nothing new to run** (the deploy applies the migrations; the consent steps are in v91/v92). Develop backported into experimental again (develop-direct PRs [#745](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/745) and [#747](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/747): User Agreement v2 [#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743), research consent [#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744), research export [#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)). Develop's v36/v37 are v91/v92 here. Migrations `0038_user_agreement_v2` to `0041_research_consent_prompts` keep develop's names and are joined to experimental's `0050_value_change` by the empty merge migration `0051_merge_develop_consent`; on the shared `YSE_test` database whichever stack deploys first applies them. On experimental the research export also includes `value_changes`, `night_plans` and `observed_blocks` and the revoke fields of data access requests, under the same consent rules and pseudonyms.
 * 2026-10-20 v92 (develop v37), optional (Step A), then by hand each time you are notified (Step B). Research consent follow-ups ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)) and the research export ([#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)): migration 0041 (one new table). Opt-outs are no longer deleted automatically: administrators are notified (`optout_notify_usernames`, default every superuser) and run `purge_unconsented_demographics --user <USERNAME>` (dry run, then `--apply`). Reminders for users who have not answered. `export_research_database --out <file>` only when Ryan asks ([section "User Agreement v2, research consent and the research export"](#research-consent)).
 * 2026-10-20 v91 (develop v36), nothing required (the purge runs later, only when Ryan says). User Agreement v2 ([#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743)) and the voluntary research consent form ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)): migrations 0038-0040 (agreement v2, two new tables, form v1); everyone accepts v2 once; `purge_unconsented_demographics` (dry run by default) after the grace period ([section "User Agreement v2, research consent and the research export"](#research-consent)).
