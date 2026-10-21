@@ -193,7 +193,7 @@ def rising_transient_queryset(ndays=14, user=None):
 def tns_yse_rising_transient_queryset(ndays=14, user=None):
 
     # g/V rise
-    qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays)).filter(tags__name__in='YSE').filter(name__startswith='20')
+    qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays)).filter(tags__name='YSE').filter(name__startswith='20')
     qs = annotate_rising_transient_qs(qs, user)
     qs_final = qs.filter((Q(rise_rate_g__gte=0.0) & (Q(rise_rate_g_sig__gte=1.0)))|
                          (Q(rise_rate_g_lim__gte=0.0) & (Q(rise_rate_g_lim_sig__gte=1.0)))|

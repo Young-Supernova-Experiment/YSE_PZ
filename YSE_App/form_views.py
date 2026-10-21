@@ -868,7 +868,7 @@ def facility_allocation_for(resource, user, slugs=('lco', 'soar')):
 @method_decorator(login_required, name='dispatch')
 class AddAutomatedSpectrumRequestFormView(FormView):
 	form_class = AutomatedSpectrumRequest
-	template_name = 'YSE_App/form_snippets/spectrum_request_form.html'
+	template_name = 'YSE_App/form_snippets/automated_spectrum_form.html'
 	success_url = '/form-success/'
 	
 	def form_invalid(self, form):
