@@ -12,6 +12,10 @@ from django.test import SimpleTestCase, override_settings
 
 from YSE_App.data_ingest import ZTF_Forced_Phot as fp
 
+# synthetic download login; the real defaults live in settings (#758)
+WEBDAV = dict(ZTF_WEBDAV_USER="fp-download-user", ZTF_WEBDAV_PASS="fp-download-pw")
+WEBDAV_AUTH = (WEBDAV["ZTF_WEBDAV_USER"], WEBDAV["ZTF_WEBDAV_PASS"])
+
 
 def _client():
     return fp.ZTF_Forced_Phot(
@@ -32,7 +36,7 @@ class ZTFForcedPhotSubmitTests(SimpleTestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmpdir = tmp.name
-        override = override_settings(ZTFTMPDIR=self.tmpdir)
+        override = override_settings(ZTFTMPDIR=self.tmpdir, **WEBDAV)
         override.enable()
         self.addCleanup(override.disable)
 
@@ -43,7 +47,7 @@ class ZTFForcedPhotSubmitTests(SimpleTestCase):
         self.assertTrue(os.path.exists(log_file))
         self.assertEqual(os.path.dirname(log_file), os.path.join(self.tmpdir, "forced_phot_out"))
         self.assertEqual(get.call_args.args[0], fp.ZTF_REQUEST_URL)
-        self.assertEqual(get.call_args.kwargs["auth"], (fp._ztfuser, fp._ztfinfo))
+        self.assertEqual(get.call_args.kwargs["auth"], WEBDAV_AUTH)
         self.assertTrue(get.call_args.kwargs["timeout"])
 
     def test_verbose_output_has_no_credentials(self):
@@ -52,7 +56,7 @@ class ZTFForcedPhotSubmitTests(SimpleTestCase):
             _client().ztf_forced_photometry(ra=10.0, decl=-5.0, verbose=True)
         shown = " ".join(str(c) for c in printed.call_args_list)
         self.assertNotIn("SECRETPASS", shown)
-        self.assertNotIn(fp._ztfinfo, shown)
+        self.assertNotIn(WEBDAV["ZTF_WEBDAV_PASS"], shown)
 
     def test_connection_error_hides_credentials(self):
         err = requests.ConnectionError("Max retries with url: /x?userpass=SECRETPASS")
@@ -85,6 +89,9 @@ class ZTFDownloadTests(SimpleTestCase):
         os.chdir(tmp.name)
         self.addCleanup(os.chdir, cwd)
         self.tmpdir = tmp.name
+        override = override_settings(**WEBDAV)
+        override.enable()
+        self.addCleanup(override.disable)
 
     def test_download_saves_file_with_auth(self):
         url = "https://%s/data/FPwork/forcedphotometry_req00001_lc.txt" % fp.ZTF_HOST
@@ -92,7 +99,7 @@ class ZTFDownloadTests(SimpleTestCase):
             name = fp.download_ztf_url(url, verbose=False)
         self.assertEqual(name, "forcedphotometry_req00001_lc.txt")
         self.assertEqual(open(os.path.join(self.tmpdir, name)).read(), "data")
-        self.assertEqual(get.call_args.kwargs["auth"], (fp._ztfuser, fp._ztfinfo))
+        self.assertEqual(get.call_args.kwargs["auth"], WEBDAV_AUTH)
         self.assertTrue(get.call_args.kwargs["timeout"])
 
     def test_other_hosts_and_schemes_are_refused(self):
@@ -131,3 +138,22 @@ class ZTFAccountAddressTests(SimpleTestCase):
     @override_settings(SMTP_LOGIN="someone@example.org")
     def test_defaults_to_settings(self):
         self.assertEqual(fp.ztf_account_address(), "someone@example.org")
+
+
+class ZTFWebdavLoginSettingsTests(SimpleTestCase):
+    """The download login comes from settings, with ZTF's published login as default (#758)."""
+
+    def test_default_login_is_configured(self):
+        from django.conf import settings
+        user, password = fp.ztf_webdav_auth()
+        self.assertTrue(user)
+        self.assertTrue(password)
+        self.assertEqual((user, password), (settings.ZTF_WEBDAV_USER, settings.ZTF_WEBDAV_PASS))
+
+    @override_settings(**WEBDAV)
+    def test_login_follows_settings(self):
+        self.assertEqual(fp.ztf_webdav_auth(), WEBDAV_AUTH)
+
+    def test_module_has_no_inline_login(self):
+        self.assertFalse(hasattr(fp, "_ztfuser"))
+        self.assertFalse(hasattr(fp, "_ztfinfo"))

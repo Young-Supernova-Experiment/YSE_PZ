@@ -232,7 +232,8 @@ CRON_CLASSES = [
 	# TNS_recent_realtime was removed (#438): it ran only at 00:00 and 08:00 with a
 	# 10-minute window; TNS_emails, TNS_recent and the TNS re-sync below cover it.
     'YSE_App.data_ingest.QUB_data.CheckDuplicates',
-    'YSE_App.data_ingest.PhotometryUploadExample.PhotometryUploads',
+    # PhotometryUploadExample.PhotometryUploads was removed (#756): a documentation example
+    # (docs/adding_data.rst) that ran live against a decommissioned service.
     'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot',
     # Personal-dashboard saved-query cache warmer; no-op unless
     # DASHBOARD_CACHE_WARM_ENABLED is set (see below).
@@ -984,6 +985,12 @@ LCOGTUSER = config.get('main', 'lcogtuser')
 LCOGTPASS = config.get('main', 'lcogtpass')
 # Required only where ZTF forced photometry runs (see below); a missing value does not stop the web stack.
 ZTFPASS = os.environ.get('ZTF_FORCED_PHOT_PASS') or config.get('ztf', 'ztfforcedphotpass', fallback='')
+# Login for downloading ZTF forced-photometry results (#758). The defaults are the generic
+# login ZTF publishes in its forced-photometry documentation; override only if ZTF changes it.
+ZTF_WEBDAV_USER = (os.environ.get('ZTF_WEBDAV_USER')
+                   or config.get('ztf', 'ztfwebdavuser', fallback='') or 'ztffps')
+ZTF_WEBDAV_PASS = (os.environ.get('ZTF_WEBDAV_PASS')
+                   or config.get('ztf', 'ztfwebdavpass', fallback='') or 'dontgocrazy!')
 # SciServer account for the photo-z crons; required only when those crons run.
 SCISERVER_USER = os.environ.get('SCISERVER_USER') or config.get('main', 'sciserveruser', fallback='')
 SCISERVER_PASSWORD = os.environ.get('SCISERVER_PASSWORD') or config.get('main', 'sciserverpass', fallback='')

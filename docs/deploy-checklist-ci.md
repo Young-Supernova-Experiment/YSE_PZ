@@ -106,9 +106,10 @@ naming a repo module, fails the inventory.
 | `yse_setting_fields.bash` | script *(inferred)* | **manual** |
 | `yse_updates_stack.bash` | `QUB_data.YSE_Stack` *(inferred)* | yes (dust map stubbed) |
 | `new_lowz.bash` | not in `CRON_CLASSES` *(inferred: a query/notification script)* | **manual** |
-| — (no crontab line) | `PS1_cutouts.YSE`, `Query_ZTF.AntaresZTF`, `QUB_data.YSE_Weekly`, `PhotometryUploadExample.PhotometryUploads` | import + `do()` smoke (`Query_ZTF`/`QUB_data` with the dust map stubbed) |
+| — (no crontab line) | `PS1_cutouts.YSE`, `Query_ZTF.AntaresZTF`, `QUB_data.YSE_Weekly` | import + `do()` smoke (`Query_ZTF`/`QUB_data` with the dust map stubbed) |
 | — (no crontab line yet) | `Query_LSST.AntaresLSST` (Rubin photometry via ANTARES, #224) | import + `do()` smoke; `test_lsst_antares_ingest` with `antares_client` mocked. Live ANTARES fetch **manual**; see `docs/rubin-antares-ingest.md` |
 | — (no crontab line) | `Photo_Z.YSE`, `SDSS_Photo_Z.YSE` | skipped in CI: TensorFlow does not import in the web image (`TypeError: Descriptors cannot be created directly`, protobuf pin); `Photo_Z`/`SDSS_Photo_Z` also need `SciServer`. |
+| — | `PhotometryUploadExample.PhotometryUploads` | **removed** in #756: a documentation example that ran live from `CRON_CLASSES`; the example code stays in `docs/adding_data.rst` |
 | — | `rapid.rapid_classify_cron` | **removed from `CRON_CLASSES`** (RAPID is not used; `astrorapid` is no longer installed). The module stays with a guarded import. |
 | — | `TNS_uploads.UpdateGHOST`, `host_associate.YSE`, `PS1_PhotoZ.YSE` | **removed** in #613 (legacy GHOST; host association is Prost, inside the TNS crons) |
 

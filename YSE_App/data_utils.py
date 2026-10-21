@@ -261,6 +261,8 @@ def add_transient_payload(transient_data, user):
     position-based duplicate check and the photometry passthrough behave
     exactly like a TNS or ZTF upload.
     """
+    from YSE_App.services import tns_resync  # the TNS class rule (#755); imported late, it pulls in jobs
+
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 
@@ -368,6 +370,8 @@ def add_transient_payload(transient_data, user):
                     #       taglist += [tagobj]
                     _existing = dbtransient[0]  # read before the update: the change log compares (#737)
                     redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
+                    if transient_data.get("TNS"):
+                        tns_resync.filter_tns_upload_classes(_existing, transientdict)  # #755
                     dbtransient.update(**transientdict)
                     change_log.record_upload(_existing, transientdict, actor=user,
                                              source_hint="TNS" if transient_data.get("TNS") else "")
@@ -397,6 +401,8 @@ def add_transient_payload(transient_data, user):
 
                 _existing = dbtransient[0]  # read before the update: the change log compares (#737)
                 redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
+                if transient_data.get("TNS"):
+                    tns_resync.filter_tns_upload_classes(_existing, transientdict)  # #755
                 dbtransient.update(**transientdict)
                 change_log.record_upload(_existing, transientdict, actor=user,
                                          source_hint="TNS" if transient_data.get("TNS") else "")
