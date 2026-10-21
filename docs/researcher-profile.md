@@ -73,9 +73,9 @@ record. Service: `YSE_App/services/research_consent.py`.
   the form. Users who answered either way are never reminded.
 * **Essential vs research data** (Ryan, 2026-10-20). Kept for everyone (`ESSENTIAL_PROFILE_FIELDS`):
   username, full and preferred name, publication name, acknowledgment text, email, institution,
-  ORCID, and group memberships and roles. Everything else is research data:
-  `RESEARCH_PROFILE_FIELDS` (pronouns, department, career level, interests, website, GitHub, time
-  zone, observing experience), every encrypted field (country, PhD year, gender), advisors and
+  ORCID, observing experience (it shows who can observe with which telescope and instrument), and
+  group memberships and roles. Everything else is research data: `RESEARCH_PROFILE_FIELDS`
+  (pronouns, department, career level, interests, website, GitHub, time zone), every encrypted field (country, PhD year, gender), advisors and
   students, affiliation history and SciX metrics. Research data are offered on `/profile/edit/`
   only to consenting users and required only from them (the onboarding gate requires only full
   name and institution otherwise). "My students" and the SciX refresh are for consenting users only.
@@ -84,7 +84,9 @@ record. Service: `YSE_App/services/research_consent.py`.
   optout_notify_usernames`, default every active superuser) get a `research_optout` notification
   (in-app, plus email per their preferences). They run `manage.py purge_unconsented_demographics
   [--user NAME] [--apply]` (dry run by default). It deletes that user's research data and keeps the
-  essential data and all activity. Users who have not answered keep stored values (they may still
+  essential data and all activity. Advisor and student rows are deleted only when the opted-out
+  user entered them (as mentee or mentor); rows the other person entered stay, because privacy
+  covers what an individual revealed, not information about them (Ryan, 2026-10-20). Users who have not answered keep stored values (they may still
   delete encrypted ones) but are never used for research.
 * **Admin:** read-only for superusers (Research consent forms, Research consent records); other
   staff cannot see them. No demographic value is ever shown.
@@ -120,9 +122,20 @@ on the server.
   and `metadata`.
 * **Identifiers:** person, row, group and allocation ids are random strings per export, and other
   users named in a row appear only when included.
-* **Free text** is scrubbed: `@mentions`, email addresses, ORCID iDs, and every user's username,
-  first and last name, full and preferred name and publication name (words of 3 or more letters)
-  are replaced.
+* **Free text:** every mention of a person is replaced with that person's pseudonym for this
+  export (the same random string used for them everywhere in the file; people outside the
+  participant set get a consistent random string too), by `NameReplacer`:
+  - first, direct matches: usernames (so `@username`), emails, ORCID iDs, full, display and
+    publication names;
+  - then given names and surnames of any length from 2 letters (single initials are left), as
+    whole words only: the character before is the start of the text, whitespace or a
+    non-alphanumeric character (`-`, `@`, `(`, ...), and the character after is the end, whitespace
+    or punctuation, so "Li" is replaced but "Literally" is not;
+  - case-insensitive, longest match first; a name shared by several people becomes one neutral
+    per-export string (`n_...`); emails and ORCID iDs of nobody known become `[email]` and
+    `[orcid]`.
+* **Timestamps** are exact (Ryan, 2026-10-20): fresh random ids make matching two leaked exports
+  harder, not impossible.
 * **Never exported:** credentials, sessions, tokens, notifications, jobs, request payloads, external
   ids and URLs, IP addresses, websites and GitHub names.
 

@@ -12,8 +12,9 @@ only: it is a management command; nothing is reachable over the web).
     joined on ids;
   - usernames, names, emails, ORCID iDs, websites, GitHub names and institutions are never
     copied (institutions appear only as a random string per export);
-  - free text (comments, request notes, interest descriptions, ...) is scrubbed: ``@mentions``,
-    email addresses, ORCID iDs and the known names of all users are replaced;
+  - in free text (comments, request notes, interest descriptions, ...) every mention, username,
+    email, ORCID iD and name of a person is replaced with that person's pseudonym for this export
+    (``NameReplacer``); people outside the participant set still get a consistent random string;
   - other users named in a row (e.g. who decided a request) appear only when the rules include
     them at that time, otherwise NULL.
 * **Demographics** (encrypted profile values) stay ciphertext, decrypted only offline with
@@ -41,53 +42,94 @@ from django.utils import timezone
 from YSE_App.services.research_dataset import Pseudonymizer, ResearchCohort
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-ORCID_RE = re.compile(r"\b\d{4}-\d{4}-\d{4}-\d{3}[\dXx]\b")
-MENTION_RE = re.compile(r"(?<![\w@])@[\w.-]+")
-MIN_NAME_LENGTH = 3
+ORCID_RE = re.compile(r"(?<![^\W_])\d{4}-\d{4}-\d{4}-\d{3}[\dXx](?![^\W_])")
+# Whole words only: not preceded or followed by a letter or digit (so "Li" never matches inside
+# "Literally"), while start/end of text, whitespace, punctuation, "@", "-" and "(" all count as edges.
+LEFT_EDGE = r"(?<![^\W_])"
+RIGHT_EDGE = r"(?![^\W_])"
+TOKEN_SPLIT_RE = re.compile(r"[\s,.;:()\[\]/-]+")
+WORD_SPLIT_RE = re.compile(r"[\s,.;:()\[\]/]+")
+MIN_TOKEN_LENGTH = 2  # single letters (initials) are not replaced on their own
 
 # Transient fields whose changes go into ``transient_changes`` (the change log).
 TRANSIENT_CHANGE_FIELDS = ("status", "best_spec_class", "photo_class", "context_class", "TNS_spec_class",
                            "redshift", "redshift_err", "redshift_source")
 
 
-class Scrubber:
-    """Replace mentions, emails, ORCID iDs and the known names of users in free text."""
+def _compile(terms):
+    ordered = sorted(terms, key=lambda t: (-len(t), t))  # longest matches first
+    if not ordered:
+        return None
+    return re.compile("%s(?:%s)%s" % (LEFT_EDGE, "|".join(re.escape(t) for t in ordered), RIGHT_EDGE),
+                      re.IGNORECASE)
 
-    def __init__(self, names: Iterable[str]):
-        terms = set()
-        for name in names:
-            name = (name or "").strip()
-            if len(name) < MIN_NAME_LENGTH:
-                continue
-            terms.add(name.lower())
-            for part in re.split(r"[\s,.]+", name):
-                if len(part) >= MIN_NAME_LENGTH:
-                    terms.add(part.lower())
-        ordered = sorted(terms, key=lambda t: (-len(t), t))
-        self._names = re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(re.escape(t) for t in ordered),
-                                 re.IGNORECASE) if ordered else None
+
+class NameReplacer:
+    """Replace every mention of a person in free text with that person's pseudonym (#746).
+
+    Pass 1, direct matches: usernames (so ``@username`` too), emails, ORCID iDs, full names,
+    display names and publication names. Pass 2, name tokens (given names and surnames, any
+    length from 2 letters) as whole words only. Case-insensitive, longest first. A term shared
+    by several people becomes one neutral per-export string. Emails and ORCID iDs of nobody known
+    become ``[email]`` and ``[orcid]``.
+    """
+
+    def __init__(self, people: Iterable[Tuple[int, Dict[str, Any]]]):
+        self.direct: Dict[str, set] = {}
+        self.tokens: Dict[str, set] = {}
+        for uid, info in people:
+            for value in info.get("direct", ()):
+                value = (value or "").strip()
+                if len(value) >= MIN_TOKEN_LENGTH:
+                    self.direct.setdefault(value.lower(), set()).add(uid)
+            for value in info.get("names", ()):
+                # Whole words ("Smith-Jones") and their hyphen-free parts ("Smith", "Jones").
+                words = WORD_SPLIT_RE.split(value or "")
+                for token in set(words) | set(TOKEN_SPLIT_RE.split(value or "")):
+                    token = token.strip("-")
+                    if len(token) >= MIN_TOKEN_LENGTH:
+                        self.tokens.setdefault(token.lower(), set()).add(uid)
+        self._direct_re = _compile(self.direct)
+        self._token_re = _compile(set(self.tokens) - set(self.direct))
 
     @classmethod
-    def for_all_users(cls) -> "Scrubber":
+    def for_all_users(cls) -> "NameReplacer":
         from YSE_App.models.researcher_models import ResearcherProfile
-        names: List[str] = []
-        for username, first, last in User.objects.values_list("username", "first_name", "last_name"):
-            names.extend([username, first, last, ("%s %s" % (first, last)).strip()])
-        for row in ResearcherProfile.objects.values_list("full_name", "preferred_name", "author_name_format"):
-            names.extend(row)
-        return cls(names)
+        profiles = {p["user_id"]: p for p in ResearcherProfile.objects.values(
+            "user_id", "full_name", "preferred_name", "author_name_format", "orcid")}
+        people = []
+        for user in User.objects.only("id", "username", "first_name", "last_name", "email"):
+            profile = profiles.get(user.pk, {})
+            full = ("%s %s" % (user.first_name, user.last_name)).strip()
+            direct = [user.username, user.email, full, profile.get("full_name"), profile.get("preferred_name"),
+                      profile.get("author_name_format"), profile.get("orcid")]
+            names = [user.first_name, user.last_name, full, profile.get("full_name"),
+                     profile.get("preferred_name"), profile.get("author_name_format")]
+            people.append((user.pk, {"direct": direct, "names": names}))
+        return cls(people)
 
-    def __call__(self, text):
+    def __call__(self, text, person: Callable[[int], str], ambiguous: Callable[[str], str]):
         if text is None:
             return None
         if not isinstance(text, str):
             text = json.dumps(text, sort_keys=True, default=str)
+        out: List[str] = []
+
+        def replacer(mapping):
+            def sub(match):
+                key = match.group(0).lower()
+                ids = mapping[key]
+                out.append(person(next(iter(ids))) if len(ids) == 1 else ambiguous(key))
+                return "\x00%d\x00" % (len(out) - 1)
+            return sub
+
+        if self._direct_re is not None:
+            text = self._direct_re.sub(replacer(self.direct), text)
         text = EMAIL_RE.sub("[email]", text)
         text = ORCID_RE.sub("[orcid]", text)
-        text = MENTION_RE.sub("@[person]", text)
-        if self._names is not None:
-            text = self._names.sub("[name]", text)
-        return text
+        if self._token_re is not None:
+            text = self._token_re.sub(replacer(self.tokens), text)
+        return re.sub("\x00(\d+)\x00", lambda m: out[int(m.group(1))], text)
 
 
 @dataclass
@@ -150,16 +192,21 @@ def _value(value):
 
 
 class Exporter:
-    def __init__(self, cohort: Optional[ResearchCohort] = None, scrubber: Optional[Scrubber] = None):
+    def __init__(self, cohort: Optional[ResearchCohort] = None, replacer: Optional[NameReplacer] = None):
         self.cohort = cohort or ResearchCohort.load()
-        self.scrub = scrubber or Scrubber.for_all_users()
+        self.replacer = replacer or NameReplacer.for_all_users()
         self.people = Pseudonymizer("p_")
         self.ids = Pseudonymizer("r_")
         self.institutions = Pseudonymizer("inst_")
+        self.ambiguous = Pseudonymizer("n_")
         self.participants: set = set()
         self.counts: Dict[str, int] = {}
 
     # -- helpers ---------------------------------------------------------------
+    def scrub(self, text):
+        """Free text with every person replaced by their pseudonym for this export."""
+        return self.replacer(text, self.people, self.ambiguous)
+
     def _ref(self, namespace, value):
         return None if value is None else self.ids((namespace, value))
 
@@ -305,4 +352,4 @@ def export(path: str) -> Dict[str, int]:
     return Exporter().write(path)
 
 
-__all__ = ["Exporter", "Scrubber", "TableSpec", "export"]
+__all__ = ["Exporter", "NameReplacer", "TableSpec", "export"]

@@ -327,15 +327,16 @@ class AgreementAcceptance(models.Model):
 # Which researcher-profile data are kept for everyone and which are research data (Ryan,
 # 2026-10-20, #744). Essential: what running the site needs (username, display name,
 # publication and acknowledgment names, email, group memberships and roles, institution,
-# ORCID). Everything else in the researcher profile is research data: offered only to users who
+# ORCID, and observing experience, which shows who can observe with which instrument). Everything else in the researcher profile is research data: offered only to users who
 # consent, never required from others, excluded from research once a user declines or
 # withdraws, and deleted by an administrator with ``purge_unconsented_demographics``.
 ESSENTIAL_PROFILE_FIELDS = (
     "full_name", "preferred_name", "author_name_format", "acknowledgment_text", "institution", "orcid",
+    "observing_experience",
 )
 RESEARCH_PROFILE_FIELDS = (
     "pronouns", "department", "career_level", "career_level_other", "research_interests", "website",
-    "github_username", "time_zone", "observing_experience",
+    "github_username", "time_zone",
 )
 # All encrypted fields (country, PhD year, gender) are research data.
 RESEARCH_ENCRYPTED_FIELDS = ENCRYPTED_FIELDS

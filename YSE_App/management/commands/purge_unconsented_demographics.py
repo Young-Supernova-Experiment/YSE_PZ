@@ -8,13 +8,15 @@ Research data = every researcher-profile item that is not essential to run the s
 
 * the encrypted values (country, PhD year, gender);
 * the plain research fields (``RESEARCH_PROFILE_FIELDS``: pronouns, department, career level,
-  research interests, website, GitHub, time zone, observing experience), blanked;
+  research interests, website, GitHub, time zone), blanked;
 * their field history;
-* mentorships where the user is the mentee, or the mentor and they added the row themselves;
+* the advisor / student rows the user entered themselves, whatever their role (rows the other
+  person entered are that person's information and stay: privacy covers what an individual
+  revealed, Ryan 2026-10-20);
 * affiliation history and SciX metrics.
 
 Kept: username, display and publication names, acknowledgment text, email, institution, ORCID,
-group memberships and roles, and all site activity.
+observing experience, group memberships and roles, and all site activity.
 
 Dry run by default (prints usernames and counts, never values). ``--apply`` deletes.
 ``--user NAME`` (repeatable) limits the run to those users; consenting users and users who have
@@ -43,7 +45,7 @@ from YSE_App.models.researcher_models import (
 )
 from YSE_App.services import research_consent as rc
 
-PLAIN_TEXT_FIELDS = tuple(f for f in RESEARCH_PROFILE_FIELDS if f != "observing_experience")
+PLAIN_TEXT_FIELDS = tuple(RESEARCH_PROFILE_FIELDS)
 HISTORY_FIELDS = RESEARCH_PROFILE_FIELDS + tuple(RESEARCH_ENCRYPTED_FIELDS) + ("current_advisor",)
 
 
@@ -57,7 +59,8 @@ def opted_out_user_ids():
 
 
 def _mentorships(user):
-    return Mentorship.objects.filter(Q(mentee=user) | Q(mentor=user, created_by=user))
+    """Rows the user entered themselves (as mentee or mentor)."""
+    return Mentorship.objects.filter(Q(mentee=user) | Q(mentor=user), created_by=user)
 
 
 def research_data_counts(user) -> Dict[str, int]:
@@ -65,7 +68,6 @@ def research_data_counts(user) -> Dict[str, int]:
     plain = 0
     if profile is not None:
         plain = sum(1 for f in PLAIN_TEXT_FIELDS if getattr(profile, f, ""))
-        plain += 1 if profile.observing_experience.exists() else 0
     return {
         "encrypted values": EncryptedProfileValue.objects.filter(user=user).count(),
         "profile fields": plain,
@@ -89,10 +91,7 @@ def purge_research_data(user) -> Dict[str, int]:
                 purged_fields.add(name)
                 setattr(profile, name, "")
         profile.save(update_fields=list(PLAIN_TEXT_FIELDS) + ["updated_at"])
-        if profile.observing_experience.exists():
-            purged_fields.add("observing_experience")
-            profile.observing_experience.clear()
-    if Mentorship.objects.filter(mentee=user, kind=Mentorship.KIND_CURRENT_ADVISOR).exists():
+    if _mentorships(user).filter(mentee=user, kind=Mentorship.KIND_CURRENT_ADVISOR).exists():
         purged_fields.add("current_advisor")
     _mentorships(user).delete()
     AffiliationHistory.objects.filter(user=user).delete()

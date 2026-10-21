@@ -377,7 +377,7 @@ class PurgeCommandTests(TestCase):
                 author_name_format="Person, S.", department="Physics", career_level="grad", pronouns="they/them",
                 research_interests="synthetic interests", website="https://example.org/", github_username="synthetic")
             Mentorship.objects.create(mentee=user, mentor_name="Synthetic Advisor",
-                                      kind=Mentorship.KIND_CURRENT_ADVISOR)
+                                      kind=Mentorship.KIND_CURRENT_ADVISOR, created_by=user)
             AffiliationHistory.objects.create(user=user, institution="Example College")
             ResearcherMetrics.objects.create(user=user, source="scix", h_index=3)
             with with_key():
@@ -419,6 +419,30 @@ class PurgeCommandTests(TestCase):
         for user in (self.unanswered, self.consenting):
             self.assertTrue(self.has_research_data(user), user.username)
         self.assertIn("Nothing to delete.", self.run_purge("--apply"))  # idempotent
+
+    def test_mentorships_entered_by_the_other_person_are_kept(self):
+        # Privacy covers what the person revealed, not information about them (Ryan, 2026-10-20).
+        mentor = User.objects.create_user("purge_mentor")
+        theirs = Mentorship.objects.create(mentor=mentor, mentee=self.declined, kind=Mentorship.KIND_PHD_ADVISOR,
+                                           created_by=mentor)
+        own_as_mentor = Mentorship.objects.create(mentor=self.declined, mentee_name="Synthetic Student",
+                                                  kind=Mentorship.KIND_RESEARCH_SUPERVISOR, created_by=self.declined)
+        self.run_purge("--apply", "--user", "purge_declined")
+        self.assertTrue(Mentorship.objects.filter(pk=theirs.pk).exists())
+        self.assertFalse(Mentorship.objects.filter(pk=own_as_mentor.pk).exists())
+        self.assertFalse(Mentorship.objects.filter(mentee=self.declined, created_by=self.declined).exists())
+
+    def test_observing_experience_is_essential_and_kept(self):
+        from YSE_App.models import Instrument, Observatory, Telescope
+        audit = {"created_by": self.consenting, "modified_by": self.consenting}
+        obs = Observatory.objects.create(name="Synthetic Observatory", utc_offset=0, tz_name="UTC", **audit)
+        tel = Telescope.objects.create(name="Synthetic Scope", observatory=obs, latitude=0.0, longitude=0.0,
+                                       elevation=0.0, **audit)
+        inst = Instrument.objects.create(name="SynthCam", telescope=tel, **audit)
+        profile = ResearcherProfile.objects.get(user=self.declined)
+        profile.observing_experience.add(inst)
+        self.run_purge("--apply", "--user", "purge_declined")
+        self.assertEqual(list(profile.observing_experience.all()), [inst])
 
     def test_user_option(self):
         self.run_purge("--apply", "--user", "purge_declined")
@@ -605,9 +629,15 @@ class ResearchExportTests(TestCase):
         self.assertNotIn("zq@example.com", dump)
         self.assertNotIn("prefer_not_to_say", dump)  # ciphertext only
         self.assertIn("2026synthexp", dump)  # public transient names are kept
+        import re
         text = conn.execute("SELECT comment FROM comments LIMIT 1").fetchone()[0]
-        self.assertIn("@[person]", text)
-        self.assertIn("[name]", text)
+        # Every person named in the text is replaced by their pseudonym for this export.
+        named = set(re.findall(r"p_[0-9a-f]{20}", text))
+        participants = {r[0] for r in conn.execute("SELECT participant FROM participants")}
+        self.assertEqual(len(named), 3, text)  # alice (name, ORCID), bob (@mention, surname), dave
+        self.assertTrue(named <= participants, text)
+        self.assertIn("[email]", text)  # an address of nobody known
+        self.assertTrue(text.startswith("Thanks @p_"), text)
 
     def test_two_exports_share_no_identifiers(self):
         first, second = self.export("c1.sqlite"), self.export("c2.sqlite")
@@ -631,3 +661,36 @@ class ResearchExportTests(TestCase):
         for bad in ("auth_user", "django_session", "authtoken_token", "YSE_App_encryptedcredential"):
             self.assertNotIn(bad, names)
         self.assertIn("comments", names)
+
+
+class NameReplacerTests(TestCase):
+    """Whole-word, case-insensitive, longest-first replacement of people in free text (#746)."""
+
+    def setUp(self):
+        from YSE_App.services.research_export import NameReplacer
+        self.replace = NameReplacer([
+            (1, {"direct": ["wli", "wei.li@example.com", "Wei Li", "Li, W.", VALID_ORCID],
+                 "names": ["Wei", "Li", "Wei Li", "Li, W."]}),
+            (2, {"direct": ["jsj", "Jo Smith-Jones"], "names": ["Jo", "Smith-Jones"]}),
+            (3, {"direct": ["kng"], "names": ["Kim", "Ng"]}),
+            (4, {"direct": ["kim2"], "names": ["Kim", "Park"]}),
+        ])
+
+    def run_replace(self, text):
+        return self.replace(text, lambda uid: "P%d" % uid, lambda key: "AMBIG")
+
+    def test_two_letter_names_only_as_whole_words(self):
+        self.assertEqual(self.run_replace("Li said: literally Literally, Lithium, oLi, Li2."),
+                         "P1 said: literally Literally, Lithium, oLi, Li2.")
+        self.assertEqual(self.run_replace("(Li) -Li- @Li li! LI? Ng's"), "(P1) -P1- @P1 P1! P1? P3's")
+
+    def test_direct_matches_first_and_longest(self):
+        self.assertEqual(self.run_replace("Thanks @wli and WEI LI (wei.li@example.com, %s)" % VALID_ORCID),
+                         "Thanks @P1 and P1 (P1, P1)")
+        self.assertEqual(self.run_replace("Li, W. 2024"), "P1 2024")
+        self.assertEqual(self.run_replace("Jo Smith-Jones; Smith-Jones; Jones; Smith"), "P2; P2; P2; P2")
+
+    def test_shared_names_and_unknown_identifiers(self):
+        self.assertEqual(self.run_replace("Kim and Park"), "AMBIG and P4")
+        self.assertEqual(self.run_replace("mail x@example.org, orcid 0000-0001-5109-3700"),
+                         "mail [email], orcid [orcid]")

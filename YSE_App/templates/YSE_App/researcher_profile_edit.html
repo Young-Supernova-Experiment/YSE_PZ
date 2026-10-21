@@ -57,7 +57,7 @@
 							</div>
 						</div>
 						{% else %}
-						<div class="alert alert-light border small mb-0" id="yse-research-fields-locked">The rest of the profile (career level, department, pronouns, advisor, PhD year, country, gender, research interests, website, GitHub, time zone and observing experience) is research information. It is offered only if you <a href="{% url 'research_consent' %}?next={% url 'researcher_profile_edit' %}">consent to the research study</a>, and is never required otherwise.</div>
+						<div class="alert alert-light border small mb-0" id="yse-research-fields-locked">The rest of the profile (career level, department, pronouns, advisor, PhD year, country, gender, research interests, website, GitHub and time zone) is research information. It is offered only if you <a href="{% url 'research_consent' %}?next={% url 'researcher_profile_edit' %}">consent to the research study</a>, and is never required otherwise.</div>
 						{% endif %}
 					</div>
 				</div>
@@ -99,8 +99,8 @@
 						{% include 'YSE_App/partials/profile_field.html' with field=form.website %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.github_username %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.time_zone %}
-						{% include 'YSE_App/partials/profile_field.html' with field=form.observing_experience note='Tick the instruments you have observed with, grouped by telescope.' %}
 						{% endif %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.observing_experience note='Tick the instruments you have observed with, grouped by telescope.' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.acknowledgment_text %}
 					</div>
 					<div class="box-footer">

@@ -712,7 +712,7 @@ Experimental has its own `0038`-`0050` under other names; the develop -> experim
 
 * Every signed-in browser user accepts agreement v2 once (the existing gate). They then see the research consent form, which offers Consent, Decline and Not now. It never blocks the site and is always available from My profile.
 * Users who have not answered are reminded once more, after 10 logins or 1 month (whichever comes first), then once a year at their first login. Anyone who answered is never reminded.
-* Only the essential profile fields are asked of everyone: name, publication name, acknowledgment text, institution and ORCID. Everything else in the profile is research data, offered only to users who consent.
+* Only the essential profile fields are asked of everyone: name, publication name, acknowledgment text, institution, ORCID and observing experience. Everything else in the profile is research data, offered only to users who consent.
 * Declining or withdrawing deletes nothing automatically. The user is excluded from research at once, and the administrators below get an in-app notification and an email.
 * Superusers see read-only consent records in the admin (no values). The three new tables are hidden from SQL Explorer. If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_researchconsentform`, `YSE_App_researchconsentrecord` and `YSE_App_researchconsentprompt`.
 
@@ -736,11 +736,11 @@ cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --user <USERN
 Without `--user` the command covers every user who declined or withdrew. What it deletes:
 
 * the encrypted values (country, PhD year, gender);
-* the research profile fields (career level, department, pronouns, interests, website, GitHub, time zone, observing experience);
+* the research profile fields (career level, department, pronouns, interests, website, GitHub, time zone);
 * their field history;
-* the user's advisor and student rows (only those they entered themselves), affiliation history and SciX metrics.
+* the advisor and student rows the user entered themselves (rows the other person entered stay), affiliation history and SciX metrics.
 
-It keeps the username, names, email, institution, ORCID, groups and roles, and all site activity. Consenting users and users who have not answered are never touched. A second run prints `Nothing to delete.`
+It keeps the username, names, email, institution, ORCID, observing experience, groups and roles, and all site activity. Consenting users and users who have not answered are never touched. A second run prints `Nothing to delete.`
 
 **Step C (only when Ryan asks): write the anonymized research database.**
 
@@ -748,7 +748,7 @@ It keeps the username, names, email, institution, ORCID, groups and roles, and a
 cd <CHECKOUT> && <PYTHON> manage.py export_research_database --out <SECURE_DIR>/yse-research-<DATE>.sqlite
 ```
 
-The command writes a new SQLite file readable only by its owner, and refuses to overwrite an existing file unless you pass `--force`. Hand the file to Ryan and do not leave copies on shared disks. The file holds no names, usernames, emails, ORCID iDs or credentials, and every person and row id is a fresh random string, so two exports cannot be joined.
+The command writes a new SQLite file readable only by its owner, and refuses to overwrite an existing file unless you pass `--force`. Hand the file to Ryan and do not leave copies on shared disks. The file holds no names, usernames, emails, ORCID iDs or credentials: people, also where comments mention them, appear only as random strings drawn fresh for each export, so two exports are hard to join.
 
 **Check (optional):**
 
