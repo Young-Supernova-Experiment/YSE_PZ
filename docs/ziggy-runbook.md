@@ -3269,6 +3269,43 @@ systemctl list-timers yse-watchdog.timer
 
 **Rollback.** `sudo systemctl disable --now yse-watchdog.timer`. To remove it completely, also delete `/usr/local/sbin/yse-watchdog.sh`, the two unit files, `/etc/yse-watchdog/` and `/var/lib/yse-watchdog/`, and run `DROP USER 'yse_watchdog'@'localhost';`.
 
+<a id="db-timeouts"></a>
+### Database client timeouts (2026-10-21, #770) optional, recommended, per stack
+
+Without client timeouts, a web thread waits as long as MySQL takes. With a fixed number of mod_wsgi threads, a few slow statements make every DB-backed page fail while static files still load. Four optional keys in `[database]` of each stack's `settings.ini` set the limits, in whole seconds (`YSE_`-prefixed environment variables win). Unset or `0` means no timeout, which is today's behaviour. The code is on yse\_experimental now, yse\_test after the next promotion, production after #143.
+
+| Key (env var) | Applies to | Recommended |
+|---|---|---|
+| `DB_CONNECT_TIMEOUT` (`YSE_DB_CONNECT_TIMEOUT`) | opening a connection, both aliases | `10` |
+| `DB_WRITE_TIMEOUT` (`YSE_DB_WRITE_TIMEOUT`) | sending a statement, both aliases | `60` |
+| `DB_READ_TIMEOUT` (`YSE_DB_READ_TIMEOUT`) | waiting for a reply, both aliases | `40` |
+| `EXPLORER_DB_READ_TIMEOUT` (`YSE_EXPLORER_DB_READ_TIMEOUT`) | replaces `DB_READ_TIMEOUT` for the `explorer` alias (saved SQL, dashboards) | `100` |
+
+The MySQL client retries a timed-out read, so a statement fails after up to **three times** the read timeout: `40` gives about 2 minutes, `100` about 5 minutes, which is Apache's `Timeout 300`. When it fails, the page gets "Lost connection to MySQL server" and the thread is free again. MySQL keeps running the statement until it next tries to send to the closed connection; the Explorer statement cap (`EXPLORER_QUERY_MAX_EXECUTION_MS`, #233) is what stops it on the server.
+
+**T1. Keep long cron statements unlimited.** Crons read the same `settings.ini`, and some run single statements longer than 2 minutes (PhotStat rebuilds, bulk updates, the dashboard cache warmer). In every cron wrapper for the stack, export the override before `manage.py`:
+```bash
+export YSE_DB_READ_TIMEOUT=0 YSE_EXPLORER_DB_READ_TIMEOUT=0
+```
+Put it in the file the wrappers source if they share one (for example an `*_envs.sourceme` file). One-off commands such as `migrate` or `rebuild_photstats` from a shell: prefix them with `YSE_DB_READ_TIMEOUT=0`.
+
+**T2. Set the keys** under the existing `[database]` header of `<CHECKOUT>/YSE_PZ/settings.ini`:
+```ini
+DB_CONNECT_TIMEOUT: 10
+DB_WRITE_TIMEOUT: 60
+DB_READ_TIMEOUT: 40
+EXPLORER_DB_READ_TIMEOUT: 100
+```
+Then `sudo systemctl reload apache2`.
+
+**T3. Check.**
+```bash
+cd <CHECKOUT> && <STACK_PYTHON> manage.py shell -c "from django.conf import settings as s; print({a: {k: v for k, v in s.DATABASES[a].get('OPTIONS', {}).items() if k.endswith('timeout')} for a in ('default', 'explorer')})"
+```
+**Expected:** `{'default': {'connect_timeout': 10, 'write_timeout': 60, 'read_timeout': 40}, 'explorer': {'connect_timeout': 10, 'write_timeout': 60, 'read_timeout': 100}}`. A typo, such as `40s`, stops the stack with `ValueError: [database] DB_READ_TIMEOUT must be a whole number of seconds`. Then load a dashboard and a transient page. In the next day's Apache error log, `Lost connection to MySQL server during query` lines name the requests that hit the limit.
+
+**Rollback:** delete the four lines (or set them to `0`) and reload Apache.
+
 ## 4 · Data checks David
 
 Read-only queries against the production database. Post the output in the Slack thread.
@@ -3418,6 +3455,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-21 v97, **optional, recommended** (no migration, no new package): database client timeouts ([#770](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/770)). New section [Database client timeouts](#db-timeouts), T1-T3 per stack; set the cron override (T1) before the keys (T2). Nothing changes until the keys are set.
 * 2026-10-21 v96, **optional, recommended** (no migration, no new package): `GET /healthz/` ([#768](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/768)) and the server watchdog ([#769](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/769)). New section [Server watchdog and `/healthz/`](#watchdog), steps W1-W5, root on Ziggy; start with `DRY_RUN=1`. Nothing changes until it is installed.
 * 2026-10-21 v95, **nothing required**; one optional check. Cron hygiene: the legacy TNS crons no longer replace our `best_spec_class` on transients we already have; they follow the TNS re-sync rule (`TNS_spec_class` follows TNS, `best_spec_class` only when we have none or ours is the previous TNS class) ([#755](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/755)). `PhotometryUploadExample.PhotometryUploads` is removed from `CRON_CLASSES` and the module is deleted ([#756](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/756)). A cron that finds another instance of itself running still sends its alert email but now returns, so the rest of that `runcrons` run continues ([#757](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/757)). The ZTF forced-photometry download login is read from settings (`[ztf] ztfwebdavuser` / `ztfwebdavpass`, or `ZTF_WEBDAV_USER` / `ZTF_WEBDAV_PASS`); the defaults are ZTF's published generic login, so leave them unset ([#758](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/758)). No migration. **Optional check:** `crontab -l | grep -c PhotometryUploadExample` as the cron user on Ziggy. **Expected:** `0`. **If not:** delete that crontab line (the module no longer exists).
 * 2026-10-21 v94, **nothing required** (no migration, no new package; one optional setting). Duplicate transients ([#752](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/752), [#753](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/753), [#754](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/754)): the `CheckDuplicates` cron only reports candidate pairs (notification to `DUPLICATE_REPORT_USERNAMES`, default every active superuser) and uploads no longer delete same-name transients; a person merges a pair with `manage.py transient_duplicates merge <DUPLICATE_ID> <KEEP_ID> --yes` (dry run without `--yes`; one transaction). `DUPLICATE_AUTO_MERGE` (off) restores unattended merging ([section "Duplicate transients"](#duplicates)).
