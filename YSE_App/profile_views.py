@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -51,7 +51,7 @@ def agreement(request):
         if form.is_valid():
             AgreementAcceptance.objects.get_or_create(user=request.user, agreement=current)
             onboarding.clear_session_flag(request)
-            messages.success(request, "Thank you: you accepted the YSE-PZ User Agreement (%s)." % current.version)
+            messages.success(request, "Thank you: you accepted the YSE-PZ User Agreement.")
             destination = onboarding.safe_next(request, next_url)
             if rc.prompt_due(request.user):
                 # The voluntary research consent form (#744), for users who never answered. Not a
@@ -83,16 +83,34 @@ def _encrypted_rows(user, key_available):
     return [{"name": name, "label": labels[name], "row": status.get(name)} for name in ENCRYPTED_FIELDS], status
 
 
+def _after_consent_url(request, destination):
+    """Where an answer to the research consent form goes next (#766).
+
+    The researcher profile (carrying ``destination`` as its ``next``) while the required essential
+    fields are incomplete, so people who decline or skip still fill them in; otherwise
+    ``destination``. The profile pages are exempt from the gate and never come back here, so
+    there is no loop; a destination that already is the profile editor is left alone.
+    """
+    edit_url = reverse("researcher_profile_edit")
+    if request.user.is_authenticated and not rp.is_complete(request.user) \
+            and urlsplit(destination).path != edit_url:
+        return "%s?%s" % (edit_url, urlencode({"next": destination}))
+    return destination
+
+
 @login_required
 def research_consent(request):
     """The voluntary research consent form (#744): consent, decline, or later withdraw.
 
-    Never a gate: both choices continue to ``next`` (default: the profile page).
+    Never a gate, and every answer (Consent, Decline, Not now) continues the same way: to the
+    researcher profile while its required fields are incomplete, then to ``next`` (default: the
+    profile page).
     """
     user = request.user
     form_row = rc.current_form()
     next_url = request.POST.get("next") or request.GET.get("next") or ""
-    continue_url = onboarding.safe_next(request, next_url, fallback=reverse("researcher_profile"))
+    continue_url = _after_consent_url(
+        request, onboarding.safe_next(request, next_url, fallback=reverse("researcher_profile")))
     state = rc.status(user)
     if request.method == "POST":
         if form_row is None:

@@ -2,7 +2,7 @@
 
 {% block content %}
 <section class="content-header">
-	<h1>Research consent (voluntary)</h1>
+	<h1>Optional research consent</h1>
 </section>
 
 <section class="content" id="yse-research-consent">
@@ -17,7 +17,6 @@
 			<div class="box box-default box-solid">
 				<div class="box-header with-border">
 					<strong>{{ consent_form.title }}</strong>
-					<span class="text-muted small ml-2">version {{ consent_form.version }}, effective {{ consent_form.effective_date|date:"Y-m-d" }}</span>
 				</div>
 				<div class="box-body yse-research-consent-body">
 					{{ consent_form.body|safe }}
