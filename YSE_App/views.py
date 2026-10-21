@@ -779,7 +779,9 @@ def get_transient_tags(request):
     for id in id_str:
         ids.append(int(id))
 
-    transient_queryset = Transient.objects.filter(tags__in=ids).distinct()
+    # The listing rule (#607, #760), as on /api/transients/ and the search page.
+    transient_queryset = filter_listed_transients(
+        request.user, Transient.objects.filter(tags__in=ids).distinct())
     transient_objs = [t for t in transient_queryset]
 
     serializer = TransientSerializer(transient_objs, context={'request': request}, many=True)
@@ -1637,19 +1639,6 @@ def _authorized_transient_spectra(request, transient_id):
     return SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
         request.user, transient_id, includeBadData=True
     ).select_related('instrument', 'instrument__telescope')
-
-
-@login_required
-def transient_detail_comments_fragment(request, transient_id):
-    get_object_or_404(Transient, pk=transient_id)
-    logs = list(
-        Log.objects.filter(transient_id=transient_id).order_by('-modified_date')
-    )
-    return render(
-        request,
-        'YSE_App/transient_detail_comments_list.html',
-        {'logs': logs},
-    )
 
 
 @login_required

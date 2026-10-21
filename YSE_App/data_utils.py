@@ -1463,11 +1463,13 @@ def add_transient_spec(request):
 
 @login_or_basic_auth_required
 def get_transient(request, slug):
-    t = Transient.objects.filter(slug=slug)
+    from YSE_App.services.visibility import filter_listed_transients
+    # The listing rule (#607, #760): a transient the user may not list answers like an unknown slug.
+    t = filter_listed_transients(request.user, Transient.objects.filter(slug=slug))
 
     return_dict = {"transient":""}
-    if t.exists():
-        transient = t[0]
+    transient = t.first()
+    if transient is not None:
         serializer = TransientSerializer(instance=transient, context={"request":Request(request)})
         return_dict["transient"] = serializer.data
 
