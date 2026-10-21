@@ -20,7 +20,7 @@
 	<div class="alert alert-warning">Please fill in: {% for name, label in missing %}{{ label }}{% if not forloop.last %}, {% endif %}{% endfor %}.</div>
 	{% endif %}
 	<p class="text-muted small">
-		<span class="text-danger">*</span> required for everyone; other requirements depend on your career level.
+		<span class="text-danger">*</span> required for everyone{% if research_consented %}; other requirements depend on your career level{% endif %}.
 		<i class="fa fa-lock" aria-hidden="true"></i> encrypted; even administrators cannot read it. Stored encrypted values are never shown again: leave a field blank to keep it, or tick "Delete" to remove it.
 		Every change is recorded with its date. See the <a href="{% url 'agreement' %}">User Agreement</a> (section 8) for how this information is used.
 	</p>
@@ -35,13 +35,18 @@
 					<div class="box-body">
 						{% include 'YSE_App/partials/profile_field.html' with field=form.full_name req='all' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.preferred_name %}
-						{% include 'YSE_App/partials/profile_field.html' with field=form.pronouns note='Optional; shown to other users.' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.author_name_format %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.institution req='all' %}
+						{% if research_consented %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.orcid req='for postdocs and above' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.pronouns note='Optional; shown to other users.' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.department req='all' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.career_level req='all' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.career_level_other req='when career level is Other' wrapper_class='yse-career-other' %}
-						{% include 'YSE_App/partials/profile_field.html' with field=form.orcid req='for postdocs and above' %}
+						{% else %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.orcid %}
+						{% endif %}
+						{% if research_consented %}
 						<div class="yse-advisor-block">
 							<div class="form-group">
 								<label for="id_advisor_name">Current advisor <span class="text-danger small">(required for students)</span></label>
@@ -51,6 +56,9 @@
 								{% if form.advisor_name.errors %}<div class="text-danger small">{{ form.advisor_name.errors|join:" " }}</div>{% endif %}
 							</div>
 						</div>
+						{% else %}
+						<div class="alert alert-light border small mb-0" id="yse-research-fields-locked">The rest of the profile (career level, department, pronouns, advisor, PhD year, country, gender, research interests, website, GitHub, time zone and observing experience) is research information. It is offered only if you <a href="{% url 'research_consent' %}?next={% url 'researcher_profile_edit' %}">consent to the research study</a>, and is never required otherwise.</div>
+						{% endif %}
 					</div>
 				</div>
 				<div class="box box-default box-solid">
@@ -61,7 +69,7 @@
 						{% endif %}
 						{% for item in encrypted_rows %}
 						<div class="mb-2">
-							{% if item.name in demographic_fields and not research_consented %}
+							{% if not research_consented %}
 							<div class="yse-demographic-locked"><strong>{{ item.label }}</strong> <span class="small text-muted">Offered only if you <a href="{% url 'research_consent' %}?next={% url 'researcher_profile_edit' %}">consent to the research study</a>.</span></div>
 							{% else %}
 							{% if item.name == 'country' %}{% include 'YSE_App/partials/profile_field.html' with field=form.country locked=1 %}{% endif %}
@@ -86,11 +94,13 @@
 				<div class="box box-default box-solid">
 					<div class="box-header with-border"><strong>Research and papers</strong></div>
 					<div class="box-body">
+						{% if research_consented %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.research_interests %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.website %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.github_username %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.time_zone %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.observing_experience note='Tick the instruments you have observed with, grouped by telescope.' %}
+						{% endif %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.acknowledgment_text %}
 					</div>
 					<div class="box-footer">

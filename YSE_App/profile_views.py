@@ -19,7 +19,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from YSE_App import onboarding
 from YSE_App.models import AgreementAcceptance, Mentorship, ResearcherMetrics, ResearcherProfile, UserAgreement
-from YSE_App.models.researcher_models import DEMOGRAPHIC_FIELDS, ENCRYPTED_FIELDS, STUDENT_LEVELS
+from YSE_App.models.researcher_models import ENCRYPTED_FIELDS, STUDENT_LEVELS
 from YSE_App.profile_forms import (
     AgreementForm, ResearchConsentChoiceForm, ResearcherProfileForm, StudentForm, StudentUpdateForm,
 )
@@ -53,9 +53,10 @@ def agreement(request):
             onboarding.clear_session_flag(request)
             messages.success(request, "Thank you: you accepted the YSE-PZ User Agreement (%s)." % current.version)
             destination = onboarding.safe_next(request, next_url)
-            if rc.needs_prompt(request.user):
-                # The voluntary research consent form, offered once (#744). Not a gate:
-                # consenting and declining both continue to ``destination``.
+            if rc.prompt_due(request.user):
+                # The voluntary research consent form (#744), for users who never answered. Not a
+                # gate: consenting, declining and "Not now" all continue to ``destination``.
+                rc.record_prompt(request.user)
                 return redirect("%s?%s" % (reverse("research_consent"), urlencode({"next": destination})))
             return redirect(destination)
     elif request.method in ("GET", "HEAD"):
@@ -101,12 +102,12 @@ def research_consent(request):
             action = form.cleaned_data["action"]
             decision = {"consent": rc.CONSENTED, "decline": rc.DECLINED, "withdraw": rc.WITHDRAWN}[action]
             try:
-                _record, deleted = rc.record_decision(user, decision, form=form_row)
+                rc.record_decision(user, decision, form=form_row)
             except rc.ConsentError:
                 messages.info(request, "Nothing changed: that choice does not apply to your current status.")
                 return redirect(continue_url)
             if decision == rc.CONSENTED:
-                messages.success(request, "Thank you for taking part. You can add the optional demographic "
+                messages.success(request, "Thank you for taking part. You can now add the research "
                                           "information on your profile.")
             elif decision == rc.DECLINED:
                 messages.success(request, "You declined to take part in the study. You can change this on your "
@@ -114,8 +115,11 @@ def research_consent(request):
             else:
                 messages.success(request, "You withdrew from the study. Your activity since the form went "
                                           "live will not be used in any research dataset.")
-            if deleted:
-                messages.info(request, "Your stored demographic information was deleted.")
+            if decision != rc.CONSENTED:
+                messages.info(request, "Your research profile information is no longer used, and an "
+                                       "administrator will delete it.")
+            # What the profile requires depends on consent: re-check the onboarding steps.
+            onboarding.clear_session_flag(request)
             return redirect(continue_url)
     elif request.method in ("GET", "HEAD"):
         form = ResearchConsentChoiceForm(initial={"next": next_url})
@@ -139,7 +143,8 @@ def researcher_profile(request):
     key_available = research_crypto.key_available()
     encrypted_rows, _status = _encrypted_rows(user, key_available)
     missing = rp.missing_fields(user, profile, key_available) if profile else ["profile"]
-    can_mentor = bool(profile and profile.can_mentor)
+    research_consented = rc.has_consented(user)
+    can_mentor = bool(profile and profile.can_mentor and research_consented)
     confirm_due = bool(profile and (profile.profile_confirmed_at is None
                                     or timezone.now() - profile.profile_confirmed_at > CONFIRM_INTERVAL))
     return render(request, "YSE_App/researcher_profile.html", {
@@ -154,13 +159,14 @@ def researcher_profile(request):
         "students": list(rp.my_students(user)) if can_mentor else [],
         "student_form": StudentForm(mentor=user) if can_mentor else None,
         "kind_choices": Mentorship.KIND_CHOICES,
-        "metrics": ResearcherMetrics.objects.filter(user=user).order_by("-fetched_at").first(),
+        "metrics": (ResearcherMetrics.objects.filter(user=user).order_by("-fetched_at").first()
+                    if research_consented else None),
         "confirm_due": confirm_due,
         "observing": list(profile.observing_experience.select_related("telescope")) if profile else [],
         "research_form": rc.current_form(),
         "research_state": rc.status(user),
         "research_latest": rc.latest_record(user),
-        "demographic_fields": DEMOGRAPHIC_FIELDS,
+        "research_consented": research_consented,
     })
 
 
@@ -203,7 +209,6 @@ def researcher_profile_edit(request):
         "next_url": next_url,
         "student_levels": sorted(STUDENT_LEVELS),
         "research_consented": research_consented,
-        "demographic_fields": DEMOGRAPHIC_FIELDS,
     })
 
 
@@ -223,7 +228,7 @@ def _save_profile(request, form, before):
             rp.set_encrypted(user, name, value, changed_by=user)
         except research_crypto.ResearchKeyError:
             messages.warning(request, "Encrypted fields are not available yet; %s was not stored." % name)
-    if obj.career_level in STUDENT_LEVELS:
+    if form.research_consented and obj.career_level in STUDENT_LEVELS:
         data = form.cleaned_data
         rp.set_current_advisor(user, data.get("advisor_user"), data.get("advisor_name", ""), changed_by=user)
     if not obj.profile_completed_at and not rp.missing_fields(user, obj):

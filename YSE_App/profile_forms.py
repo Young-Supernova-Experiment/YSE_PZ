@@ -9,7 +9,8 @@ from django.utils import timezone
 from YSE_App.models import Instrument
 from YSE_App.models.researcher_models import (
     CAREER_OTHER,
-    DEMOGRAPHIC_FIELDS,
+    RESEARCH_ENCRYPTED_FIELDS,
+    RESEARCH_PROFILE_FIELDS,
     POSTDOC_AND_ABOVE,
     STUDENT_LEVELS,
     Mentorship,
@@ -106,7 +107,8 @@ class ResearcherProfileForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
         self.key_available = key_available
-        # Demographic fields are offered only to users who consented to the research study (#744).
+        # Research fields (everything but the essential ones) are offered only to users who
+        # consented to the research study, and required only from them (#744).
         self.research_consented = research_consented
         self.encrypted_status = encrypted_status or {}
         self.current_advisor = advisor
@@ -124,15 +126,18 @@ class ResearcherProfileForm(forms.ModelForm):
         self.fields["orcid"].help_text = "0000-0000-0000-0000 (required for postdocs and above)."
         self.fields["orcid"].widget.attrs["placeholder"] = "0000-0000-0000-0000"
         self.fields["time_zone"].help_text = "IANA name, e.g. America/Los_Angeles."
-        for name in rp.required_fields("", key_available):
+        for name in rp.required_fields("", key_available, research_consented):
             self.fields[name].required = True
         if not key_available:
             for name in ("country", "phd_year", "gender", "gender_self",
                          "clear_country", "clear_phd_year", "clear_gender"):
                 self.fields[name].disabled = True
         if not research_consented:
-            for name in ("country", "gender", "gender_self"):
+            # Disabled fields keep their stored values; posted values are ignored.
+            for name in RESEARCH_PROFILE_FIELDS + ("country", "phd_year", "gender", "gender_self",
+                                                   "advisor_name", "advisor_user_id"):
                 self.fields[name].disabled = True
+                self.fields[name].required = False
         if advisor is not None and not self.is_bound:
             self.initial.setdefault("advisor_name", advisor.mentor_label)
             if advisor.mentor_id:
@@ -175,6 +180,9 @@ class ResearcherProfileForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
+        if not self.research_consented:
+            data["advisor_user"] = None
+            return data
         level = data.get("career_level") or ""
         if level == CAREER_OTHER and not (data.get("career_level_other") or "").strip():
             self.add_error("career_level_other", "Describe your career level.")
@@ -216,8 +224,8 @@ class ResearcherProfileForm(forms.ModelForm):
         if gender and "gender" not in to_clear:
             to_set["gender"] = ("self_describe:%s" % data["gender_self"]) if gender == "self_describe" else gender
         if not self.research_consented:
-            # Without research consent a user may delete stored demographic values, never add them.
-            for name in DEMOGRAPHIC_FIELDS:
+            # Without research consent a user may delete stored encrypted values, never add them.
+            for name in RESEARCH_ENCRYPTED_FIELDS:
                 to_set.pop(name, None)
         return to_set, to_clear
 

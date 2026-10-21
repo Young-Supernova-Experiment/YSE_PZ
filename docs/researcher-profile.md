@@ -2,7 +2,7 @@
 
 Issues #627 (profile and encrypted fields), #628 (mentorship and affiliation history),
 #629 (SciX metrics), #630 (agreement and onboarding gate), #631 (develop-direct promotion rule),
-#743 (User Agreement v2), #744 (voluntary research consent form).
+#743 (User Agreement v2), #744 (voluntary research consent form), #746 (research export).
 Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profile and onboarding gate".
 
 ## Pages
@@ -10,7 +10,7 @@ Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profi
 | URL | What |
 | --- | --- |
 | `/agreement/` | Current agreement, one checkbox, Accept. Acceptances store only user, version and time (no IP or user agent). |
-| `/research-consent/` | The voluntary research consent form: one checkbox, Consent or Decline; Withdraw once consented. Never a gate. |
+| `/research-consent/` | The voluntary research consent form: one checkbox, Consent, Decline or Not now; Withdraw once consented. Never a gate. |
 | `/profile/` | Your profile; required and encrypted fields marked; "My students" for scientific staff and faculty. |
 | `/profile/edit/` | The form. Required fields depend on career level (below). |
 | user menu > My profile | Link from every page. |
@@ -25,9 +25,12 @@ item. v1 and its acceptances stay on record; everyone accepts v2 once through th
 
 ## Requirements
 
+Without research consent (#744) only full name and institution are required; the rows below
+apply to consenting users.
+
 | Career level | Required |
 | --- | --- |
-| everyone | full name, institution, department, career level |
+| everyone (consenting) | full name, institution, department, career level |
 | other | the career-level description |
 | undergraduate, graduate | current advisor (a YSE-PZ user from the autocomplete, or a typed name; stored as a `current_advisor` `Mentorship`) |
 | postdoc, scientific staff, tenure-track, tenured | ORCID iD (format and ISO 7064 check digit) and PhD year (waived while no research key is installed) |
@@ -55,29 +58,41 @@ item. v1 and its acceptances stay on record; everyone accepts v2 once through th
 ## Research consent (#744)
 
 Voluntary and separate from the agreement. Text: `0040_seed_research_consent` (version 1, from
-Ryan Foley, verbatim). Models `ResearchConsentForm` (versions; `effective_date` is the go-live
-date) and `ResearchConsentRecord` (one row per consent, decline or withdrawal, with time and form
-version; never deleted). A user's state is their latest record. Service:
-`YSE_App/services/research_consent.py`.
+Ryan Foley, verbatim). Models: `ResearchConsentForm` (versions; `effective_date` is the go-live
+date, i.e. the day the migration first ran on that database), `ResearchConsentRecord` (one row
+per consent, decline or withdrawal, with time and form version; never deleted) and
+`ResearchConsentPrompt` (when the form was offered, for reminders). A user's state is their latest
+record. Service: `YSE_App/services/research_consent.py`.
 
-* **Prompt:** shown once, right after the user accepts an agreement, if they have never answered.
-  Consent and Decline both continue to the page they were going to. The page is exempt from the
-  gate, and the gate never sends anyone to it. My profile shows the state and links to the form
-  (consent later, or withdraw).
-* **Demographic fields** (`DEMOGRAPHIC_FIELDS`: country, gender) are offered on `/profile/edit/`
-  only to consenting users. Declining or withdrawing deletes their stored ciphertexts. Users who
-  have not answered keep stored values (and may delete them) but are never used for research.
-  `manage.py purge_unconsented_demographics` (dry run by default; `--apply`, `--older-than-days N`)
-  deletes them after a grace period that Ryan chooses. PhD year is career information required of
-  postdocs and above, so it is not a demographic field and is not deleted.
+* **Offer:** right after the user accepts an agreement, if they have never answered. Consent,
+  Decline and Not now all continue to the page they were going to. The page is exempt from the
+  gate. My profile shows the state and links to the form (consent later, or withdraw).
+* **Reminders**, only for users who have not answered: a second request after 10 logins or 30
+  days from the first offer (whichever comes first), then at the first login of each calendar
+  year. A login sets a session flag, and the first page that passes the gate redirects once to
+  the form. Users who answered either way are never reminded.
+* **Essential vs research data** (Ryan, 2026-10-20). Kept for everyone (`ESSENTIAL_PROFILE_FIELDS`):
+  username, full and preferred name, publication name, acknowledgment text, email, institution,
+  ORCID, and group memberships and roles. Everything else is research data:
+  `RESEARCH_PROFILE_FIELDS` (pronouns, department, career level, interests, website, GitHub, time
+  zone, observing experience), every encrypted field (country, PhD year, gender), advisors and
+  students, affiliation history and SciX metrics. Research data are offered on `/profile/edit/`
+  only to consenting users and required only from them (the onboarding gate requires only full
+  name and institution otherwise). "My students" and the SciX refresh are for consenting users only.
+* **Decline or withdraw:** nothing is deleted automatically. The user is excluded from research at
+  once, and the administrators in `RESEARCH_OPTOUT_NOTIFY_USERNAMES` (settings.ini `[research]
+  optout_notify_usernames`, default every active superuser) get a `research_optout` notification
+  (in-app, plus email per their preferences). They run `manage.py purge_unconsented_demographics
+  [--user NAME] [--apply]` (dry run by default). It deletes that user's research data and keeps the
+  essential data and all activity. Users who have not answered keep stored values (they may still
+  delete encrypted ones) but are never used for research.
 * **Admin:** read-only for superusers (Research consent forms, Research consent records); other
   staff cannot see them. No demographic value is ever shown.
 
-## Research datasets (#744)
+## Research datasets and the research export (#744, #746)
 
 Every research dataset is built with `YSE_App/services/research_dataset.py` (`ResearchCohort`,
-`ActivitySource`, `build_dataset`). Before #744 there was no dataset export code, only the
-encryption. The rules:
+`ActivitySource`, `build_dataset`). The rules:
 
 * Activity **before go-live** (the first form's `effective_date`, 00:00 UTC) is exempt, because it
   was public, as on an internet forum. It is included anonymized for everyone, including users who
@@ -85,11 +100,31 @@ encryption. The rules:
 * Activity **from go-live on** is included only for consenting users, inside their consent periods
   (consent to the next withdrawal; a user may consent again). A user whose latest decision is
   `withdrawn` has none of their post-go-live activity included.
-* **Demographics** (the latest ciphertext per encrypted field) only for users whose latest decision
-  is `consented`. They are exported as ciphertext and decrypted offline by the custodian.
-* **Anonymized:** users appear only as an HMAC-SHA256 pseudonym with a fresh salt per export. Only
-  the fields a source names are copied, and identifying fields (user, username, email, names) are
-  refused.
+* **Research profile data** (plain research fields, mentorships, metrics, and the latest
+  ciphertext per encrypted field) only for users whose latest decision is `consented`. Ciphertexts
+  are decrypted offline by the custodian.
+* **Anonymized:** users appear only as random strings drawn fresh for each export. Only the fields
+  a source names are copied, and identifying fields (user, username, email, names) are refused.
+
+`manage.py export_research_database --out FILE.sqlite [--force]` (`services/research_export.py`)
+writes a standalone SQLite database under these rules. It is a management command, so it runs only
+on the server.
+
+* **Activity tables:** `followups`, `followup_requests`, `comments`, `annotations`,
+  `data_access_requests`, `facility_requests`, `interests`, `favorites` and `transient_changes`
+  (status, class and redshift changes from the change log).
+* **Public lookups:** `transients`, `transient_statuses`, `transient_classes`,
+  `followup_statuses`. Transients keep their real ids and names.
+* **Participants:** `participants` (research profile only for consenting users; institution as a
+  random string), `participant_instruments`, `demographics` (ciphertext), `mentorships`, `metrics`
+  and `metadata`.
+* **Identifiers:** person, row, group and allocation ids are random strings per export, and other
+  users named in a row appear only when included.
+* **Free text** is scrubbed: `@mentions`, email addresses, ORCID iDs, and every user's username,
+  first and last name, full and preferred name and publication name (words of 3 or more letters)
+  are replaced.
+* **Never exported:** credentials, sessions, tokens, notifications, jobs, request payloads, external
+  ids and URLs, IP addresses, websites and GitHub names.
 
 ## History and deletion
 

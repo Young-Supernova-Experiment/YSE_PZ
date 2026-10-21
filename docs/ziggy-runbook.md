@@ -697,17 +697,58 @@ Expected: the same first line, then `written: N datasets`. **Check:** running th
 Production: steps A-B after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
 <a id="research-consent"></a>
-### User Agreement v2 and the voluntary research consent form (develop-direct PR; #743, #744) nothing required now; one purge later, only when Ryan says
+### User Agreement v2, research consent and the research export (develop-direct PRs; #743, #744, #746) optional notice setting; manual purge when notified; export only when Ryan asks
 
-Lands on `develop` first (a `develop-direct/*` PR merged by Ryan), then is merged back into `experimental`. Three migrations run automatically on deploy and are safe on the shared `YSE_test` database:
+Lands on `develop` first (`develop-direct/*` PRs merged by Ryan: #745, then the follow-up), then is merged back into `experimental`. Four migrations run automatically on deploy and are safe on the shared `YSE_test` database:
 
 * `0038_user_agreement_v2`: adds User Agreement version 2 and makes it current (v1 and its acceptances stay). Idempotent.
 * `0039_research_consent`: two new tables, `YSE_App_researchconsentform` and `YSE_App_researchconsentrecord`. No change to existing tables.
-* `0040_seed_research_consent`: loads the consent form text as version 1. Its go-live date is the day this migration first runs. Idempotent.
+* `0040_seed_research_consent`: loads the consent form text as version 1. Its go-live date is the day this migration first runs on that database (production: its deploy day). Idempotent.
+* `0041_research_consent_prompts`: one new table, `YSE_App_researchconsentprompt` (when the form was offered, for reminders), filled once for users who already accepted agreement v2. Idempotent.
 
 Experimental has its own `0038`-`0050` under other names; the develop -> experimental backport adds a merge migration. No new dependency.
 
-**Effect on deploy:** every signed-in browser user is asked to accept agreement v2 on their next page view (the existing gate). Right after accepting, they see the research consent form once, with Consent and Decline. Both choices continue, and the form never blocks the site. It is always available from My profile. Country and gender are offered only to users who consent. Declining or withdrawing deletes those stored values. Superusers see read-only consent records in the admin (no values). Both new tables are hidden from SQL Explorer. If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_researchconsentform` and `YSE_App_researchconsentrecord`.
+**Effect on deploy:**
+
+* Every signed-in browser user accepts agreement v2 once (the existing gate). They then see the research consent form, which offers Consent, Decline and Not now. It never blocks the site and is always available from My profile.
+* Users who have not answered are reminded once more, after 10 logins or 1 month (whichever comes first), then once a year at their first login. Anyone who answered is never reminded.
+* Only the essential profile fields are asked of everyone: name, publication name, acknowledgment text, institution and ORCID. Everything else in the profile is research data, offered only to users who consent.
+* Declining or withdrawing deletes nothing automatically. The user is excluded from research at once, and the administrators below get an in-app notification and an email.
+* Superusers see read-only consent records in the admin (no values). The three new tables are hidden from SQL Explorer. If you set up table-level Explorer grants ([step D above](#onboarding)), also exclude `YSE_App_researchconsentform`, `YSE_App_researchconsentrecord` and `YSE_App_researchconsentprompt`.
+
+**Step A (optional): who is notified of opt-outs.** By default every active superuser is notified. To notify only some accounts (for example David), add to `<CHECKOUT>/YSE_PZ/settings.ini` and restart Apache:
+
+```ini
+[research]
+optout_notify_usernames: <USERNAME>[,<USERNAME>...]
+```
+
+(or export `YSE_RESEARCH_OPTOUT_NOTIFY_USERNAMES=<USERNAME>,...` in the web environment). Email arrives only while site email is on and the recipient has email on for "Interests and data access" in `/notifications/preferences/`.
+
+**Step B (each time you are notified): purge that user's research data by hand.** The notice names the user. First a dry run, which prints counts and deletes nothing:
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --user <USERNAME>
+# then:
+cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --user <USERNAME> --apply
+```
+
+Without `--user` the command covers every user who declined or withdrew. What it deletes:
+
+* the encrypted values (country, PhD year, gender);
+* the research profile fields (career level, department, pronouns, interests, website, GitHub, time zone, observing experience);
+* their field history;
+* the user's advisor and student rows (only those they entered themselves), affiliation history and SciX metrics.
+
+It keeps the username, names, email, institution, ORCID, groups and roles, and all site activity. Consenting users and users who have not answered are never touched. A second run prints `Nothing to delete.`
+
+**Step C (only when Ryan asks): write the anonymized research database.**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py export_research_database --out <SECURE_DIR>/yse-research-<DATE>.sqlite
+```
+
+The command writes a new SQLite file readable only by its owner, and refuses to overwrite an existing file unless you pass `--force`. Hand the file to Ryan and do not leave copies on shared disks. The file holds no names, usernames, emails, ORCID iDs or credentials, and every person and row id is a fresh random string, so two exports cannot be joined.
 
 **Check (optional):**
 
@@ -715,18 +756,9 @@ Experimental has its own `0038`-`0050` under other names; the develop -> experim
 cd <CHECKOUT> && <PYTHON> manage.py shell -c "from YSE_App.models import UserAgreement as A, ResearchConsentForm as F; print(list(A.objects.filter(is_current=True).values_list('version', flat=True)), list(F.objects.values_list('version', 'effective_date', 'is_current')))"
 ```
 
-Expected: `['2'] [('1', datetime.date(<deploy day>), True)]`.
+Expected: `['2'] [('1', datetime.date(<first deploy day>), True)]`.
 
-**Later, ONLY when Ryan says the grace period is over: purge demographics of users who never answered.** Until then those users keep their stored values, but they are never used for research. First a dry run, which prints counts only and deletes nothing:
-
-```bash
-cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics
-# then, if Ryan confirms:
-cd <CHECKOUT> && <PYTHON> manage.py purge_unconsented_demographics --apply
-# optional: --older-than-days N  only values stored more than N days ago
-```
-
-Production: the migrations run with the others after the `develop -> master` merge. The purge also needs Ryan's go-ahead there.
+Production: the migrations run with the others after the `develop -> master` merge; Steps A-C apply there too (`/data/yse_pz/YSE_PZ`).
 
 <a id="data-sharers"></a>
 ### Who may share private data: PIs and their deputies (develop-direct PR; #447) nothing required, but check PI links first
@@ -1722,7 +1754,8 @@ Everything still waiting on David, with its source. Rows change status here as t
 
 ## 6 · Changelog
 
-* 2026-10-20 v36, nothing required (the purge runs later, only when Ryan says). User Agreement v2 ([#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743)) and the voluntary research consent form ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)): migrations 0038-0040 (agreement v2, two new tables, form v1); everyone accepts v2 once; `purge_unconsented_demographics` (dry run by default) after the grace period ([section "User Agreement v2 and the voluntary research consent form"](#research-consent)).
+* 2026-10-20 v37, optional (Step A), then by hand each time you are notified (Step B). Research consent follow-ups ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)) and the research export ([#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)): migration 0041 (one new table). Opt-outs are no longer deleted automatically: administrators are notified (`optout_notify_usernames`, default every superuser) and run `purge_unconsented_demographics --user <USERNAME>` (dry run, then `--apply`). Reminders for users who have not answered. `export_research_database --out <file>` only when Ryan asks ([section "User Agreement v2, research consent and the research export"](#research-consent)).
+* 2026-10-20 v36, nothing required (the purge runs later, only when Ryan says). User Agreement v2 ([#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743)) and the voluntary research consent form ([#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744)): migrations 0038-0040 (agreement v2, two new tables, form v1); everyone accepts v2 once; `purge_unconsented_demographics` (dry run by default) after the grace period ([section "User Agreement v2, research consent and the research export"](#research-consent)).
 * 2026-10-15 v35, nothing required. Data-access requests with no PI notify superusers only, and `YSE_App_datasharingdelegate` is hidden from SQL Explorer; add it to table-level Explorer grant exclusions if you use them ([#650](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/650)).
 * 2026-10-13 v34, nothing required (link PI accounts first so PIs, not only staff, can decide). Only PIs and their deputies share private data ([#447](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/447)): migration 0037 (one new table, one nullable column); allocation-PI fallback; logged staff override; `/data_sharing_deputies/`; TNS references; PI tables visible in Explorer again ([section "Who may share private data"](#data-sharers)).
 * 2026-10-13 v33, nothing required (signup off by default). Self-service signup and team membership requests ([#448](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/448)): migration 0036 (one new table); turn on with `SELF_SIGNUP_ENABLED: True` when ready; optional `purge_group_membership_requests`. Public always offered in pickers ([#440](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/440)); PI contact fields staff-only in the API and PI table hidden from Explorer ([#643](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/643)) ([section "Self-service signup"](#self-signup)).

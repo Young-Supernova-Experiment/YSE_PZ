@@ -396,6 +396,7 @@ _PERSONAL_DATA_TABLES = (
     # Voluntary research consent form and per-user consent decisions (#744).
     'YSE_App_researchconsentform',
     'YSE_App_researchconsentrecord',
+    'YSE_App_researchconsentprompt',
     # The PI tables stay visible in Explorer (Ryan, 2026-10-13: knowing someone is a PI is not
     # a secret); the PI REST API still shows non-staff only the id and name (#643).
 )
@@ -886,6 +887,16 @@ GROUP_INVITE_PURGE_DAYS = config.getint('groups', 'INVITE_PURGE_DAYS', fallback=
 # on the server. Without a key those fields are not collected; nothing breaks.
 RESEARCH_PUBLIC_KEY = os.environ.get('YSE_RESEARCH_PUBLIC_KEY', '').strip()
 RESEARCH_PUBLIC_KEY_PATH = config.get('research', 'public_key_path', fallback='').strip()
+# Who is told when someone declines or withdraws research consent, so they can purge that
+# person's research data by hand (purge_unconsented_demographics, #744). Comma-separated
+# usernames: env YSE_RESEARCH_OPTOUT_NOTIFY_USERNAMES or [research] optout_notify_usernames.
+# Empty (the default): every active superuser.
+RESEARCH_OPTOUT_NOTIFY_USERNAMES = tuple(
+    name.strip() for name in (
+        os.environ.get('YSE_RESEARCH_OPTOUT_NOTIFY_USERNAMES')
+        or config.get('research', 'optout_notify_usernames', fallback='')
+    ).split(',') if name.strip()
+)
 # Researcher metrics from SciX (formerly ADS), keyed by ORCID. Off by default.
 # The token is an EncryptedCredential with service RESEARCHER_METRICS_SCIX_SERVICE
 # and payload {"token": "..."}; never in settings.ini.

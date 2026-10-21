@@ -32,7 +32,7 @@
 						{{ form.next }}
 						{% if state == 'consented' %}
 						<button type="submit" name="action" value="withdraw" class="btn btn-outline-danger">Withdraw from the study</button>
-						<p class="small text-muted mt-2 mb-0">Withdrawing deletes your stored demographic information, and none of your activity from the date this form went live is used in research datasets. Activity from before that date was public and may still be used, anonymized. Nothing else is deleted from the site.</p>
+						<p class="small text-muted mt-2 mb-0">If you withdraw, your research profile information and your activity from the date this form went live are no longer used in research datasets, and an administrator deletes that profile information. Activity from before that date was public and may still be used, anonymized. Nothing else is deleted from the site.</p>
 						{% else %}
 						{% if form.consent.errors %}<div class="text-danger small">{{ form.consent.errors|join:" " }}</div>{% endif %}
 						<div class="form-group form-check">
@@ -44,7 +44,7 @@
 						<button type="submit" name="action" value="decline" class="btn btn-outline-secondary">Decline</button>
 						{% endif %}
 						{% endif %}
-						{% if state %}<a class="btn btn-link" href="{{ continue_url }}" id="yse-research-consent-continue">Back</a>{% endif %}
+						<a class="btn btn-link" href="{{ continue_url }}" id="yse-research-consent-continue">{% if state %}Back{% else %}Not now{% endif %}</a>
 					</form>
 				</div>
 			</div>
