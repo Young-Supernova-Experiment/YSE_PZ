@@ -29,6 +29,10 @@ class TransientPhotometry(Photometry):
     # Optional
     host = models.ForeignKey(Host, null=True, blank=True, on_delete=models.SET_NULL)
     followup = models.ForeignKey(TransientFollowup, null=True, blank=True, on_delete=models.SET_NULL) # Can by null if data is from external source
+    # PIs of this dataset (#446); several are allowed. See YSE_App.services.data_pis.
+    pis = models.ManyToManyField(
+        'YSE_App.PrincipalInvestigator', blank=True, related_name='transient_photometry',
+        help_text='Principal investigator(s) of this photometry set.')
 
     def __str__(self):
         return 'Transient Phot: %s' % (self.transient.name)
@@ -89,6 +93,15 @@ class TransientPhotData(PhotData):
     ### Properties ###
     # Optional
     discovery_point = models.BooleanField(null=True, blank=True)
+
+    class Meta:
+        # Recent-magnitude subqueries (WHERE photometry_id = ? ORDER BY obs_date
+        # DESC LIMIT 1) and the "points in the last N days" prefilters of the
+        # dashboard saved queries (#248). See docs/dashboard-performance.md.
+        indexes = [
+            models.Index(fields=['obs_date'], name='yse_photdata_obs_date_idx'),
+            models.Index(fields=['photometry', 'obs_date'], name='yse_photdata_phot_obs_idx'),
+        ]
 
     def __str__(self):
         return '%s - %s - %s' % (self.photometry.transient.name, self.band.name, self.obs_date.strftime('%m/%d/%Y'))

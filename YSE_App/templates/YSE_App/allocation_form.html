@@ -1,0 +1,88 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+{% load widget_tweaks %}
+
+{% block content_header %}
+<h1>{% if allocation %}Edit allocation <small class="text-muted">{{ allocation.name }}</small>{% else %}New allocation{% endif %}</h1>
+<a href="{% url 'allocations' %}">&larr; all allocations</a>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-lg-8 col-12">
+		<div class="card">
+			<form method="post" action="" id="allocation_form" autocomplete="off">
+				{% csrf_token %}
+				<div class="card-body">
+					{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+					<div class="row">
+						{% for field in form.visible_fields %}
+						{% if field.name == 'default_request_params_text' or field.name == 'notes' or field.name == 'new_secret' %}
+						<div class="col-12">
+						{% elif field.name == 'is_active' %}
+						<div class="col-12">
+						{% else %}
+						<div class="col-md-6 col-12">
+						{% endif %}
+							<div class="form-group{% if field.errors %} has-error{% endif %}">
+								{% if field.name == 'is_active' %}
+									<div class="form-check">{% render_field field class+="form-check-input" %} <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label></div>
+								{% elif field.name == 'groups' %}
+									<label for="{{ field.id_for_label }}">{{ field.label }}</label>
+									{% render_field field class+="form-control select2" style+="width: 100%;" %}
+								{% else %}
+									<label for="{{ field.id_for_label }}">{{ field.label }}</label>
+									{% render_field field class+="form-control" %}
+								{% endif %}
+								{% if field.help_text %}<small class="form-text text-muted">{{ field.help_text }}</small>{% endif %}
+								{% for err in field.errors %}<div class="text-danger small">{{ err }}</div>{% endfor %}
+							</div>
+						</div>
+						{% endfor %}
+					</div>
+				</div>
+				<div class="card-footer">
+					<button type="submit" class="btn btn-primary" id="allocation_save_btn">Save</button>
+					<a class="btn btn-default" href="{% url 'allocations' %}">Cancel</a>
+					{% if allocation and allocation.credential %}<span class="text-muted ml-3">Bound credential: <code>{{ allocation.credential.name }}</code> ({{ allocation.credential.masked_display }})</span>{% endif %}
+				</div>
+			</form>
+		</div>
+	</div>
+	<div class="col-lg-4 col-12">
+		<div class="card">
+			<div class="card-header"><h3 class="card-title">Facility APIs</h3></div>
+			<div class="card-body">
+				<dl>
+					{% for f in facilities %}
+					<dt><code>{{ f.slug }}</code> &mdash; {{ f.name }}</dt>
+					<dd><small>{{ f.description }}<br>Capabilities: {{ f.capabilities|join:", " }}.{% if f.credential_keys %} Credential keys: <code>{{ f.credential_keys|join:"</code>, <code>" }}</code>.{% endif %}{% if f.manual_status %} Status is updated by hand.{% endif %}</small></dd>
+					{% endfor %}
+				</dl>
+			</div>
+		</div>
+		{% if allocation %}
+		<div class="card">
+			<div class="card-header"><h3 class="card-title">Recent requests</h3></div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-sm">
+					<thead><tr><th>Transient</th><th>State</th><th>By</th><th>When</th></tr></thead>
+					<tbody>
+						{% for r in recent_requests %}
+						<tr data-status="{{ r.state }}">
+							<td><a href="{% url 'transient_detail' r.transient.slug %}#followup_tab">{{ r.transient.name }}</a></td>
+							<td><span class="badge badge-{% if r.state == 'complete' %}success{% elif r.state == 'failed' %}danger{% elif r.state == 'cancelled' %}secondary{% elif r.state == 'queued' or r.state == 'draft' %}warning{% else %}info{% endif %}">{{ r.get_state_display }}</span></td>
+							<td>{{ r.submitted_by.username }}</td>
+							<td>{{ r.created_date|date:"Y-m-d H:i" }}</td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="4" class="text-muted">No requests yet.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		{% endif %}
+	</div>
+</div>
+{% endblock %}

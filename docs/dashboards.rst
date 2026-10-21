@@ -26,3 +26,15 @@ flag transients that meet their particular science interests.  See :ref:`queries
 for more information about building queries and adding them to your dashboard.
 
 .. image:: _static/yse_pz_personaldashboard.png
+
+Each saved query appears once per user: adding a query that is already on your
+dashboard re-uses the existing entry, and the trash button removes every copy
+of that query from your dashboard.  Databases populated before this rule was
+enforced can hold duplicate rows; an operator can clean them up with::
+
+  docker exec ysepz_web_container python3 manage.py dedupe_dashboard_queries --dry-run
+  docker exec ysepz_web_container python3 manage.py dedupe_dashboard_queries
+  docker exec ysepz_web_container python3 manage.py dedupe_dashboard_queries --user <username>
+
+The command keeps the oldest copy of each (user, query) pair and deletes the
+rest; ``--dry-run`` only reports what would be removed.

@@ -11,19 +11,19 @@
 				{% for hidden_field in form.hidden_fields %}
 					{{ hidden_field }}
 				{% endfor %}
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>ID</label>
 						{% render_field form.ztf_field_id class+="form-control select2" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Camera</label>
 						{% render_field form.instrument class+="form-control select2" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Date (UT)</label>
 						<div class="input-group">
@@ -31,13 +31,13 @@
 								<i class="fa fa-clock-o"></i>
 							</div>
 							<!--
-							<input type="text" class="form-control pull-right" id="survey_obs_date">
+							<input type="text" class="form-control float-right" id="survey_obs_date">
 						</div>
 						<input type="hidden" id="valid_date" name="valid_date">-->
 						<input id="survey_obs_date" class="span2 datepicker" type="text" value="" name="survey_obs_date" default="{{obs_date_str}}" data-date="{{obs_date_str}}" data-behavior="datepicker" format="mm/dd/yyyy">
 					</div>
 				</div>
-				<div class="col-xs-12">
+				<div class="col-12">
 					<div class="form-group">
 						<br>
 						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>

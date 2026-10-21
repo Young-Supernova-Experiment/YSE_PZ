@@ -43,6 +43,14 @@ in :code:`YSE_App/api_views.py`::
   - dec_lte
   - tag_in
   - name
+  - plus the search filters shared with the /search/ page: cone
+    (ra, dec, radius_arcsec), gal_b_abs_min/max, disc_date_after/before,
+    name_contains, alias, has_tns_name, the TransientPhotStat filters
+    (peak_mag_min/max, latest_mag_min/max, num_det_min/max, ...),
+    classification / exclude_class, has_redshift, redshift_min/max, status,
+    obs_group, internal_survey, tags / tags_all, has_spectrum, has_followup,
+    has_comment, has_host, visible_to_group and ordering; see
+    docs/transient-search.md for the full list
   ClassicalResource
   - instrument_name
   

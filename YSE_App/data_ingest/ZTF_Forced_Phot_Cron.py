@@ -46,7 +46,7 @@ class ForcedPhot(CronJobBase):
     RUN_EVERY_MINS = 30
 
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
-    code = 'YSE_App.data_ingest.YSE_Forced_Phot.ForcedPhot'
+    code = 'YSE_App.data_ingest.ZTF_Forced_Phot_Cron.ForcedPhot'
 
     def __init__(self): 
         pass
@@ -120,7 +120,7 @@ class ForcedPhot(CronJobBase):
         # created_by date is in the last day or so
         
         nowdate = datetime.datetime.utcnow()
-        logs = Log.objects.filter(created_date__gt=nowdate-datetime.timedelta(1))
+        logs = Log.objects.filter(created_date__gt=nowdate-datetime.timedelta(2))
 
         # now see which ones already have ZTF forced phot uploaded, so
         # we don't do extra work

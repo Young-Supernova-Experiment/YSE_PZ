@@ -1,0 +1,68 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>External service runs <small class="text-muted">staff</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-12">
+		<div class="card">
+			<div class="card-header">
+				<form class="form-inline" method="get" action="{% url 'external_service_runs' %}">
+					<label class="mr-2" for="svc-filter-service">Service</label>
+					<select class="form-control form-control-sm mr-3" id="svc-filter-service" name="service">
+						<option value="">all</option>
+						{% for s in services %}
+						<option value="{{ s.slug }}"{% if s.slug == selected_service %} selected{% endif %}>{{ s.name }}</option>
+						{% endfor %}
+					</select>
+					<label class="mr-2" for="svc-filter-status">Status</label>
+					<select class="form-control form-control-sm mr-3" id="svc-filter-status" name="status">
+						<option value="">all</option>
+						{% for value, label in statuses %}
+						<option value="{{ value }}"{% if value == selected_status %} selected{% endif %}>{{ label }}</option>
+						{% endfor %}
+					</select>
+					<button class="btn btn-sm btn-primary" type="submit">Filter</button>
+				</form>
+			</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-hover table-sm" id="service_runs_tbl">
+					<thead>
+						<tr>
+							<th>Run</th>
+							<th>Service</th>
+							<th>Target</th>
+							<th>Status</th>
+							<th>Requested by</th>
+							<th>Created</th>
+							<th>Finished</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for run in runs %}
+						<tr data-status="{{ run.status }}">
+							<td><a href="{% url 'external_service_run_detail' run.uuid %}"><code>{{ run.uuid|slice:":8" }}</code></a></td>
+							<td>{{ run.service.name }}</td>
+							<td>{% if run.transient %}<a href="{% url 'transient_detail' run.transient.slug %}">{{ run.transient.name }}</a>{% else %}{{ run.target_display }}{% endif %}</td>
+							<td><span class="badge badge-{% if run.status == 'succeeded' %}success{% elif run.status == 'failed' %}danger{% elif run.status == 'running' %}info{% elif run.status == 'cancelled' %}secondary{% else %}warning{% endif %}">{{ run.get_status_display }}</span></td>
+							<td>{{ run.created_by.username }}</td>
+							<td>{{ run.created_date|date:"Y-m-d H:i" }}</td>
+							<td>{% if run.finished_at %}{{ run.finished_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="7" class="text-muted">No runs recorded{% if selected_service or selected_status %} for this filter{% endif %}.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			<div class="card-footer text-muted">
+				Newest {{ page_size }} runs. Services are configured in the <a href="{% url 'admin:YSE_App_externalservice_changelist' %}">admin</a>;
+				credentials in <a href="{% url 'admin:YSE_App_encryptedcredential_changelist' %}">Encrypted credentials</a> (values are never displayed).
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}

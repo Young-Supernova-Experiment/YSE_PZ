@@ -1,0 +1,145 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Instrument logs <small class="text-muted">{{ telescope.name }} / {{ instrument.name }}</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-12 col-xl-8">
+		<div class="card">
+			<div class="card-header">
+				<form class="form-inline" method="get" action="{% url 'instrument_logs' instrument.id %}" id="instlog-filter-form">
+					<label class="mr-2" for="instlog-start">From</label>
+					<input class="form-control form-control-sm mr-3 yse-datepicker" id="instlog-start" name="start" type="text" value="{{ start_str }}" placeholder="YYYY-MM-DD" autocomplete="off">
+					<label class="mr-2" for="instlog-end">To</label>
+					<input class="form-control form-control-sm mr-3 yse-datepicker" id="instlog-end" name="end" type="text" value="{{ end_str }}" placeholder="YYYY-MM-DD" autocomplete="off">
+					<label class="mr-2" for="instlog-source">Source</label>
+					<select class="form-control form-control-sm mr-3" id="instlog-source" name="source">
+						<option value=""{% if not source %} selected{% endif %}>all</option>
+						<option value="manual"{% if source == 'manual' %} selected{% endif %}>entered by hand</option>
+						<option value="api"{% if source == 'api' %} selected{% endif %}>facility API</option>
+					</select>
+					<button class="btn btn-sm btn-primary" type="submit">Show</button>
+					<span class="ml-auto text-muted small" id="instlog-count">{{ counts.total }} log block{{ counts.total|pluralize }}{% if counts.api %} ({{ counts.api }} from the facility){% endif %}</span>
+				</form>
+			</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-hover table-sm" id="instrument_logs_tbl">
+					<thead>
+						<tr>
+							<th style="width: 11em">Start (UT)</th>
+							<th style="width: 11em">End (UT)</th>
+							<th>Log</th>
+							<th style="width: 7em">Source</th>
+							<th style="width: 9em">By</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for row in rows %}
+						{% with l=row.log %}
+						<tr data-log-id="{{ l.id }}" data-source="{{ l.source }}">
+							<td class="text-nowrap">{{ l.start|date:"Y-m-d H:i" }}</td>
+							<td class="text-nowrap">{% if l.end %}{{ l.end|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">&ndash;</span>{% endif %}</td>
+							<td>
+								{% if l.message %}<div class="instlog-message">{% if row.entries|length == 1 and row.entries.0.level %}{% with lvl=row.entries.0.level %}<span class="badge instlog-level {% if lvl == 'error' or lvl == 'critical' %}badge-danger{% elif lvl == 'warning' or lvl == 'warn' %}badge-warning{% else %}badge-secondary{% endif %}" data-level="{{ lvl }}">{{ lvl }}</span> {% endwith %}{% endif %}{{ l.message|linebreaksbr }}</div>{% endif %}
+								{% if row.entries %}
+								{% if row.entries|length > 1 or not l.message %}
+								<details class="instlog-entries"{% if not l.message %} open{% endif %}>
+									<summary class="text-muted small">{{ row.entries|length }} entr{{ row.entries|length|pluralize:"y,ies" }}</summary>
+									<table class="table table-sm table-borderless mb-0 small">
+										<tbody>
+										{% for e in row.entries %}
+										<tr class="instlog-entry" data-level="{{ e.level }}">
+											<td class="text-nowrap text-muted" style="width: 12em">{{ e.timestamp|default:"" }}</td>
+											<td style="width: 5em">{% if e.level %}<span class="badge {% if e.level == 'error' or e.level == 'critical' %}badge-danger{% elif e.level == 'warning' or e.level == 'warn' %}badge-warning{% else %}badge-secondary{% endif %}">{{ e.level }}</span>{% endif %}</td>
+											<td>{{ e.message }}</td>
+										</tr>
+										{% endfor %}
+										</tbody>
+									</table>
+								</details>
+								{% endif %}
+								{% endif %}
+							</td>
+							<td>{% if l.source == 'api' %}<span class="badge badge-info" title="{{ l.source_name }}">facility API</span>{% else %}<span class="badge badge-secondary">manual</span>{% endif %}
+								{% if l.run_id and request.user.is_staff %}<br><a class="small" href="{% url 'external_service_run_detail' l.run.uuid %}">run</a>{% endif %}</td>
+							<td class="small">{{ l.created_by.username }}<br><span class="text-muted">{{ l.created_date|date:"Y-m-d H:i" }}</span></td>
+						</tr>
+						{% endwith %}
+						{% empty %}
+						<tr><td colspan="5" class="text-muted p-3" id="instlog-empty">No instrument logs between {{ start_str }} and {{ end_str }}.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+	<div class="col-12 col-xl-4">
+		<div class="card card-outline card-secondary">
+			<div class="card-header"><span class="card-title">{{ instrument.name }}</span>
+				<div class="card-tools"><a class="btn btn-tool" href="{% url 'telescope_detail' telescope.id %}" title="Telescope page"><i class="fa fa-external-link"></i></a></div>
+			</div>
+			<div class="card-body small">
+				<p class="mb-1"><b>Telescope:</b> <a href="{% url 'telescope_detail' telescope.id %}">{{ telescope.name }}</a> ({{ telescope.observatory.name }})</p>
+				{% if instrument.description %}<p class="mb-1">{{ instrument.description }}</p>{% endif %}
+				{% if siblings %}<p class="mb-1"><b>Other instruments:</b> {% for s in siblings %}<a href="{% url 'instrument_logs' s.id %}">{{ s.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+				<p class="mb-0"><b>API:</b> <code>/api/instrumentlogs/?instrument={{ instrument.id }}&amp;start_after={{ start_str }}&amp;end_before={{ end_str }}</code></p>
+			</div>
+		</div>
+		{% if can_add %}
+		<div class="card card-outline card-primary" id="instlog-add-card">
+			<div class="card-header"><span class="card-title">Add a log entry</span></div>
+			<div class="card-body">
+				<form method="post" action="{% url 'instrument_log_add' instrument.id %}" id="instlog-add-form">
+					{% csrf_token %}
+					<div class="form-group mb-2">
+						<label class="small mb-0" for="instlog-add-start">Start (UT)</label>
+						<input class="form-control form-control-sm" id="instlog-add-start" name="start" type="datetime-local" value="{{ now_str }}" required>
+					</div>
+					<div class="form-group mb-2">
+						<label class="small mb-0" for="instlog-add-end">End (UT, optional)</label>
+						<input class="form-control form-control-sm" id="instlog-add-end" name="end" type="datetime-local">
+					</div>
+					<div class="form-group mb-2">
+						<label class="small mb-0" for="instlog-add-level">Level</label>
+						<select class="form-control form-control-sm" id="instlog-add-level" name="level">
+							<option value="info">info</option><option value="warning">warning</option><option value="error">error</option>
+						</select>
+					</div>
+					<div class="form-group mb-2">
+						<label class="small mb-0" for="instlog-add-message">Message</label>
+						<textarea class="form-control form-control-sm" id="instlog-add-message" name="message" rows="3" required placeholder="e.g. Dome closed 04:10 UT, humidity 95%"></textarea>
+					</div>
+					<button class="btn btn-sm btn-primary" type="submit"><i class="fa fa-plus"></i> Add</button>
+				</form>
+			</div>
+		</div>
+		{% endif %}
+		{% if can_pull %}
+		<div class="card card-outline card-info" id="instlog-pull-card">
+			<div class="card-header"><span class="card-title">Pull from the facility</span></div>
+			<div class="card-body small">
+				<p class="mb-2">Allocation{{ pull_allocations|length|pluralize }} with an instrument-log endpoint: {% for a in pull_allocations %}<a href="{% url 'allocation_edit' a.id %}">{{ a.name }}</a> ({{ a.facility }}){% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+				<form method="post" action="{% url 'instrument_log_pull' instrument.id %}" class="form-inline" id="instlog-pull-form">
+					{% csrf_token %}
+					<input type="hidden" name="start" value="{{ start_str }}"><input type="hidden" name="end" value="{{ end_str }}">
+					<button class="btn btn-sm btn-info" type="submit"><i class="fa fa-download"></i> Pull {{ start_str }} &ndash; {{ end_str }}</button>
+				</form>
+			</div>
+		</div>
+		{% endif %}
+	</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+	(function () {
+		if (window.jQuery && jQuery.fn.datepicker) {
+			jQuery('.yse-datepicker').datepicker({ format: 'yyyy-mm-dd', autoclose: true, todayHighlight: true, weekStart: 1 });
+		}
+	})();
+</script>
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Sharing services <small class="text-muted">TNS reporting configuration</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-12">
+		{% for row in rows %}
+		<div class="card" data-service="{{ row.service.slug }}">
+			<div class="card-header">
+				<strong>{{ row.service.name }}</strong> <code>{{ row.service.slug }}</code>
+				<span class="badge badge-{% if row.service.testing %}secondary{% else %}danger{% endif %}">{% if row.service.testing %}sandbox{% else %}production{% endif %}</span>
+				{% if not row.service.enabled %}<span class="badge badge-warning">disabled</span>{% endif %}
+				<span class="float-right">
+					<a href="{% url 'sharing_submissions' %}?service={{ row.service.slug }}">{{ row.n_submissions }} submission{{ row.n_submissions|pluralize }}</a>
+					{% if user.is_staff %} &middot; <a href="{% url 'admin:YSE_App_sharingservice_change' row.service.pk %}">edit</a>{% endif %}
+				</span>
+			</div>
+			<div class="card-body p-0">
+				<table class="table table-sm mb-0">
+					<tr><th style="width: 14em">Kind</th><td>{{ row.service.get_kind_display }}</td></tr>
+					<tr><th>API</th><td><code>{{ row.service.api_base_url }}</code></td></tr>
+					<tr><th>Reporting group</th><td>{{ row.service.tns_group_name|default:"-" }} (id {{ row.service.tns_group_id|default:"not set" }})</td></tr>
+					<tr><th>Credential</th><td>{% if row.service.credential %}{{ row.service.credential.name }} <span class="text-muted">keys: {{ row.credential_keys|join:", " }}</span>{% else %}<span class="text-danger">none</span>{% endif %}</td></tr>
+					<tr><th>Default coauthors</th><td>{{ row.service.default_coauthors|default:"-" }}</td></tr>
+					<tr><th>Allowed instruments</th><td>{{ row.instruments|join:", "|default:"all" }}</td></tr>
+					<tr><th>Allowed observation groups</th><td>{{ row.obs_groups|join:", "|default:"all" }}</td></tr>
+					<tr><th>Who may report</th><td>{{ row.groups|join:", "|default:"every authenticated user" }}</td></tr>
+					{% if row.service.description %}<tr><th>Description</th><td>{{ row.service.description }}</td></tr>{% endif %}
+				</table>
+			</div>
+			<div class="card-footer">
+				<strong>Auto-publisher rules</strong>
+				{% if row.rules %}
+				<table class="table table-sm mb-0 mt-2">
+					<thead><tr><th>Rule</th><th>Group</th><th>Report</th><th>Criteria</th><th>TNS</th><th>Hermes</th><th>Last sweep</th>{% if user.is_staff %}<th></th>{% endif %}</tr></thead>
+					<tbody>
+					{% for rule in row.rules %}
+					<tr data-rule="{{ rule.pk }}">
+						<td>{{ rule.name }}{% if not rule.enabled %} <span class="badge badge-warning">off</span>{% endif %}</td>
+						<td>{{ rule.group.name|default:"-" }}</td>
+						<td>{{ rule.get_kind_display }}</td>
+						<td><code class="small">{{ rule.criteria }}</code></td>
+						<td>{% if rule.tns_enabled %}on{% else %}off{% endif %}</td>
+						<td>{% if rule.hermes_enabled %}on{% else %}off{% endif %}</td>
+						<td>{{ rule.last_run_at|date:"Y-m-d H:i"|default:"never" }}</td>
+						{% if user.is_staff %}
+						<td><button type="button" class="btn btn-xs btn-outline-secondary yse-rule-dryrun" data-url="{% url 'sharing_autopublisher_dry_run' row.service.pk rule.pk %}">Dry run</button>
+							<span class="small text-muted yse-rule-dryrun-result"></span></td>
+						{% endif %}
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				{% else %}
+				<span class="text-muted">none{% if user.is_staff %}; add one in the <a href="{% url 'admin:YSE_App_autopublisher_add' %}">admin</a>{% endif %}</span>
+				{% endif %}
+			</div>
+		</div>
+		{% empty %}
+		<div class="card"><div class="card-body text-muted">No sharing service is configured for you.
+			{% if user.is_staff %}Create one with <code>manage.py create_tns_sharing_service</code> or in the <a href="{% url 'admin:YSE_App_sharingservice_add' %}">admin</a>.{% endif %}</div></div>
+		{% endfor %}
+	</div>
+</div>
+<script>
+(function () {
+	document.querySelectorAll('.yse-rule-dryrun').forEach(function (btn) {
+		btn.addEventListener('click', function () {
+			var out = btn.parentNode.querySelector('.yse-rule-dryrun-result');
+			out.textContent = 'checking...';
+			fetch(btn.getAttribute('data-url'), {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(function (d) {
+				var names = d.transients.map(function (t) { return t.name; }).join(', ');
+				out.textContent = d.count + ' transient(s) qualify' + (names ? ': ' + names : '');
+			}).catch(function () { out.textContent = 'dry run failed'; });
+		});
+	});
+})();
+</script>
+{% endblock %}

@@ -4,7 +4,7 @@
 	<div class="box box-primary box-solid collapsed-box"> <!--collapsed-box-->
 		<div class="box-header with-border" data-widget="collapse" type="button" class="btn btn-box-tool">
 			<button id="add_classical_resource_btn" class="btn btn-box-tool" style="height: 30px;"><h3 class="box-title">Add Classical Resource</h3></button>
-			<div class="box-tools pull-right">
+			<div class="box-tools float-right">
 				<button id="add_classical_resource_btn" class="btn btn-box-tool"><i class="fa fa-plus"></i></button>
 			</div>
 		</div>
@@ -14,19 +14,19 @@
 				{% for hidden_field in form.hidden_fields %}
 					{{ hidden_field }}
 				{% endfor %}
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Telescope</label>
 						{% render_field form.telescope class+="form-control select2" %}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>PI</label>
 						{% render_field form.principal_investigator class+="form-control select2" style+="width: 100%;"%}
 					</div>
 				</div>
-				<div class="col-xs-6">
+				<div class="col-6">
 					<div class="form-group">
 						<label>Date (UT)</label>
 						<div class="input-group">
@@ -34,14 +34,14 @@
 								<i class="fa fa-clock-o"></i>
 							</div>
 							<!--
-							<input type="text" class="form-control pull-right" id="survey_obs_date">
+							<input type="text" class="form-control float-right" id="survey_obs_date">
 						</div>
 						<input type="hidden" id="valid_date" name="valid_date">-->
 						<input id="observing_date" class="span2 datepicker" type="text" value="" name="observing_date" data-behavior="datepicker" format="mm/dd/yyyy">
 					</div>
 				</div>
 				</div>
-				<div class="col-xs-12">
+				<div class="col-12">
 					<div class="form-group">
 						<br>
 						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>

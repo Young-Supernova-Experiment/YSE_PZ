@@ -11,6 +11,7 @@ import configparser
 import time
 from html.parser import HTMLParser
 import astropy.table as at
+import numpy as np
 import re
 import os
 from bs4 import BeautifulSoup
@@ -19,11 +20,6 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from YSE_App.util.TNS_Synopsis import mastrequests
 #from YSE_App.data_ingest.TNS_uploads import get_ps_score
-from astro_ghost.ghostHelperFunctions import *
-try:
-    from astro_ghost.photoz_helper import calc_photoz
-except:
-    pass
 import datetime
 import json
 from astropy.time import Time
@@ -228,6 +224,8 @@ class DECam(CronJobBase):
         scexisting = SkyCoord(ra,dec,unit=u.deg)
             
         # prelims
+        # astro_ghost fetches the VO registry on import; keep it out of module import
+        from astro_ghost.ghostHelperFunctions import getGHOST, getTransientHosts
         transientdict = {}
         if not os.path.exists(f'{self.options.ghost_path}/database/GHOST.csv'):
             getGHOST(real=True, verbose=True, installpath=self.options.ghost_path)
@@ -313,6 +311,7 @@ class DECam(CronJobBase):
 
                     # run GHOST
                     try:
+                        from astro_ghost.photoz_helper import calc_photoz
                         ghost_hosts = getTransientHosts(
                             ['tmp'+candid],[SkyCoord(ra,dec,unit=(u.hour,u.deg))], verbose=True, starcut='gentle', ascentMatch=False,
                             GHOSTpath=self.options.ghost_path)

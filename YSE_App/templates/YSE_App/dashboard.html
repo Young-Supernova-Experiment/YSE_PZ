@@ -13,15 +13,18 @@
     <ol class="breadcrumb">
         <li><i class="fa fa-dashboard"></i> Home</li>
     </ol>
-    <ol class="breadcrumb">
-      <form action="{% url 'search' %}" method="get">
-        <input name="q" type="text" placeholder="Name or coord. search">
-      </form>
-    </ol>
 {% endblock %}
 
 {% block content %}
-    
+<div class="yse-page-dashboard">
+  {% if broker_stale_heartbeats %}
+  <div class="alert alert-warning yse-broker-stale-banner" role="alert">
+    <i class="fa fa-exclamation-triangle"></i>
+    <strong>Broker stream ingest stale:</strong>
+    {% for hb in broker_stale_heartbeats %}<code>{{ hb.connection.slug }}{% if hb.topic %}/{{ hb.topic }}{% endif %}#{{ hb.worker }}</code> last seen {{ hb.last_seen|timesince }} ago{% if hb.last_error %} (last error: {{ hb.last_error|truncatechars:80 }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.
+    {% if user.is_staff %}<a href="{% url 'admin:YSE_App_ingestheartbeat_changelist' %}" class="alert-link">Heartbeats</a>{% endif %}
+  </div>
+  {% endif %}
   <!-- Default box -->
   {% for transient_cat in transient_categories %}
 
@@ -41,8 +44,13 @@
       {% endif %}
     </div>
     <div class="box-body">
+      {% if transient_cat.0 %}
       {% render_table transient_cat.0 %}
-
+      {% elif main_dashboard_defer %}
+      <div class="mdash-section-loading" data-url="{% url 'dashboard_section' transient_cat.2 %}">
+        <p><i class="fa fa-spinner fa-spin"></i> Loading {{ transient_cat.1 }}…</p>
+      </div>
+      {% endif %}
     </div>
     <!-- /.box-body -->
     <div class="box-footer">
@@ -51,11 +59,35 @@
     <!-- /.box-footer-->
   </div>
   <!-- /.box -->
-  
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script type='text/javascript'>
+{% if main_dashboard_defer %}
+$(document).ready(function() {
+  // Forward the page query string (e.g. followingsort=..., followingpage=...,
+  // following-ex=...) so django-tables2 sorting, pagination and the filter form
+  // keep working on sections loaded by AJAX, not only on the synchronous New table.
+  function sectionUrl($slot) {
+    var url = $slot.data('url');
+    var search = window.location.search;
+    if (search && search.length > 1) {
+      url += (url.indexOf('?') >= 0 ? '&' : '?') + search.substring(1);
+    }
+    return url;
+  }
+
+  $('.mdash-section-loading').each(function() {
+    var $slot = $(this);
+    $.get(sectionUrl($slot), function(html) {
+      $slot.replaceWith(html);
+    }).fail(function() {
+      $slot.html('<p class="text-danger">Failed to load section.</p>');
+    });
+  });
+});
+{% endif %}
 {% if anchor %}
 $(document).ready(function(){
     window.location = '#{{ anchor }}'

@@ -1,0 +1,29 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Email address</h1>
+</section>
+
+<section class="content" id="yse-account-email">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="box box-default box-solid">
+		<div class="box-body">
+			{% if has_email %}
+			<p>Your account has a confirmed email address. Enter a new one to change it{% if verification %}; we send a confirmation link to the new address first{% endif %}.</p>
+			{% else %}
+			<p>Your account has no confirmed email address yet, so you get no email notifications and cannot reset your password by email.{% if verification %} Enter your address and we will send you a confirmation link.{% endif %}</p>
+			{% endif %}
+			<form method="post" action="{% url 'account_email' %}" style="max-width: 28em">{% csrf_token %}
+				<div class="form-group">{{ form.email.label_tag }} {{ form.email }}
+					{% if form.email.errors %}<div class="text-danger small">{{ form.email.errors|join:" " }}</div>{% endif %}</div>
+				<button type="submit" class="btn btn-primary">{% if verification %}Send confirmation link{% else %}Save{% endif %}</button>
+			</form>
+		</div>
+	</div>
+</section>
+{% endblock %}

@@ -6,10 +6,8 @@ from YSE_App.models.photometric_band_models import *
 from YSE_App.models.host_models import *
 from YSE_App.models.tag_models import *
 from YSE_App.common.utilities import GetSexigesimalString
-from YSE_App.common.alert import IsK2Pixel, SendTransientAlert
-from YSE_App.common.thacher_transient_search import thacher_transient_search
-from YSE_App.common.tess_obs import tess_obs
 from YSE_App.common.utilities import date_to_mjd
+from YSE_App.common.galactic import galactic_coords
 from YSE_App import models as yse_models
 from django.dispatch import receiver
 from pytz import timezone
@@ -19,7 +17,10 @@ import astropy.coordinates as cd
 import astropy.units as u
 from YSE_App.models.survey_models import *
 import datetime
+import logging
 from auditlog.registry import auditlog
+
+logger = logging.getLogger(__name__)
 
 class Transient(BaseModel):
 
@@ -80,6 +81,50 @@ class Transient(BaseModel):
 	has_hst = models.BooleanField(null=True, blank=True)
 	has_spitzer = models.BooleanField(null=True, blank=True)
 	has_chandra = models.BooleanField(null=True, blank=True)
+	# JWST coverage from the detail page's MAST lookup (#328 follow-up); None = never looked up.
+	has_jwst = models.BooleanField(null=True, blank=True)
+
+	# AI summary (#295): the current text; every version is a TransientSummaryHistory row.
+	summary = models.TextField(null=True, blank=True)
+	summary_modified = models.DateTimeField(null=True, blank=True, editable=False)
+
+	# Galactic coordinates (#286), degrees, J2000; filled from ra / dec by save()
+	# (common/galactic.py), backfilled by migration 0027 and
+	# ``manage.py backfill_galactic_coords``. gal_b is indexed for the search
+	# filters; NULL only for rows written around save() and not yet backfilled.
+	gal_l = models.FloatField(null=True, blank=True, editable=False)
+	gal_b = models.FloatField(null=True, blank=True, editable=False)
+
+	class Meta:
+		# Dashboard/search hot paths (#248): name lookups from saved queries,
+		# ORDER BY disc_date per status bucket, Explorer ORDER BY modified_date,
+		# coordinate box searches. See docs/dashboard-performance.md.
+		indexes = [
+			models.Index(fields=['name'], name='yse_transient_name_idx'),
+			models.Index(fields=['disc_date'], name='yse_transient_disc_date_idx'),
+			models.Index(fields=['status', 'disc_date'], name='yse_transient_status_disc_idx'),
+			models.Index(fields=['modified_date'], name='yse_transient_mod_date_idx'),
+			models.Index(fields=['ra'], name='yse_transient_ra_idx'),
+			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
+			# Search |b| cuts and ORDER BY gal_b (#286).
+			models.Index(fields=['gal_b'], name='yse_transient_gal_b_idx'),
+		]
+
+	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
+	ARCHIVE_FLAG_FIELDS = (('HST', 'has_hst'), ('JWST', 'has_jwst'), ('Chandra', 'has_chandra'), ('Spitzer', 'has_spitzer'))
+
+	@property
+	def archive_flags(self):
+		return [(label, getattr(self, field)) for label, field in self.ARCHIVE_FLAG_FIELDS]
+
+	def save(self, *args, **kwargs):
+		"""Keep gal_l / gal_b in step with ra / dec (also when update_fields names one of them)."""
+		update_fields = kwargs.get('update_fields')
+		if update_fields is None or 'ra' in update_fields or 'dec' in update_fields:
+			self.gal_l, self.gal_b = galactic_coords(self.ra, self.dec)
+			if update_fields is not None:
+				kwargs['update_fields'] = list(dict.fromkeys(list(update_fields) + ['gal_l', 'gal_b']))
+		super().save(*args, **kwargs)
 
 	def CoordString(self):
 		return GetSexigesimalString(self.ra, self.dec)
@@ -91,6 +136,8 @@ class Transient(BaseModel):
 		return '%.7f'%(self.dec)
 
 	def Separation(self):
+		if not self.host_id:
+			return None
 		host = Host.objects.get(pk=self.host_id)
 		return '%.2f'%getSeparation(self.ra,self.dec,host.ra,host.dec)
 
@@ -194,6 +241,12 @@ class Transient(BaseModel):
 		mod_date = self.modified_date.astimezone(timezone('US/Pacific'))
 		return mod_date.strftime(date_format)
 
+	@property
+	def summary_first_line(self):
+		"""First line of the AI/human summary (table tooltips, #295)."""
+		from YSE_App.models.summary_models import first_line
+		return first_line(self.summary)
+
 	def disc_date_string(self):
 		date_format = '%m/%d/%Y'
 		return self.disc_date.strftime(date_format)
@@ -265,68 +318,19 @@ auditlog.register(Transient)
 
 @receiver(models.signals.post_save, sender=Transient)
 def execute_after_save(sender, instance, created, *args, **kwargs):
+	"""Log new transients.
 
-	tag_K2 = False
-
+	The TESS and Thacher footprint tags are applied by the
+	``YSE_App.data_ingest.Apply_Tags.Tags`` cron (every 8 h, transients created
+	in the last day), not here: this handler runs inside the web request or
+	ingest loop that created the transient, and the TESS lookup is a blocking
+	HTTP call to HEASARC (issue #239).
+	"""
 	if created:
-		print("Transient Created: %s" % instance.name)
-		print("Internal Survey: %s" % instance.internal_survey)
-
-		if tag_K2:
-			is_k2_C16_validated, C16_msg = IsK2Pixel(instance.ra, instance.dec, "16")
-			is_k2_C17_validated, C17_msg = IsK2Pixel(instance.ra, instance.dec, "17")
-			is_k2_C19_validated, C19_msg = IsK2Pixel(instance.ra, instance.dec, "19")
-
-			print("K2 C16 Val: %s; K2 Val Msg: %s" % (is_k2_C16_validated, C16_msg))
-			print("K2 C17 Val: %s; K2 Val Msg: %s" % (is_k2_C17_validated, C17_msg))
-			print("K2 C19 Val: %s; K2 Val Msg: %s" % (is_k2_C19_validated, C19_msg))
-
-			if is_k2_C16_validated:
-				k2c16tag = TransientTag.objects.get(name='K2 C16')
-				instance.k2_validated = True
-				instance.k2_msg = C16_msg
-				instance.tags.add(k2c16tag)
-			
-			elif is_k2_C17_validated:
-				k2c17tag = TransientTag.objects.get(name='K2 C17')
-				instance.k2_validated = True
-				instance.k2_msg = C17_msg
-				instance.tags.add(k2c17tag)
-
-			elif is_k2_C19_validated:
-				k2c19tag = TransientTag.objects.get(name='K2 C19')
-				instance.k2_validated = True
-				instance.k2_msg = C19_msg
-				instance.tags.add(k2c19tag)
-		tag_TESS,tag_Thacher = True,True #False,False
-		print('Checking TESS')
-		if tag_TESS and instance.disc_date:
-			TESSFlag = tess_obs(instance.ra,instance.dec,date_to_mjd(instance.disc_date)+2400000.5)
-			if TESSFlag:
-				try:
-					tesstag = TransientTag.objects.get(name='TESS')
-					instance.tags.add(tesstag)
-				except: pass
-		else:
-			TESSFlag = tess_obs(instance.ra,instance.dec,date_to_mjd(instance.modified_date)+2400000.5)
-			if TESSFlag:
-				try:
-					tesstag = TransientTag.objects.get(name='TESS')
-					instance.tags.add(tesstag)
-				except: pass
-
-		print('Checking Thacher')
-		if tag_Thacher and thacher_transient_search(instance.ra,instance.dec):
-			try:
-				thachertag = TransientTag.objects.get(name='Thacher')
-				instance.tags.add(thachertag)
-			except: pass
-			
-		instance.save()
-		#if is_k2_C19_validated:
-		#	coord_string = GetSexigesimalString(instance.ra, instance.dec)
-		#	coord_string = instance.CoordString()
-		#	SendTransientAlert(instance.id, instance.name, coord_string[0], coord_string[1])
+		logger.info(
+			"Transient created: %s (internal survey: %s)",
+			instance.name, instance.internal_survey,
+		)
 
 # Alternate Host names?
 class AlternateTransientNames(BaseModel):

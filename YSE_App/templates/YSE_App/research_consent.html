@@ -1,0 +1,57 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Optional research consent</h1>
+</section>
+
+<section class="content" id="yse-research-consent">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-8 col-12">
+			{% if consent_form %}
+			<div class="box box-default box-solid">
+				<div class="box-header with-border">
+					<strong>{{ consent_form.title }}</strong>
+				</div>
+				<div class="box-body yse-research-consent-body">
+					{{ consent_form.body|safe }}
+				</div>
+				<div class="box-footer">
+					<p class="text-muted small">Taking part is optional and never limits your use of YSE-PZ. You can change your choice at any time from your profile.</p>
+					{% if latest %}
+					<p id="yse-research-consent-status">Your current choice: <strong>{{ latest.get_decision_display }}</strong> on {{ latest.decided_at|date:"Y-m-d" }}.</p>
+					{% endif %}
+					<form method="post" action="{% url 'research_consent' %}{% if next_url %}?next={{ next_url|urlencode:'' }}{% endif %}" id="yse-research-consent-form">
+						{% csrf_token %}
+						{{ form.next }}
+						{% if state == 'consented' %}
+						<button type="submit" name="action" value="withdraw" class="btn btn-outline-danger">Withdraw from the study</button>
+						<p class="small text-muted mt-2 mb-0">If you withdraw, your research profile information and your activity from the date this form went live are no longer used in research datasets, and an administrator deletes that profile information. Activity from before that date was public and may still be used, anonymized. Nothing else is deleted from the site.</p>
+						{% else %}
+						{% if form.consent.errors %}<div class="text-danger small">{{ form.consent.errors|join:" " }}</div>{% endif %}
+						<div class="form-group form-check">
+							<input type="checkbox" class="form-check-input" name="consent" id="id_consent">
+							<label class="form-check-label" for="id_consent">{{ form.consent.label }}</label>
+						</div>
+						<button type="submit" name="action" value="consent" class="btn btn-primary">Consent</button>
+						{% if state != 'declined' and state != 'withdrawn' %}
+						<button type="submit" name="action" value="decline" class="btn btn-outline-secondary">Decline</button>
+						{% endif %}
+						{% endif %}
+						<a class="btn btn-link" href="{{ continue_url }}" id="yse-research-consent-continue">{% if state %}Back{% else %}Not now{% endif %}</a>
+					</form>
+				</div>
+			</div>
+			{% else %}
+			<div class="alert alert-info">No research consent form is in effect.</div>
+			<a class="btn btn-primary" href="{{ continue_url }}">Continue</a>
+			{% endif %}
+		</div>
+	</div>
+</section>
+{% endblock %}

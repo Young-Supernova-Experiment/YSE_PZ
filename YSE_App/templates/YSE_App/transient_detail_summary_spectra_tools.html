@@ -1,0 +1,36 @@
+{% comment %}
+Summary-tab spectrum toolbar. Included inline by summary_tab.html and, in the
+deferred shell (YSE_TRANSIENT_DETAIL_DEFER), reloaded into #summary_spectra_tools
+via transient_detail_summary_spectra_tools_fragment once spectra are known.
+{% endcomment %}
+{% if all_transient_spectra.count > 1 %}
+<div class="row">
+    <div class="col-6">
+        <div class="dropdown">
+            <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                Show single spectrum
+            </button>
+            <div class="dropdown-menu">
+                {% for spec in all_transient_spectra %}
+                <a class="dropdown-item specPlotChange" spec_plot-id="{{ spec.id }}" href="#">{{ spec }} - {{ spec.instrument.name }}</a>
+                {% endfor %}
+                <div class="dropdown-divider"></div>
+                <a class="dropdown-item specPlotChange" spec_plot-id="all" href="#">Plot All Spectra</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-6">
+        <button style="margin-bottom:5px" type="button" class="btn btn-block btn-primary" onclick="window.open('{% url 'download_spectra' transient.slug %}')">
+            Download {{ all_transient_spectra.count }} Spectra
+        </button>
+    </div>
+</div>
+{% elif all_transient_spectra.count == 1 %}
+<div class="row">
+    <div class="col-6">
+        <button style="margin-bottom:5px" type="button" class="btn btn-block btn-primary" onclick="window.open('{% url 'download_spectra' transient.slug %}')">
+            Download {{ all_transient_spectra.count }} Spectrum
+        </button>
+    </div>
+</div>
+{% endif %}

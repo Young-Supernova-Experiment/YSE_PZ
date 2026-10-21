@@ -1,0 +1,87 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% block content_header %}
+<h1>Facility requests <small class="text-muted">{{ counts.open }} open, {{ counts.final }} finished</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+	<div class="col-12">
+		<div class="card">
+			<div class="card-header">
+				<form class="form-inline" method="get" action="{% url 'facility_requests' %}" id="facility_requests_filter">
+					<label class="mr-2" for="fr-filter-state">State</label>
+					<select class="form-control form-control-sm mr-3" id="fr-filter-state" name="state">
+						<option value="open"{% if state == 'open' %} selected{% endif %}>open (queued, submitted, accepted, running)</option>
+						<option value="final"{% if state == 'final' %} selected{% endif %}>finished</option>
+						<option value="all"{% if state == 'all' %} selected{% endif %}>all</option>
+						{% for value, label in states %}<option value="{{ value }}"{% if state == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+					</select>
+					<label class="mr-2" for="fr-filter-facility">Facility</label>
+					<select class="form-control form-control-sm mr-3" id="fr-filter-facility" name="facility">
+						<option value="">all</option>
+						{% for slug in facility_slugs %}<option value="{{ slug }}"{% if slug == facility %} selected{% endif %}>{{ slug }}</option>{% endfor %}
+					</select>
+					<label class="mr-2" for="fr-filter-allocation">Allocation</label>
+					<select class="form-control form-control-sm mr-3" id="fr-filter-allocation" name="allocation">
+						<option value="">all</option>
+						{% for a in allocations %}<option value="{{ a.id }}"{% if allocation_id == a.id|stringformat:"s" %} selected{% endif %}>{{ a.name }}</option>{% endfor %}
+					</select>
+					<label class="mr-2" for="fr-filter-transient">Transient</label>
+					<input class="form-control form-control-sm mr-3" id="fr-filter-transient" name="transient" value="{{ transient_name }}" placeholder="name contains">
+					<div class="form-check mr-3"><input class="form-check-input" type="checkbox" id="fr-filter-mine" name="mine" value="1"{% if mine %} checked{% endif %}><label class="form-check-label" for="fr-filter-mine">mine only</label></div>
+					<button class="btn btn-sm btn-primary" type="submit">Filter</button>
+				</form>
+			</div>
+			<div class="card-body table-responsive p-0">
+				<table class="table table-hover table-sm" id="facility_requests_tbl">
+					<thead>
+						<tr>
+							<th>Transient</th>
+							<th>Allocation / facility</th>
+							<th>State</th>
+							<th>External id</th>
+							<th>Requested by</th>
+							<th>Submitted</th>
+							<th>Last polled</th>
+							<th>Hours</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for row in rows %}
+						{% with r=row.r %}
+						<tr data-request-id="{{ r.id }}" data-status="{{ r.state }}">
+							<td><a href="{% url 'transient_detail' r.transient.slug %}#followup_tab">{{ r.transient.name }}</a></td>
+							<td>{{ r.allocation.name }}<br><small class="text-muted">{{ r.allocation.facility }} &middot; {{ r.allocation.telescope.name }}{% if r.is_photometry %} &middot; forced photometry{% endif %}</small></td>
+							<td><span class="badge badge-{% if r.state == 'complete' %}success{% elif r.state == 'failed' %}danger{% elif r.state == 'cancelled' %}secondary{% elif r.state == 'queued' %}warning{% else %}info{% endif %}" title="{{ r.state_detail }}">{{ r.get_state_display }}</span>
+								{% if r.attempts > 1 %}<small class="text-muted">x{{ r.attempts }}</small>{% endif %}{% if r.n_results %} <small class="text-muted">{{ r.n_results }} pts</small>{% endif %}
+								{% if r.state_detail %}<br><small class="text-muted">{{ r.state_detail|truncatechars:70 }}</small>{% endif %}</td>
+							<td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank" rel="noopener noreferrer">{{ r.external_id|truncatechars:30 }}</a>{% else %}{{ r.external_id|default:"-"|truncatechars:30 }}{% endif %}
+								{% if r.run and user.is_staff %}<br><a href="{% url 'external_service_run_detail' r.run.uuid %}"><small>run {{ r.run.uuid|slice:":8" }}</small></a>{% endif %}</td>
+							<td>{{ r.submitted_by.username }}</td>
+							<td>{{ r.submitted_at|date:"Y-m-d H:i"|default:"-" }}</td>
+							<td>{{ r.last_polled|date:"Y-m-d H:i"|default:"-" }}</td>
+							<td>{{ r.hours_charged|floatformat:2 }}{% if r.charged_at %} <i class="fa fa-check text-success" title="charged"></i>{% endif %}</td>
+						</tr>
+						{% endwith %}
+						{% empty %}
+						<tr><td colspan="8" class="text-muted">No facility requests match this filter.</td></tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			<div class="card-footer text-muted">
+				{% if page.has_other_pages %}
+				Page {{ page.number }} of {{ page.paginator.num_pages }}
+				{% if page.has_previous %}<a href="?{{ request.GET.urlencode }}&amp;page={{ page.previous_page_number }}">&laquo; previous</a>{% endif %}
+				{% if page.has_next %}<a href="?{{ request.GET.urlencode }}&amp;page={{ page.next_page_number }}">next &raquo;</a>{% endif %} &middot;
+				{% endif %}
+				Requests are submitted from a transient's follow-up tab; open requests at facilities with a status endpoint are polled by the
+				<code>FacilityPoll</code> cron (or <code>manage.py poll_facility_requests</code>).{% if user.is_staff %} <a href="{% url 'allocations' %}">Allocations</a>.{% endif %}
+				See <code>docs/facility-apis.md</code>.
+			</div>
+		</div>
+	</div>
+</div>
+{% endblock %}
