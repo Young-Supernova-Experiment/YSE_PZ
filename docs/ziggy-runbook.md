@@ -3211,6 +3211,82 @@ curl -s -H "Authorization: Token <TOKEN>" "<SITE_URL>/api/transients/?limit=1"
 
 Expected: HTTP 200 JSON with `count` and `results`. A wrong token returns 401 `Invalid token.`. In Python: `requests.get(url, headers={"Authorization": "Token <TOKEN>"})`.
 
+<a id="mysql-sizing"></a>
+### MySQL memory and connection limits (2026-10-21, #777) recommended, the shared MySQL server
+
+On 2026-10-21 MySQL ran with the defaults: `innodb_buffer_pool_size` 128 MB and `max_connections` 151. Both settings change online with `SET PERSIST` (no restart), and the value survives restarts.
+
+**M1. Check memory headroom.** ZFS (the `/data` pools) keeps a cache that shows as "used" but gives memory back under pressure:
+```bash
+free -g | head -2
+awk '/^size/ {printf "ZFS ARC now %.1f GB\n", $3/2^30} /^c_max/ {printf "ZFS ARC max %.1f GB\n", $3/2^30}' /proc/spl/kstat/zfs/arcstats
+mysql -u root -p -t -e "SELECT table_schema, ROUND(SUM(data_length+index_length)/1073741824,1) gb FROM information_schema.TABLES GROUP BY 1 ORDER BY 2 DESC LIMIT 5;"
+```
+Size the buffer pool to the hot data, not the whole database. Keep at least 8 GB of `available` memory after the change. With about 23 GB available and a ZFS cache of several GB, **8 GB** is a safe first step.
+
+**M2. Raise the limits.**
+```bash
+mysql -u root -p -e "SET PERSIST innodb_buffer_pool_size = 8589934592; SET PERSIST max_connections = 300;"
+mysql -u root -p -t -e "SHOW STATUS LIKE 'Innodb_buffer_pool_resize_status'; SELECT @@innodb_buffer_pool_size/1073741824 bp_gb, @@max_connections;"
+```
+**Expected:** `bp_gb 8.0000` and `300`. The resize runs in the background in 128 MB chunks; the status ends with `Completed resizing buffer pool`. Queries keep running, but run it at a quiet time anyway.
+
+**M3. Check after a day.**
+```bash
+mysql -u root -p -t -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Innodb_buffer_pool_reads','Innodb_buffer_pool_read_requests','Max_used_connections','Uptime');"; free -g | head -2
+```
+`Innodb_buffer_pool_reads / Innodb_buffer_pool_read_requests` (reads that had to go to disk) should be well under 1%. `Max_used_connections` should stay well below 300, and `available` memory above 8 GB.
+
+**Rollback:** `mysql -u root -p -e "RESET PERSIST innodb_buffer_pool_size; RESET PERSIST max_connections; SET GLOBAL innodb_buffer_pool_size = 134217728; SET GLOBAL max_connections = 151;"`.
+
+<a id="wsgi-sizing"></a>
+### mod_wsgi daemon size and timeouts (2026-10-21, #771) recommended, all three stacks
+
+With no options, a `WSGIDaemonProcess` runs mod\_wsgi's defaults: **one process with 15 threads** and no request or queue timeout. Apache's `Timeout 300` gives up on a slow request after 5 minutes, but the thread keeps working on it. Once the threads are all busy, new requests queue, and Apache logs `Unable to connect to WSGI daemon process ... Resource temporarily unavailable` and returns 503. The options below run several processes, fail queued requests quickly instead of letting them pile up, and restart a process whose threads stay stuck.
+
+Each thread can hold one connection per database alias (`default` and `explorer`), so keep processes × threads × 2, summed over the stacks, plus the crons, under `max_connections` (300 after [M2](#mysql-sizing)). The values below use at most 3×10×2 + 2×(1×10×2) = 100.
+
+| Option | Production | yse\_test, yse\_experimental | Why |
+|---|---|---|---|
+| `processes` / `threads` | `3` / `10` | `1` / `10` | a stuck process leaves the others serving |
+| `request-timeout` | `240` | `240` | restarts a process whose threads have been busy on requests for 4 minutes on average |
+| `queue-timeout` | `45` | `45` | a request that waited 45 s for a thread gets a fast 504 instead of holding Apache |
+| `socket-timeout` | `300` | `300` | matches Apache's `Timeout` |
+| `connect-timeout` | `15` | `15` | |
+| `graceful-timeout` / `shutdown-timeout` | `30` / `10` | `30` / `10` | how long a restart waits for running requests |
+| `display-name` | `%{GROUP}` | `%{GROUP}` | `ps` shows `(wsgi:yse_pz.django)` instead of `apache2` |
+
+**A1. Back up the site files and look at today's lines.**
+```bash
+for f in <PROD_SITE_CONF> <TEST_SITE_CONF> <EXP_SITE_CONF>; do sudo cp -p "$f" "$f.bak-$(date +%Y%m%d)"; grep -n '^WSGIDaemonProcess' "$f"; done
+```
+**Expected:** one `WSGIDaemonProcess <group> python-home=... python-path=...` line per file, with nothing after `python-path=...`.
+
+**A2. Append the options to each `WSGIDaemonProcess` line** (production first):
+```bash
+sudo sed -i -E 's#^(WSGIDaemonProcess [^ ]+ python-home=[^ ]+ python-path=[^ ]+)[[:space:]]*$#\1 processes=3 threads=10 display-name=%{GROUP} request-timeout=240 queue-timeout=45 socket-timeout=300 connect-timeout=15 graceful-timeout=30 shutdown-timeout=10#' <PROD_SITE_CONF>
+sudo sed -i -E 's#^(WSGIDaemonProcess [^ ]+ python-home=[^ ]+ python-path=[^ ]+)[[:space:]]*$#\1 processes=1 threads=10 display-name=%{GROUP} request-timeout=240 queue-timeout=45 socket-timeout=300 connect-timeout=15 graceful-timeout=30 shutdown-timeout=10#' <TEST_SITE_CONF> <EXP_SITE_CONF>
+grep -n '^WSGIDaemonProcess' <PROD_SITE_CONF> <TEST_SITE_CONF> <EXP_SITE_CONF>
+```
+**Expected:** each line now ends with `... shutdown-timeout=10`. If a line did not change, it has other options already: edit it by hand.
+
+**A3. Apply.**
+```bash
+sudo apache2ctl configtest && sudo systemctl reload apache2
+ps -eo pid,nlwp,rss,cmd | grep '[w]sgi:'
+```
+**Expected:** `Syntax OK`, then three `(wsgi:yse_pz.django)` processes and one each for the two test daemons. Load a few production pages.
+
+**A4. Check the next day.**
+```bash
+sudo grep -c 'Unable to connect to WSGI daemon' /var/log/apache2/error.log
+sudo grep -c 'Queue timeout expired' /var/log/apache2/error.log
+sudo grep -E -c 'Daemon process request time limit exceeded|Aborting process' /var/log/apache2/error.log
+```
+The first count should fall to near zero. Some queue timeouts and request-time-limit restarts are expected while slow pages remain; each line names the URL or process. Tell Ryan which ones recur.
+
+**Rollback:** copy each `.bak-<date>` file back, then `sudo apache2ctl configtest && sudo systemctl reload apache2`.
+
 <a id="backup"></a>
 ### Nightly database backup without table locks (2026-10-21, #772) recommended, production
 
@@ -3404,6 +3480,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-21 v98, **recommended** (no code change): server sizing and backup. New sections [MySQL memory and connection limits](#mysql-sizing) (M1-M3, [#777](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/777)), [mod_wsgi daemon size and timeouts](#wsgi-sizing) (A1-A4, [#771](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/771)) and [Nightly database backup without table locks](#backup) (B1-B5, [#772](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/772)). Do M2 before A2.
 * 2026-10-21 v95, **nothing required**; one optional check. Cron hygiene: the legacy TNS crons no longer replace our `best_spec_class` on transients we already have; they follow the TNS re-sync rule (`TNS_spec_class` follows TNS, `best_spec_class` only when we have none or ours is the previous TNS class) ([#755](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/755)). `PhotometryUploadExample.PhotometryUploads` is removed from `CRON_CLASSES` and the module is deleted ([#756](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/756)). A cron that finds another instance of itself running still sends its alert email but now returns, so the rest of that `runcrons` run continues ([#757](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/757)). The ZTF forced-photometry download login is read from settings (`[ztf] ztfwebdavuser` / `ztfwebdavpass`, or `ZTF_WEBDAV_USER` / `ZTF_WEBDAV_PASS`); the defaults are ZTF's published generic login, so leave them unset ([#758](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/758)). No migration. **Optional check:** `crontab -l | grep -c PhotometryUploadExample` as the cron user on Ziggy. **Expected:** `0`. **If not:** delete that crontab line (the module no longer exists).
 * 2026-10-21 v94, **nothing required** (no migration, no new package; one optional setting). Duplicate transients ([#752](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/752), [#753](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/753), [#754](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/754)): the `CheckDuplicates` cron only reports candidate pairs (notification to `DUPLICATE_REPORT_USERNAMES`, default every active superuser) and uploads no longer delete same-name transients; a person merges a pair with `manage.py transient_duplicates merge <DUPLICATE_ID> <KEEP_ID> --yes` (dry run without `--yes`; one transaction). `DUPLICATE_AUTO_MERGE` (off) restores unattended merging ([section "Duplicate transients"](#duplicates)).
 * 2026-10-20 v93, **nothing new to run** (the deploy applies the migrations; the consent steps are in v91/v92). Develop backported into experimental again (develop-direct PRs [#745](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/745) and [#747](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/747): User Agreement v2 [#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743), research consent [#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744), research export [#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)). Develop's v36/v37 are v91/v92 here. Migrations `0038_user_agreement_v2` to `0041_research_consent_prompts` keep develop's names and are joined to experimental's `0050_value_change` by the empty merge migration `0051_merge_develop_consent`; on the shared `YSE_test` database whichever stack deploys first applies them. On experimental the research export also includes `value_changes`, `night_plans` and `observed_blocks` and the revoke fields of data access requests, under the same consent rules and pseudonyms.
