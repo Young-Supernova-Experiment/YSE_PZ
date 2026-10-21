@@ -1493,74 +1493,36 @@ class YSE_Weekly(CronJobBase):
 
             
 class CheckDuplicates(CronJobBase):
-    
+    """Find possible duplicate transients and report them for review (#752, #753).
+
+    Changes nothing unless ``DUPLICATE_AUTO_MERGE`` is on; the detection,
+    report and (confirmed) merge live in ``YSE_App.services.duplicates``.
+    """
+
     RUN_EVERY_MINS = 30
 
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
     code = 'YSE_App.data_ingest.QUB_data.CheckDuplicates'
 
     def do(self):
+        from YSE_App.services import duplicates
 
         print("starting duplicate check at {}".format(datetime.datetime.now().isoformat()))
-
         tstart = time.time()
-
-        # read in the options from the param file and the command line
-        # some convoluted syntax here, making it so param file is not required
         try:
-            nsn = self.main()
+            result = self.main()
         except Exception as e:
-            print(e)
-            nsn = 0
-            smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
-            from_addr = "%s@gmail.com" % options.SMTP_LOGIN
-            subject = "Duplicate Check Failure"
-            print("Sending error email")
-            html_msg = "Alert : YSE_PZ Failed to upload transients from YSE in QUB_data.py\n"
-            html_msg += "Error : %s"
-            sendemail(from_addr, options.dbemail, subject,
-                      html_msg%(e),
-                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-
-        print('Checking duplicates took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
+            print("Duplicate check failed: %s" % e)
+            duplicates.report_failure(e)
+            return
+        print('Checking duplicates took %.1f seconds: %s' % (time.time() - tstart, result))
 
     def main(self):
-        from YSE_App.models import Transient
-        
-        transients = Transient.objects.filter(modified_date__gt=datetime.datetime.now()-datetime.timedelta(1)).filter(name__startswith='1')
-        for t in transients:
-            if t.disc_date is None: continue
-            ramin,ramax,decmin,decmax = getRADecBox(t.ra,t.dec,size=0.00042)
-            dups = Transient.objects.filter(Q(ra__gt=ramin) & Q(ra__lt=ramax) &
-                                            Q(dec__gt=decmin) & Q(dec__lt=decmax) &
-                                            (Q(disc_date__gte=t.disc_date-datetime.timedelta(365)) &
-                                             Q(disc_date__lte=t.disc_date+datetime.timedelta(365))))
-            if len(dups) > 1:
-                print('deleting transient %s'%t.name)
-                t.delete()
+        from YSE_App.services import duplicates
 
-        transients = Transient.objects.filter(~Q(name=F('slug')))
-        for t in transients:
-            t_good = Transient.objects.filter(slug=t.name)
-            if not len(t_good): continue
-            t_good = t_good[0]
-            
-            tp = TransientPhotometry.objects.filter(transient__name=t.name)
-            ts = TransientSpectrum.objects.filter(transient__name=t.name)
-            # Moving photometry refreshes both transients' TransientPhotStat
-            # rows (signals.py, #269); deferred, so once per transient.
-            from YSE_App.services import photstat
-            with photstat.deferred_updates():
-                for tps in tp:
-                    tps.transient = t_good
-                    tps.save()
-            for tss in ts:
-                tss.transient = t_good
-                tss.save()
-            print('deleting transient %s with slug %s'%(t.name,t.slug))
-            t.delete()
-        return len(transients)
-    
+        return duplicates.run_check()
+
+
 def jd_to_date(jd):
     time = Time(jd,scale='utc',format='jd')
     return time.isot

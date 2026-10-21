@@ -303,6 +303,13 @@ PHOTSTAT_REFRESH_CRON_ENABLED = _flag(
 PHOTSTAT_BAZIN_CRON_ENABLED = _flag(
     'YSE_PHOTSTAT_BAZIN_CRON', 'site_settings', 'PHOTSTAT_BAZIN_CRON_ENABLED', False
 )
+# Duplicate transients (#752, #754; YSE_App/services/duplicates.py). The
+# CheckDuplicates cron reports candidate pairs to DUPLICATE_REPORT_USERNAMES
+# (comma-separated; empty = active superusers) and changes nothing; a person
+# merges with `manage.py transient_duplicates merge ... --yes`. Only
+# DUPLICATE_AUTO_MERGE = True (env YSE_DUPLICATE_AUTO_MERGE) merges unattended.
+DUPLICATE_AUTO_MERGE = _flag('YSE_DUPLICATE_AUTO_MERGE', 'site_settings', 'DUPLICATE_AUTO_MERGE', False)
+DUPLICATE_REPORT_USERNAMES = config.get('site_settings', 'DUPLICATE_REPORT_USERNAMES', fallback='')
 PHOTSTAT_REFRESH_CRON_MINUTES = config.getint('site_settings', 'PHOTSTAT_REFRESH_CRON_MINUTES', fallback=60)
 PHOTSTAT_REFRESH_LIMIT = config.getint('site_settings', 'PHOTSTAT_REFRESH_LIMIT', fallback=2000)
 PHOTSTAT_BAZIN_LIMIT = config.getint('site_settings', 'PHOTSTAT_BAZIN_LIMIT', fallback=500)
@@ -1284,6 +1291,9 @@ NOTIFICATION_LIST_PAGE_SIZE = config.getint('site_settings', 'NOTIFICATION_LIST_
 # within this window share a notification and its delayed email/Slack
 # delivery; 0 sends every event on its own.
 FAVORITE_ACTIVITY_BATCH_MINUTES = config.getint('site_settings', 'FAVORITE_ACTIVITY_BATCH_MINUTES', fallback=60)
+# A new spectrum is announced to favoriters by a job this many seconds later,
+# once the upload has attached its groups, so visibility is decided per recipient (#761).
+FAVORITE_SPECTRUM_DELAY_SECONDS = config.getint('site_settings', 'FAVORITE_SPECTRUM_DELAY_SECONDS', fallback=120)
 # Retention (#320): the notifications.prune job / PruneNotifications cron deletes
 # read notifications, unread notifications and finished job rows older than
 # these many days (0 disables that part); the cron runs every

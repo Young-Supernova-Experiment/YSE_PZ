@@ -382,9 +382,8 @@ def _announce_new_photometry(stat, new_points: int) -> None:
     """Favorite-activity hook (#323): detections that arrived since the last recompute."""
     from YSE_App.services import favorites
 
-    band = getattr(getattr(stat, 'last_detected_band', None), 'name', '') or ''
-    favorites._safely(favorites.on_photometry, stat.transient_id, new_points,
-                      latest_mag=stat.last_detected_mag, latest_band=band)
+    # Count and latest magnitude are worked out per recipient from the points they may see (#761).
+    favorites._safely(favorites.on_photometry, stat.transient_id, new_points)
 
 
 DISPLAY_RELATED = (
