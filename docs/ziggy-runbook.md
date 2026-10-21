@@ -3268,6 +3268,125 @@ systemctl list-timers yse-watchdog.timer
 **Where things are.** State and snapshots: `/var/lib/yse-watchdog/` (root only). Each snapshot holds the MySQL process list (full SQL text of running statements), InnoDB status, memory, disk and recent journal lines. Snapshots are deleted after 30 days (`SNAPSHOT_DAYS`). Treat them as sensitive and do not copy them off the server.
 
 **Rollback.** `sudo systemctl disable --now yse-watchdog.timer`. To remove it completely, also delete `/usr/local/sbin/yse-watchdog.sh`, the two unit files, `/etc/yse-watchdog/` and `/var/lib/yse-watchdog/`, and run `DROP USER 'yse_watchdog'@'localhost';`.
+<a id="mysql-sizing"></a>
+### MySQL memory and connection limits (2026-10-21, #777) recommended, the shared MySQL server
+
+On 2026-10-21 MySQL ran with the defaults: `innodb_buffer_pool_size` 128 MB and `max_connections` 151. Both settings change online with `SET PERSIST` (no restart), and the value survives restarts.
+
+**M1. Check memory headroom.** ZFS (the `/data` pools) keeps a cache that shows as "used" but gives memory back under pressure:
+```bash
+free -g | head -2
+awk '/^size/ {printf "ZFS ARC now %.1f GB\n", $3/2^30} /^c_max/ {printf "ZFS ARC max %.1f GB\n", $3/2^30}' /proc/spl/kstat/zfs/arcstats
+mysql -u root -p -t -e "SELECT table_schema, ROUND(SUM(data_length+index_length)/1073741824,1) gb FROM information_schema.TABLES GROUP BY 1 ORDER BY 2 DESC LIMIT 5;"
+```
+Size the buffer pool to the hot data, not the whole database. Keep at least 8 GB of `available` memory after the change. With about 23 GB available and a ZFS cache of several GB, **8 GB** is a safe first step.
+
+**M2. Raise the limits.**
+```bash
+mysql -u root -p -e "SET PERSIST innodb_buffer_pool_size = 8589934592; SET PERSIST max_connections = 300;"
+mysql -u root -p -t -e "SHOW STATUS LIKE 'Innodb_buffer_pool_resize_status'; SELECT @@innodb_buffer_pool_size/1073741824 bp_gb, @@max_connections;"
+```
+**Expected:** `bp_gb 8.0000` and `300`. The resize runs in the background in 128 MB chunks; the status ends with `Completed resizing buffer pool`. Queries keep running, but run it at a quiet time anyway.
+
+**M3. Check after a day.**
+```bash
+mysql -u root -p -t -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Innodb_buffer_pool_reads','Innodb_buffer_pool_read_requests','Max_used_connections','Uptime');"; free -g | head -2
+```
+`Innodb_buffer_pool_reads / Innodb_buffer_pool_read_requests` (reads that had to go to disk) should be well under 1%. `Max_used_connections` should stay well below 300, and `available` memory above 8 GB.
+
+**Rollback:** `mysql -u root -p -e "RESET PERSIST innodb_buffer_pool_size; RESET PERSIST max_connections; SET GLOBAL innodb_buffer_pool_size = 134217728; SET GLOBAL max_connections = 151;"`.
+
+<a id="wsgi-sizing"></a>
+### mod_wsgi daemon size and timeouts (2026-10-21, #771) recommended, all three stacks
+
+With no options, a `WSGIDaemonProcess` runs mod\_wsgi's defaults: **one process with 15 threads** and no request or queue timeout. Apache's `Timeout 300` gives up on a slow request after 5 minutes, but the thread keeps working on it. Once the threads are all busy, new requests queue, and Apache logs `Unable to connect to WSGI daemon process ... Resource temporarily unavailable` and returns 503. The options below run several processes, fail queued requests quickly instead of letting them pile up, and restart a process whose threads stay stuck.
+
+Each thread can hold one connection per database alias (`default` and `explorer`), so keep processes × threads × 2, summed over the stacks, plus the crons, under `max_connections` (300 after [M2](#mysql-sizing)). The values below use at most 3×10×2 + 2×(1×10×2) = 100.
+
+| Option | Production | yse\_test, yse\_experimental | Why |
+|---|---|---|---|
+| `processes` / `threads` | `3` / `10` | `1` / `10` | a stuck process leaves the others serving |
+| `request-timeout` | `240` | `240` | restarts a process whose threads have been busy on requests for 4 minutes on average |
+| `queue-timeout` | `45` | `45` | a request that waited 45 s for a thread gets a fast 504 instead of holding Apache |
+| `socket-timeout` | `300` | `300` | matches Apache's `Timeout` |
+| `connect-timeout` | `15` | `15` | |
+| `graceful-timeout` / `shutdown-timeout` | `30` / `10` | `30` / `10` | how long a restart waits for running requests |
+| `display-name` | `%{GROUP}` | `%{GROUP}` | `ps` shows `(wsgi:yse_pz.django)` instead of `apache2` |
+
+**A1. Back up the site files and look at today's lines.**
+```bash
+for f in <PROD_SITE_CONF> <TEST_SITE_CONF> <EXP_SITE_CONF>; do sudo cp -p "$f" "$f.bak-$(date +%Y%m%d)"; grep -n '^WSGIDaemonProcess' "$f"; done
+```
+**Expected:** one `WSGIDaemonProcess <group> python-home=... python-path=...` line per file, with nothing after `python-path=...`.
+
+**A2. Append the options to each `WSGIDaemonProcess` line** (production first):
+```bash
+sudo sed -i -E 's#^(WSGIDaemonProcess [^ ]+ python-home=[^ ]+ python-path=[^ ]+)[[:space:]]*$#\1 processes=3 threads=10 display-name=%{GROUP} request-timeout=240 queue-timeout=45 socket-timeout=300 connect-timeout=15 graceful-timeout=30 shutdown-timeout=10#' <PROD_SITE_CONF>
+sudo sed -i -E 's#^(WSGIDaemonProcess [^ ]+ python-home=[^ ]+ python-path=[^ ]+)[[:space:]]*$#\1 processes=1 threads=10 display-name=%{GROUP} request-timeout=240 queue-timeout=45 socket-timeout=300 connect-timeout=15 graceful-timeout=30 shutdown-timeout=10#' <TEST_SITE_CONF> <EXP_SITE_CONF>
+grep -n '^WSGIDaemonProcess' <PROD_SITE_CONF> <TEST_SITE_CONF> <EXP_SITE_CONF>
+```
+**Expected:** each line now ends with `... shutdown-timeout=10`. If a line did not change, it has other options already: edit it by hand.
+
+**A3. Apply.**
+```bash
+sudo apache2ctl configtest && sudo systemctl reload apache2
+ps -eo pid,nlwp,rss,cmd | grep '[w]sgi:'
+```
+**Expected:** `Syntax OK`, then three `(wsgi:yse_pz.django)` processes and one each for the two test daemons. Load a few production pages.
+
+**A4. Check the next day.**
+```bash
+sudo grep -c 'Unable to connect to WSGI daemon' /var/log/apache2/error.log
+sudo grep -c 'Queue timeout expired' /var/log/apache2/error.log
+sudo grep -E -c 'Daemon process request time limit exceeded|Aborting process' /var/log/apache2/error.log
+```
+The first count should fall to near zero. Some queue timeouts and request-time-limit restarts are expected while slow pages remain; each line names the URL or process. Tell Ryan which ones recur.
+
+**Rollback:** copy each `.bak-<date>` file back, then `sudo apache2ctl configtest && sudo systemctl reload apache2`.
+
+<a id="backup"></a>
+### Nightly database backup without table locks (2026-10-21, #772) recommended, production
+
+A plain `mysqldump` locks each database's tables for the whole dump. Requests that write wait until it finishes, and the web process runs out of threads, which is the midnight spike of 503s. Passing the password with `--password=` also shows it in `ps` to every user on the host while the dump runs. With `--single-transaction`, InnoDB tables are dumped from one consistent snapshot and no locks are held. `--quick` streams rows instead of buffering whole tables. A defaults file keeps the password off the command line.
+
+Placeholders: `<BACKUP_SCRIPT>` is the script the backup cron runs, `<BACKUP_USER>` the Unix user that runs it, `<BACKUP_CNF>` a new file in that user's home (for example `~/.yse-backup.cnf`), `<BACKUP_DIR>` where the dumps go, `<PROD_DB>` the production database.
+
+**B1. Check every table is InnoDB.** `--single-transaction` is consistent only for InnoDB:
+```bash
+mysql -u root -p -N -e "SELECT engine, COUNT(*) FROM information_schema.TABLES WHERE table_schema='<PROD_DB>' AND table_type='BASE TABLE' GROUP BY engine;"
+```
+**Expected:** one line, `InnoDB <n>`. Any MyISAM table would still be dumped, without a consistent snapshot. List them and tell Ryan.
+
+**B2. A backup login with only what `mysqldump` needs** (new random password):
+```bash
+mysql -u root -p -e "CREATE USER 'yse_backup'@'localhost' IDENTIFIED BY '<BACKUP_DB_PASSWORD>'; GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES ON *.* TO 'yse_backup'@'localhost';"
+printf '[mysqldump]\nuser=yse_backup\npassword="<BACKUP_DB_PASSWORD>"\n' | sudo -u <BACKUP_USER> tee <BACKUP_CNF> >/dev/null
+sudo -u <BACKUP_USER> chmod 600 <BACKUP_CNF>
+```
+**Check:** `sudo ls -l <BACKUP_CNF>` shows `-rw------- <BACKUP_USER>`.
+
+**B3. Change the dump command in `<BACKUP_SCRIPT>`.** Keep the output path and file name it uses today; only the options change:
+```bash
+mysqldump --defaults-extra-file=<BACKUP_CNF> --single-transaction --quick --no-tablespaces --routines --events --triggers <PROD_DB> > <BACKUP_DIR>/<DATE>_<PROD_DB>.sql
+```
+`--defaults-extra-file` must be the first option. Remove `-u root` and `--password=...`. Optional: `--ignore-table=<PROD_DB>.explorer_querylog` skips SQL Explorer's run history, which is large and not needed to restore the site. Decide this with Ryan before using it.
+
+**B4. Run it once by hand, off-peak, and watch the site while it runs.**
+```bash
+sudo -u <BACKUP_USER> bash -c 'time python <BACKUP_SCRIPT>'
+tail -c 200 <BACKUP_DIR>/<DATE>_<PROD_DB>.sql
+```
+**Expected:** the last line is `-- Dump completed on <date>`. While it runs, pages keep loading, and `mysql -u root -p -e "SHOW PROCESSLIST"` shows the dump's `SELECT` but no `Waiting for table metadata lock` or `Waiting for table flush`.
+
+**B5. Optional restore check** (needs free disk about the size of the dump; it can take hours on the full database, so run it off-peak):
+```bash
+mysql -u root -p -e "CREATE DATABASE yse_restore_check"
+mysql -u root -p yse_restore_check < <BACKUP_DIR>/<DATE>_<PROD_DB>.sql
+mysql -u root -p -e "SELECT (SELECT COUNT(*) FROM <PROD_DB>.YSE_App_transient) live, (SELECT COUNT(*) FROM yse_restore_check.YSE_App_transient) restored; DROP DATABASE yse_restore_check;"
+```
+**Expected:** the two counts match, or `live` is a little higher because of rows added since the dump.
+
+**Rollback:** put the old command back in `<BACKUP_SCRIPT>`. The new login can stay or be dropped: `DROP USER 'yse_backup'@'localhost';`.
 
 <a id="db-timeouts"></a>
 ### Database client timeouts (2026-10-21, #770) optional, recommended, per stack
@@ -3455,6 +3574,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-21 v101, **recommended** (no code change): server sizing and backup. New sections [MySQL memory and connection limits](#mysql-sizing) (M1-M3, [#777](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/777)), [mod_wsgi daemon size and timeouts](#wsgi-sizing) (A1-A4, [#771](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/771)) and [Nightly database backup without table locks](#backup) (B1-B5, [#772](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/772)). Do M2 before A2.
 * 2026-10-21 v100, **nothing new to run** (the deploy applies the migration; v99 needs no step). Develop backported into experimental again (develop-direct PR [#767](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/767): agreement and consent page edits [#766](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/766)). Develop's v38 is v99 here. Migration `0042_agreement_consent_wording` keeps develop's name and is joined to experimental's `0051_merge_develop_consent` by the empty merge migration `0052_merge_develop_consent_wording`; on the shared `YSE_test` database develop already applied it, and the edit is idempotent.
 * 2026-10-21 v99 (develop v38), nothing required. Agreement and consent page edits ([#766](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/766)): migration 0042 edits the current User Agreement v2 and Research Consent Form v1 wording in place (titles lose "(v2)"/"(v1)", small text edits; versions, acceptances and consent records untouched, nobody re-accepts; idempotent on the shared database). The pages show only the title; "Research consent (voluntary)" is now "Optional research consent"; Consent, Decline and Not now continue to the researcher profile while its required fields are incomplete.
 * 2026-10-21 v97, **optional, recommended** (no migration, no new package): database client timeouts ([#770](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/770)). New section [Database client timeouts](#db-timeouts), T1-T3 per stack; set the cron override (T1) before the keys (T2). Nothing changes until the keys are set.
