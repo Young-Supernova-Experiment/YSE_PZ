@@ -324,10 +324,24 @@ class AgreementAcceptance(models.Model):
 # Voluntary research consent (#744). Separate from the User Agreement and never a gate.
 # Like the tables above: no REST serializer, excluded from SQL Explorer, admin read-only.
 
-# Encrypted profile fields that are demographic: offered only to users who consent to the
-# study, and deleted when a user declines or withdraws. (PhD year is career information that
-# the profile requires of postdocs and above, so it is not in this list.)
-DEMOGRAPHIC_FIELDS = ("country", "gender")
+# Which researcher-profile data are kept for everyone and which are research data (Ryan,
+# 2026-10-20, #744). Essential: what running the site needs (username, display name,
+# publication and acknowledgment names, email, group memberships and roles, institution,
+# ORCID, and observing experience, which shows who can observe with which instrument). Everything else in the researcher profile is research data: offered only to users who
+# consent, never required from others, excluded from research once a user declines or
+# withdraws, and deleted by an administrator with ``purge_unconsented_demographics``.
+ESSENTIAL_PROFILE_FIELDS = (
+    "full_name", "preferred_name", "author_name_format", "acknowledgment_text", "institution", "orcid",
+    "observing_experience",
+)
+RESEARCH_PROFILE_FIELDS = (
+    "pronouns", "department", "career_level", "career_level_other", "research_interests", "website",
+    "github_username", "time_zone",
+)
+# All encrypted fields (country, PhD year, gender) are research data.
+RESEARCH_ENCRYPTED_FIELDS = ENCRYPTED_FIELDS
+# Kept for older imports: the encrypted research fields.
+DEMOGRAPHIC_FIELDS = RESEARCH_ENCRYPTED_FIELDS
 
 
 class ResearchConsentForm(models.Model):
@@ -386,3 +400,23 @@ class ResearchConsentRecord(models.Model):
 
     def __str__(self):
         return "Research consent record #%s" % self.pk
+
+
+class ResearchConsentPrompt(models.Model):
+    """When the consent form was offered to a user who has not answered yet (reminders, #744).
+
+    Second request: after 10 logins or 1 month from the first prompt, whichever comes first;
+    then once a year at the first login of the year. Users who answered are never reminded.
+    """
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="research_consent_prompt")
+    first_prompted_at = models.DateTimeField(default=timezone.now)
+    last_prompted_at = models.DateTimeField(default=timezone.now)
+    prompt_count = models.PositiveIntegerField(default=1)
+    logins_since_first = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "research consent prompt"
+
+    def __str__(self):
+        return "Research consent prompt #%s" % self.pk

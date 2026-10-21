@@ -12,20 +12,26 @@ from urllib.parse import urlencode
 
 from django.apps import apps as django_apps
 from django.contrib.auth.models import User
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from YSE_App import onboarding
 from YSE_App.models import (
+    AffiliationHistory,
     AgreementAcceptance,
     EncryptedProfileValue,
+    Mentorship,
+    ProfileFieldHistory,
     ResearchConsentForm,
+    ResearchConsentPrompt,
     ResearchConsentRecord,
+    ResearcherMetrics,
     ResearcherProfile,
     UserAgreement,
 )
+from YSE_App.models.notification_models import Notification
 from YSE_App.services import research_consent as rc
 from YSE_App.services import research_crypto
 from YSE_App.services import research_dataset as rd
@@ -180,7 +186,7 @@ class ConsentFlowTests(TestCase):
     def test_never_a_gate(self):
         AgreementAcceptance.objects.create(user=self.user, agreement=UserAgreement.objects.get(is_current=True))
         complete_profile(self.user)
-        self.assertTrue(rc.needs_prompt(self.user))
+        self.assertTrue(rc.prompt_due(self.user))
         self.assertEqual(self.client.get(self.page).status_code, 200)  # unanswered: not redirected
         self.assertEqual(self.client.get(reverse("research_consent")).status_code, 200)
 
@@ -200,74 +206,181 @@ class ConsentFlowTests(TestCase):
         self.assertContains(page, "Withdraw")
 
 
-class DemographicsTests(TestCase):
+class ReminderTests(TestCase):
+    """Second request at 10 logins or 30 days, then yearly; never for users who answered."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("remind_user", password="x")
+
+    def test_schedule(self):
+        first = datetime.datetime(2026, 3, 1, 12, tzinfo=UTC)
+        self.assertTrue(rc.prompt_due(self.user, now=first))
+        rc.record_prompt(self.user, now=first)
+        self.assertFalse(rc.prompt_due(self.user, now=first + datetime.timedelta(days=29)))
+        self.assertTrue(rc.prompt_due(self.user, now=first + datetime.timedelta(days=30)))
+        for _ in range(9):
+            rc.note_login(self.user)
+        self.assertFalse(rc.prompt_due(self.user, now=first + datetime.timedelta(days=1)))
+        rc.note_login(self.user)
+        self.assertTrue(rc.prompt_due(self.user, now=first + datetime.timedelta(days=1)))
+        second = first + datetime.timedelta(days=2)
+        rc.record_prompt(self.user, now=second)
+        self.assertFalse(rc.prompt_due(self.user, now=datetime.datetime(2026, 12, 30, tzinfo=UTC)))
+        self.assertTrue(rc.prompt_due(self.user, now=datetime.datetime(2027, 1, 5, tzinfo=UTC)))
+        rc.record_prompt(self.user, now=datetime.datetime(2027, 1, 5, tzinfo=UTC))
+        self.assertFalse(rc.prompt_due(self.user, now=datetime.datetime(2027, 6, 5, tzinfo=UTC)))
+
+    def test_never_after_an_answer(self):
+        rc.record_prompt(self.user, now=at(1))
+        rc.record_decision(self.user, rc.DECLINED)
+        self.assertFalse(rc.prompt_due(self.user, now=datetime.datetime(2030, 1, 1, tzinfo=UTC)))
+        other = User.objects.create_user("remind_consented")
+        rc.record_decision(other, rc.CONSENTED)
+        self.assertFalse(rc.prompt_due(other))
+
+    @override_settings(**GATE_ON)
+    def test_login_flags_one_non_blocking_redirect(self):
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        AgreementAcceptance.objects.create(user=self.user, agreement=UserAgreement.objects.get(is_current=True))
+        complete_profile(self.user)
+        rc.record_prompt(self.user, now=timezone.now() - datetime.timedelta(days=40))
+        page = reverse("notification_list")
+        self.client.login(username="remind_user", password="x")
+        resp = self.client.get(page)
+        self.assertRedirects(resp, "%s?%s" % (reverse("research_consent"), urlencode({"next": page})),
+                             fetch_redirect_response=False)
+        consent_page = self.client.get(resp["Location"])
+        self.assertContains(consent_page, "Not now")
+        self.assertEqual(self.client.get(page).status_code, 200)  # once only; nothing recorded
+        self.assertFalse(ResearchConsentRecord.objects.filter(user=self.user).exists())
+        self.assertEqual(ResearchConsentPrompt.objects.get(user=self.user).prompt_count, 2)
+
+    def test_logins_count(self):
+        rc.record_prompt(self.user)
+        self.client.login(username="remind_user", password="x")
+        self.client.logout()
+        self.client.login(username="remind_user", password="x")
+        self.assertEqual(ResearchConsentPrompt.objects.get(user=self.user).logins_since_first, 2)
+
+
+class ResearchFieldsTests(TestCase):
+    """Everything but the essential fields is research data, offered and required only with consent."""
+
     def setUp(self):
         research_crypto.reset_cache()
         self.addCleanup(research_crypto.reset_cache)
-        self.user = User.objects.create_user("demo_user", password="x")
+        self.user = User.objects.create_user("fields_user", password="x")
         self.client.force_login(self.user)
 
     def post_profile(self, **extra):
         data = dict(full_name="Test Person", institution="Example University", department="Physics",
-                    career_level="postdoc", orcid=VALID_ORCID, phd_year="2015")
+                    career_level="postdoc", orcid=VALID_ORCID, phd_year="2015", pronouns="they/them")
         data.update(extra)
         return self.client.post(reverse("researcher_profile_edit"), data)
 
     def stored(self):
         return set(EncryptedProfileValue.objects.filter(user=self.user).values_list("field_name", flat=True))
 
-    def test_fields_hidden_and_ignored_without_consent(self):
+    def test_without_consent_only_essential_fields(self):
         with with_key():
             page = self.client.get(reverse("researcher_profile_edit"))
-            self.assertContains(page, "Offered only if you")
-            self.assertNotContains(page, 'name="gender"')
-            self.assertNotContains(page, 'name="country"')
-            resp = self.post_profile(gender="woman", country="Atlantis")
+            self.assertContains(page, 'id="yse-research-fields-locked"')
+            for name in ("gender", "country", "phd_year", "career_level", "department", "pronouns",
+                         "research_interests", "website", "github_username", "advisor_name"):
+                self.assertNotContains(page, 'name="%s"' % name)
+            for name in ("full_name", "author_name_format", "institution", "orcid", "acknowledgment_text"):
+                self.assertContains(page, 'name="%s"' % name)
+            resp = self.client.post(reverse("researcher_profile_edit"), dict(
+                full_name="Test Person", institution="Example University", gender="woman", country="Atlantis",
+                career_level="grad", pronouns="they/them"))
             self.assertEqual(resp.status_code, 302)
-        self.assertEqual(self.stored(), {"phd_year"})  # PhD year is career information, not demographic
+        profile = ResearcherProfile.objects.get(user=self.user)
+        self.assertEqual((profile.career_level, profile.pronouns, profile.department), ("", "", ""))
+        self.assertEqual(self.stored(), set())
+        self.assertEqual(rp.missing_fields(self.user), [])  # complete without research fields
 
-    def test_offered_to_consenting_users(self):
+    def test_consenting_users_are_offered_and_required_the_research_fields(self):
         rc.record_decision(self.user, rc.CONSENTED)
+        self.assertEqual(rp.missing_fields(self.user, ResearcherProfile.objects.create(
+            user=self.user, full_name="Test Person", institution="Example University"), key_available=False),
+            ["department", "career_level"])
         with with_key():
             page = self.client.get(reverse("researcher_profile_edit"))
             self.assertContains(page, 'name="gender"')
             self.post_profile(gender="woman", country="Atlantis")
         self.assertEqual(self.stored(), {"phd_year", "gender", "country"})
 
-    def _store_demographics(self):
+    def _store_research_data(self):
+        ResearcherProfile.objects.create(user=self.user, full_name="Test Person", institution="Example University",
+                                         department="Physics", career_level="grad", pronouns="they/them")
+        Mentorship.objects.create(mentee=self.user, mentor_name="Synthetic Advisor",
+                                  kind=Mentorship.KIND_CURRENT_ADVISOR)
         with with_key():
             for name, value in (("gender", "man"), ("country", "Atlantis"), ("phd_year", "2015")):
                 rp.set_encrypted(self.user, name, value, changed_by=self.user)
 
-    def test_decline_deletes_demographics(self):
-        self._store_demographics()
-        rc.record_decision(self.user, rc.DECLINED)
-        self.assertEqual(self.stored(), {"phd_year"})
+    def test_decline_deletes_nothing_and_notifies_admins(self):
+        self._store_research_data()
+        admin = User.objects.create_superuser("optout_admin", password="x", email="admin@example.com")
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("research_consent"), {"action": "decline"})
+        self.assertEqual(self.stored(), {"phd_year", "gender", "country"})  # purged by hand later
+        note = Notification.objects.get(recipient=admin)
+        self.assertEqual(note.kind, "research_optout")
+        self.assertIn("fields_user", note.text)
+        self.assertIn("purge_unconsented_demographics --user fields_user", note.text)
+        self.assertNotIn("Atlantis", note.text)
 
-    def test_withdraw_deletes_demographics(self):
+    @override_settings(RESEARCH_OPTOUT_NOTIFY_USERNAMES=("optout_named",))
+    def test_withdraw_notifies_the_configured_admins(self):
+        named = User.objects.create_user("optout_named")
+        superuser = User.objects.create_superuser("optout_super", password="x")
         rc.record_decision(self.user, rc.CONSENTED)
-        self._store_demographics()
-        resp = self.client.post(reverse("research_consent"), {"action": "withdraw"})
-        self.assertEqual(resp.status_code, 302)
-        self.assertEqual(self.stored(), {"phd_year"})
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("research_consent"), {"action": "withdraw"})
+        self.assertTrue(Notification.objects.filter(recipient=named, kind="research_optout").exists())
+        self.assertFalse(Notification.objects.filter(recipient=superuser).exists())
 
     def test_unanswered_users_keep_values_and_may_delete_them(self):
-        self._store_demographics()
-        self.assertEqual(self.stored(), {"phd_year", "gender", "country"})
+        self._store_research_data()
         with with_key():
-            self.post_profile(clear_gender="on")
+            self.client.post(reverse("researcher_profile_edit"), dict(
+                full_name="Test Person", institution="Example University", clear_gender="on"))
         self.assertEqual(self.stored(), {"phd_year", "country"})
+        self.assertEqual(ResearcherProfile.objects.get(user=self.user).career_level, "grad")  # kept
+
+    def test_metrics_only_for_consenting_users(self):
+        from YSE_App.services import research_dataset
+        other = User.objects.create_user("fields_consenting")
+        rc.record_decision(other, rc.CONSENTED)
+        self.assertEqual(research_dataset.consenting_user_ids(), [other.pk])
 
 
 class PurgeCommandTests(TestCase):
     def setUp(self):
         research_crypto.reset_cache()
         self.addCleanup(research_crypto.reset_cache)
+        self.declined = User.objects.create_user("purge_declined")
+        self.withdrawn = User.objects.create_user("purge_withdrawn")
         self.unanswered = User.objects.create_user("purge_unanswered")
         self.consenting = User.objects.create_user("purge_consenting")
+        rc.record_decision(self.declined, rc.DECLINED)
+        rc.record_decision(self.withdrawn, rc.CONSENTED)
+        rc.record_decision(self.withdrawn, rc.WITHDRAWN)
         rc.record_decision(self.consenting, rc.CONSENTED)
-        with with_key():
-            for user in (self.unanswered, self.consenting):
+        self.users = (self.declined, self.withdrawn, self.unanswered, self.consenting)
+        for user in self.users:
+            ResearcherProfile.objects.create(
+                user=user, full_name="Synthetic Person", institution="Example University", orcid=VALID_ORCID,
+                author_name_format="Person, S.", department="Physics", career_level="grad", pronouns="they/them",
+                research_interests="synthetic interests", website="https://example.org/", github_username="synthetic")
+            Mentorship.objects.create(mentee=user, mentor_name="Synthetic Advisor",
+                                      kind=Mentorship.KIND_CURRENT_ADVISOR, created_by=user)
+            AffiliationHistory.objects.create(user=user, institution="Example College")
+            ResearcherMetrics.objects.create(user=user, source="scix", h_index=3)
+            with with_key():
                 rp.set_encrypted(user, "gender", "prefer_not_to_say", changed_by=user)
                 rp.set_encrypted(user, "phd_year", "2010", changed_by=user)
 
@@ -276,25 +389,69 @@ class PurgeCommandTests(TestCase):
         call_command("purge_unconsented_demographics", *args, stdout=out)
         return out.getvalue()
 
+    def has_research_data(self, user):
+        profile = ResearcherProfile.objects.get(user=user)
+        return any([EncryptedProfileValue.objects.filter(user=user).exists(), profile.career_level,
+                    profile.department, profile.pronouns, profile.research_interests, profile.website,
+                    Mentorship.objects.filter(mentee=user).exists(),
+                    AffiliationHistory.objects.filter(user=user).exists(),
+                    ResearcherMetrics.objects.filter(user=user).exists()])
+
     def test_dry_run_by_default(self):
         out = self.run_purge()
-        self.assertIn("1 demographic value(s) of 1 user(s)", out)
-        self.assertIn("Dry run", out)
-        self.assertEqual(EncryptedProfileValue.objects.count(), 4)
+        self.assertIn("purge_declined: would delete", out)
+        self.assertIn("purge_withdrawn: would delete", out)
         self.assertNotIn("purge_unanswered", out)
+        self.assertNotIn("purge_consenting", out)
+        self.assertIn("Dry run", out)
+        self.assertTrue(all(self.has_research_data(u) for u in self.users))
 
-    def test_apply_deletes_only_unconsented_demographics(self):
+    def test_apply_deletes_research_data_of_decliners_and_withdrawers_only(self):
         self.run_purge("--apply")
-        remaining = set(EncryptedProfileValue.objects.values_list("user__username", "field_name"))
-        self.assertEqual(remaining, {("purge_unanswered", "phd_year"), ("purge_consenting", "gender"),
-                                     ("purge_consenting", "phd_year")})
+        for user in (self.declined, self.withdrawn):
+            self.assertFalse(self.has_research_data(user), user.username)
+            profile = ResearcherProfile.objects.get(user=user)
+            # Essential data are kept.
+            self.assertEqual((profile.full_name, profile.institution, profile.orcid, profile.author_name_format),
+                             ("Synthetic Person", "Example University", VALID_ORCID, "Person, S."))
+            self.assertFalse(ProfileFieldHistory.objects.filter(user=user, field_name="pronouns",
+                                                                cleared=False).exists())
+        for user in (self.unanswered, self.consenting):
+            self.assertTrue(self.has_research_data(user), user.username)
+        self.assertIn("Nothing to delete.", self.run_purge("--apply"))  # idempotent
 
-    def test_older_than_days(self):
-        self.run_purge("--apply", "--older-than-days", "30")
-        self.assertEqual(EncryptedProfileValue.objects.count(), 4)  # stored today: kept
-        EncryptedProfileValue.objects.update(set_at=timezone.now() - datetime.timedelta(days=45))
-        self.run_purge("--apply", "--older-than-days", "30")
-        self.assertEqual(EncryptedProfileValue.objects.count(), 3)
+    def test_mentorships_entered_by_the_other_person_are_kept(self):
+        # Privacy covers what the person revealed, not information about them (Ryan, 2026-10-20).
+        mentor = User.objects.create_user("purge_mentor")
+        theirs = Mentorship.objects.create(mentor=mentor, mentee=self.declined, kind=Mentorship.KIND_PHD_ADVISOR,
+                                           created_by=mentor)
+        own_as_mentor = Mentorship.objects.create(mentor=self.declined, mentee_name="Synthetic Student",
+                                                  kind=Mentorship.KIND_RESEARCH_SUPERVISOR, created_by=self.declined)
+        self.run_purge("--apply", "--user", "purge_declined")
+        self.assertTrue(Mentorship.objects.filter(pk=theirs.pk).exists())
+        self.assertFalse(Mentorship.objects.filter(pk=own_as_mentor.pk).exists())
+        self.assertFalse(Mentorship.objects.filter(mentee=self.declined, created_by=self.declined).exists())
+
+    def test_observing_experience_is_essential_and_kept(self):
+        from YSE_App.models import Instrument, Observatory, Telescope
+        audit = {"created_by": self.consenting, "modified_by": self.consenting}
+        obs = Observatory.objects.create(name="Synthetic Observatory", utc_offset=0, tz_name="UTC", **audit)
+        tel = Telescope.objects.create(name="Synthetic Scope", observatory=obs, latitude=0.0, longitude=0.0,
+                                       elevation=0.0, **audit)
+        inst = Instrument.objects.create(name="SynthCam", telescope=tel, **audit)
+        profile = ResearcherProfile.objects.get(user=self.declined)
+        profile.observing_experience.add(inst)
+        self.run_purge("--apply", "--user", "purge_declined")
+        self.assertEqual(list(profile.observing_experience.all()), [inst])
+
+    def test_user_option(self):
+        self.run_purge("--apply", "--user", "purge_declined")
+        self.assertFalse(self.has_research_data(self.declined))
+        self.assertTrue(self.has_research_data(self.withdrawn))
+        for name in ("purge_consenting", "purge_unanswered", "no_such_user"):
+            with self.assertRaises(CommandError):
+                self.run_purge("--apply", "--user", name)
+        self.assertTrue(self.has_research_data(self.consenting))
 
 
 class ResearchDatasetTests(TestCase):
@@ -351,9 +508,9 @@ class ResearchDatasetTests(TestCase):
                     user=user, field_name="gender", key_fingerprint="synthetic",
                     ciphertext=research_crypto.encrypt_value("prefer_not_to_say", "gender")[0])
         source = rd.ActivitySource("requests", rows, user_key="user_id", time_key="when", fields=("transient_id",))
-        data = rd.build_dataset([source], cohort=self.cohort, salt=b"synthetic-salt")
+        pseudonym = rd.Pseudonymizer()
+        data = rd.build_dataset([source], cohort=self.cohort, pseudonym=pseudonym)
         table = data["tables"]["requests"]
-        pseudonym = rd.Pseudonymizer(b"synthetic-salt")
         got = sorted((r["participant"], r["time"][:4]) for r in table)
         expected = sorted([(pseudonym(self.consented.pk), "2025"), (pseudonym(self.consented.pk), "2026"),
                            (pseudonym(self.declined.pk), "2025"), (pseudonym(self.unanswered.pk), "2025"),
@@ -398,3 +555,142 @@ class ConsentAdminTests(TestCase):
         self.client.force_login(staff)
         resp = self.client.get(reverse("admin:YSE_App_researchconsentrecord_changelist"))
         self.assertEqual(resp.status_code, 403)
+
+
+class ResearchExportTests(TestCase):
+    """The anonymized SQLite export (#746), with synthetic users and go-live fixed at 2026-01-01."""
+
+    def setUp(self):
+        import tempfile
+        from YSE_App.models import Log
+        from YSE_App.tests.fixtures_minimal import create_minimal_transient
+        research_crypto.reset_cache()
+        self.addCleanup(research_crypto.reset_cache)
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        ResearchConsentForm.objects.update(effective_date=GO_LIVE_DATE)
+        people = (("exp_alice", "Zebulon", "Quixote"), ("exp_bob", "Xanthippe", "Vandermolen"),
+                  ("exp_carol", "Wolfram", "Ulbrichtova"), ("exp_dave", "Thaddeus", "Smorgasbord"))
+        self.users = {}
+        for username, first, last in people:
+            user = User.objects.create_user(username, first_name=first, last_name=last,
+                                            email="%s@example.com" % username)
+            ResearcherProfile.objects.create(
+                user=user, full_name="%s %s" % (first, last), institution="Synthetic Institute of %s" % last,
+                author_name_format="%s, %s." % (last, first[0]), career_level="postdoc", department="Physics",
+                orcid=VALID_ORCID if username == "exp_alice" else "", website="https://%s.example.org/" % username)
+            self.users[username] = user
+        alice, bob, carol, dave = (self.users[n] for n in ("exp_alice", "exp_bob", "exp_carol", "exp_dave"))
+        rc.record_decision(alice, rc.CONSENTED, now=at(3))
+        rc.record_decision(bob, rc.DECLINED, now=at(3))
+        rc.record_decision(carol, rc.CONSENTED, now=at(2))
+        rc.record_decision(carol, rc.WITHDRAWN, now=at(4))
+        with with_key():
+            for user in (alice, bob):
+                rp.set_encrypted(user, "gender", "prefer_not_to_say", changed_by=user)
+        transient = create_minimal_transient(alice, name="2026synthexp")
+        text = ("Thanks @exp_bob and Zebulon Quixote (zq@example.com, 0000-0002-1825-0097); "
+                "Vandermolen agrees. exp_dave too.")
+        for user in (alice, bob, carol, dave):
+            for when in (datetime.datetime(2025, 6, 1, tzinfo=UTC), at(5)):
+                row = Log.objects.create(transient=transient, comment=text, created_by=user, modified_by=user)
+                Log.objects.filter(pk=row.pk).update(created_date=when)
+
+    def export(self, name):
+        import os
+        import sqlite3
+        path = os.path.join(self.tmp, name)
+        call_command("export_research_database", "--out", path, stdout=io.StringIO())
+        conn = sqlite3.connect(path)
+        self.addCleanup(conn.close)
+        return conn
+
+    def test_inclusion_rules(self):
+        conn = self.export("a.sqlite")
+        comments = conn.execute("SELECT participant, time FROM comments").fetchall()
+        self.assertEqual(sum(1 for _p, t in comments if t.startswith("2025")), 4)  # everyone, before go-live
+        late = [p for p, t in comments if t.startswith("2026")]
+        self.assertEqual(len(late), 1)  # only the consenting user after go-live
+        profiles = dict(conn.execute("SELECT participant, research_profile FROM participants").fetchall())
+        self.assertEqual(sorted(profiles.values()), [0, 0, 0, 1])
+        self.assertEqual(profiles[late[0]], 1)
+        demographics = conn.execute("SELECT participant, field FROM demographics").fetchall()
+        self.assertEqual(demographics, [(late[0], "gender")])
+
+    def test_no_identifiers_anywhere(self):
+        conn = self.export("b.sqlite")
+        dump = "\n".join(str(v) for line in conn.iterdump() for v in [line]).lower()
+        for user in self.users.values():
+            profile = user.researcher_profile
+            for value in (user.username, user.first_name, user.last_name, user.email, profile.full_name,
+                          profile.author_name_format, profile.institution, profile.website):
+                self.assertNotIn(value.lower(), dump, value)
+        self.assertNotIn(VALID_ORCID, dump)
+        self.assertNotIn("zq@example.com", dump)
+        self.assertNotIn("prefer_not_to_say", dump)  # ciphertext only
+        self.assertIn("2026synthexp", dump)  # public transient names are kept
+        import re
+        text = conn.execute("SELECT comment FROM comments LIMIT 1").fetchone()[0]
+        # Every person named in the text is replaced by their pseudonym for this export.
+        named = set(re.findall(r"p_[0-9a-f]{20}", text))
+        participants = {r[0] for r in conn.execute("SELECT participant FROM participants")}
+        self.assertEqual(len(named), 3, text)  # alice (name, ORCID), bob (@mention, surname), dave
+        self.assertTrue(named <= participants, text)
+        self.assertIn("[email]", text)  # an address of nobody known
+        self.assertTrue(text.startswith("Thanks @p_"), text)
+
+    def test_two_exports_share_no_identifiers(self):
+        first, second = self.export("c1.sqlite"), self.export("c2.sqlite")
+        for table, column in (("participants", "participant"), ("comments", "id"), ("comments", "participant")):
+            a = {r[0] for r in first.execute('SELECT "%s" FROM "%s"' % (column, table))}
+            b = {r[0] for r in second.execute('SELECT "%s" FROM "%s"' % (column, table))}
+            self.assertTrue(a and b)
+            self.assertFalse(a & b, (table, column))
+
+    def test_refuses_to_overwrite(self):
+        import os
+        path = os.path.join(self.tmp, "d.sqlite")
+        open(path, "w").close()
+        with self.assertRaises(CommandError):
+            call_command("export_research_database", "--out", path, stdout=io.StringIO())
+        call_command("export_research_database", "--out", path, "--force", stdout=io.StringIO())
+
+    def test_no_credential_or_session_tables(self):
+        conn = self.export("e.sqlite")
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for bad in ("auth_user", "django_session", "authtoken_token", "YSE_App_encryptedcredential"):
+            self.assertNotIn(bad, names)
+        self.assertIn("comments", names)
+
+
+class NameReplacerTests(TestCase):
+    """Whole-word, case-insensitive, longest-first replacement of people in free text (#746)."""
+
+    def setUp(self):
+        from YSE_App.services.research_export import NameReplacer
+        self.replace = NameReplacer([
+            (1, {"direct": ["wli", "wei.li@example.com", "Wei Li", "Li, W.", VALID_ORCID],
+                 "names": ["Wei", "Li", "Wei Li", "Li, W."]}),
+            (2, {"direct": ["jsj", "Jo Smith-Jones"], "names": ["Jo", "Smith-Jones"]}),
+            (3, {"direct": ["kng"], "names": ["Kim", "Ng"]}),
+            (4, {"direct": ["kim2"], "names": ["Kim", "Park"]}),
+        ])
+
+    def run_replace(self, text):
+        return self.replace(text, lambda uid: "P%d" % uid, lambda key: "AMBIG")
+
+    def test_two_letter_names_only_as_whole_words(self):
+        self.assertEqual(self.run_replace("Li said: literally Literally, Lithium, oLi, Li2."),
+                         "P1 said: literally Literally, Lithium, oLi, Li2.")
+        self.assertEqual(self.run_replace("(Li) -Li- @Li li! LI? Ng's"), "(P1) -P1- @P1 P1! P1? P3's")
+
+    def test_direct_matches_first_and_longest(self):
+        self.assertEqual(self.run_replace("Thanks @wli and WEI LI (wei.li@example.com, %s)" % VALID_ORCID),
+                         "Thanks @P1 and P1 (P1, P1)")
+        self.assertEqual(self.run_replace("Li, W. 2024"), "P1 2024")
+        self.assertEqual(self.run_replace("Jo Smith-Jones; Smith-Jones; Jones; Smith"), "P2; P2; P2; P2")
+
+    def test_shared_names_and_unknown_identifiers(self):
+        self.assertEqual(self.run_replace("Kim and Park"), "AMBIG and P4")
+        self.assertEqual(self.run_replace("mail x@example.org, orcid 0000-0001-5109-3700"),
+                         "mail [email], orcid [orcid]")

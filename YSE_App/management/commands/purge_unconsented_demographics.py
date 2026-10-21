@@ -1,74 +1,144 @@
-"""Delete stored demographic values of users who have not consented to the research study (#744).
+"""Delete the research data of users who declined or withdrew from the research study (#744).
 
-Users who never answered the research consent form keep their encrypted demographic values
-(country, gender) until a grace period that Ryan chooses ends; they are never used for research
-in the meantime. Run this only when Ryan says the grace period is over.
+Nothing is deleted automatically when someone declines or withdraws: they are excluded from
+research at once, and the administrators in ``RESEARCH_OPTOUT_NOTIFY_USERNAMES`` (default:
+every active superuser) are notified to run this command (Ryan, 2026-10-20).
 
-Also removes any demographic values left over for users whose latest decision is decline or
-withdraw (those are normally deleted when the decision is recorded).
+Research data = every researcher-profile item that is not essential to run the site:
 
-Dry run by default: prints counts only (never names or values). ``--apply`` deletes.
-``--older-than-days N`` limits the purge to values stored more than N days ago.
+* the encrypted values (country, PhD year, gender);
+* the plain research fields (``RESEARCH_PROFILE_FIELDS``: pronouns, department, career level,
+  research interests, website, GitHub, time zone), blanked;
+* their field history;
+* the advisor / student rows the user entered themselves, whatever their role (rows the other
+  person entered are that person's information and stay: privacy covers what an individual
+  revealed, Ryan 2026-10-20);
+* affiliation history and SciX metrics.
+
+Kept: username, display and publication names, acknowledgment text, email, institution, ORCID,
+observing experience, group memberships and roles, and all site activity.
+
+Dry run by default (prints usernames and counts, never values). ``--apply`` deletes.
+``--user NAME`` (repeatable) limits the run to those users; consenting users and users who have
+not answered are never touched.
 """
 
 from __future__ import annotations
 
-import datetime
+from typing import Dict
 
+from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.db.models import OuterRef, Q, Subquery
-from django.utils import timezone
+from django.db.models import Q
 
 from YSE_App.models.researcher_models import (
-    DEMOGRAPHIC_FIELDS, EncryptedProfileValue, ProfileFieldHistory, ResearchConsentRecord,
+    RESEARCH_ENCRYPTED_FIELDS,
+    RESEARCH_PROFILE_FIELDS,
+    AffiliationHistory,
+    EncryptedProfileValue,
+    Mentorship,
+    ProfileFieldHistory,
+    ResearcherMetrics,
+    ResearcherProfile,
+    ResearchConsentRecord,
 )
 from YSE_App.services import research_consent as rc
 
+PLAIN_TEXT_FIELDS = tuple(RESEARCH_PROFILE_FIELDS)
+HISTORY_FIELDS = RESEARCH_PROFILE_FIELDS + tuple(RESEARCH_ENCRYPTED_FIELDS) + ("current_advisor",)
 
-def unconsented_values(older_than_days: int = 0):
-    """Demographic ciphertext rows whose owner's latest decision is not ``consented``."""
-    latest = (ResearchConsentRecord.objects.filter(user_id=OuterRef("user_id"))
-              .order_by("-decided_at", "-id").values("decision")[:1])
-    qs = (EncryptedProfileValue.objects.filter(field_name__in=DEMOGRAPHIC_FIELDS)
-          .annotate(latest_decision=Subquery(latest)))
-    # Spelled out: a NULL (never answered) must match, which ``exclude(=consented)`` may not do.
-    qs = qs.filter(Q(latest_decision__isnull=True) | Q(latest_decision__in=(rc.DECLINED, rc.WITHDRAWN)))
-    if older_than_days:
-        qs = qs.filter(set_at__lt=timezone.now() - datetime.timedelta(days=older_than_days))
-    return qs
+
+def opted_out_user_ids():
+    """Users whose latest consent decision is declined or withdrawn."""
+    latest: Dict[int, str] = {}
+    for user_id, decision in ResearchConsentRecord.objects.order_by("user_id", "decided_at", "id").values_list(
+            "user_id", "decision"):
+        latest[user_id] = decision
+    return sorted(uid for uid, decision in latest.items() if decision in (rc.DECLINED, rc.WITHDRAWN))
+
+
+def _mentorships(user):
+    """Rows the user entered themselves (as mentee or mentor)."""
+    return Mentorship.objects.filter(Q(mentee=user) | Q(mentor=user), created_by=user)
+
+
+def research_data_counts(user) -> Dict[str, int]:
+    profile = ResearcherProfile.objects.filter(user=user).first()
+    plain = 0
+    if profile is not None:
+        plain = sum(1 for f in PLAIN_TEXT_FIELDS if getattr(profile, f, ""))
+    return {
+        "encrypted values": EncryptedProfileValue.objects.filter(user=user).count(),
+        "profile fields": plain,
+        "field history rows": ProfileFieldHistory.objects.filter(user=user, field_name__in=HISTORY_FIELDS)
+        .filter(cleared=False).count(),
+        "mentorships": _mentorships(user).count(),
+        "affiliations": AffiliationHistory.objects.filter(user=user).count(),
+        "metrics": ResearcherMetrics.objects.filter(user=user).count(),
+    }
+
+
+@transaction.atomic
+def purge_research_data(user) -> Dict[str, int]:
+    counts = research_data_counts(user)
+    purged_fields = set(EncryptedProfileValue.objects.filter(user=user).values_list("field_name", flat=True))
+    EncryptedProfileValue.objects.filter(user=user).delete()
+    profile = ResearcherProfile.objects.filter(user=user).first()
+    if profile is not None:
+        for name in PLAIN_TEXT_FIELDS:
+            if getattr(profile, name, ""):
+                purged_fields.add(name)
+                setattr(profile, name, "")
+        profile.save(update_fields=list(PLAIN_TEXT_FIELDS) + ["updated_at"])
+    if _mentorships(user).filter(mentee=user, kind=Mentorship.KIND_CURRENT_ADVISOR).exists():
+        purged_fields.add("current_advisor")
+    _mentorships(user).delete()
+    AffiliationHistory.objects.filter(user=user).delete()
+    ResearcherMetrics.objects.filter(user=user).delete()
+    # Drop the old values from the history and leave one "cleared" marker per purged field.
+    ProfileFieldHistory.objects.filter(user=user, field_name__in=HISTORY_FIELDS).delete()
+    ProfileFieldHistory.objects.bulk_create([
+        ProfileFieldHistory(user=user, field_name=name, cleared=True, changed_by=None)
+        for name in sorted(purged_fields)
+    ])
+    return counts
 
 
 class Command(BaseCommand):
-    help = "Delete demographic values of users without research consent (dry run unless --apply)."
+    help = "Delete the research data of users who declined or withdrew (dry run unless --apply)."
 
     def add_arguments(self, parser):
         parser.add_argument("--apply", action="store_true", help="Delete (default: dry run, counts only).")
-        parser.add_argument("--older-than-days", type=int, default=0,
-                            help="Only values stored more than this many days ago (default 0: all).")
+        parser.add_argument("--user", action="append", default=[], metavar="USERNAME",
+                            help="Only this user (repeatable).")
 
     def handle(self, *args, **options):
-        days = options["older_than_days"]
-        if days < 0:
-            raise CommandError("--older-than-days must be 0 or more")
-        qs = unconsented_values(days)
-        rows = list(qs.values_list("pk", "user_id", "field_name", "latest_decision"))
-        users = {uid for _pk, uid, _f, _d in rows}
-        unanswered = len({uid for _pk, uid, _f, decision in rows if decision is None})
-        self.stdout.write("%d demographic value(s) of %d user(s) without consent (%d never answered)."
-                          % (len(rows), len(users), unanswered))
-        if not options["apply"]:
+        targets = set(opted_out_user_ids())
+        if options["user"]:
+            wanted = list(User.objects.filter(username__in=options["user"]).values_list("pk", "username"))
+            unknown = set(options["user"]) - {name for _pk, name in wanted}
+            if unknown:
+                raise CommandError("unknown user(s): %s" % ", ".join(sorted(unknown)))
+            refused = sorted(name for pk, name in wanted if pk not in targets)
+            if refused:
+                raise CommandError("not declined or withdrawn, so not purged: %s" % ", ".join(refused))
+            targets = {pk for pk, _name in wanted}
+        users = list(User.objects.filter(pk__in=targets).order_by("username"))
+        total = 0
+        for user in users:
+            counts = research_data_counts(user)
+            n = sum(counts.values())
+            if not n:
+                continue
+            total += n
+            detail = ", ".join("%s %d" % (k, v) for k, v in counts.items() if v)
+            if options["apply"]:
+                purge_research_data(user)
+                self.stdout.write("%s: deleted %s" % (user.get_username(), detail))
+            else:
+                self.stdout.write("%s: would delete %s" % (user.get_username(), detail))
+        if not total:
+            self.stdout.write("Nothing to delete.")
+        elif not options["apply"]:
             self.stdout.write("Dry run: nothing deleted. Run again with --apply to delete.")
-            return
-        # Delete by primary key (MySQL refuses a DELETE whose subquery reads the same table).
-        by_field = {}
-        for pk, uid, name, _d in rows:
-            by_field.setdefault((uid, name), []).append(pk)
-        deleted = 0
-        for (uid, name), pks in sorted(by_field.items()):
-            with transaction.atomic():
-                n, _ = EncryptedProfileValue.objects.filter(pk__in=pks).delete()
-                deleted += n
-                if n:
-                    ProfileFieldHistory.objects.create(user_id=uid, field_name=name, cleared=True, changed_by=None)
-        self.stdout.write("Deleted %d demographic value(s)." % deleted)

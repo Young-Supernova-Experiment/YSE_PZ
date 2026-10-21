@@ -8,11 +8,13 @@ Every research dataset must be built through this module. The rules (Ryan, 2026-
 * **From go-live on:** activity is included only for users who consented, and only inside their
   consent periods (consent to the next withdrawal). A user whose latest decision is ``withdrawn``
   has none of their post-go-live activity included, not even from an earlier consent period.
-* **Demographics** (the encrypted profile values) only for users whose latest decision is
-  ``consented``, exported as ciphertext for offline decryption by the custodian. Nothing here
-  decrypts anything.
-* **Anonymized:** users appear only as a keyed pseudonym (HMAC-SHA256 with a per-export salt);
-  only the fields a source names are copied, and a source may not name its user field.
+* **Research profile data** (``RESEARCH_PROFILE_FIELDS``, mentorships, and the encrypted values)
+  only for users whose latest decision is ``consented``. Encrypted values are exported as
+  ciphertext for offline decryption by the custodian. Nothing here decrypts anything.
+* **Anonymized:** users appear only as a random string, drawn fresh for every export, so two
+  exports cannot be joined; only the fields a source names are copied, and a source may not
+  name its user field. The full database export is ``manage.py export_research_database``
+  (``YSE_App/services/research_export.py``, #746).
 
 Use::
 
@@ -26,8 +28,6 @@ Use::
 from __future__ import annotations
 
 import datetime
-import hashlib
-import hmac
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -66,7 +66,10 @@ class ResearchCohort:
         return self.latest.get(user_id) == rc.WITHDRAWN
 
     def demographics_allowed(self, user_id) -> bool:
+        """Research profile data (plain and encrypted) only for consenting users."""
         return self.latest.get(user_id) == rc.CONSENTED
+
+    research_profile_allowed = demographics_allowed
 
     def includes(self, user_id, when: Optional[datetime.datetime]) -> bool:
         """May activity by ``user_id`` at ``when`` go into a research dataset?"""
@@ -86,14 +89,29 @@ class ResearchCohort:
         return False
 
 
+def consenting_user_ids() -> List[int]:
+    """Users whose latest consent decision is ``consented``."""
+    return sorted(uid for uid, decision in ResearchCohort.load().latest.items() if decision == rc.CONSENTED)
+
+
 class Pseudonymizer:
-    """Stable, non-reversible participant ids within one export (a new salt per export)."""
+    """Random identifiers, fresh for every instance (one per export): stable inside an export,
+    unrelated to the real id and to every other export."""
 
-    def __init__(self, salt: Optional[bytes] = None):
-        self._salt = salt or secrets.token_bytes(32)
+    def __init__(self, prefix: str = "p_"):
+        self.prefix = prefix
+        self._map: Dict[Any, str] = {}
 
-    def __call__(self, user_id) -> str:
-        return "p_" + hmac.new(self._salt, str(user_id).encode("ascii"), hashlib.sha256).hexdigest()[:20]
+    def __call__(self, key) -> Optional[str]:
+        if key is None:
+            return None
+        value = self._map.get(key)
+        if value is None:
+            value = self.prefix + secrets.token_hex(10)
+            while value in self._map.values():  # pragma: no cover - 80-bit collision
+                value = self.prefix + secrets.token_hex(10)
+            self._map[key] = value
+        return value
 
 
 @dataclass
@@ -154,10 +172,10 @@ def demographic_ciphertexts(cohort: ResearchCohort, pseudonym: Pseudonymizer,
 
 
 def build_dataset(sources: Iterable[ActivitySource], cohort: Optional[ResearchCohort] = None,
-                  salt: Optional[bytes] = None, include_demographics: bool = True) -> Dict[str, Any]:
+                  pseudonym: Optional[Pseudonymizer] = None, include_demographics: bool = True) -> Dict[str, Any]:
     """An anonymized dataset: ``{"go_live", "tables": {name: rows}, "demographics": [...]}``."""
     cohort = cohort or ResearchCohort.load()
-    pseudonym = Pseudonymizer(salt)
+    pseudonym = pseudonym or Pseudonymizer()
     tables, participants = {}, set()
     for source in sources:
         rows = filter_activity(source, cohort)

@@ -125,6 +125,9 @@ class GateFlowTests(TestCase):
 
     def test_incomplete_profile_is_redirected_to_edit(self):
         AgreementAcceptance.objects.create(user=self.user, agreement=UserAgreement.objects.get(is_current=True))
+        # Student requirements apply only with research consent (#744).
+        from YSE_App.services import research_consent
+        research_consent.record_decision(self.user, research_consent.CONSENTED)
         ResearcherProfile.objects.create(user=self.user, full_name="Test Person", career_level="grad",
                                          institution="Example University", department="Physics")
         resp = self.client.get(self.page)  # a student without a current advisor
