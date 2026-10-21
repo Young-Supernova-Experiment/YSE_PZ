@@ -474,7 +474,8 @@ class InviteGateFlowTests(GroupTestBase):
         self.assertTrue(resp["Location"].startswith(reverse("research_consent")))  # offered once (#744)
         resp = self.client.post(reverse("research_consent"), {"action": "decline",
                                                               "next": reverse("group_invite_accept")})
-        self.assertRedirects(resp, reverse("group_invite_accept"), fetch_redirect_response=False)
+        # Declining goes on to the incomplete profile (#766), carrying the invite page as ``next``.
+        self.assertTrue(resp["Location"].startswith(reverse("researcher_profile_edit")))
         resp = self.client.get(reverse("group_invite_accept"))
         self.assertTrue(resp["Location"].startswith(reverse("researcher_profile_edit")))
 
