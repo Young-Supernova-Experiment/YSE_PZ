@@ -20,6 +20,7 @@ from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
 from YSE_App import change_log_views
+from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import signup_views
@@ -46,6 +47,8 @@ class AuthenticatedAPIRootView(rf_routers.APIRootView):
 urlpatterns = [
     # ex: /yse/
     re_path(r'^$', views.index, name='index'),
+    # Monitoring: DB-backed health check, public, one query (#768).
+    re_path(r'^healthz/$', health_views.healthz, name='healthz'),
     re_path(r'^dashboard/$', views.dashboard, name='dashboard'),
     re_path(
         r'^dashboard/section/(?P<status_key>[a-zA-Z]+)/$',
