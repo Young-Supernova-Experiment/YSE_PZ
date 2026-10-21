@@ -63,6 +63,8 @@ EXPECTED_PUBLIC_NAMES = {
     "slack_events", "external_service_run_callback",
     # develop backport 2026-10-15 (#445, #448): login_exempt views from develop
     "signup", "signup_verify_email", "group_invite_link",
+    # monitoring health check, one SELECT 1, no data (#768)
+    "healthz",
 }
 
 # Views behind YSE_App.basicauth.login_or_basic_auth_required: scripts and crons

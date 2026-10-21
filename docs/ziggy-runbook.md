@@ -3211,6 +3211,64 @@ curl -s -H "Authorization: Token <TOKEN>" "<SITE_URL>/api/transients/?limit=1"
 
 Expected: HTTP 200 JSON with `count` and `results`. A wrong token returns 401 `Invalid token.`. In Python: `requests.get(url, headers={"Authorization": "Token <TOKEN>"})`.
 
+<a id="watchdog"></a>
+### Server watchdog and `/healthz/` (2026-10-21, #768, #769) optional, recommended; root on Ziggy
+
+`GET /healthz/` ([#768](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/768)) answers `200 ok` when Django can run `SELECT 1`, `503 db error` when it cannot. It is public, sets no cookies and makes one query. It reaches each stack with that stack's code: yse\_experimental now, yse\_test after the next promotion, production after #143.
+
+The watchdog ([#769](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/769)) is `scripts/ops/yse-watchdog.sh`, run every minute by a systemd timer. It checks MySQL directly, the Django URL, and a static file Apache serves without Django. After 3 failed runs in a row it saves a diagnostic snapshot, then restarts MySQL (only if MySQL itself does not answer) and gracefully reloads Apache (a full restart if static files fail too). It waits 15 minutes between actions, acts at most 3 times an hour, and emails a summary each time. One installation watches one stack; install it for production.
+
+Run as a user with sudo. The files come from the yse\_experimental checkout, which the deploy keeps current.
+
+**W1. Install the script, units and config.**
+```bash
+E=/data/yse_pz/YSE_PZ_experimental/scripts/ops
+sudo install -o root -g root -m 700 $E/yse-watchdog.sh /usr/local/sbin/yse-watchdog.sh
+sudo install -o root -g root -m 644 $E/yse-watchdog.service $E/yse-watchdog.timer /etc/systemd/system/
+sudo install -d -o root -g root -m 700 /etc/yse-watchdog
+sudo install -o root -g root -m 600 $E/watchdog.conf.example /etc/yse-watchdog/watchdog.conf
+```
+**Check:** `sudo ls -l /usr/local/sbin/yse-watchdog.sh /etc/yse-watchdog/` shows `-rwx------ root` for the script and `-rw------- root` for `watchdog.conf`.
+
+**W2. A monitoring login for MySQL.** `PROCESS` lets it read the process list and InnoDB status for the snapshot; it can read no table data. Pick a new random password.
+```bash
+mysql -u root -p -e "CREATE USER 'yse_watchdog'@'localhost' IDENTIFIED BY '<WATCHDOG_DB_PASSWORD>'; GRANT PROCESS ON *.* TO 'yse_watchdog'@'localhost';"
+printf '[client]\nuser=yse_watchdog\npassword="<WATCHDOG_DB_PASSWORD>"\n' | sudo tee /etc/yse-watchdog/my.cnf >/dev/null
+sudo chmod 600 /etc/yse-watchdog/my.cnf
+sudo mysql --defaults-extra-file=/etc/yse-watchdog/my.cnf -N -e 'SELECT 1'
+```
+**Expected:** `1`. Optional: to let the watchdog cancel runaway statements (W3 `KILL_QUERY_*`), also `GRANT CONNECTION_ADMIN ON *.* TO 'yse_watchdog'@'localhost';`.
+
+**W3. Fill in `/etc/yse-watchdog/watchdog.conf`** (`sudo nano /etc/yse-watchdog/watchdog.conf`). For production:
+```bash
+DB_HEALTH_URL="https://ziggy.ucolick.org/yse/login/"
+STATIC_URL="https://ziggy.ucolick.org/static/YSE_App/dist/css/AdminLTE.min.css"
+NOTIFY="<YOUR_EMAIL>"
+DRY_RUN=1
+```
+Production runs `master`, which has no `/healthz/` yet. Until it does, the login page (Django, no database) catches a stuck web process, and the direct MySQL check covers the database. After #143 is deployed, change `DB_HEALTH_URL` to `https://ziggy.ucolick.org/yse/healthz/`. Optional: `KILL_QUERY_SECONDS=300` and `KILL_QUERY_USERS="explorer"` cancel Explorer statements older than 5 minutes before Apache is reloaded (needs the W2 grant).
+
+**W4. Check the probes and mail by hand.**
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://ziggy.ucolick.org/yse/login/
+curl -s -o /dev/null -w '%{http_code}\n' https://ziggy.ucolick.org/static/YSE_App/dist/css/AdminLTE.min.css
+echo "yse-watchdog mail test" | mail -s "yse-watchdog mail test" <YOUR_EMAIL>
+sudo /usr/local/sbin/yse-watchdog.sh; echo "exit $?"
+```
+**Expected:** `200`, `200`, the test mail arrives (check spam; Ziggy's postfix sends directly), and `exit 0` with no other output. `exit 2` means a setting in `watchdog.conf` is missing or not a number; the message says which.
+
+**W5. Turn it on (dry run first).**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now yse-watchdog.timer
+systemctl list-timers yse-watchdog.timer
+```
+**Expected:** a NEXT time within a minute. Follow it with `journalctl -t yse-watchdog -f`. It logs only when something is unhealthy. With `DRY_RUN=1` it logs and emails `[dry run] ... would run: ...` and changes nothing. After a day without false alarms, set `DRY_RUN=0` in `watchdog.conf`; no reload is needed, because each run reads the file.
+
+**Where things are.** State and snapshots: `/var/lib/yse-watchdog/` (root only). Each snapshot holds the MySQL process list (full SQL text of running statements), InnoDB status, memory, disk and recent journal lines. Snapshots are deleted after 30 days (`SNAPSHOT_DAYS`). Treat them as sensitive and do not copy them off the server.
+
+**Rollback.** `sudo systemctl disable --now yse-watchdog.timer`. To remove it completely, also delete `/usr/local/sbin/yse-watchdog.sh`, the two unit files, `/etc/yse-watchdog/` and `/var/lib/yse-watchdog/`, and run `DROP USER 'yse_watchdog'@'localhost';`.
+
 <a id="db-timeouts"></a>
 ### Database client timeouts (2026-10-21, #770) optional, recommended, per stack
 
@@ -3398,6 +3456,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 ## 6 · Changelog
 
 * 2026-10-21 v97, **optional, recommended** (no migration, no new package): database client timeouts ([#770](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/770)). New section [Database client timeouts](#db-timeouts), T1-T3 per stack; set the cron override (T1) before the keys (T2). Nothing changes until the keys are set.
+* 2026-10-21 v96, **optional, recommended** (no migration, no new package): `GET /healthz/` ([#768](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/768)) and the server watchdog ([#769](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/769)). New section [Server watchdog and `/healthz/`](#watchdog), steps W1-W5, root on Ziggy; start with `DRY_RUN=1`. Nothing changes until it is installed.
 * 2026-10-21 v95, **nothing required**; one optional check. Cron hygiene: the legacy TNS crons no longer replace our `best_spec_class` on transients we already have; they follow the TNS re-sync rule (`TNS_spec_class` follows TNS, `best_spec_class` only when we have none or ours is the previous TNS class) ([#755](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/755)). `PhotometryUploadExample.PhotometryUploads` is removed from `CRON_CLASSES` and the module is deleted ([#756](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/756)). A cron that finds another instance of itself running still sends its alert email but now returns, so the rest of that `runcrons` run continues ([#757](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/757)). The ZTF forced-photometry download login is read from settings (`[ztf] ztfwebdavuser` / `ztfwebdavpass`, or `ZTF_WEBDAV_USER` / `ZTF_WEBDAV_PASS`); the defaults are ZTF's published generic login, so leave them unset ([#758](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/758)). No migration. **Optional check:** `crontab -l | grep -c PhotometryUploadExample` as the cron user on Ziggy. **Expected:** `0`. **If not:** delete that crontab line (the module no longer exists).
 * 2026-10-21 v94, **nothing required** (no migration, no new package; one optional setting). Duplicate transients ([#752](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/752), [#753](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/753), [#754](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/754)): the `CheckDuplicates` cron only reports candidate pairs (notification to `DUPLICATE_REPORT_USERNAMES`, default every active superuser) and uploads no longer delete same-name transients; a person merges a pair with `manage.py transient_duplicates merge <DUPLICATE_ID> <KEEP_ID> --yes` (dry run without `--yes`; one transaction). `DUPLICATE_AUTO_MERGE` (off) restores unattended merging ([section "Duplicate transients"](#duplicates)).
 * 2026-10-20 v93, **nothing new to run** (the deploy applies the migrations; the consent steps are in v91/v92). Develop backported into experimental again (develop-direct PRs [#745](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/745) and [#747](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/747): User Agreement v2 [#743](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/743), research consent [#744](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/744), research export [#746](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/746)). Develop's v36/v37 are v91/v92 here. Migrations `0038_user_agreement_v2` to `0041_research_consent_prompts` keep develop's names and are joined to experimental's `0050_value_change` by the empty merge migration `0051_merge_develop_consent`; on the shared `YSE_test` database whichever stack deploys first applies them. On experimental the research export also includes `value_changes`, `night_plans` and `observed_blocks` and the revoke fields of data access requests, under the same consent rules and pseudonyms.
