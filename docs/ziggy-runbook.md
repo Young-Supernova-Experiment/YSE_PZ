@@ -3211,6 +3211,50 @@ curl -s -H "Authorization: Token <TOKEN>" "<SITE_URL>/api/transients/?limit=1"
 
 Expected: HTTP 200 JSON with `count` and `results`. A wrong token returns 401 `Invalid token.`. In Python: `requests.get(url, headers={"Authorization": "Token <TOKEN>"})`.
 
+<a id="backup"></a>
+### Nightly database backup without table locks (2026-10-21, #772) recommended, production
+
+A plain `mysqldump` locks each database's tables for the whole dump. Requests that write wait until it finishes, and the web process runs out of threads, which is the midnight spike of 503s. Passing the password with `--password=` also shows it in `ps` to every user on the host while the dump runs. With `--single-transaction`, InnoDB tables are dumped from one consistent snapshot and no locks are held. `--quick` streams rows instead of buffering whole tables. A defaults file keeps the password off the command line.
+
+Placeholders: `<BACKUP_SCRIPT>` is the script the backup cron runs, `<BACKUP_USER>` the Unix user that runs it, `<BACKUP_CNF>` a new file in that user's home (for example `~/.yse-backup.cnf`), `<BACKUP_DIR>` where the dumps go, `<PROD_DB>` the production database.
+
+**B1. Check every table is InnoDB.** `--single-transaction` is consistent only for InnoDB:
+```bash
+mysql -u root -p -N -e "SELECT engine, COUNT(*) FROM information_schema.TABLES WHERE table_schema='<PROD_DB>' AND table_type='BASE TABLE' GROUP BY engine;"
+```
+**Expected:** one line, `InnoDB <n>`. Any MyISAM table would still be dumped, without a consistent snapshot. List them and tell Ryan.
+
+**B2. A backup login with only what `mysqldump` needs** (new random password):
+```bash
+mysql -u root -p -e "CREATE USER 'yse_backup'@'localhost' IDENTIFIED BY '<BACKUP_DB_PASSWORD>'; GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES ON *.* TO 'yse_backup'@'localhost';"
+printf '[mysqldump]\nuser=yse_backup\npassword="<BACKUP_DB_PASSWORD>"\n' | sudo -u <BACKUP_USER> tee <BACKUP_CNF> >/dev/null
+sudo -u <BACKUP_USER> chmod 600 <BACKUP_CNF>
+```
+**Check:** `sudo ls -l <BACKUP_CNF>` shows `-rw------- <BACKUP_USER>`.
+
+**B3. Change the dump command in `<BACKUP_SCRIPT>`.** Keep the output path and file name it uses today; only the options change:
+```bash
+mysqldump --defaults-extra-file=<BACKUP_CNF> --single-transaction --quick --no-tablespaces --routines --events --triggers <PROD_DB> > <BACKUP_DIR>/<DATE>_<PROD_DB>.sql
+```
+`--defaults-extra-file` must be the first option. Remove `-u root` and `--password=...`. Optional: `--ignore-table=<PROD_DB>.explorer_querylog` skips SQL Explorer's run history, which is large and not needed to restore the site. Decide this with Ryan before using it.
+
+**B4. Run it once by hand, off-peak, and watch the site while it runs.**
+```bash
+sudo -u <BACKUP_USER> bash -c 'time python <BACKUP_SCRIPT>'
+tail -c 200 <BACKUP_DIR>/<DATE>_<PROD_DB>.sql
+```
+**Expected:** the last line is `-- Dump completed on <date>`. While it runs, pages keep loading, and `mysql -u root -p -e "SHOW PROCESSLIST"` shows the dump's `SELECT` but no `Waiting for table metadata lock` or `Waiting for table flush`.
+
+**B5. Optional restore check** (needs free disk about the size of the dump; it can take hours on the full database, so run it off-peak):
+```bash
+mysql -u root -p -e "CREATE DATABASE yse_restore_check"
+mysql -u root -p yse_restore_check < <BACKUP_DIR>/<DATE>_<PROD_DB>.sql
+mysql -u root -p -e "SELECT (SELECT COUNT(*) FROM <PROD_DB>.YSE_App_transient) live, (SELECT COUNT(*) FROM yse_restore_check.YSE_App_transient) restored; DROP DATABASE yse_restore_check;"
+```
+**Expected:** the two counts match, or `live` is a little higher because of rows added since the dump.
+
+**Rollback:** put the old command back in `<BACKUP_SCRIPT>`. The new login can stay or be dropped: `DROP USER 'yse_backup'@'localhost';`.
+
 ## 4 · Data checks David
 
 Read-only queries against the production database. Post the output in the Slack thread.
