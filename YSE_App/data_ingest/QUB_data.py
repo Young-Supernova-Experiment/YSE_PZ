@@ -197,7 +197,9 @@ class QUB(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         try:
             nsn = self.main()
@@ -514,7 +516,9 @@ class YSE(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         
         # read in the options from the param file and the command line

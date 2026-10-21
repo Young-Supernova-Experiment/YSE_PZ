@@ -1279,7 +1279,9 @@ class TNS_emails(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
             
         try:
             if options.update:
@@ -1363,7 +1365,9 @@ class TNS_updates(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         try:
             tnsproc.noupdatestatus = True
@@ -1444,7 +1448,9 @@ class TNS_Ignore_updates(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         try:
             tnsproc.noupdatestatus = True
@@ -1526,7 +1532,9 @@ class TNS_recent(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
             
         try:
             tnsproc.noupdatestatus = True

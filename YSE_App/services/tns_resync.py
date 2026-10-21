@@ -441,6 +441,38 @@ def _class_name(cls) -> str:
     return getattr(cls, "name", "") or ""
 
 
+def tns_may_set_best_class(ours: str, previous_tns_class: str, tns_class: str) -> bool:
+    """The rule for ``best_spec_class`` from TNS (see the module docstring).
+
+    TNS sets our class only when it differs from ours and we have none, or ours is the
+    previous TNS classification (no better one of ours). Shared by the re-sync
+    (:func:`_field_changes`) and the legacy TNS crons' upload path (#755).
+    """
+    ours = (ours or "").strip()
+    previous_tns_class = (previous_tns_class or "").strip()
+    tns_class = (tns_class or "").strip()
+    return bool(tns_class) and ours != tns_class and (not ours or ours == previous_tns_class)
+
+
+def filter_tns_upload_classes(existing: Optional[Transient], fields: dict) -> dict:
+    """Guard for ``/add_transient`` uploads from the TNS crons that update ``existing`` (#755).
+
+    ``TNS_spec_class`` is kept (it follows TNS). ``best_spec_class`` (already resolved to a
+    ``TransientClass``) is dropped unless :func:`tns_may_set_best_class` allows it and the
+    resolved class is the TNS class itself (the upload path falls back to ``Unknown`` when
+    TNS's name is not one of ours).
+    """
+    if existing is None or "best_spec_class" not in fields:
+        return fields
+    tns_class = fields.get("TNS_spec_class") or _class_name(fields.get("best_spec_class"))
+    allowed = (_class_name(fields.get("best_spec_class")) == (tns_class or "").strip()
+               and tns_may_set_best_class(_class_name(existing.best_spec_class),
+                                          existing.TNS_spec_class, tns_class))
+    if not allowed:
+        fields.pop("best_spec_class", None)
+    return fields
+
+
 def _field_changes(transient: Transient, jd: dict, result: ResyncResult) -> dict:
     """The Transient attributes to change (``{attr: new}``); fills ``result.fields`` / ``classification``."""
     updates = {}
@@ -454,7 +486,7 @@ def _field_changes(transient: Transient, jd: dict, result: ResyncResult) -> dict
         if tns_class != previous:
             updates["TNS_spec_class"] = tns_class
             result.fields["TNS_spec_class"] = (previous or None, tns_class)
-        if ours != tns_class and (not ours or ours == previous):
+        if tns_may_set_best_class(ours, previous, tns_class):
             new_best = TransientClass.objects.filter(name=tns_class).first()
             if new_best is not None:
                 updates["best_spec_class"] = new_best

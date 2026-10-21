@@ -35,11 +35,11 @@ import warnings
 warnings.filterwarnings("ignore") # We'll get warnings from log10 when there are non-detections
 
 
-#
-# Generic ZTF webdav login
-#
-_ztfuser = "ztffps"
-_ztfinfo = "dontgocrazy!"
+def ztf_webdav_auth():
+    """The (user, password) for downloading ZTF forced-photometry results (#758): the
+    generic login ZTF publishes, read from settings (``[ztf] ztfwebdavuser`` /
+    ``ztfwebdavpass`` or ``ZTF_WEBDAV_USER`` / ``ZTF_WEBDAV_PASS``)."""
+    return (djangoSettings.ZTF_WEBDAV_USER, djangoSettings.ZTF_WEBDAV_PASS)
 
 def ztf_account_address(login=None):
     """The ZTF forced-photometry account address: SMTP_LOGIN as is when it is a full
@@ -95,7 +95,7 @@ def download_ztf_url(url, verbose=True):
         print("Downloading file...")
         print('\t' + url)
     try:
-        response = requests.get(url, auth=(_ztfuser, _ztfinfo), timeout=ZTF_TIMEOUT,
+        response = requests.get(url, auth=ztf_webdav_auth(), timeout=ZTF_TIMEOUT,
                                 allow_redirects=False)
     except requests.RequestException as exc:
         raise ZTFForcedPhotSubmitError('ZTF download failed (%s).' % type(exc).__name__)
@@ -354,7 +354,7 @@ class ZTF_Forced_Phot:
                 try:
                     response = requests.get(
                         ZTF_REQUEST_URL, params=dict(params, userpass=self._ztffp_user_password),
-                        auth=(_ztfuser, _ztfinfo), timeout=ZTF_TIMEOUT, allow_redirects=False)
+                        auth=ztf_webdav_auth(), timeout=ZTF_TIMEOUT, allow_redirects=False)
                 except requests.RequestException as exc:
                     # the exception text can carry the request URL, so only its type is shown
                     raise ZTFForcedPhotSubmitError(
