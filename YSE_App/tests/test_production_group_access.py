@@ -101,7 +101,11 @@ class ProductionGroupPatternTests(TestCase):
 
     def test_plot_cache_token_does_not_encode_user_id(self):
         token = group_access_plot_cache_token(self.users["prod_user_yse"])
-        self.assertNotIn(str(self.users["prod_user_yse"].pk), token)
+        # The token is a hex digest, so any digit run can appear inside it by
+        # chance (it did once the user pk reached 2350): look for the id as a
+        # separate field only.
+        pk = str(self.users["prod_user_yse"].pk)
+        self.assertNotRegex(token, r"(?<![0-9a-f])%s(?![0-9a-f])" % pk)
 
     def test_lightcurve_plot_not_shared_across_production_group_sets(self):
         url = reverse(

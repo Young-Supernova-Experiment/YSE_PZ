@@ -302,6 +302,13 @@ PHOTSTAT_REFRESH_CRON_ENABLED = _flag(
 PHOTSTAT_BAZIN_CRON_ENABLED = _flag(
     'YSE_PHOTSTAT_BAZIN_CRON', 'site_settings', 'PHOTSTAT_BAZIN_CRON_ENABLED', False
 )
+# Duplicate transients (#752, #754; YSE_App/services/duplicates.py). The
+# CheckDuplicates cron reports candidate pairs to DUPLICATE_REPORT_USERNAMES
+# (comma-separated; empty = active superusers) and changes nothing; a person
+# merges with `manage.py transient_duplicates merge ... --yes`. Only
+# DUPLICATE_AUTO_MERGE = True (env YSE_DUPLICATE_AUTO_MERGE) merges unattended.
+DUPLICATE_AUTO_MERGE = _flag('YSE_DUPLICATE_AUTO_MERGE', 'site_settings', 'DUPLICATE_AUTO_MERGE', False)
+DUPLICATE_REPORT_USERNAMES = config.get('site_settings', 'DUPLICATE_REPORT_USERNAMES', fallback='')
 PHOTSTAT_REFRESH_CRON_MINUTES = config.getint('site_settings', 'PHOTSTAT_REFRESH_CRON_MINUTES', fallback=60)
 PHOTSTAT_REFRESH_LIMIT = config.getint('site_settings', 'PHOTSTAT_REFRESH_LIMIT', fallback=2000)
 PHOTSTAT_BAZIN_LIMIT = config.getint('site_settings', 'PHOTSTAT_BAZIN_LIMIT', fallback=500)

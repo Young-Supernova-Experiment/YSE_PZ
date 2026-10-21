@@ -308,10 +308,17 @@ def add_transient_payload(transient_data, user):
 
                     transientdict[transientkey] = fk[0]
 
-            dbtransient = Transient.objects.filter(name=transient['name'])
+            dbtransient = Transient.objects.filter(name=transient['name']).order_by('pk')
             if len(dbtransient) > 1:
-                dbtransient.filter(~Q(pk=dbtransient[0].id)).delete()
-                dbtransient = Transient.objects.filter(name=transient['name'])
+                # Never delete here (#754): update the oldest, leave the others
+                # alone and report the conflict for a person to review.
+                _kept, _others = dbtransient[0], list(dbtransient[1:])
+                try:
+                    from YSE_App.services import duplicates
+                    duplicates.report_same_name_conflict(transient['name'], _kept, _others)
+                except Exception as exc:
+                    print('Duplicate report failed: %s' % exc)
+                dbtransient = Transient.objects.filter(pk=_kept.pk)
 
             if not len(dbtransient):
                 # check RA/dec
@@ -490,7 +497,7 @@ def _add_transient_data_stage(transient_data, user):
         transient = transient_data[transientlistkey]
         transientkeys = transient.keys()
 
-        dbtransient = Transient.objects.filter(name=transient['name'])
+        dbtransient = Transient.objects.filter(name=transient['name']).order_by('pk')  # the one updated above (#754)
         if not len(dbtransient):
             dbtransient = AlternateTransientNames.objects.filter(name=transient['name'])[0].transient
         else: dbtransient = dbtransient[0]
@@ -521,7 +528,7 @@ def _add_transient_data_stage(transient_data, user):
         transient = transient_data[transientlistkey]
         transientkeys = transient.keys()
 
-        dbtransient = Transient.objects.filter(name=transient['name'])
+        dbtransient = Transient.objects.filter(name=transient['name']).order_by('pk')  # the oldest of any same-name rows (#754)
         if not len(dbtransient):
             dbtransient = AlternateTransientNames.objects.filter(name=transient['name'])[0].transient
         else: dbtransient = dbtransient[0]
