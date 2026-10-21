@@ -10,7 +10,7 @@ Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profi
 | URL | What |
 | --- | --- |
 | `/agreement/` | Current agreement, one checkbox, Accept. Acceptances store only user, version and time (no IP or user agent). |
-| `/research-consent/` | The voluntary research consent form: one checkbox, Consent, Decline or Not now; Withdraw once consented. Never a gate. |
+| `/research-consent/` | Optional research consent form: one checkbox, Consent, Decline or Not now; Withdraw once consented. Never a gate; every answer continues to the profile while its required fields are incomplete, then to the requested page. |
 | `/profile/` | Your profile; required and encrypted fields marked; "My students" for scientific staff and faculty. |
 | `/profile/edit/` | The form. Required fields depend on career level (below). |
 | user menu > My profile | Link from every page. |
