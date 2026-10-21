@@ -15,6 +15,7 @@ from django.contrib.auth.models import User
 from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils.html import escape
 from django.utils import timezone
 
 from YSE_App import onboarding
@@ -65,7 +66,7 @@ class AgreementV2Tests(TestCase):
         v2 = UserAgreement.objects.get(version="2")
         self.assertFalse(v1.is_current)
         self.assertTrue(v2.is_current)
-        self.assertEqual(v2.title, "YSE-PZ User Agreement (v2)")
+        self.assertEqual(v2.title, "YSE-PZ User Agreement")
         self.assertIn("Use of platform data for research", v1.body)
         self.assertNotIn("Use of platform data for research", v2.body)
         self.assertNotIn("(such as gender)", v2.body)
@@ -74,7 +75,9 @@ class AgreementV2Tests(TestCase):
         self.assertEqual(v2.body.count("<li>"), 8)
         # Nothing else changed: v1 minus item 5 and minus "(such as gender) " is v2.
         v1_items = [line for line in v1.body.splitlines() if "Use of platform data for research" not in line]
-        self.assertEqual("\n".join(v1_items).replace("(such as gender) ", ""), v2.body.rstrip("\n"))
+        self.assertEqual("\n".join(v1_items).replace("(such as gender) ", "")
+                         .replace(" (cite the YSE-PZ software and PASP papers and include the listed acknowledgment)", ""),
+                         v2.body.rstrip("\n"))
 
     def test_seed_is_idempotent(self):
         migration = importlib.import_module("YSE_App.migrations.0038_user_agreement_v2")
@@ -140,6 +143,7 @@ class ConsentFlowTests(TestCase):
         self.assertContains(page, 'value="consent"')
         self.assertContains(page, 'value="decline"')
         self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
+        complete_profile(self.user)
         # A later agreement version does not offer the consent form again.
         UserAgreement.objects.create(version="3", title="v3", body="<p>Terms.</p>", is_current=True)
         resp = self.accept_agreement()
@@ -150,6 +154,7 @@ class ConsentFlowTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(ResearchConsentRecord.objects.exists())
         before = timezone.now()
+        complete_profile(self.user)
         resp = self.client.post(reverse("research_consent"), {"action": "consent", "consent": "on",
                                                               "next": self.page})
         self.assertRedirects(resp, self.page, fetch_redirect_response=False)
@@ -179,6 +184,7 @@ class ConsentFlowTests(TestCase):
             with self.assertRaises(rc.ConsentError):
                 rc.record_decision(self.user, decision)
         # Through the page: nothing changes, and the user still continues.
+        complete_profile(self.user)
         resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
         self.assertRedirects(resp, self.page, fetch_redirect_response=False)
         self.assertEqual(ResearchConsentRecord.objects.filter(user=self.user).count(), 1)
@@ -194,7 +200,7 @@ class ConsentFlowTests(TestCase):
         # A newcomer who has accepted nothing can still open and answer the form (no loop).
         self.assertEqual(self.client.get(reverse("research_consent")).status_code, 200)
         resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
-        self.assertRedirects(resp, self.page, fetch_redirect_response=False)
+        self.assertEqual(resp.status_code, 302)  # on to the profile (#766), not back to the form
 
     def test_profile_offers_consent_and_withdrawal(self):
         complete_profile(self.user)
@@ -714,3 +720,130 @@ class NameReplacerTests(TestCase):
         self.assertEqual(self.run_replace("Kim and Park"), "AMBIG and P4")
         self.assertEqual(self.run_replace("mail x@example.org, orcid 0000-0001-5109-3700"),
                          "mail [email], orcid [orcid]")
+
+
+class WordingEditTests(TestCase):
+    """#766: titles without version labels, wording edits in place, nobody re-accepts."""
+
+    def test_seeded_text(self):
+        agreement = UserAgreement.objects.get(version="2")
+        self.assertEqual(agreement.title, "YSE-PZ User Agreement")
+        self.assertNotIn("(cite the YSE-PZ software", agreement.body)
+        self.assertIn("Acknowledgements page</a>, and follow any acknowledgment", agreement.body)
+        form = rc.current_form()
+        self.assertEqual(form.title, "YSE-PZ Research Consent Form")
+        self.assertIn("basic demographic information such as career stage and country to track science outcomes",
+                      form.body)
+
+    def test_migration_edits_old_text_in_place_and_is_idempotent(self):
+        migration = importlib.import_module("YSE_App.migrations.0042_agreement_consent_wording")
+        agreement = UserAgreement.objects.get(version="2")
+        form = ResearchConsentForm.objects.get(version="1")
+        user = User.objects.create_user("wording_user", password="x")
+        acceptance = AgreementAcceptance.objects.create(user=user, agreement=agreement)
+        record = rc.record_decision(user, rc.CONSENTED, form=form)
+        # Put back the pre-#766 text.
+        UserAgreement.objects.filter(pk=agreement.pk).update(
+            title="YSE-PZ User Agreement (v2)",
+            body=agreement.body.replace("</a>, and follow", "</a>" + migration.AGREEMENT_BODY_OLD + ", and follow"))
+        ResearchConsentForm.objects.filter(pk=form.pk).update(
+            title="YSE-PZ Research Consent Form (v1)",
+            body=form.body.replace("such as career stage and country ", ""))
+        for _ in range(2):
+            migration.apply_edits(django_apps, None)
+            agreement.refresh_from_db()
+            form.refresh_from_db()
+            self.assertEqual(agreement.title, "YSE-PZ User Agreement")
+            self.assertNotIn("(cite", agreement.body)
+            self.assertIn("Acknowledgements page</a>, and follow", agreement.body)
+            self.assertEqual(agreement.body.count("<li>"), 8)
+            self.assertEqual(form.title, "YSE-PZ Research Consent Form")
+            self.assertIn("demographic information such as career stage and country to track", form.body)
+        self.assertEqual(agreement.version, "2")
+        self.assertEqual(form.version, "1")
+        self.assertTrue(AgreementAcceptance.objects.filter(pk=acceptance.pk, agreement=agreement).exists())
+        self.assertTrue(ResearchConsentRecord.objects.filter(pk=record.pk, form=form).exists())
+
+    @override_settings(**GATE_ON)
+    def test_pages_show_title_only_and_old_acceptors_are_not_asked_again(self):
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        user = User.objects.create_user("wording_page_user", password="x")
+        AgreementAcceptance.objects.create(user=user, agreement=UserAgreement.objects.get(version="2"))
+        complete_profile(user)
+        self.client.force_login(user)
+        self.assertEqual(self.client.get(reverse("notification_list")).status_code, 200)
+        page = self.client.get(reverse("agreement") + "?next=")
+        self.assertContains(page, "YSE-PZ User Agreement")
+        self.assertNotContains(page, "version 2")
+        self.assertNotContains(page, "(v2)")
+        page = self.client.get(reverse("research_consent"))
+        self.assertContains(page, "Optional research consent")
+        self.assertContains(page, "YSE-PZ Research Consent Form")
+        self.assertNotContains(page, "(voluntary)")
+        self.assertNotContains(page, "version 1")
+        self.assertNotContains(page, "(v1)")
+
+    @override_settings(**GATE_ON)
+    def test_acceptance_message_has_no_version(self):
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        user = User.objects.create_user("wording_msg_user", password="x")
+        self.client.force_login(user)
+        resp = self.client.post(reverse("agreement"), {"agree": "on", "next": reverse("notification_list")}, follow=True)
+        texts = [str(m) for m in resp.context["messages"]]
+        self.assertIn("Thank you: you accepted the YSE-PZ User Agreement.", texts)
+
+
+@override_settings(**GATE_ON)
+class ConsentToProfileFlowTests(TestCase):
+    """#766: Consent, Decline and Not now continue to the profile while it is incomplete."""
+
+    def setUp(self):
+        research_crypto.reset_cache()
+        onboarding.invalidate_current_agreement()
+        self.addCleanup(onboarding.invalidate_current_agreement)
+        self.user = User.objects.create_user("consent_profile_user", password="x")
+        AgreementAcceptance.objects.create(user=self.user, agreement=UserAgreement.objects.get(is_current=True))
+        self.client.force_login(self.user)
+        self.page = reverse("notification_list")
+        self.edit = "%s?%s" % (reverse("researcher_profile_edit"), urlencode({"next": self.page}))
+
+    def test_decline_and_consent_continue_to_profile_when_incomplete(self):
+        resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
+        self.assertRedirects(resp, self.edit, fetch_redirect_response=False)
+        self.assertEqual(rc.status(self.user), rc.DECLINED)
+        # The profile editor opens (no loop back to the gate or the form).
+        self.assertEqual(self.client.get(resp["Location"]).status_code, 200)
+        # Not now: the link on the form itself.
+        page = self.client.get(reverse("research_consent") + "?" + urlencode({"next": self.page}))
+        self.assertContains(page, 'id="yse-research-consent-continue"')
+        self.assertContains(page, escape(self.edit))
+
+    def test_consent_and_not_now_continue_to_profile_when_incomplete(self):
+        page = self.client.get(reverse("research_consent") + "?" + urlencode({"next": self.page}))
+        self.assertContains(page, escape(self.edit))  # Not now
+        resp = self.client.post(reverse("research_consent"), {"action": "consent", "consent": "on",
+                                                              "next": self.page})
+        self.assertRedirects(resp, self.edit, fetch_redirect_response=False)
+
+    def test_complete_profile_continues_to_next(self):
+        complete_profile(self.user)
+        resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
+        self.assertRedirects(resp, self.page, fetch_redirect_response=False)
+
+    def test_next_already_the_profile_editor_is_not_nested(self):
+        edit_only = reverse("researcher_profile_edit")
+        resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": edit_only})
+        self.assertRedirects(resp, edit_only, fetch_redirect_response=False)
+
+    def test_agreement_to_consent_to_profile_to_next(self):
+        user = User.objects.create_user("consent_chain_user", password="x")
+        self.client.force_login(user)
+        resp = self.client.post(reverse("agreement"), {"agree": "on", "next": self.page})
+        self.assertRedirects(resp, "%s?%s" % (reverse("research_consent"), urlencode({"next": self.page})),
+                             fetch_redirect_response=False)
+        resp = self.client.post(reverse("research_consent"), {"action": "decline", "next": self.page})
+        self.assertRedirects(resp, self.edit, fetch_redirect_response=False)

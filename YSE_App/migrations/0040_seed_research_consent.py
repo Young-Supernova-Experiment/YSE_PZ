@@ -13,9 +13,9 @@ import datetime
 from django.db import migrations
 
 VERSION = "1"
-TITLE = "YSE-PZ Research Consent Form (v1)"
+TITLE = "YSE-PZ Research Consent Form"  # "(v1)" dropped in place by 0042 (#766)
 BODY = """<p>YSE-PZ records how the platform is used: requests, priorities, plans, observing outcomes, comments and similar activity.  This study is looking to learn more about how scientists make decisions, how to more efficiently use limited resources, and how to identify interesting science opportunities faster.</p>
-<p>If you agree to be in this study, you will provide basic demographic information to track science outcomes. Your participation will take about 5 minutes.</p>
+<p>If you agree to be in this study, you will provide basic demographic information such as career stage and country to track science outcomes. Your participation will take about 5 minutes.</p>
 <p>We will keep all study information private and only use anonymized data for any study.  There is a small risk that your personal information could be shared by mistake. However, researchers take steps to protect your privacy, including encrypting all information that is not essential for running the site.</p>
 <p>Your participation is completely voluntary. You can stop participating at any time. If you choose not to participate or stop later, it will not affect your grade, job, or any benefits you’re entitled to.</p>
 <p>If you have any questions or want more information, you can contact Prof. Ryan Foley at foley@ucsc.edu.</p>
