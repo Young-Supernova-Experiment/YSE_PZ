@@ -81,7 +81,7 @@ def collaboration_context(request, transient):
 @require_POST
 def interest_register(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
-    fallback = reverse("transient_detail", kwargs={"slug": transient.slug}) + "#summary_tab"
+    fallback = reverse("transient_detail", kwargs={"slug": transient.slug})
     group = None
     group_id = (request.POST.get("group") or "").strip()
     if group_id:
@@ -116,7 +116,7 @@ def _checked(value) -> bool:
 @require_POST
 def interest_status(request, interest_id):
     interest = get_object_or_404(TransientInterest.objects.select_related("transient"), pk=interest_id)
-    fallback = reverse("transient_detail", kwargs={"slug": interest.transient.slug}) + "#summary_tab"
+    fallback = reverse("transient_detail", kwargs={"slug": interest.transient.slug})
     doi = request.POST.get("doi")
     try:
         svc.update_interest_status(interest, request.user, request.POST.get("status", ""), doi=doi)

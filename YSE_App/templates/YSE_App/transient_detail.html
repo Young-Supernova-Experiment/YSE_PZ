@@ -776,11 +776,20 @@
         var yseJwstObservationsLoaded = false;
         var yseChandraImagesLoaded = false;
         $(function() {
-            if (window.location.hash === '#followup_tab') {
-                if (window.yseResetFollowupFragmentCache) {
-                    window.yseResetFollowupFragmentCache();
-                }
-                $('a[href="#followup_tab"]').tab('show');
+            // A tab named in the URL (#followup_tab, #spectra_tab, ... after an action) opens that
+            // tab, and the page stays at the top so the tab bar is always in view: an action never
+            // scrolls the browser down to a pane.
+            var yseHash = window.location.hash;
+            var $yseHashTab = yseHash ? $('a[data-toggle="tab"]').filter(function() {
+                return $(this).attr('href') === yseHash;
+            }) : $();
+            if (yseHash === '#followup_tab' && window.yseResetFollowupFragmentCache) {
+                window.yseResetFollowupFragmentCache();
+            }
+            if ($yseHashTab.length) {
+                $yseHashTab.first().tab('show');
+                window.scrollTo(0, 0);
+                $(window).one('load', function() { window.scrollTo(0, 0); });
             }
             $('a[data-toggle="tab"]').on('shown.bs.tab', function(e) {
                 var target = $(e.target).attr('href');
