@@ -1,5 +1,5 @@
 from YSE_App.models import *
-from django.db.models import DateTimeField, ExpressionWrapper, F, Q
+from django.db.models import DateTimeField, ExpressionWrapper, F, FloatField, Q
 from django.db.models.functions import Greatest
 from django.db.models.expressions import RawSQL
 from datetime import timedelta
@@ -92,6 +92,11 @@ def _last_mag_sql(column, filters, offset, visible=None):
     return sql.replace('ORDER BY', 'AND EXISTS (%s)\n   ORDER BY' % vis_sql, 1), tuple(vis_params)
 
 
+def _last_mag(column, filters, offset, visible=None):
+    """``_last_mag_sql`` as a float annotation. Django 4.x needs the type to do arithmetic on it (dm, dt, rise rate)."""
+    return RawSQL(*_last_mag_sql(column, filters, offset, visible), output_field=FloatField())
+
+
 def annotate_rising_transient_qs(qs, user=None):
     """Rise-rate annotations; for a ``user`` who is not a service reader only from photometry they may see (#692)."""
     visible = _visible_point_sql(user)
@@ -101,14 +106,14 @@ def annotate_rising_transient_qs(qs, user=None):
     i_filters = "('i-ZTF', 'i')"
 
     # g/V rise
-    qs = qs.annotate(recent_g_mag=RawSQL(*_last_mag_sql('pd.mag',g_filters,0,visible))).\
-            annotate(recent_g_mag_err=RawSQL(*_last_mag_sql('pd.mag_err',g_filters,0,visible))).\
-            annotate(recent_g_obs=RawSQL(*_last_mag_sql('UNIX_TIMESTAMP(pd.obs_date)',g_filters,0,visible))).\
-            annotate(second_most_recent_g_mag=RawSQL(*_last_mag_sql('pd.mag',g_filters,1,visible))).\
-            annotate(second_most_recent_g_obs=RawSQL(*_last_mag_sql('UNIX_TIMESTAMP(pd.obs_date)',g_filters,1,visible))).\
-            annotate(second_most_recent_g_ulim=RawSQL(*_last_mag_sql('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',g_filters,1,visible))).\
-            annotate(second_most_recent_g_flux=RawSQL(*_last_mag_sql('pd.flux',g_filters,1,visible))).\
-            annotate(second_most_recent_g_flux_err=RawSQL(*_last_mag_sql('pd.flux_err',g_filters,1,visible)))
+    qs = qs.annotate(recent_g_mag=_last_mag('pd.mag',g_filters,0,visible)).\
+            annotate(recent_g_mag_err=_last_mag('pd.mag_err',g_filters,0,visible)).\
+            annotate(recent_g_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',g_filters,0,visible)).\
+            annotate(second_most_recent_g_mag=_last_mag('pd.mag',g_filters,1,visible)).\
+            annotate(second_most_recent_g_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',g_filters,1,visible)).\
+            annotate(second_most_recent_g_ulim=_last_mag('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',g_filters,1,visible)).\
+            annotate(second_most_recent_g_flux=_last_mag('pd.flux',g_filters,1,visible)).\
+            annotate(second_most_recent_g_flux_err=_last_mag('pd.flux_err',g_filters,1,visible))
 
     qs = qs.annotate(dm_g=-1.0*(F('recent_g_mag') - F('second_most_recent_g_mag')))
     qs = qs.annotate(dt_g=F('recent_g_obs') - F('second_most_recent_g_obs'))
@@ -120,14 +125,14 @@ def annotate_rising_transient_qs(qs, user=None):
 
     # r rise
     qs = qs.\
-            annotate(recent_r_mag=RawSQL(*_last_mag_sql('pd.mag',r_filters,0,visible))).\
-            annotate(recent_r_mag_err=RawSQL(*_last_mag_sql('pd.mag_err',r_filters,0,visible))).\
-            annotate(recent_r_obs=RawSQL(*_last_mag_sql('UNIX_TIMESTAMP(pd.obs_date)',r_filters,0,visible))).\
-            annotate(second_most_recent_r_mag=RawSQL(*_last_mag_sql('pd.mag',r_filters,1,visible))).\
-            annotate(second_most_recent_r_obs=RawSQL(*_last_mag_sql('UNIX_TIMESTAMP(pd.obs_date)',r_filters,1,visible))).\
-            annotate(second_most_recent_r_ulim=RawSQL(*_last_mag_sql('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',r_filters,1,visible))).\
-            annotate(second_most_recent_r_flux=RawSQL(*_last_mag_sql('pd.flux',r_filters,1,visible))).\
-            annotate(second_most_recent_r_flux_err=RawSQL(*_last_mag_sql('pd.flux_err',r_filters,1,visible)))
+            annotate(recent_r_mag=_last_mag('pd.mag',r_filters,0,visible)).\
+            annotate(recent_r_mag_err=_last_mag('pd.mag_err',r_filters,0,visible)).\
+            annotate(recent_r_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',r_filters,0,visible)).\
+            annotate(second_most_recent_r_mag=_last_mag('pd.mag',r_filters,1,visible)).\
+            annotate(second_most_recent_r_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',r_filters,1,visible)).\
+            annotate(second_most_recent_r_ulim=_last_mag('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',r_filters,1,visible)).\
+            annotate(second_most_recent_r_flux=_last_mag('pd.flux',r_filters,1,visible)).\
+            annotate(second_most_recent_r_flux_err=_last_mag('pd.flux_err',r_filters,1,visible))
 
     qs = qs.annotate(dm_r=-1.0*(F('recent_r_mag') - F('second_most_recent_r_mag')))
     qs = qs.annotate(dt_r=F('recent_r_obs') - F('second_most_recent_r_obs'))
@@ -139,14 +144,14 @@ def annotate_rising_transient_qs(qs, user=None):
 
     # i rise
     qs = qs.\
-        annotate(recent_i_mag=RawSQL(*_last_mag_sql('pd.mag',i_filters,0,visible))).\
-        annotate(recent_i_mag_err=RawSQL(*_last_mag_sql('pd.mag_err',i_filters,0,visible))).\
-        annotate(recent_i_obs=RawSQL(*_last_mag_sql('UNIX_TIMESTAMP(pd.obs_date)',i_filters,0,visible))).\
-        annotate(second_most_recent_i_mag=RawSQL(*_last_mag_sql('pd.mag',i_filters,1,visible))).\
-        annotate(second_most_recent_i_obs=RawSQL(*_last_mag_sql('UNIX_TIMESTAMP(pd.obs_date)',i_filters,1,visible))).\
-        annotate(second_most_recent_i_ulim=RawSQL(*_last_mag_sql('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',i_filters,1,visible))).\
-        annotate(second_most_recent_i_flux=RawSQL(*_last_mag_sql('pd.flux',i_filters,1,visible))).\
-        annotate(second_most_recent_i_flux_err=RawSQL(*_last_mag_sql('pd.flux_err',i_filters,1,visible)))
+        annotate(recent_i_mag=_last_mag('pd.mag',i_filters,0,visible)).\
+        annotate(recent_i_mag_err=_last_mag('pd.mag_err',i_filters,0,visible)).\
+        annotate(recent_i_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',i_filters,0,visible)).\
+        annotate(second_most_recent_i_mag=_last_mag('pd.mag',i_filters,1,visible)).\
+        annotate(second_most_recent_i_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',i_filters,1,visible)).\
+        annotate(second_most_recent_i_ulim=_last_mag('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',i_filters,1,visible)).\
+        annotate(second_most_recent_i_flux=_last_mag('pd.flux',i_filters,1,visible)).\
+        annotate(second_most_recent_i_flux_err=_last_mag('pd.flux_err',i_filters,1,visible))
 
     qs = qs.annotate(dm_i=-1.0*(F('recent_i_mag') - F('second_most_recent_i_mag')))
     qs = qs.annotate(dt_i=F('recent_i_obs') - F('second_most_recent_i_obs'))
