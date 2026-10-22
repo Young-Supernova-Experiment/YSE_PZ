@@ -712,6 +712,8 @@ class BrokersTabAndSearchTests(ConsumeBase):
         r = self.client.get(reverse("broker_search"))
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "yse-broker-search-form")
+        # step="0.5" with min="0.1" made browsers reject 2, 5, 10 ... ("Enter a valid value").
+        self.assertRegex(r.content.decode(), r'id="bs-radius"[^>]*step="any"')
         r = self.client.get(reverse("broker_search"), {"ra": "10.0", "dec": "10.0", "radius": "5"})
         self.assertContains(r, "ZTF26far0001")
         self.assertContains(r, "Save as transient")

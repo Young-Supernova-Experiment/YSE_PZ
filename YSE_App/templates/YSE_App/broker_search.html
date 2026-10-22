@@ -22,7 +22,7 @@
 						<div class="form-group col-6"><label for="bs-ra">RA</label><input class="form-control form-control-sm" id="bs-ra" name="ra" value="{% if ra != None %}{{ ra }}{% endif %}" placeholder="150.0 or 10:00:00"></div>
 						<div class="form-group col-6"><label for="bs-dec">Dec</label><input class="form-control form-control-sm" id="bs-dec" name="dec" value="{% if dec != None %}{{ dec }}{% endif %}" placeholder="40.0 or +40:00:00"></div>
 					</div>
-					<div class="form-group"><label for="bs-radius">Radius (arcsec)</label><input class="form-control form-control-sm" id="bs-radius" name="radius" type="number" step="0.5" min="0.1" max="600" value="{{ radius }}"></div>
+					<div class="form-group"><label for="bs-radius">Radius (arcsec)</label><input class="form-control form-control-sm" id="bs-radius" name="radius" type="number" step="any" min="0.1" max="600" value="{{ radius }}"></div>
 					<button type="submit" class="btn btn-sm btn-primary">Search</button>
 				</form>
 			</div>
