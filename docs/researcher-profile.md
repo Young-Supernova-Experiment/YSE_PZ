@@ -11,7 +11,7 @@ Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profi
 | --- | --- |
 | `/agreement/` | Current agreement, one checkbox, Accept. Acceptances store only user, version and time (no IP or user agent). |
 | `/research-consent/` | Optional research consent form: one checkbox, Consent, Decline or Not now; Withdraw once consented. Never a gate; every answer continues to the profile while its required fields are incomplete, then to the requested page. |
-| `/profile/` | Your profile; required and encrypted fields marked; "My students" for scientific staff and faculty. |
+| `/profile/` | Your profile; required and encrypted fields marked; "My advisees" for scientific staff and faculty; "My advisors" (PhD, postdoc, former advisors and supervisors) for everyone who consents. Rows edit kind and years in place. |
 | `/profile/edit/` | The form. Required fields depend on career level (below). |
 | user menu > My profile | Link from every page. |
 
@@ -78,7 +78,7 @@ record. Service: `YSE_App/services/research_consent.py`.
   (pronouns, department, career level, interests, website, GitHub, time zone), every encrypted field (country, PhD year, gender), advisors and
   students, affiliation history and SciX metrics. Research data are offered on `/profile/edit/`
   only to consenting users and required only from them (the onboarding gate requires only full
-  name and institution otherwise). "My students" and the SciX refresh are for consenting users only.
+  name and institution otherwise). "My advisees", "My advisors" and the SciX refresh are for consenting users only.
 * **Decline or withdraw:** nothing is deleted automatically. The user is excluded from research at
   once, and the administrators in `RESEARCH_OPTOUT_NOTIFY_USERNAMES` (settings.ini `[research]
   optout_notify_usernames`, default every active superuser) get a `research_optout` notification

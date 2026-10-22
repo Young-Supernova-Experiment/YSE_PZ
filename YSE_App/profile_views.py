@@ -1,4 +1,4 @@
-"""User agreement, researcher profile and "My students" pages (#627, #628, #630)."""
+"""User agreement, researcher profile, "My advisees" and "My advisors" pages (#627, #628, #630)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from YSE_App import onboarding
 from YSE_App.models import AgreementAcceptance, Mentorship, ResearcherMetrics, ResearcherProfile, UserAgreement
 from YSE_App.models.researcher_models import ENCRYPTED_FIELDS, STUDENT_LEVELS
 from YSE_App.profile_forms import (
-    AgreementForm, ResearchConsentChoiceForm, ResearcherProfileForm, StudentForm, StudentUpdateForm,
+    AdvisorForm, AgreementForm, ResearchConsentChoiceForm, ResearcherProfileForm, StudentForm, StudentUpdateForm,
 )
 from YSE_App.services import research_consent as rc
 from YSE_App.services import research_crypto
@@ -173,6 +173,9 @@ def researcher_profile(request):
         "incomplete": bool(missing),
         "advisor": rp.current_advisor(user),
         "mentors": Mentorship.objects.filter(mentee=user).select_related("mentor").order_by("-start_year", "-id"),
+        "can_edit_advisors": research_consented,
+        "advisor_kind_default": (Mentorship.KIND_CURRENT_ADVISOR if profile and profile.is_student
+                                 else Mentorship.KIND_POSTDOC_ADVISOR),
         "can_mentor": can_mentor,
         "students": list(rp.my_students(user)) if can_mentor else [],
         "student_form": StudentForm(mentor=user) if can_mentor else None,
@@ -321,7 +324,31 @@ def researcher_advisor_suggest(request):
 
 def _require_mentor(request):
     if not rp.can_manage_students(request.user):
-        raise Http404("Only scientific staff and faculty manage students here.")
+        raise Http404("Only scientific staff and faculty manage advisees here.")
+
+
+def _require_research_consent(request):
+    # Advisors are research data, like advisees: only consenting users manage them.
+    if not rc.has_consented(request.user):
+        raise Http404("Advisors are managed here only with research consent.")
+
+
+def _update_mentorship(request, row, anchor, removed_message):
+    form = StudentUpdateForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Not saved: enter a valid year.")
+    elif form.cleaned_data.get("remove"):
+        row.delete()
+        messages.success(request, removed_message)
+    else:
+        changed = form.apply(row)
+        if row.start_year and row.end_year and row.end_year < row.start_year:
+            messages.error(request, "The end year is before the start year.")
+        else:
+            if changed:
+                row.save(update_fields=changed)
+            messages.success(request, "Saved.")
+    return redirect(reverse("researcher_profile") + anchor)
 
 
 @login_required
@@ -336,10 +363,10 @@ def researcher_student_add(request):
             mentor=request.user, mentee=student, mentee_name="" if student else data["student_name"].strip(),
             kind=data["kind"], start_year=data.get("start_year"), end_year=data.get("end_year"),
             created_by=request.user)
-        messages.success(request, "Student added.")
+        messages.success(request, "Advisee added.")
     else:
         errors = "; ".join("%s" % e for errs in form.errors.values() for e in errs)
-        messages.error(request, "Student not added: %s" % errors)
+        messages.error(request, "Advisee not added: %s" % errors)
     return redirect(reverse("researcher_profile") + "#my-students")
 
 
@@ -348,24 +375,39 @@ def researcher_student_add(request):
 def researcher_student_update(request, mentorship_id):
     _require_mentor(request)
     row = get_object_or_404(Mentorship, pk=mentorship_id, mentor=request.user)
-    form = StudentUpdateForm(request.POST)
-    if not form.is_valid():
-        messages.error(request, "Not saved: enter a valid year.")
-    elif form.cleaned_data.get("remove"):
-        row.delete()
-        messages.success(request, "Student removed from your list.")
+    return _update_mentorship(request, row, "#my-students", "Advisee removed from your list.")
+
+
+@login_required
+@require_POST
+def researcher_advisor_add(request):
+    _require_research_consent(request)
+    form = AdvisorForm(request.POST, mentee=request.user)
+    if form.is_valid():
+        data = form.cleaned_data
+        advisor = data["advisor_user"]
+        Mentorship.objects.create(
+            mentee=request.user, mentor=advisor, mentor_name="" if advisor else data["advisor_name"].strip(),
+            kind=data["kind"], start_year=data.get("start_year"), end_year=data.get("end_year"),
+            created_by=request.user)
+        messages.success(request, "Advisor added.")
     else:
-        row.end_year = form.cleaned_data.get("end_year")
-        if row.start_year and row.end_year and row.end_year < row.start_year:
-            messages.error(request, "The end year is before the start year.")
-        else:
-            row.save(update_fields=["end_year"])
-            messages.success(request, "Saved.")
-    return redirect(reverse("researcher_profile") + "#my-students")
+        errors = "; ".join("%s" % e for errs in form.errors.values() for e in errs)
+        messages.error(request, "Advisor not added: %s" % errors)
+    return redirect(reverse("researcher_profile") + "#my-advisors")
+
+
+@login_required
+@require_POST
+def researcher_advisor_update(request, mentorship_id):
+    _require_research_consent(request)
+    row = get_object_or_404(Mentorship, pk=mentorship_id, mentee=request.user)
+    return _update_mentorship(request, row, "#my-advisors", "Advisor removed from your list.")
 
 
 # The onboarding pages must never be gated themselves.
 for _view in ("agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_profile_confirm",
-              "researcher_advisor_suggest", "researcher_student_add", "researcher_student_update"):
+              "researcher_advisor_suggest", "researcher_student_add", "researcher_student_update",
+              "researcher_advisor_add", "researcher_advisor_update"):
     globals()[_view].onboarding_exempt = True
 del _view

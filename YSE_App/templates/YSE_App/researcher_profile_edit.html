@@ -3,6 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>{% if is_new %}Set up your profile{% else %}Edit my profile{% endif %}</h1>
+	{% include 'YSE_App/partials/settings_tabs.html' %}
 </section>
 
 <style>
