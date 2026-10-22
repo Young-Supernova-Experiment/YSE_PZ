@@ -1,5 +1,5 @@
 from YSE_App.models import *
-from django.db.models import DateTimeField, ExpressionWrapper, F, FloatField, Q
+from django.db.models import DateTimeField, ExpressionWrapper, F, Q
 from django.db.models.functions import Greatest
 from django.db.models.expressions import RawSQL
 from datetime import timedelta

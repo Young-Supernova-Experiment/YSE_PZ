@@ -92,8 +92,12 @@ jobs:
       - name: Pin Django 4.2 in the web container
         working-directory: docker
         run: |
-          docker exec ysepz_web_container pip3 install --quiet --no-deps \
-            $(grep -E -m2 '^(Django|asgiref)==' ../requirements.txt)
+          # asgiref first: 3.8.1 also runs the image's Django 4.0, while Django 4.2 on
+          # the image's asgiref 3.4.1 cannot import. gunicorn in the container may boot
+          # a worker between the two installs; in the other order that worker fails,
+          # gunicorn exits and the container (and this pip) is killed (exit 137).
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^asgiref==' ../requirements.txt)"
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^Django==' ../requirements.txt)"
           # Login lockout (django-axes; same pins as requirements.txt) is not in the
           # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
           docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
