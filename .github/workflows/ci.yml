@@ -110,13 +110,6 @@ jobs:
             exit 1
           }
 
-      - name: Web container logs (on failure)
-        if: failure()
-        working-directory: docker
-        run: |
-          docker compose ps -a || true
-          docker compose logs --tail=300 web || true
-
       - name: Wait for MySQL
         working-directory: docker
         run: |
@@ -139,6 +132,13 @@ jobs:
           # axes' own tables in the CI database (the runbook's `migrate axes` step).
           docker exec ysepz_web_container python3 manage.py migrate axes --noinput
           docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
+
+      - name: Web container logs (on failure)
+        if: failure()
+        working-directory: docker
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail=300 web || true
 
       - name: Wait for Gunicorn
         working-directory: docker
