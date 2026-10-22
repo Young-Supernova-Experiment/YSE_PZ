@@ -1673,7 +1673,7 @@ git fetch origin && git checkout master && git pull --ff-only origin master && g
 <PROD_PYTHON> -m pip install -r requirements.txt
 ```
 
-**Expected** HEAD is the #143 merge commit; each pip line ends `Successfully installed` or `Requirement already satisfied`. `requirements.txt` is resolver-consistent since [#223](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/223), so no `--no-deps`; it pins `Django>=3.2,<4.0` and `protobuf==3.20.3`. If pip is not writable as your user, prefix with `sudo -u <VENV_OWNER>` (`stat -c %U $(dirname $(dirname <PROD_PYTHON>))`). ML extras for TensorFlow crons live in `requirements-ingest.txt` and are for the cron venv only.
+**Expected** HEAD is the #143 merge commit; each pip line ends `Successfully installed` or `Requirement already satisfied`. `requirements.txt` is resolver-consistent since [#223](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/223), so no `--no-deps`; it pinned `Django>=3.2,<4.0` at #143 (production then had Django 4.0, so this step moved it to 3.2.25; from #781 the pin is Django 4.2.30, see [Django 4.2 LTS](#django-42)) and `protobuf==3.20.3`. If pip is not writable as your user, prefix with `sudo -u <VENV_OWNER>` (`stat -c %U $(dirname $(dirname <PROD_PYTHON>))`). ML extras for TensorFlow crons live in `requirements-ingest.txt` and are for the cron venv only.
 
 3.7
 
@@ -3425,6 +3425,41 @@ cd <CHECKOUT> && <STACK_PYTHON> manage.py shell -c "from django.conf import sett
 
 **Rollback:** delete the four lines (or set them to `0`) and reload Apache.
 
+<a id="django-42"></a>
+### Django 4.2 LTS on every stack (2026-10-22, #781) required per stack, in promotion order
+
+Production had Django 4.0 (the 2022 install), while `requirements.txt` pinned the 3.2 line, so the #143 deploy step 3.6 moved production down to 3.2.25. From #781 every stack runs **Django 4.2.30**, the newest line that supports Python 3.8 (8 known advisories, against 13 for 3.2.25 and 27 for 4.0). With it: `asgiref` 3.8.1 (Django 4.2 needs 3.6 or newer) and `djangorestframework` 3.15.2. No other package changes.
+
+Migration `0053_related_name_as_declared` comes with it. Its 42 `AlterField`s only record `related_name` the way Django 4.1+ writes it; `related_name` is Python-only, so it runs **no SQL**, and a stack still on 3.2 reads it fine. On the shared `YSE_test` database whichever stack deploys first applies it.
+
+**Order matters for one package:** install `asgiref` before Django. Django 4.2 cannot import with the old asgiref 3.4.1, while asgiref 3.8.1 runs Django 3.2 and 4.0 too, so a web process that starts between the two installs still works.
+
+**yse\_experimental:** nothing to do. The deploy after the merge runs `pip install -r requirements.txt` in its venv. Expect a few seconds of errors on `/yse_experimental/` during that pip run (Apache restarts at the end of the deploy).
+
+**yse\_test (after the promotion to develop; its venv is not updated by the deploy):**
+```bash
+cd /data/yse_pz/YSE_PZ_test
+/data/yse_pz/yse_test_virtual/bin/python -m pip install "asgiref==3.8.1"
+/data/yse_pz/yse_test_virtual/bin/python -m pip install -r requirements.txt
+/data/yse_pz/yse_test_virtual/bin/python manage.py check
+sudo systemctl restart apache2
+```
+
+**Production (after the promotion to master),** in the deploy's pip step (3.6), same order, with `<PROD_PYTHON>` = `/data/yse_pz/yse_virtual/bin/python`:
+```bash
+<PROD_PYTHON> -m pip install "asgiref==3.8.1"
+<PROD_PYTHON> -m pip install -r requirements.txt
+```
+
+**Check** (each stack, with its own Python):
+```bash
+<STACK_PYTHON> -c "import django, asgiref, rest_framework; print(django.get_version(), asgiref.__version__, rest_framework.VERSION)"
+cd <CHECKOUT> && <STACK_PYTHON> manage.py showmigrations YSE_App | tail -2
+```
+**Expected:** `4.2.30 3.8.1 3.15.2`, and `[X] 0053_related_name_as_declared` once the deploy's `migrate` has run.
+
+**Rollback:** check out the previous commit and `pip install -r requirements.txt` from it (that brings back Django 3.2.25, asgiref 3.4.1, DRF 3.15.1), then restart Apache. Migration `0053` can stay: it changes nothing in the database. For production before #143, the saved `pip freeze` from 2026-10-21 restores the original 4.0 environment.
+
 ## 4 · Data checks David
 
 Read-only queries against the production database. Post the output in the Slack thread.
@@ -3574,6 +3609,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-22 v102, **required per stack, in promotion order** (one migration with no SQL; three package pins). Django 4.2 LTS ([#781](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/781)): Django 4.2.30, asgiref 3.8.1, djangorestframework 3.15.2 on every stack. yse\_experimental: automatic on deploy. yse\_test after the promotion to develop, production after the promotion to master: install asgiref first, then the requirements, see [Django 4.2 LTS on every stack](#django-42). Migration `0053_related_name_as_declared` changes no table. Production ran Django 4.0 until the #143 deploy moved it to 3.2.25.
 * 2026-10-21 v101, **recommended** (no code change): server sizing and backup. New sections [MySQL memory and connection limits](#mysql-sizing) (M1-M3, [#777](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/777)), [mod_wsgi daemon size and timeouts](#wsgi-sizing) (A1-A4, [#771](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/771)) and [Nightly database backup without table locks](#backup) (B1-B5, [#772](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/772)). Do M2 before A2.
 * 2026-10-21 v100, **nothing new to run** (the deploy applies the migration; v99 needs no step). Develop backported into experimental again (develop-direct PR [#767](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/767): agreement and consent page edits [#766](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/766)). Develop's v38 is v99 here. Migration `0042_agreement_consent_wording` keeps develop's name and is joined to experimental's `0051_merge_develop_consent` by the empty merge migration `0052_merge_develop_consent_wording`; on the shared `YSE_test` database develop already applied it, and the edit is idempotent.
 * 2026-10-21 v99 (develop v38), nothing required. Agreement and consent page edits ([#766](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/766)): migration 0042 edits the current User Agreement v2 and Research Consent Form v1 wording in place (titles lose "(v2)"/"(v1)", small text edits; versions, acceptances and consent records untouched, nobody re-accepts; idempotent on the shared database). The pages show only the title; "Research consent (voluntary)" is now "Optional research consent"; Consent, Decline and Not now continue to the researcher profile while its required fields are incomplete.
