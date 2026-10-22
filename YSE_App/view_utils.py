@@ -2105,9 +2105,12 @@ def _spectrum_line_kwargs(spec):
 def _normalized_plot_flux(flux, offset):
     """Scale ``flux`` onto the 5th-95th percentile range and stack it at ``offset``."""
     n_pix = len(flux)
+    if n_pix == 0:
+        return flux
     sort_flux = np.sort(flux)
-    minval = sort_flux[round(n_pix * 0.05)] * 0.5
-    maxval = sort_flux[round(n_pix * 0.95)] * 1.1
+    # Clamp: round(n * 0.95) is n itself for short spectra (fewer than about ten pixels).
+    minval = sort_flux[min(round(n_pix * 0.05), n_pix - 1)] * 0.5
+    maxval = sort_flux[min(round(n_pix * 0.95), n_pix - 1)] * 1.1
     scale = maxval - minval
     if scale == 0:
         scale = 1.0
@@ -2151,7 +2154,8 @@ def spectrumplot(request, transient_id):
     
     for spec, color, offset in zip(spectra, colors, offsets):
         norm_flux = _normalized_plot_flux(spec['flux'], offset)
-        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2,
+        # Step plot centred on each pixel, so individual pixels are visible.
+        p = ax.step(spec['wave'], norm_flux, mode='center', color=color, muted_alpha=0.2,
                     **_spectrum_line_kwargs(spec))
         legend_items.append((spec['label'], [p]))
     
@@ -2217,7 +2221,8 @@ def spectrumplot_summary(request, transient_id):
     legend_it = [None] * len(spectra)
     for spec, color, offset in zip(spectra, colors, offsets):
         norm_flux = _normalized_plot_flux(spec['flux'], offset)
-        p = ax.line(spec['wave'], norm_flux, color=color, muted_alpha=0.2,
+        # Step plot centred on each pixel, so individual pixels are visible.
+        p = ax.step(spec['wave'], norm_flux, mode='center', color=color, muted_alpha=0.2,
                     **_spectrum_line_kwargs(spec))
         legend_it[len(spectra) - 1 - offset] = (spec['label'], [p])
 
@@ -2300,7 +2305,8 @@ def spectrumplotsingle(request, transient_id, spec_id):
 
     ax=figure(plot_width=240,plot_height=240,sizing_mode='stretch_both',
               y_range=(bottom, top))
-    ax.line(np.sort(wave),np.array(flux)[np.argsort(wave)],color='black')
+    # Step plot centred on each pixel, so individual pixels are visible.
+    ax.step(np.sort(wave),np.array(flux)[np.argsort(wave)],mode='center',color='black')
         
     ax.title.text = "%s, %s, %s, Phase: %s, DQ: %s"%(transient.name,spectrum.obs_date.strftime('%m/%d/%Y'),spectrum.instrument,spectrum.spec_phase,','.join([d.name for d in spectrum.data_quality.all()]))
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'

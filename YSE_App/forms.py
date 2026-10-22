@@ -382,14 +382,14 @@ class TransientCommentForm(ModelForm):
             from YSE_App.services.groups import comment_default_public
 
             # Offer the picker groups (no system, inactive or user-hidden groups, #440) but
-            # keep validating against every selectable group (eligibility is unchanged).
+            # keep validating against every selectable group (any of the user's groups).
             from YSE_App.services.groups import picker_groups
 
             selectable = selectable_audience_groups(user, transient_id)
             shown = picker_groups(user, selectable)
             self.fields["audience_groups"].queryset = selectable
             self.fields["audience_groups"].choices = [(g.pk, g.name) for g in shown]
-            self.fields["audience_groups"].initial = comment_picker_initial(user, shown)
+            self.fields["audience_groups"].initial = comment_picker_initial(user, shown, transient_id)
             self.fields["is_public"].initial = comment_default_public(user)
             self.initial_is_public = self.fields["is_public"].initial
             self.show_audience_picker = bool(shown)

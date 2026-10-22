@@ -13,9 +13,9 @@ interests_show_withdrawn. Withdrawn rows are hidden unless ?interests=all.
             <div class="ml-auto">
                 <a class="btn btn-xs btn-sm btn-outline-secondary" href="{% url 'my_interests' %}">My interests</a>
                 {% if interests_show_withdrawn %}
-                <a class="btn btn-xs btn-sm btn-outline-secondary" href="?#summary_tab">Hide withdrawn</a>
+                <a class="btn btn-xs btn-sm btn-outline-secondary" href="?">Hide withdrawn</a>
                 {% else %}
-                <a class="btn btn-xs btn-sm btn-outline-secondary" href="?interests=all#summary_tab">Show withdrawn</a>
+                <a class="btn btn-xs btn-sm btn-outline-secondary" href="?interests=all">Show withdrawn</a>
                 {% endif %}
                 <button type="button" class="btn btn-xs btn-sm btn-primary" data-toggle="collapse" data-target="#yse-interest-form" aria-expanded="false" aria-controls="yse-interest-form" id="yse-interest-register-btn">Register interest</button>
             </div>
@@ -31,7 +31,7 @@ interests_show_withdrawn. Withdrawn rows are hidden unless ?interests=all.
                     {% if i.user_id == user.id or user.is_staff %}
                     <form method="post" action="{% url 'interest_status' i.id %}" class="form-inline d-inline yse-interest-status-form">
                         {% csrf_token %}
-                        <input type="hidden" name="next" value="{% url 'transient_detail' transient.slug %}#summary_tab">
+                        <input type="hidden" name="next" value="{% url 'transient_detail' transient.slug %}">
                         {% if i.is_withdrawn %}
                         <button type="submit" name="status" value="planned" class="btn btn-link btn-sm p-0 ml-1">re-open</button>
                         {% else %}
