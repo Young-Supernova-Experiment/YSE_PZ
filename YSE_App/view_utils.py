@@ -85,7 +85,8 @@ def _load_astropy_coords():
     from astropy.utils import iers
     import astropy.units as u
     from astroplan import Observer
-    # Web workers never wait on an IERS download (#466); refresh by cron instead.
+    # Web workers never wait on an IERS download (#466): YSE_App/apps.py turns downloads
+    # off at startup; set it again here in case anything turned them back on.
     iers.conf.auto_download = False
     _ASTROPY_COORDS_LOADED = True
 
