@@ -24,13 +24,11 @@ from django.utils.decorators import method_decorator
 import logging
 import os
 
-from astropy.utils import iers
-
 logger = logging.getLogger(__name__)
 QUERY_CACHE_VERSION = os.environ.get('YSE_QUERY_CACHE_VERSION', '2')
 # yse_home "Next Telescope Nights": classical runs starting within this many days (#397).
 YSE_HOME_CLASSICAL_DAYS_AHEAD = 30
-iers.conf.auto_download = True
+# IERS downloads stay off (YSE_App/apps.py astropy_offline); never treat the bundled table as stale.
 from astropy.utils.iers import conf
 conf.auto_max_age = None
 
