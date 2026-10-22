@@ -44,12 +44,11 @@ jobs:
 
       - name: Build the pinned requirement set
         run: |
-          # requirements.txt allows Django>=3.2,<4.0; audit the 3.2.25 that CI
-          # and docker/requirements.web.dev pin. requirements-ingest.txt includes
-          # requirements.txt via -r; audit its extra pins once.
+          # requirements.txt pins every package (Django included). requirements-ingest.txt
+          # includes requirements.txt via -r; audit its extra pins once.
           mkdir -p "$RUNNER_TEMP/audit"
-          sed -E 's/^Django>=3\.2,<4\.0$/Django==3.2.25/' requirements.txt > "$RUNNER_TEMP/audit/web.txt"
-          grep -q '^Django==3\.2\.25$' "$RUNNER_TEMP/audit/web.txt" || { echo "::error::Django line in requirements.txt changed; update this step"; exit 1; }
+          cp requirements.txt "$RUNNER_TEMP/audit/web.txt"
+          grep -q '^Django==' "$RUNNER_TEMP/audit/web.txt" || { echo "::error::Django is not pinned with == in requirements.txt; update this step"; exit 1; }
           grep -v '^-r ' requirements-ingest.txt > "$RUNNER_TEMP/audit/ingest.txt"
 
       - name: Audit (fails on advisories not in the ignore list)

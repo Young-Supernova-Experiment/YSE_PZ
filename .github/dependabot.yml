@@ -17,12 +17,13 @@ updates:
     exclude-paths:
       - "docker/web_image_history/**"
     ignore:
-      # Settled decision: stay on the Django 3.2 LTS line until #133 is scheduled.
+      # Django 4.2 LTS is the newest line that supports Python 3.8 (the deployed
+      # stacks). 5.x waits for the Python upgrade (#133).
       - dependency-name: "django"
-        versions: [">=4"]
-      # Last release that supports Django 3.2 is 3.15.1 (#539).
+        versions: [">=5"]
+      # 3.16+ needs Python 3.9.
       - dependency-name: "djangorestframework"
-        versions: [">=3.15.2"]
+        versions: [">=3.16"]
       # TensorFlow 2.13.1 needs protobuf 3.x (#183) and typing-extensions < 4.6;
       # cryptography 46+ needs typing-extensions >= 4.13.2. Revisit with #186.
       - dependency-name: "protobuf"
