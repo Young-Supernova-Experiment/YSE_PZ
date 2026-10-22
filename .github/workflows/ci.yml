@@ -155,13 +155,15 @@ jobs:
       - name: Django system check
         run: docker exec ysepz_web_container python3 manage.py check
 
-      # Models and migrations agree on this Django (a missing migration would make
-      # the deploy's migrate step and the models disagree on the stacks).
-      - name: No missing YSE_App migrations
-        run: docker exec ysepz_web_container python3 manage.py makemigrations YSE_App --check --dry-run
-
       - name: Run tests
         run: docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
+
+      # Models and migrations agree on this Django (a missing migration would make
+      # the deploy's migrate step and the models disagree on the stacks). Runs even
+      # when tests fail; -v 3 prints the migration it would write.
+      - name: No missing YSE_App migrations
+        if: always()
+        run: docker exec ysepz_web_container python3 manage.py makemigrations YSE_App --check --dry-run -v 3
 
       # The suite above runs with two-factor sign-in off (the default). Its flow
       # tests need django-otp's tables in the test database, so run that module
