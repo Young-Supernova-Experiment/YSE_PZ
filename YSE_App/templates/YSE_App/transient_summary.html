@@ -39,12 +39,12 @@
               <a class="btn btn-block btn-primary" href="?sort=ra">RA</a>
               <a class="btn btn-block btn-primary" href="?sort=dec">Dec</a>
               <a class="btn btn-block btn-primary" href="?sort=disc_date">Disc. Date</a>
-              <a class="btn btn-block btn-primary" href="?sort=last_mag">Last Mag</a>
-              <a class="btn btn-block btn-primary" href="?sort=last_obs_date">Last Obs. Date</a>
+              <a class="btn btn-block btn-primary" href="?sort=last_mag">Last Det.</a>
+              <a class="btn btn-block btn-primary" href="?sort=last_obs_date">Last Obs.</a>
               <a class="btn btn-block btn-primary" href="?sort=mw_ebv">MW E(B-V)</a>
               <a class="btn btn-block btn-primary" href="?sort=obs_group__name">Obs. Group</a>
               <a class="btn btn-block btn-primary" href="?sort=best_spec_class__name">Spec. Class.</a>
-              <a class="btn btn-block btn-primary" href="?sort=redshift">Redshift</a>
+              <a class="btn btn-block btn-primary" href="?sort=best_redshift">Redshift</a>
               <a class="btn btn-block btn-primary" href="?sort=point_source_probability">PS Score</a>
               <a class="btn btn-block btn-primary" href="?sort=status">Status</a>
             </div>
@@ -64,12 +64,12 @@
               <a class="btn btn-block btn-primary" href="?sort=-ra">RA</a>
               <a class="btn btn-block btn-primary" href="?sort=-dec">Dec</a>
               <a class="btn btn-block btn-primary" href="?sort=-disc_date">Disc. Date</a>
-              <a class="btn btn-block btn-primary" href="?sort=-last_mag">Last Mag</a>
-              <a class="btn btn-block btn-primary" href="?sort=-last_obs_date">Last Obs. Date</a>
+              <a class="btn btn-block btn-primary" href="?sort=-last_mag">Last Det.</a>
+              <a class="btn btn-block btn-primary" href="?sort=-last_obs_date">Last Obs.</a>
               <a class="btn btn-block btn-primary" href="?sort=-mw_ebv">MW E(B-V)</a>
               <a class="btn btn-block btn-primary" href="?sort=-obs_group__name">Obs. Group</a>
               <a class="btn btn-block btn-primary" href="?sort=-best_spec_class__name">Spec. Class.</a>
-              <a class="btn btn-block btn-primary" href="?sort=-redshift">Redshift</a>
+              <a class="btn btn-block btn-primary" href="?sort=-best_redshift">Redshift</a>
               <a class="btn btn-block btn-primary" href="?sort=-point_source_probability">PS Score</a>
               <a class="btn btn-block btn-primary" href="?sort=-status">Status</a>
             </div>
@@ -91,7 +91,6 @@
 {% block scripts %}
 
     {{ block.super }}
-    <script src="http://code.jquery.com/jquery-latest.js"></script>
     <script src="{{ STATIC_URL }}el-pagination/js/el-pagination.js"></script>
     <script type='text/javascript'>
         $.endlessPaginate({

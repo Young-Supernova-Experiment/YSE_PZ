@@ -81,7 +81,7 @@ def collaboration_context(request, transient):
 @require_POST
 def interest_register(request, transient_id):
     transient = get_object_or_404(Transient, pk=transient_id)
-    fallback = reverse("transient_detail", kwargs={"slug": transient.slug}) + "#summary_tab"
+    fallback = reverse("transient_detail", kwargs={"slug": transient.slug})
     group = None
     group_id = (request.POST.get("group") or "").strip()
     if group_id:
@@ -116,7 +116,7 @@ def _checked(value) -> bool:
 @require_POST
 def interest_status(request, interest_id):
     interest = get_object_or_404(TransientInterest.objects.select_related("transient"), pk=interest_id)
-    fallback = reverse("transient_detail", kwargs={"slug": interest.transient.slug}) + "#summary_tab"
+    fallback = reverse("transient_detail", kwargs={"slug": interest.transient.slug})
     doi = request.POST.get("doi")
     try:
         svc.update_interest_status(interest, request.user, request.POST.get("status", ""), doi=doi)
@@ -187,6 +187,7 @@ def data_access_requests(request):
         row.can_decide = row.decider_role is not None
         row.staff_override = row.decider_role == "staff"
         # #447: requests whose data has no PI (with an account) and no deputy can only be decided by staff
+        row.can_revoke = bool(row.is_accepted and box != "mine" and dar.can_revoke(request.user, row))
         row.no_named_decider = bool(staff and row.is_pending and box == "inbox" and not dar.named_deciders_for(row))
     highlight = request.GET.get("request") or ""
     return render(request, "YSE_App/data_access_requests.html", {
@@ -226,6 +227,31 @@ def data_access_decide(request, request_id):
             messages.success(request, "Request #%d declined." % req.pk)
         if req.is_staff_override:
             messages.warning(request, "You decided request #%d as an administrator; the override is logged." % req.pk)
+    return redirect(_safe_next(request, fallback))
+
+
+@login_required
+@require_POST
+def data_access_revoke(request, request_id):
+    """Revoke an accepted request; ``direction`` is ``forward`` (default) or ``backward`` (also earlier data)."""
+    req = get_object_or_404(DataAccessRequest.objects.select_related("owner_group", "target_group", "transient"),
+                            pk=request_id)
+    fallback = reverse("data_access_requests") + "?box=decided"
+    backwards = (request.POST.get("direction") or "forward") == "backward"
+    try:
+        dar.revoke(req, request.user, backwards=backwards, note=request.POST.get("note", ""))
+    except (ValidationError, PermissionDenied) as exc:
+        messages.error(request, "Request #%d not revoked: %s" % (req.pk, _error_text(exc)))
+    else:
+        messages.success(request, "Request #%d revoked %s: %s %s." % (
+            req.pk, "backwards" if backwards else "going forward", req.target_group.name,
+            "no longer sees the earlier data either" if backwards else
+            "keeps the data taken before now and does not see later data"))
+        skipped = getattr(req, "revoke_skipped", 0)
+        if skipped:
+            messages.warning(request, "%d dataset%s left unchanged (public, not yours to change, or shared with the "
+                                      "group before this request was accepted); remove the group by hand from the "
+                                      "data access dashboard if you intend that." % (skipped, "" if skipped == 1 else "s"))
     return redirect(_safe_next(request, fallback))
 
 

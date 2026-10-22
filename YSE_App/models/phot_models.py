@@ -7,6 +7,7 @@ from YSE_App.models.transient_models import *
 from YSE_App.models.host_models import *
 from astropy.time import Time
 from django.contrib.auth.models import Group
+from YSE_App.common.quality_mask import PhotType
 
 class Photometry(BaseModel):
 
@@ -33,6 +34,11 @@ class TransientPhotometry(Photometry):
     pis = models.ManyToManyField(
         'YSE_App.PrincipalInvestigator', blank=True, related_name='transient_photometry',
         help_text='Principal investigator(s) of this photometry set.')
+    # The program (allocation) these data were taken under (#648); its access rules
+    # apply once DATA_ACCESS_GRANTS_ENABLED is on. Empty for unlinked / external data.
+    allocation = models.ForeignKey(
+        'YSE_App.Allocation', null=True, blank=True, on_delete=models.SET_NULL, related_name='transient_photometry',
+        help_text='Program (allocation) these data were taken under, if known.')
 
     def __str__(self):
         return 'Transient Phot: %s' % (self.transient.name)
@@ -83,12 +89,24 @@ class PhotData(BaseModel):
     forced = models.BooleanField(null=True, blank=True)
     diffim = models.BooleanField(null=True, blank=True)
     # dq = models.BooleanField(null=True, blank=True)
+    # Data-quality bits, 0 = best (YSE_App/common/quality_mask.py, docs/quality-mask.md).
+    # MySQL DEFAULT 0 too (migration 0036), so code that predates the column still inserts.
+    # While DataQuality is in use the DataQuality-managed bits follow that M2M (signals.py).
+    quality_mask = models.PositiveBigIntegerField(default=0)
 
 
 class TransientPhotData(PhotData):
     # Entity relationships ###
     # Required
     photometry = models.ForeignKey(TransientPhotometry, on_delete=models.CASCADE)
+    # The program (allocation) this point was taken under (#648, #714): access is per point, so
+    # forced photometry from several programs in one header follows each program's rules. Empty:
+    # the header's ``allocation`` is the default. No database constraint (an online ALTER on a big
+    # table); Django still sets it to NULL when the allocation is deleted.
+    allocation = models.ForeignKey(
+        'YSE_App.Allocation', null=True, blank=True, on_delete=models.SET_NULL, db_constraint=False,
+        related_name='photometry_points',
+        help_text="Program (allocation) this point was taken under, if known; empty: its header's.")
 
     ### Properties ###
     # Optional
@@ -119,6 +137,10 @@ class HostPhotData(PhotData):
     # Entity relationships ###
     # Required
     photometry = models.ForeignKey(HostPhotometry, on_delete=models.CASCADE)
+
+    ### Properties ###
+    # Optional
+    phot_type = models.CharField(max_length=16, choices=PhotType.choices, null=True, blank=True)
 
     def __str__(self):
         return '%s - %s - %s' % (self.photometry.host.HostString(), self.band.name, self.obs_date.strftime('%m/%d/%Y'))

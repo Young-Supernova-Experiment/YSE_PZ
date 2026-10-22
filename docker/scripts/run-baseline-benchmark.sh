@@ -13,11 +13,13 @@ if [[ ! -f .env ]]; then
     "VOL_DB=$ROOT/database" \
     "VOL_GHOST=$ROOT/ghost_logs" \
     "STATIC_VOL=$ROOT/YSE_PZ/static" \
-    "DB_PWD=password" \
+    "DB_PWD=$(openssl rand -hex 16)" \
+    "YSE_DATABASE_PASSWORD=$(openssl rand -hex 16)" \
+    "YSE_EXPLORER_PASSWORD=$(openssl rand -hex 16)" \
     "LOCAL_DB_PORT=53306" \
     "LOCAL_HTTP_PORT=8080" \
     "DJANGO_SUPERUSER_USERNAME=ci_admin" \
-    "DJANGO_SUPERUSER_PASSWORD=ci_password" \
+    "DJANGO_SUPERUSER_PASSWORD=$(openssl rand -hex 16)" \
     "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
     > .env
 fi

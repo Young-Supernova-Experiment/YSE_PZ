@@ -70,7 +70,6 @@ FRAGMENT_NAMES = (
     "transient_detail_followup_fragment",
     "transient_detail_followup_classical_fragment",
     "transient_detail_followup_rest_fragment",
-    "transient_detail_comments_fragment",
     "transient_detail_gw_fragment",
     "transient_detail_spectra_tab_fragment",
     "transient_detail_summary_spectra_tools_fragment",

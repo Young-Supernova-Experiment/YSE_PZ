@@ -57,6 +57,10 @@ class Host(BaseModel):
 	name = models.CharField(max_length=64, null=True, blank=True)
 	redshift = models.FloatField(null=True, blank=True)
 	redshift_err = models.FloatField(null=True, blank=True)
+	# Provenance and override of ``redshift`` (#436, #437; YSE_App/services/redshift_precedence.py).
+	# Nullable for the shared database: rows written by older code leave them NULL (= no source, no override).
+	redshift_source = models.CharField(max_length=64, null=True, blank=True)
+	redshift_override = models.BooleanField(null=True, blank=True, default=False)
 	r_a = models.FloatField(null=True, blank=True)
 	r_b = models.FloatField(null=True, blank=True)
 	theta = models.FloatField(null=True, blank=True)
@@ -70,6 +74,13 @@ class Host(BaseModel):
 	photo_z_source = models.CharField(max_length=64, null=True, blank=True)
 	transient_host_rank = models.IntegerField(null=True, blank=True)
 	panstarrs_objid = models.BigIntegerField(null=True, blank=True)
+
+	class Meta:
+		indexes = [
+			# Positional box prefilters (dec range AND ra range); Host had no
+			# positional index at all (#477, #475).
+			models.Index(fields=['dec', 'ra'], name='yse_host_dec_ra_idx'),
+		]
 
 	def HostString(self):
 		ra_str, dec_str = GetSexigesimalString(self.ra, self.dec)

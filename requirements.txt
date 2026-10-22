@@ -9,13 +9,18 @@
 # install it first with `pip install --no-build-isolation extinction==0.4.2`
 # (see .github/workflows/deploy.yml).
 #
-# TensorFlow (and scikit-learn, opencv-python, seaborn, joypy, imblearn, rfpimp,
-# sfdmap) are here because astro-ghost 2.0.16 declares them as hard dependencies
-# and the TNS / host-association crons call astro_ghost (including
-# astro_ghost.photoz_helper.calc_photoz, which imports TensorFlow), so a
-# resolver-consistent web install cannot leave them out. protobuf must stay on
-# 3.x for TensorFlow 2.13.1 (#183). Django stays on the 3.2 LTS line until #133
-# is scheduled. Extras nothing in the web venv imports (RAPID/TCN, TF-addons)
+# TensorFlow stays because Photo_Z / SDSS_Photo_Z still import it; removing it
+# with a regenerated requirements set is #186. scikit-learn and sfdmap stay
+# because astro-prost needs them. GHOST is no longer used (host association is
+# Prost, astro-prost), so astro-ghost was dropped (#613) and, with it, the
+# packages only it needed (opencv-python, seaborn, joypy, imblearn,
+# imbalanced-learn, rfpimp, mastcasjobs; #622). protobuf must stay on 3.x for
+# TensorFlow 2.13.1 (#183). Django stays on the 3.2 LTS line until #133 is
+# scheduled.
+# requests is on 2.32.x, the last line that supports Python 3.8 (the old
+# requests<2.29 cap came from astro-ghost, #619), and urllib3 on 1.26.x;
+# djangorestframework 3.15.1 is the last
+# release that supports Django 3.2 (#539). Extras nothing in the web venv imports (RAPID/TCN, TF-addons)
 # are in requirements-ingest.txt, which includes this file.
 absl-py==2.1.0
 alerce==1.0.1
@@ -27,16 +32,18 @@ asdf-standard==1.0.3
 asdf-transform-schemas==0.4.0
 asdf-unit-schemas==0.2.0
 asdf-wcs-schemas==0.3.0
-asgiref==3.4.1
+asgiref==3.8.1
 asn1crypto==0.24.0
 astro-datalab==2.22.1
-astro-ghost==2.0.16
 astro-prost==1.2.13
 astroplan==0.8
 astropy==5.2.2
 astropy-helpers==4.0.1
 async-timeout==4.0.3
 astroquery==0.4.6
+# AstroScheduler's night-planner solver (#653), pinned to a release tag. It needs only
+# astropy, astroplan, numpy and pytz (pinned here); its CI tests Python 3.8 with these pins.
+astroscheduler @ https://github.com/UCSC-Transients/AstroScheduler/archive/refs/tags/v1.3.0.tar.gz
 astunparse==1.6.3
 attrs==21.2.0
 backcall==0.2.0
@@ -46,7 +53,7 @@ bokeh==2.4.2
 bson==0.5.10
 cachetools==4.2.2
 casjobs==0.0.2
-certifi==2025.11.12
+certifi==2026.10.19
 cffi==1.14.5
 chardet==3.0.4
 charset-normalizer==3.4.4
@@ -55,26 +62,29 @@ colorama==0.4.6
 confluent-kafka==1.7.0
 coreapi==2.3.3
 coreschema==0.0.4
-cryptography==3.4.7
+cryptography==45.0.7
 cycler==0.10.0
 Cython==0.29.23
 DateTime==4.3
 decorator==5.0.8
-Django>=3.2,<4.0
+Django==4.2.30
 django-auditlog==1.0.0
+django-axes==5.41.1
 django-autoslug==1.9.8
 django-bootstrap3==21.1
 django-common-helpers==0.9.2
-django-cron==0.5.1
-django-el-pagination==3.3.0
+django-cron==0.6.0
+django-el-pagination==4.1.2
 django-filter==2.4.0
+django-ipware==5.0.2
 django-jsonfield==1.4.1
 django-jsonfield-backport==1.0.5
+django-otp==1.5.4
 django-redis==5.4.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
-djangorestframework==3.13.1
+djangorestframework==3.15.2
 dustmaps==1.0.8
 extinction==0.4.2
 filelock==3.16.1
@@ -90,9 +100,7 @@ healpy==1.14.0
 html5lib==1.0.1
 httpie==1.0.3
 httplib2==0.31.0
-idna==3.11
-imbalanced-learn==0.8.0
-imblearn==0.0
+idna==3.15
 iminuit==2.6.1
 importlib-metadata==8.5.0
 importlib-resources==6.4.0
@@ -102,22 +110,20 @@ ipython-genutils==0.2.0
 itypes==1.1.0
 jedi==0.18.0
 jeepney==0.6.0
-Jinja2==2.10
+Jinja2==3.1.6
 jmespath==1.0.1
 joblib==1.0.1
-joypy==0.2.5
 jsonfield==3.1.0
 jsonschema==4.17.3
 keras==2.13.1
 keyring==11.0.0
 kiwisolver==1.3.1
 libclang==18.1.1
-lxml==4.6.3
+lxml==6.1.3
 Markdown==3.3.6
-MarkupSafe==2.0.1
+MarkupSafe==2.1.5
 marshmallow==3.12.1
 marshmallow-jsonapi==0.24.0
-mastcasjobs==0.0.6
 matplotlib==3.4.2
 matplotlib-inline==0.1.2
 mimeparse==0.1.3
@@ -126,7 +132,6 @@ mysqlclient==2.1.0
 ndcube==2.1.4
 numpy==1.22.4
 oauthlib==3.1.1
-opencv-python==4.5.5.64
 opt-einsum==3.3.0
 optional-django==0.1.0
 packaging==21.3
@@ -136,7 +141,7 @@ pbr==5.9.0
 pexpect==4.8.0
 photutils==1.1.0
 pickleshare==0.7.5
-Pillow==8.2.0
+Pillow==10.4.0
 pkgutil-resolve-name==1.3.10
 pluggy==0.13.1
 progressbar2==3.53.1
@@ -160,21 +165,23 @@ pytz==2018.3
 redis==5.0.8
 pyvo==1.6.2
 PyYAML==5.4.1
-requests==2.28.2
+requests==2.32.4
 requests-mock==1.9.2
 requests-oauthlib==1.3.0
-rfpimp==1.3.7
 rsa==4.7.2
 scikit-learn==0.24.2
 scipy==1.6.3
-seaborn==0.11.1
 SecretStorage==2.3.1
+segno==1.6.6
 semantic-version==2.10.0
 sfdmap==0.1.1
 six==1.15.0
 sncosmo==2.8.0
 specutils==1.16.0
-sqlparse==0.4.2
+sqlparse==0.5.5
+# SQL Explorer query scope (#723): pure Python, no runtime dependencies; 26.33.0 is the last
+# release that supports Python 3.8 (27.x needs 3.9). Do not install the optional sqlglotrs.
+sqlglot==26.33.0
 tendo==0.2.15
 tensorboard==2.13.0
 tensorboard-data-server==0.7.2
@@ -184,16 +191,16 @@ tensorflow-io-gcs-filesystem==0.34.0
 termcolor==1.1.0
 threadpoolctl==2.1.0
 toml==0.10.2
-tornado==6.1
+tornado==6.4.2
 tqdm==4.67.1
 traitlets==5.0.5
 typing-extensions==4.0.1
 unicodecsv==0.14.1
 uritemplate==3.0.0
-urllib3<1.27
+urllib3==1.26.20
 wcwidth==0.2.5
 webencodings==0.5.1
-Werkzeug==2.0.1
+Werkzeug==3.0.6
 wget==3.2
 wheel==0.45.1
 wrapt==1.12.1

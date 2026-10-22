@@ -1,5 +1,6 @@
-{% load static %}
+{% load static quality_mask_extras access_rules_tags %}
 {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows_photometry %}
+{% access_rules_enabled as access_rules_on %}{% if access_rules_on and user.is_authenticated %}<p class="small mb-2 yse-access-rules-link"><a href="{% url 'access_transient_rules' transient.id %}"><i class="fa fa-key" aria-hidden="true"></i> Access rules for this object's data</a> <span class="text-muted">(for the data's PIs, their deputies, program deputies and administrators)</span></p>{% endif %}
 {% if diff_images %}
 <div class="col-12">
     <div class="box box-primary">
@@ -75,6 +76,11 @@
     </div>
 </div>
 {% endif %}
+<div class="yse-dq-filter btn-group" role="group" aria-label="Filter photometry by data quality" style="margin-bottom:8px">
+    <a href="?dq=all#photometry_tab" data-dq="all" class="btn btn-default btn-sm{% if dq_filter|default:'all' == 'all' %} active{% endif %}">All</a>
+    <a href="?dq=good#photometry_tab" data-dq="good" class="btn btn-default btn-sm{% if dq_filter == 'good' %} active{% endif %}">Good only</a>
+    <a href="?dq=flagged#photometry_tab" data-dq="flagged" class="btn btn-default btn-sm{% if dq_filter == 'flagged' %} active{% endif %}">Flagged only</a>
+</div>
 <table class="table table-bordered table-striped">
     <thead>
         <tr>
@@ -98,7 +104,9 @@
             <td>{{allphot.band.name}}</td>
             <td>{{allphot.band.instrument.name}}</td>
             <td class="yse-data-pis">{{ allphot.photometry.pis.all|join:", "|default:"—" }}</td>
-            <td>{{ allphot.data_quality.all|join:"," }}</td>
+            <td>
+                {% for flag in allphot.quality_mask|phot_mask_flags %}<span class="label label-default yse-mask-bit" title="quality_mask bit">{{ flag }}</span> {% endfor %}
+            </td>
         </tr>
     {% endfor %}
     </tbody>

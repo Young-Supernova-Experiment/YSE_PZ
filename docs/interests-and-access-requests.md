@@ -83,7 +83,7 @@ would either leak data or hide it inconsistently. The group add is narrowed and 
   acceptance cannot make data world-readable by accident;
 - the owner sees exactly which group will gain access before accepting;
 - `granted_dataset_ids` on the request records what was shared, so a grant can be reversed by
-  removing the group again (admin, or a future *Revoke* action);
+  removing the group again; `added_dataset_ids` narrows that to the datasets acceptance newly added the group to;
 - the owner group keeps its access (the M2M only grows).
 
 Staff are not special in the hidden counts: the data services filter by group name, so a staff user
@@ -113,3 +113,18 @@ pages and the REST actions.
 
 - Migration `0019_interests_data_access` (two tables, six indexes; no data migration), depending on `0018_sharing_services`; it becomes `0020` on `0019_analysis_services` if the analysis-services PR lands first.
 - No new settings or packages.
+
+## Revoking an accepted request (#291)
+
+An accepted request can be revoked by the people who may decide it (the data's PIs and deputies; staff as
+administrators): from the **Decided** tab of the inbox, from the data access dashboard (`/data_access/`, flag
+on), or `POST /api/dataaccessrequests/<id>/revoke/` (optional `direction`, `note`). It sets the status to
+`revoked` and records `revoked_by`, `revoked_at` and `revoke_direction`, notifies the requester, and is
+logged by auditlog.
+
+The removal is the dashboard's group-removal action (`access_actions.remove_dataset_group`), so it follows the
+same rules: **forward** (the default) keeps the points that were shared before now visible to the group, and
+later points are not; **backwards** hides the earlier points too. Public data is never touched, a group that was
+already on a dataset before the request keeps it, and a dataset the group alone would leave public is skipped.
+With `DATA_ACCESS_GRANTS_ENABLED` off the kept rules are not read, so either direction hides the data at once
+(the pre-flag behaviour of removing a group). The Slack mirror to the owner group's channel is not part of this.

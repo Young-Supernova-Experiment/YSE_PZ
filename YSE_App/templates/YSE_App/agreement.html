@@ -35,7 +35,8 @@
 							<label class="form-check-label" for="id_agree">{{ form.agree.label }}</label>
 						</div>
 						<button type="submit" class="btn btn-primary">Accept</button>
-						<a class="btn btn-outline-secondary" href="{% url 'auth_logout' %}">Log out</a>
+						{# Logout is POST-only on experimental (#504): submit this form to it instead. #}
+						<button type="submit" class="btn btn-outline-secondary" formaction="{% url 'auth_logout' %}" formnovalidate>Log out</button>
 					</form>
 					{% endif %}
 				</div>

@@ -1,0 +1,40 @@
+{% extends "YSE_App/staff_mfa/base.html" %}
+{% block title %}Set up two-factor sign-in{% endblock %}
+{% block content %}
+  {% if replacing %}
+    <p>Set up a new authenticator. Your current one stops working once you confirm the new one.</p>
+  {% else %}
+    <p>Staff accounts sign in with a password and a code from an authenticator app.
+      {% if can_skip and enforce_after %}This is required from {{ enforce_after|date:"Y-m-d" }}.{% endif %}</p>
+  {% endif %}
+  <ol class="small pl-3">
+    <li>In Duo Mobile tap <em>Add</em> &rarr; <em>Use QR code</em> (a third-party account), or use any authenticator app.</li>
+    <li>Scan this code. If you cannot scan it, enter the key by hand (time-based, 6 digits).</li>
+    <li>Enter the 6-digit code the app shows.</li>
+  </ol>
+  <div class="yse-mfa-qr my-3">{{ qr_svg|safe }}</div>
+  <p class="small mb-1">Key:</p>
+  <p class="yse-mfa-secret small">{{ secret }}</p>
+  <details class="small mb-3"><summary>Setup link</summary><span class="yse-mfa-secret">{{ otpauth_uri }}</span></details>
+  {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+  <form action="{% url 'staff_mfa_setup' %}" method="post">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}" />
+    <div class="form-group">
+      <label for="id_token">Code from the app</label>
+      <input id="id_token" name="token" class="form-control" type="text" inputmode="numeric" pattern="[0-9 ]*"
+             autocomplete="one-time-code" maxlength="8" required>
+    </div>
+    <button type="submit" class="btn btn-primary btn-block">Confirm</button>
+  </form>
+  {% if replacing %}
+    <form action="{% url 'staff_mfa_backup_codes' %}" method="post" class="mt-3">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}" />
+      <button type="submit" class="btn btn-link p-0">Get new backup codes instead</button>
+    </form>
+  {% endif %}
+  {% if can_skip %}
+    <p class="mt-3"><a href="{{ next }}">Not now</a></p>
+  {% endif %}
+{% endblock %}

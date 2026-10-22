@@ -17,6 +17,7 @@ from YSE_App.table_utils import TransientTable,TransientFilter
 from YSE_App.queries.yse_python_queries import *
 from django_tables2 import RequestConfig
 from django.shortcuts import redirect
+from django.contrib.auth.decorators import login_required
 
 def get_yse_pointings_base(field_name,snid):
 
@@ -204,6 +205,7 @@ def get_yse_pointings_base(field_name,snid):
 
 	return suggested_pointings,suggested_pointing_names,pointings_for_html,transient,sf
 
+@login_required
 def get_yse_pointings(request,field_name,snid):
 
 	suggested_pointings,suggested_pointing_names,pointings_for_html,transient,sf = get_yse_pointings_base(field_name,snid)
@@ -215,6 +217,7 @@ def get_yse_pointings(request,field_name,snid):
 	}
 	return render(request, 'YSE_App/yse_pointings.html', context)
 
+@login_required
 def yse_pointing_plot(request,field_name,snid):
 
 	suggested_pointings,suggested_pointing_names,pointings_for_html,transient,sf = get_yse_pointings_base(
@@ -247,6 +250,7 @@ def yse_pointing_plot(request,field_name,snid):
 	canvas.print_jpg(response)
 	return response
 
+@login_required
 def adjust_yse_pointings(request,field_name,snid):
 
 	new_pointing,pointings,pointing_names,pointings_for_html,new_pointing_for_html,transient,sf = adjust_yse_pointings_base(field_name,snid)
@@ -262,7 +266,7 @@ def adjust_yse_pointings(request,field_name,snid):
 	for p,n in zip(all_pointings,all_pointing_names):
 		transients = sne_in_yse_field_with_ignore(n)
 
-		transientfilter = TransientFilter(request.GET, queryset=transients,prefix=n.replace('.',''))
+		transientfilter = TransientFilter(request.GET, request=request, queryset=transients,prefix=n.replace('.',''))
 		table = TransientTable(transientfilter.qs,prefix=n.replace('.',''))
 		RequestConfig(request, paginate={'per_page': 10}).configure(table)
 		tables += [(table,n,n.replace('.',''),transientfilter,n,p.ra.deg,p.dec.deg)]
@@ -279,6 +283,7 @@ def adjust_yse_pointings(request,field_name,snid):
 	}
 	return render(request, 'YSE_App/yse_adjusted_pointings.html', context)
 
+@login_required
 def adjust_yse_pointings_plot(request,field_name,snid):
 
 	new_pointing,pointings,pointing_names,pointings_for_html,new_pointing_for_html,transient,sf = adjust_yse_pointings_base(field_name,snid)

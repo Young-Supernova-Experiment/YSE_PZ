@@ -22,9 +22,12 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from YSE_App.models import SharingService, SharingSubmission, Transient, TransientClass, TransientSpectrum
+from YSE_App.models import (SharingService, SharingSubmission, Transient, TransientClass, TransientPhotometry,
+                            TransientSpectrum)
 from YSE_App.models.sharing_models import AutoPublisher
+from YSE_App.services import autopublish_optin as optin_service
 from YSE_App.sharing import tns
+from YSE_App.sharing.report_scope import OMITTED_REASON, ReportScope
 
 PAGE_SIZE = 100
 
@@ -151,16 +154,20 @@ def autopublisher_dry_run(request, service_id, rule_id):
 # --- the report dialog --------------------------------------------------------
 
 def _report_options(request, transient):
+    scope = ReportScope.for_user(request.user)
     data = request.POST if request.method == "POST" else request.GET
     kind = (data.get("kind") or tns.KIND_DISCOVERY).strip()
     options = {
         "coauthors": (data.get("coauthors") or "").strip(),
         "remarks": (data.get("remarks") or "").strip(),
+        "scope": scope,
     }
     if kind == tns.KIND_CLASSIFICATION:
         spectrum_id = data.get("spectrum")
-        options["spectrum"] = TransientSpectrum.objects.filter(pk=spectrum_id, transient=transient).select_related(
-            "instrument", "obs_group").first() if spectrum_id else None
+        # only spectra the submitter may see and send (#691)
+        options["spectrum"] = TransientSpectrum.objects.filter(
+            pk=spectrum_id, transient=transient, pk__in=scope.spectrum_ids(transient)
+        ).select_related("instrument", "obs_group").first() if spectrum_id else None
         options["classification"] = (data.get("classification") or "").strip()
         redshift = (data.get("redshift") or "").strip()
         options["redshift"] = redshift if redshift else None
@@ -189,7 +196,10 @@ def report_preview(request, transient_id):
         return error
     kind, options = _report_options(request, transient)
     payload, problems = tns.preview_payload(service, transient, kind, **options)
+    omitted = options["scope"].omitted(transient)
     return JsonResponse({
+        "omitted": omitted,
+        "omitted_reason": OMITTED_REASON if any(omitted.values()) else "",
         "service": service.name,
         "kind": kind,
         "sandbox": service.testing,
@@ -228,7 +238,10 @@ def report_dialog_context(user, transient):
     services = [s for s in SharingService.for_user(user, kind=SharingService.KIND_TNS)]
     if not services:
         return {"sharing_services": []}
-    spectra = TransientSpectrum.objects.filter(transient=transient).select_related("instrument").order_by("-obs_date")
+    scope = ReportScope.for_user(user)
+    spectra = TransientSpectrum.objects.filter(
+        transient=transient, pk__in=scope.spectrum_ids(transient)).select_related("instrument").order_by("-obs_date")
+    omitted = scope.omitted(transient)
     recent = SharingSubmission.objects.filter(transient=transient).select_related("service").order_by("-created_date")[:5]
     return {
         "sharing_services": [{
@@ -241,4 +254,25 @@ def report_dialog_context(user, transient):
         "sharing_default_class": transient.best_spec_class.name if transient.best_spec_class_id else "",
         "sharing_recent": recent,
         "sharing_has_tns_name": bool(tns.tns_name_for(transient)),
+        "sharing_omitted": omitted if any(omitted.values()) else None,
+        "sharing_omitted_reason": OMITTED_REASON,
     }
+
+
+@login_required
+@require_POST
+def autopublish_optin(request, kind, dataset_id):
+    """Opt a restricted dataset in (``enabled=1``) or out of automatic publishing (#691).
+
+    Only a PI, a deputy or staff for the dataset (``services.data_sharing.share_role``); logged.
+    """
+    from rest_framework.exceptions import APIException
+
+    model = TransientPhotometry if kind == "photometry" else TransientSpectrum
+    dataset = get_object_or_404(model, pk=dataset_id)
+    enabled = (request.POST.get("enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+    try:
+        state = optin_service.set_opt_in(request.user, dataset, enabled)
+    except APIException as exc:
+        return JsonResponse({"error": str(exc.detail)}, status=exc.status_code)
+    return JsonResponse({"kind": kind, "id": dataset.pk, "autopublish": state})

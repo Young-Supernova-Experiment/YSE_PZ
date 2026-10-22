@@ -1,0 +1,41 @@
+<div class="yse-history-tab">
+    <p class="text-muted small mb-2">
+        Every automatic update (TNS re-sync, NED/DESI redshifts, Prost host links, photo-z) and every
+        change to a redshift override, newest first, including changes to this object's host.
+    </p>
+    {% if changes %}
+    <div class="table-responsive">
+        <table class="table table-sm table-striped" id="yse_history_table">
+            <thead>
+                <tr>
+                    <th>When (UTC)</th>
+                    <th>On</th>
+                    <th>Field</th>
+                    <th>Old</th>
+                    <th>New</th>
+                    <th>Source</th>
+                    <th>By</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in changes %}
+                <tr>
+                    <td class="text-nowrap">{{ c.created_at|date:"Y-m-d H:i:s" }}</td>
+                    <td>{% if c.transient_id %}transient{% else %}host{% endif %}</td>
+                    <td><code>{{ c.field }}</code></td>
+                    <td>{{ c.old_value|default_if_none:"—" }}{% if c.old_source %} <span class="text-muted">({{ c.old_source }})</span>{% endif %}</td>
+                    <td>{{ c.new_value|default_if_none:"—" }}</td>
+                    <td>{{ c.source|default:"—" }}</td>
+                    <td>{{ c.service }}{% if c.actor_id %} · {{ c.actor_name }}{% else %} · system{% endif %}</td>
+                    <td class="small text-muted">{{ c.note }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if truncated %}<p class="text-muted small">Showing the latest {{ limit }} entries; the API (<code>api/transients/{{ transient.id }}/history/?limit=1000</code>) returns more.</p>{% endif %}
+    {% else %}
+    <p class="text-muted"><i class="fa fa-info-circle"></i> No recorded changes yet.</p>
+    {% endif %}
+</div>

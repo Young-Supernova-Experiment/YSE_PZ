@@ -343,6 +343,8 @@ class ProviderTests(SummaryBase):
         self.assertEqual(llm.embedder_name(self.service), llm.LOCAL_EMBEDDER_NAME)
 
 
+# 'sum_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['sum_staff'])
 class RunTests(SummaryBase):
     def url(self, name):
         return reverse(name, kwargs={"transient_id": self.transient.pk})
@@ -570,6 +572,8 @@ SUMMARIES = {
 }
 
 
+# 'sum_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['sum_staff'])
 class SearchTests(SummaryBase):
     def setUp(self):
         super().setUp()

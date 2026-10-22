@@ -102,6 +102,8 @@ class MagLimitedSampleSqlTests(TestCase):
 
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
+# The benchmark accounts read all data as service readers; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=["perf_mag_limited_regression", "perf_benchmark_mag_limited"])
 class MagLimitedSampleQueryRegressionTests(TestCase):
     """Seed the small tier, attach the saved query, time it as the dashboard does."""
 

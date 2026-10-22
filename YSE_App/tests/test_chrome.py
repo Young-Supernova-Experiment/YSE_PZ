@@ -152,6 +152,21 @@ class ChromeSmokeTests(TestCase):
         self.assertIn('id="calendar"', html)
         self.assertIn("$(window).height() - 180", html)
 
+    def test_light_mode_switches_the_sidebar(self):
+        """The toggle swaps AdminLTE's sidebar classes and the light theme has a light sidebar."""
+        import re
+        from pathlib import Path
+
+        static = Path(__file__).resolve().parents[1] / "static" / "YSE_App"
+        js = (static / "yse-chrome.js").read_text(encoding="utf-8")
+        self.assertIn("sidebar-light-primary", js)
+        self.assertIn("sidebar-dark-primary", js)
+        css = (static / "yse-theme.css").read_text(encoding="utf-8")
+        light = css[css.index('html[data-yse-theme="light"] {'):]
+        light = light[:light.index("}")]
+        bg = re.search(r"--yse-sidebar-bg:\s*#([0-9a-fA-F]{6})", light).group(1)
+        self.assertGreater(sum(int(bg[i:i + 2], 16) for i in (0, 2, 4)) / 3, 200, bg)
+
     def test_vendored_assets_exist(self):
         for rel in (
             "YSE_App/vendor/adminlte-3.2/css/adminlte.min.css",

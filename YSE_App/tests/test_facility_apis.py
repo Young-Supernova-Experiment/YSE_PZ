@@ -549,7 +549,8 @@ class SubmitFlowTests(_Base):
         self.assertIsNotNone(req.charged_at)
         req.followup.refresh_from_db()
         self.assertEqual(req.followup.status, self.successful)
-        self.assertTrue(Notification.objects.filter(recipient=self.user, kind="followup_status").exists())
+        # told once: by the facility notice, not again by the follow-up status notice (#69)
+        self.assertEqual(Notification.objects.filter(recipient=self.user, kind="followup_status").count(), 1)
         with self.assertRaises(fr.FacilityRequestError):
             fr.mark_request(req, FacilityRequest.STATE_COMPLETE, self.user)
         with self.assertRaises(fr.FacilityRequestError):

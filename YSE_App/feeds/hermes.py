@@ -24,6 +24,7 @@ from typing import Dict, Iterable, List, Optional
 
 import requests
 from django.conf import settings
+from django.db.models import Q
 
 from YSE_App.brokers import register
 from YSE_App.brokers.base import BrokerAlert, make_point
@@ -354,8 +355,10 @@ class HermesFeed(FeedProvider):
                 message.object_id, message.reporter, (message.raw or {}).get("topic") or "Hermes",
                 " (%s)" % message.url if message.url else ""), user)
         if message.redshift is not None and transient.redshift is None and self.option("update_redshift", True):
-            transient.redshift = message.redshift
-            transient.save(update_fields=["redshift", "modified_date"])
+            from YSE_App.services import redshift_precedence
+
+            redshift_precedence.apply_redshift(transient, message.redshift, None, redshift_precedence.SOURCE_HERMES,
+                                               service="hermes")
 
     def apply_classification(self, message: FeedMessage, transient, user) -> None:
         """Set ``best_spec_class`` (matching a TransientClass by name) and leave a comment."""
@@ -363,16 +366,24 @@ class HermesFeed(FeedProvider):
 
         label = message.classification.strip()
         cls = TransientClass.objects.filter(name__iexact=label).first()
-        changed = []
+        changed, before = [], {}
         if cls is not None and transient.best_spec_class_id != cls.id:
+            before["best_spec_class"] = transient.best_spec_class
             transient.best_spec_class = cls
             changed.append("best_spec_class")
         if cls is None and transient.TNS_spec_class != label:
+            before["TNS_spec_class"] = transient.TNS_spec_class
             transient.TNS_spec_class = label[:64]
             changed.append("TNS_spec_class")
         if changed:
             transient.modified_by_id = user.id
             transient.save(update_fields=changed + ["modified_by", "modified_date"])
+            from YSE_App.services import change_log
+
+            for attr in changed:  # one change-log entry per field (#737); the feed is the system
+                change_log.record_change(transient, attr, before[attr], getattr(transient, attr),
+                                         service=change_log.SERVICE_HERMES, category="classification",
+                                         source="Hermes")
         z = " at z=%.4f" % message.redshift if message.redshift is not None else ""
         self.add_comment(transient, "Hermes classification: %s%s by %s%s" % (
             label, z, message.reporter or "unknown reporter", " (%s)" % message.url if message.url else ""), user)
@@ -391,9 +402,16 @@ def _iso(dt) -> str:
 def build_message(transient, topic: str, *, kind: str = "discovery", reporting_group: str = "YSE",
                   authors: str = "", remarks: str = "", allowed_instruments=None, allowed_obs_groups=None,
                   classification: str = "", redshift: Optional[float] = None, max_points: int = 50,
-                  submitter: str = "") -> Dict:
-    """The Hermes ``submit_message`` document for ``transient`` (targets + photometry [+ spectroscopy])."""
+                  submitter: str = "", scope=None) -> Dict:
+    """The Hermes ``submit_message`` document for ``transient`` (targets + photometry [+ spectroscopy]).
+
+    Photometry comes only from the sets in ``scope`` (a ``sharing.report_scope.ReportScope``);
+    none given means public data only (#691).
+    """
     from YSE_App.models.phot_models import TransientPhotData
+    from YSE_App.sharing.report_scope import ReportScope
+
+    scope = scope if scope is not None else ReportScope.public_only()
 
     target = {
         "name": transient.name,
@@ -414,7 +432,10 @@ def build_message(transient, topic: str, *, kind: str = "discovery", reporting_g
         if hasattr(transient, "alternatetransientnames_set") else []
     if aliases:
         target["aliases"] = aliases
-    qs = (TransientPhotData.objects.filter(photometry__transient=transient, mag__isnull=False)
+    point_filter = scope.point_filter()
+    qs = (TransientPhotData.objects.filter(photometry__transient=transient, mag__isnull=False,
+                                           photometry_id__in=scope.photometry_ids(transient))
+          .filter(point_filter if point_filter is not None else Q())
           .select_related("band", "photometry__instrument", "photometry__instrument__telescope", "photometry__obs_group")
           .order_by("-obs_date"))
     if allowed_instruments:
@@ -463,6 +484,8 @@ def publish_submission(submission) -> Dict:
     token = _token(credential)
     if not token:
         raise FeedError("sharing service %s has no Hermes token (credential key hermes_token)" % service.slug)
+    from YSE_App.sharing.report_scope import ReportScope
+
     payload = submission.payload if isinstance(submission.payload, dict) else {}
     hermes = payload.get("hermes") if isinstance(payload.get("hermes"), dict) else {}
     kind = hermes.get("kind") or ("classification" if submission.transient.best_spec_class_id else "discovery")
@@ -473,6 +496,7 @@ def publish_submission(submission) -> Dict:
         allowed_obs_groups=list(service.allowed_obs_groups.all()) or None,
         classification=hermes.get("classification") or "", redshift=num(hermes.get("redshift")),
         submitter=getattr(submission.created_by, "username", "") or "",
+        scope=ReportScope.for_submission(submission),
     )
     result = HermesClient(token=token).submit(message)
     uuid = str(result.get("uuid") or result.get("id") or "")

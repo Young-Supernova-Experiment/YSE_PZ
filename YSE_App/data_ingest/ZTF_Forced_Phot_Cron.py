@@ -139,8 +139,8 @@ class ForcedPhot(CronJobBase):
 
         # run ZTF forced phot script
         ztf = ZTF_Forced_Phot.ZTF_Forced_Phot(
-            ztf_email_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,ztf_email_password=djangoSettings.SMTP_PASSWORD,
-            ztf_email_imapserver='imap.gmail.com',ztf_user_address='%s@gmail.com'%djangoSettings.SMTP_LOGIN,
+            ztf_email_address=ZTF_Forced_Phot.ztf_account_address(),ztf_email_password=djangoSettings.SMTP_PASSWORD,
+            ztf_email_imapserver='imap.gmail.com',ztf_user_address=ZTF_Forced_Phot.ztf_account_address(),
             ztf_user_password=self.options.ztfforcedphotpass)
 
                 

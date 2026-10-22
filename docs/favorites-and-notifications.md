@@ -35,8 +35,8 @@ and never breaks the save):
 |---|---|---|
 | comment | `Log` saved with a transient (`create_transient_comment` records it once the audience groups are set; a `Log` saved any other way at `post_save`) | `new comment: "<first 140 chars>"`; a comment the favoriter may not read is announced as *new comment (restricted to collaboration groups)* |
 | status / class / redshift | the auditlog entry `Transient.save()` writes (`status`, `best_spec_class`, `photo_class`, `redshift`, `TNS_spec_class`) | `status changed New -> Following; redshift set to 0.031` |
-| spectrum | `TransientSpectrum` created | `new spectrum from Binospec (observed 2026-09-29)` |
-| photometry | the stat recompute (`photstat.recompute`) finding more detections than the stored row (`num_det_global` grew; bulk rebuilds do not notify) | `12 new photometry points, latest 17.40 r`; consecutive photometry events merge into one line |
+| spectrum | `TransientSpectrum` created; announced by the `favorites.spectrum_activity` job `FAVORITE_SPECTRUM_DELAY_SECONDS` (default 120) later, once the upload has attached the spectrum's groups, and only to favoriters who may see the spectrum (#761) | `new spectrum from Binospec (observed 2026-09-29)` |
+| photometry | the stat recompute (`photstat.recompute`) finding more detections than the stored row (`num_det_global` grew; bulk rebuilds do not notify). Per recipient and per point (#761): the count is the new detections they may see, the magnitude the latest detection they may see; no event if they see none of the new points | `12 new photometry points, latest 17.40 r`; consecutive photometry events merge into one line |
 | follow-up | `TransientFollowup` created, or its status changed (a pre-save hook keeps the old status name) | `follow-up requested on MMT (Requested)`, `follow-up on MMT: status Requested -> Successful` |
 
 Events are delivered through `notify()` with kind `favorite_activity`, preference group **Favorite

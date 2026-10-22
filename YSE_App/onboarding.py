@@ -16,8 +16,10 @@ It never touches requests that crons, scripts, brokers and integrations make:
   add_yse_survey_*, the downloads, query_api, ...) and the views decorated with
   ``onboarding_exempt`` below;
 * the URL names in ``EXEMPT_URL_NAMES`` (Slack events, login/logout, signup and
-  its email confirmation link, password reset and change, the agreement, research consent, profile and
-  acknowledgements pages);
+  its email confirmation link, password reset and change, the agreement, research
+  consent, profile and acknowledgements pages, and on experimental the two-factor
+  pages and the feedback POST);
+* DRF views wherever they are routed;
 * static and media files, ``.json`` endpoints (status and health polling),
   AJAX/fetch requests and non-GET methods;
 * ``/admin/`` for superusers (other staff go through the gate).
@@ -67,6 +69,11 @@ EXEMPT_URL_NAMES = frozenset({
     "acknowledgements",
     # integrations and machine endpoints
     "slack_events", "external_service_run_callback", "query_api",
+    # experimental-only pages (backport of develop, 2026-10-12): the two-factor
+    # setup and verify pages (StaffMFAMiddleware runs first and sends staff there;
+    # gating them would loop between the two) and the feedback button's POST target.
+    "staff_mfa_verify", "staff_mfa_setup", "staff_mfa_backup_codes",
+    "feedback_submit",
 })
 
 
@@ -160,6 +167,10 @@ def is_exempt(request, view_func) -> bool:
     if "HTTP_AUTHORIZATION" in request.META:
         return True
     if getattr(view_func, "onboarding_exempt", False):
+        return True
+    # DRF views anywhere in the URL tree (not only under /api/) are never gated.
+    from YSE_App import login_required as _login_required
+    if _login_required._is_drf_view(view_func):
         return True
     path = request.path_info
     if path.startswith(EXEMPT_PATH_PREFIXES):

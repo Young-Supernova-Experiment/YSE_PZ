@@ -530,6 +530,8 @@ class NgsfFragmentAndQueueTests(SummaryRefitBase):
         self.assertIn("last run failed", html)
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['jwst_flag_user'])
 class HasJwstFlagTests(TestCase):
     def setUp(self):
         cache.clear()
