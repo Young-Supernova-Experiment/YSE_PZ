@@ -97,10 +97,14 @@ jobs:
           # a worker between the two installs; in the other order that worker fails,
           # gunicorn exits and the container (and this pip) is killed (exit 137).
           docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^asgiref==' ../requirements.txt)"
+          # Every Django add-on at its requirements.txt pin, also before Django: the
+          # image's older add-ons (django-el-pagination 3.3, django-cron 0.5) cannot
+          # import on Django 4.x, while the pinned ones also run the image's 4.0. Without
+          # this CI tested the image's add-ons, not the ones the stacks install (#781).
+          ADDONS=$(grep -E '^(django-[A-Za-z0-9-]+|djangorestframework)==' ../requirements.txt)
+          echo "$ADDONS"
+          docker exec ysepz_web_container pip3 install --quiet --no-deps $ADDONS
           docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^Django==' ../requirements.txt)"
-          # Login lockout (django-axes; same pins as requirements.txt) is not in the
-          # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
-          docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
           # Two-factor sign-in for staff (#512; requirements.txt pins), tested in its own step below.
           docker exec ysepz_web_container pip3 install --quiet --no-deps \
             $(grep -E -m2 '^(django-otp|segno)==' ../requirements.txt)
