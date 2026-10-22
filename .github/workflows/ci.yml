@@ -126,6 +126,26 @@ jobs:
           docker compose logs --tail=200 yse_db || true
           exit 1
 
+      - name: Check the web container
+        working-directory: docker
+        run: |
+          # axes' own tables in the CI database (the runbook's `migrate axes` step); the
+          # login page needs them. MySQL answers its own ping before it accepts TCP from
+          # the web container, so retry.
+          for i in $(seq 1 30); do
+            docker exec ysepz_web_container python3 manage.py migrate axes --noinput && break
+            [ "$i" = 30 ] && exit 1
+            sleep 3
+          done
+          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
+
+      - name: Web container logs (on failure)
+        if: failure()
+        working-directory: docker
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail=300 web || true
+
       - name: Wait for Gunicorn
         working-directory: docker
         run: |
@@ -143,20 +163,6 @@ jobs:
           docker compose logs --tail=200 web || true
           docker compose logs --tail=100 yse_db || true
           exit 1
-
-      - name: Check the web container
-        working-directory: docker
-        run: |
-          # axes' own tables in the CI database (the runbook's `migrate axes` step).
-          docker exec ysepz_web_container python3 manage.py migrate axes --noinput
-          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
-
-      - name: Web container logs (on failure)
-        if: failure()
-        working-directory: docker
-        run: |
-          docker compose ps -a || true
-          docker compose logs --tail=300 web || true
 
       - name: Django system check
         run: docker exec ysepz_web_container python3 manage.py check
