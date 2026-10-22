@@ -1,9 +1,10 @@
 """File lock backend for django_cron that actually refuses a second holder (#472).
 
-django_cron 0.5.1's own FileLock expects ``django.core.files.locks.lock`` to raise
-when a non-blocking lock is already held. Since Django 3.0 that function returns
-False instead, so the stock backend reports "locked" to every caller and never
-skips an overlapping run. This subclass checks the return value.
+django_cron's own FileLock (0.5.1 and 0.6.0) expects ``django.core.files.locks.lock``
+to raise when a non-blocking lock is already held. Since Django 3.0 that function
+returns False instead, so the stock backend reports "locked" to every caller and
+never skips an overlapping run. This subclass checks the return value, and has its
+own ``release`` because 0.6.0's reads a private attribute that ``lock`` here does not set.
 """
 
 import os
@@ -36,3 +37,16 @@ class FileLock(_DjangoCronFileLock):
                     return True
             # The holder released (unlinked) the file between open and lock: retry.
             f.close()
+
+    def release(self):
+        f = getattr(self, 'lockfile', None)
+        if f is None:
+            return
+        # Unlink before closing (which drops the lock), so a waiter that opened the old
+        # file sees the inode change in ``lock`` and retries on a fresh file.
+        try:
+            os.unlink(f.name)
+        except FileNotFoundError:
+            pass
+        f.close()
+        self.lockfile = None
