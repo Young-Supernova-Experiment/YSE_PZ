@@ -45,7 +45,7 @@ CAREER_LEVEL_CHOICES = (
 )
 STUDENT_LEVELS = frozenset({CAREER_UNDERGRAD, CAREER_GRAD})
 POSTDOC_AND_ABOVE = frozenset({CAREER_POSTDOC, CAREER_SCIENTIFIC_STAFF, CAREER_TENURE_TRACK, CAREER_TENURED})
-# Career levels that see and manage "My students" on their profile.
+# Career levels that see and manage "My advisees" on their profile.
 MENTOR_LEVELS = frozenset({CAREER_SCIENTIFIC_STAFF, CAREER_TENURE_TRACK, CAREER_TENURED})
 
 # Profile fields stored only as ciphertext (EncryptedProfileValue.field_name).
@@ -159,10 +159,14 @@ class Mentorship(models.Model):
 
     KIND_PHD_ADVISOR = "phd_advisor"
     KIND_CURRENT_ADVISOR = "current_advisor"
+    KIND_FORMER_ADVISOR = "former_advisor"
+    KIND_POSTDOC_ADVISOR = "postdoc_advisor"
     KIND_RESEARCH_SUPERVISOR = "research_supervisor"
     KIND_CHOICES = (
         (KIND_PHD_ADVISOR, "PhD advisor"),
         (KIND_CURRENT_ADVISOR, "Current advisor"),
+        (KIND_FORMER_ADVISOR, "Former advisor"),
+        (KIND_POSTDOC_ADVISOR, "Postdoc advisor"),
         (KIND_RESEARCH_SUPERVISOR, "Research supervisor"),
     )
 

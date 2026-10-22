@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>My profile</h1>
-	<p class="text-muted mb-0"><a href="{% url 'user_settings' %}">Settings</a> (group pickers and defaults) &middot; <a href="{% url 'team_list' %}">My teams</a></p>
+	{% include 'YSE_App/partials/settings_tabs.html' %}
 </section>
 
 <section class="content" id="yse-researcher-profile">
@@ -77,21 +77,8 @@
 					<a class="btn btn-sm btn-outline-primary" href="{% url 'research_consent' %}?next={% url 'researcher_profile' %}">Read the form</a>
 					{% endif %}
 					{% if research_state != 'consented' %}
-					<p class="small text-muted mt-2 mb-0">Research information (career level, department, advisors and students, PhD year, country, gender, interests and the rest; not your name, institution, ORCID or observing experience) is offered only to people who consent. Without consent, any you entered earlier is not used for research{% if research_state %}, and an administrator will delete it{% endif %}.</p>
+					<p class="small text-muted mt-2 mb-0">Research information (career level, department, advisors and advisees, PhD year, country, gender, interests and the rest; not your name, institution, ORCID or observing experience) is offered only to people who consent. Without consent, any you entered earlier is not used for research{% if research_state %}, and an administrator will delete it{% endif %}.</p>
 					{% endif %}
-				</div>
-			</div>
-			{% endif %}
-			{% if mentors %}
-			<div class="box box-default box-solid">
-				<div class="box-header with-border"><strong>My advisors and supervisors</strong></div>
-				<div class="box-body p-0">
-					<table class="table table-sm mb-0">
-						<thead><tr><th>Name</th><th>Kind</th><th>Years</th></tr></thead>
-						<tbody>
-						{% for m in mentors %}<tr><td>{{ m.mentor_label }}</td><td>{{ m.get_kind_display }}</td><td>{{ m.start_year|default:"?" }}–{{ m.end_year|default:"" }}</td></tr>{% endfor %}
-						</tbody>
-					</table>
 				</div>
 			</div>
 			{% endif %}
@@ -111,37 +98,99 @@
 		</div>
 	</div>
 
-	{% if can_mentor %}
-	<div class="row" id="my-students">
+	{% if can_edit_advisors or mentors %}
+	<div class="row" id="my-advisors">
 		<div class="col-12">
 			<div class="box box-default box-solid">
-				<div class="box-header with-border"><strong>My students</strong></div>
+				<div class="box-header with-border"><strong>My advisors</strong> <span class="small text-muted">PhD, postdoc and former advisors and research supervisors</span></div>
 				<div class="box-body p-0">
-					<table class="table table-sm mb-0" id="yse-my-students">
-						<thead><tr><th>Student</th><th>Kind</th><th>Start</th><th>End</th><th></th></tr></thead>
+					<table class="table table-sm mb-0" id="yse-my-advisors">
+						<thead><tr><th>Advisor</th><th>Kind</th><th>Start</th><th>End</th><th></th></tr></thead>
 						<tbody>
-						{% for s in students %}
+						{% if can_edit_advisors %}
+						{% for m in mentors %}
 						<tr>
-							<td>{{ s.mentee_label }}{% if not s.mentee_id %} <span class="text-muted small">(not a YSE-PZ user)</span>{% endif %}</td>
-							<td>{{ s.get_kind_display }}</td>
-							<td>{{ s.start_year|default:"" }}</td>
+							<td>{{ m.mentor_label }}{% if not m.mentor_id %} <span class="text-muted small">(not a YSE-PZ user)</span>{% endif %}</td>
 							<td>
-								<form method="post" action="{% url 'researcher_student_update' s.pk %}" class="form-inline">
+								<select name="kind" form="ms-{{ m.pk }}" class="form-control form-control-sm" aria-label="Kind">
+									{% for value, label in kind_choices %}<option value="{{ value }}"{% if value == m.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
+								</select>
+							</td>
+							<td><input type="number" form="ms-{{ m.pk }}" class="form-control form-control-sm" style="width:7em" name="start_year" value="{{ m.start_year|default_if_none:'' }}" min="1950" aria-label="Start year"></td>
+							<td><input type="number" form="ms-{{ m.pk }}" class="form-control form-control-sm" style="width:7em" name="end_year" value="{{ m.end_year|default_if_none:'' }}" min="1950" aria-label="End year"></td>
+							<td class="text-nowrap">
+								<form method="post" action="{% url 'researcher_advisor_update' m.pk %}" id="ms-{{ m.pk }}" class="d-inline">
 									{% csrf_token %}
-									<label class="sr-only" for="end-{{ s.pk }}">End year</label>
-									<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="end_year" id="end-{{ s.pk }}" value="{{ s.end_year|default:'' }}" min="1950">
 									<button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
 								</form>
-							</td>
-							<td>
-								<form method="post" action="{% url 'researcher_student_update' s.pk %}">
+								<form method="post" action="{% url 'researcher_advisor_update' m.pk %}" class="d-inline">
 									{% csrf_token %}<input type="hidden" name="remove" value="1">
 									<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
 								</form>
 							</td>
 						</tr>
 						{% empty %}
-						<tr><td colspan="5" class="text-muted">No students listed yet. Students who name you as their advisor appear here automatically.</td></tr>
+						<tr><td colspan="5" class="text-muted">No advisors listed yet.</td></tr>
+						{% endfor %}
+						{% else %}
+						{% for m in mentors %}<tr><td>{{ m.mentor_label }}</td><td>{{ m.get_kind_display }}</td><td>{{ m.start_year|default:"" }}</td><td>{{ m.end_year|default:"" }}</td><td></td></tr>{% endfor %}
+						{% endif %}
+						</tbody>
+					</table>
+				</div>
+				{% if can_edit_advisors %}
+				<div class="box-footer">
+					<form method="post" action="{% url 'researcher_advisor_add' %}" class="form-inline yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
+						{% csrf_token %}
+						<label class="mr-1" for="id_advisor_add_name">Add an advisor</label>
+						<input type="text" class="form-control form-control-sm mr-1 yse-user-picker-text" name="advisor_name" id="id_advisor_add_name" list="yse-advisor-add-options" autocomplete="off" placeholder="Name (pick a user or type)">
+						<datalist id="yse-advisor-add-options"></datalist>
+						<input type="hidden" name="advisor_user_id" class="yse-user-picker-id">
+						<select name="kind" class="form-control form-control-sm mr-1" aria-label="Kind">
+							{% for value, label in kind_choices %}<option value="{{ value }}"{% if value == advisor_kind_default %} selected{% endif %}>{{ label }}</option>{% endfor %}
+						</select>
+						<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="start_year" placeholder="Start year" aria-label="Start year" min="1950">
+						<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="end_year" placeholder="End year" aria-label="End year" min="1950">
+						<button type="submit" class="btn btn-sm btn-primary">Add</button>
+					</form>
+				</div>
+				{% endif %}
+			</div>
+		</div>
+	</div>
+	{% endif %}
+	{% if can_mentor %}
+	<div class="row" id="my-students">
+		<div class="col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>My advisees</strong></div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0" id="yse-my-students">
+						<thead><tr><th>Advisee</th><th>Kind</th><th>Start</th><th>End</th><th></th></tr></thead>
+						<tbody>
+						{% for m in students %}
+						<tr>
+							<td>{{ m.mentee_label }}{% if not m.mentee_id %} <span class="text-muted small">(not a YSE-PZ user)</span>{% endif %}</td>
+							<td>
+								<select name="kind" form="ms-{{ m.pk }}" class="form-control form-control-sm" aria-label="Kind">
+									{% for value, label in kind_choices %}<option value="{{ value }}"{% if value == m.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
+								</select>
+							</td>
+							<td><input type="number" form="ms-{{ m.pk }}" class="form-control form-control-sm" style="width:7em" name="start_year" value="{{ m.start_year|default_if_none:'' }}" min="1950" aria-label="Start year"></td>
+							<td><input type="number" form="ms-{{ m.pk }}" class="form-control form-control-sm" style="width:7em" name="end_year" value="{{ m.end_year|default_if_none:'' }}" min="1950" aria-label="End year"></td>
+							<td class="text-nowrap">
+								<form method="post" action="{% url 'researcher_student_update' m.pk %}" id="ms-{{ m.pk }}" class="d-inline">
+									{% csrf_token %}
+									<button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+								</form>
+								<form method="post" action="{% url 'researcher_student_update' m.pk %}" class="d-inline">
+									{% csrf_token %}<input type="hidden" name="remove" value="1">
+									<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+								</form>
+							</td>
+						</tr>
+						{% empty %}
+						<tr><td colspan="5" class="text-muted">No advisees listed yet. People who name you as their advisor appear here automatically.</td></tr>
 						{% endfor %}
 						</tbody>
 					</table>
@@ -149,7 +198,7 @@
 				<div class="box-footer">
 					<form method="post" action="{% url 'researcher_student_add' %}" class="form-inline yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
 						{% csrf_token %}
-						<label class="mr-1" for="id_student_name">Add a student</label>
+						<label class="mr-1" for="id_student_name">Add an advisee</label>
 						<input type="text" class="form-control form-control-sm mr-1 yse-user-picker-text" name="student_name" id="id_student_name" list="yse-student-options" autocomplete="off" placeholder="Name (pick a user or type)">
 						<datalist id="yse-student-options"></datalist>
 						<input type="hidden" name="student_user_id" class="yse-user-picker-id">

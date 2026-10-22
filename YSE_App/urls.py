@@ -376,7 +376,7 @@ urlpatterns = [
     re_path(r'^get_legacy_image/(?P<transient_id>[0-9]+)',
         view_utils.get_legacy_image, name='get_legacy_image'),
 
-    # User agreement, researcher profile and "My students" (#627, #628, #630)
+    # User agreement, researcher profile, "My advisees" and "My advisors" (#627, #628, #630)
     re_path(r'^agreement/$', profile_views.agreement, name='agreement'),
     re_path(r'^research-consent/$', profile_views.research_consent, name='research_consent'),
     re_path(r'^profile/$', profile_views.researcher_profile, name='researcher_profile'),
@@ -387,6 +387,9 @@ urlpatterns = [
     re_path(r'^profile/students/add/$', profile_views.researcher_student_add, name='researcher_student_add'),
     re_path(r'^profile/students/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_student_update,
             name='researcher_student_update'),
+    re_path(r'^profile/advisors/add/$', profile_views.researcher_advisor_add, name='researcher_advisor_add'),
+    re_path(r'^profile/advisors/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_advisor_update,
+            name='researcher_advisor_update'),
     # Research teams, invitation links (#445) and user settings (#440)
     re_path(r'^settings/$', group_views.user_settings, name='user_settings'),
     re_path(r'^teams/$', group_views.team_list, name='team_list'),
