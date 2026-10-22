@@ -76,6 +76,32 @@ jobs:
           cp .env.secrets.example .env.secrets
           grep -q '^TNS_API_KEY=' .env.secrets
 
+      # The GHCR image bakes in Django 4.0 and older add-ons. Build a local image on
+      # top of it with the requirements.txt pins (asgiref, Django 4.2, every Django
+      # add-on, the #539 security pins, two-factor, AstroScheduler, sqlglot; gunicorn
+      # from requirements.web.lock) under the same tag, so compose starts it and every
+      # check below runs on what the stacks install. Installing into the running
+      # container instead raced gunicorn's worker boots against half-installed
+      # packages (exit 137). Drop this once the image is rebuilt on these pins.
+      - name: Build the CI web image with the requirements pins
+        working-directory: docker
+        run: |
+          IMAGE=ghcr.io/young-supernova-experiment/yse_pz:latest
+          CTX="$RUNNER_TEMP/ci-image"
+          mkdir -p "$CTX"
+          PINS="$CTX/pins.txt"
+          : > "$PINS"
+          for p in asgiref Django Pillow cryptography urllib3 certifi sqlparse lxml Jinja2 MarkupSafe tornado Werkzeug segno sqlglot; do
+            grep -i -m1 "^$p==" ../requirements.txt >> "$PINS" || { echo "::error::no $p pin in requirements.txt"; exit 1; }
+          done
+          grep -E '^(django-[A-Za-z0-9-]+|djangorestframework)==' ../requirements.txt >> "$PINS"
+          grep -m1 '^gunicorn==' requirements.web.lock >> "$PINS"
+          grep -m1 '^astroscheduler ' ../requirements.txt >> "$PINS"
+          cat "$PINS"
+          printf 'FROM %s\nCOPY pins.txt /tmp/ci-pins.txt\nRUN pip3 install --quiet --no-deps -r /tmp/ci-pins.txt\n' "$IMAGE" > "$CTX/Dockerfile"
+          docker pull --quiet "$IMAGE"
+          docker build --quiet -t "$IMAGE" "$CTX"
+
       - name: Start database and web services
         working-directory: docker
         run: |
@@ -83,48 +109,6 @@ jobs:
             docker logs ysepz_db_container 2>&1 || true
             exit 1
           }
-
-      # The pulled GHCR image bakes in Django 4.0; the stacks run the 4.2 LTS line
-      # (requirements.txt and docker/requirements.web.dev pin it, with the asgiref
-      # it needs). Install the same pins into the running container and restart it
-      # so every check below runs on the Django the stacks run. Drop this step once
-      # the image is rebuilt on docker/requirements.web.dev.
-      - name: Pin Django 4.2 in the web container
-        working-directory: docker
-        run: |
-          # asgiref first: 3.8.1 also runs the image's Django 4.0, while Django 4.2 on
-          # the image's asgiref 3.4.1 cannot import. gunicorn in the container may boot
-          # a worker between the two installs; in the other order that worker fails,
-          # gunicorn exits and the container (and this pip) is killed (exit 137).
-          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^asgiref==' ../requirements.txt)"
-          # Every Django add-on at its requirements.txt pin, also before Django: the
-          # image's older add-ons (django-el-pagination 3.3, django-cron 0.5) cannot
-          # import on Django 4.x, while the pinned ones also run the image's 4.0. Without
-          # this CI tested the image's add-ons, not the ones the stacks install (#781).
-          ADDONS=$(grep -E '^(django-[A-Za-z0-9-]+|djangorestframework)==' ../requirements.txt)
-          echo "$ADDONS"
-          docker exec ysepz_web_container pip3 install --quiet --no-deps $ADDONS
-          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^Django==' ../requirements.txt)"
-          # Two-factor sign-in for staff (#512; requirements.txt pins), tested in its own step below.
-          docker exec ysepz_web_container pip3 install --quiet --no-deps \
-            $(grep -E -m2 '^(django-otp|segno)==' ../requirements.txt)
-          # Pins bumped in #539 that are newer than the image: install the exact
-          # requirements.txt pins (gunicorn: docker/requirements.web.lock) so the
-          # suite runs on them.
-          PINS=$(for p in Pillow cryptography urllib3 certifi djangorestframework sqlparse lxml Jinja2 MarkupSafe tornado Werkzeug; do
-                   grep -i -m1 "^$p==" ../requirements.txt || { echo "::error::no $p pin in requirements.txt" >&2; exit 1; }
-                 done)
-          PINS="$PINS $(grep -m1 '^gunicorn==' requirements.web.lock)"
-          # AstroScheduler's solver (#653): not in the image yet; its own deps are already pinned.
-          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^astroscheduler ' ../requirements.txt)"
-          # SQL Explorer query scope (#723): sqlglot, pure Python with no dependencies; not in the image yet.
-          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^sqlglot==' ../requirements.txt)"
-          echo "$PINS"
-          docker exec ysepz_web_container pip3 install --quiet --no-deps $PINS
-          docker compose restart web
-          # axes' own tables in the CI database (the runbook's `migrate axes` step).
-          docker exec ysepz_web_container python3 manage.py migrate axes --noinput
-          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
 
       - name: Web container logs (on failure)
         if: failure()
@@ -148,6 +132,13 @@ jobs:
           docker compose ps || true
           docker compose logs --tail=200 yse_db || true
           exit 1
+
+      - name: Check the web container
+        working-directory: docker
+        run: |
+          # axes' own tables in the CI database (the runbook's `migrate axes` step).
+          docker exec ysepz_web_container python3 manage.py migrate axes --noinput
+          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
 
       - name: Wait for Gunicorn
         working-directory: docker
