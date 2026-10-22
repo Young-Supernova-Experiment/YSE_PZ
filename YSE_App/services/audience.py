@@ -12,13 +12,19 @@ from YSE_App.services import groups as group_svc
 from YSE_App.services.visibility import (
     default_comment_audience_groups,
     object_has_groups,
-    shared_groups_for_transient,
 )
 
 
 def selectable_audience_groups(user: User, transient_id: int):
-    """Collaboration groups the user may assign at create time (the eligibility rule)."""
-    return shared_groups_for_transient(user, transient_id).order_by("name")
+    """Collaboration groups the user may assign to a comment at create time (the eligibility rule).
+
+    Any group the user belongs to (Ryan, 2026-10-22). It used to be only the groups on the
+    transient's restricted data, which is also the default audience, so the picker offered
+    nothing beyond the defaults. The default when no audience is sent is unchanged
+    (``default_comment_audience_groups``), and the picker still leaves out system, inactive
+    and hidden groups.
+    """
+    return user.groups.all().order_by("name")
 
 
 def picker_audience_groups(user: User, transient_id: int) -> List[Group]:
@@ -39,9 +45,19 @@ def picker_audience_groups(user: User, transient_id: int) -> List[Group]:
     return shown
 
 
-def comment_picker_initial(user: User, groups: List[Group]) -> List[int]:
-    """Pre-checked comment groups: the user's saved defaults among ``groups``, else all."""
-    return [g.pk for g in group_svc.preferred_defaults(user, groups, group_svc.KIND_COMMENT)]
+def comment_picker_initial(user: User, groups: List[Group], transient_id: Optional[int] = None) -> List[int]:
+    """Pre-checked comment groups: the user's saved defaults among ``groups``; else the groups
+    on the transient's restricted data (the default audience); else all of ``groups``.
+
+    The picker offers every non-hidden group, but only the default audience starts checked.
+    """
+    groups = list(groups)
+    wanted = group_svc.default_group_ids(user, group_svc.KIND_COMMENT)
+    chosen = [g for g in groups if g.id in wanted] if wanted else []
+    if not chosen and transient_id is not None:
+        default_ids = {g.id for g in default_comment_audience_groups(user, transient_id)}
+        chosen = [g for g in groups if g.id in default_ids]
+    return [g.pk for g in (chosen or groups)]
 
 
 def _default_comment_groups(user: User, transient_id: int) -> List[Group]:
