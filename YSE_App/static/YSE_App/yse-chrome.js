@@ -17,6 +17,12 @@
     if (document.body) {
       document.body.classList.toggle("dark-mode", next === "dark");
     }
+    // AdminLTE colours the sidebar from sidebar-dark-* / sidebar-light-*, not from dark-mode.
+    var sidebars = document.querySelectorAll(".main-sidebar");
+    for (var i = 0; i < sidebars.length; i++) {
+      sidebars[i].classList.toggle("sidebar-dark-primary", next === "dark");
+      sidebars[i].classList.toggle("sidebar-light-primary", next !== "dark");
+    }
     try {
       localStorage.setItem(KEY, next);
     } catch (err) {
