@@ -2105,9 +2105,12 @@ def _spectrum_line_kwargs(spec):
 def _normalized_plot_flux(flux, offset):
     """Scale ``flux`` onto the 5th-95th percentile range and stack it at ``offset``."""
     n_pix = len(flux)
+    if n_pix == 0:
+        return flux
     sort_flux = np.sort(flux)
-    minval = sort_flux[round(n_pix * 0.05)] * 0.5
-    maxval = sort_flux[round(n_pix * 0.95)] * 1.1
+    # Clamp: round(n * 0.95) is n itself for short spectra (fewer than about ten pixels).
+    minval = sort_flux[min(round(n_pix * 0.05), n_pix - 1)] * 0.5
+    maxval = sort_flux[min(round(n_pix * 0.95), n_pix - 1)] * 1.1
     scale = maxval - minval
     if scale == 0:
         scale = 1.0

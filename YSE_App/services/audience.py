@@ -55,8 +55,12 @@ def comment_picker_initial(user: User, groups: List[Group], transient_id: Option
     wanted = group_svc.default_group_ids(user, group_svc.KIND_COMMENT)
     chosen = [g for g in groups if g.id in wanted] if wanted else []
     if not chosen and transient_id is not None:
-        default_ids = {g.id for g in default_comment_audience_groups(user, transient_id)}
-        chosen = [g for g in groups if g.id in default_ids]
+        # default_comment_audience_groups without its extra Group query: the groups on the
+        # transient's restricted data, picked from ``groups`` in memory (all of them if none).
+        from YSE_App.services.visibility import transient_visible_group_names
+
+        on_data = transient_visible_group_names(transient_id)
+        chosen = [g for g in groups if g.name in on_data] if on_data else []
     return [g.pk for g in (chosen or groups)]
 
 
