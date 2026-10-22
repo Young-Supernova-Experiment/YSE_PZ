@@ -84,15 +84,20 @@ jobs:
             exit 1
           }
 
-      # The pulled GHCR image bakes in Django 4.0, but production runs the 3.2 LTS
-      # line (requirements.txt: Django>=3.2,<4.0; docker/requirements.web.dev pins
-      # 3.2.25). Install the same pin into the running container and restart it so
-      # every check below runs on the Django that Ziggy runs. Drop this step once
-      # the image is rebuilt on docker/requirements.web.dev or #133 lands.
-      - name: Pin Django 3.2 in the web container
+      # The pulled GHCR image bakes in Django 4.0; the stacks run the 4.2 LTS line
+      # (requirements.txt and docker/requirements.web.dev pin it, with the asgiref
+      # it needs). Install the same pins into the running container and restart it
+      # so every check below runs on the Django the stacks run. Drop this step once
+      # the image is rebuilt on docker/requirements.web.dev.
+      - name: Pin Django 4.2 in the web container
         working-directory: docker
         run: |
-          docker exec ysepz_web_container pip3 install --quiet "Django==3.2.25"
+          # asgiref first: 3.8.1 also runs the image's Django 4.0, while Django 4.2 on
+          # the image's asgiref 3.4.1 cannot import. gunicorn in the container may boot
+          # a worker between the two installs; in the other order that worker fails,
+          # gunicorn exits and the container (and this pip) is killed (exit 137).
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^asgiref==' ../requirements.txt)"
+          docker exec ysepz_web_container pip3 install --quiet --no-deps "$(grep -m1 '^Django==' ../requirements.txt)"
           # Login lockout (django-axes; same pins as requirements.txt) is not in the
           # image yet; CI runs the suite with it on (YSE_LOGIN_LOCKOUT=1 above).
           docker exec ysepz_web_container pip3 install --quiet --no-deps "django-axes==5.41.1" "django-ipware==5.0.2"
@@ -115,7 +120,14 @@ jobs:
           docker compose restart web
           # axes' own tables in the CI database (the runbook's `migrate axes` step).
           docker exec ysepz_web_container python3 manage.py migrate axes --noinput
-          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
+          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
+
+      - name: Web container logs (on failure)
+        if: failure()
+        working-directory: docker
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail=300 web || true
 
       - name: Wait for MySQL
         working-directory: docker
@@ -156,6 +168,13 @@ jobs:
 
       - name: Run tests
         run: docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
+
+      # Models and migrations agree on this Django (a missing migration would make
+      # the deploy's migrate step and the models disagree on the stacks). Runs even
+      # when tests fail; -v 3 prints the migration it would write.
+      - name: No missing YSE_App migrations
+        if: always()
+        run: docker exec ysepz_web_container python3 manage.py makemigrations YSE_App --check --dry-run -v 3
 
       # The suite above runs with two-factor sign-in off (the default). Its flow
       # tests need django-otp's tables in the test database, so run that module

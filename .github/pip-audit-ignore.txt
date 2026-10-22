@@ -5,25 +5,21 @@
 # vulnerable pin shows up. Baseline taken 2026-10-11 with pip-audit 2.9.0 (#538).
 # Add a line only with a reason; delete lines when the package is upgraded.
 
-# --- Django 3.2 LTS (end of life). Staying on 3.2 is a settled decision until the
-# Django upgrade (#133) is scheduled; these advisories are accepted.
-PYSEC-2026-1297        # django 3.2.25 (fixed in 4.2.16,5.0.9,5.1.1)
-PYSEC-2026-3717        # django 3.2.25 (fixed in 5.2.17,6.0.8)
-PYSEC-2026-4035        # django 3.2.25 (fixed in 5.2.17,6.0.8)
-GHSA-7xr5-9hcq-chf9    # django 3.2.25 (fixed in 4.2.22,5.1.10,5.2.2)
-GHSA-6w2r-r2m5-xq5w    # django 3.2.25 (fixed in 4.2.24,5.1.12,5.2.6)
-GHSA-qw25-v68c-qjf3    # django 3.2.25 (fixed in 4.2.26,5.1.14,5.2.8)
-GHSA-frmv-pr5f-9mcr    # django 3.2.25 (fixed in 4.2.26,5.1.14,5.2.8)
-GHSA-923m-gv2p-w5qp    # django 3.2.25 (fixed in 5.2.15,6.0.6)
-GHSA-h7pc-vwp9-298g    # django 3.2.25 (fixed in 5.2.15,6.0.6)
-GHSA-8cjm-8mp7-r2xf    # django 3.2.25 (fixed in 5.2.15,6.0.6)
-GHSA-3h9f-r86x-qvjx    # django 3.2.25 (fixed in 5.2.16,6.0.7)
-GHSA-crhf-3pfg-w68w    # django 3.2.25 (fixed in 5.2.16,6.0.7)
-GHSA-8qcx-xf44-272x    # django 3.2.25 (fixed in 5.2.16,6.0.7)
+# --- Django 4.2 LTS (end of life since April 2026), the newest line that supports Python 3.8.
+# These are fixed only in Django 5.2+, which needs Python 3.10; accepted until the Python
+# upgrade (#133).
+PYSEC-2026-3717        # django 4.2.30 (fixed in 5.2.17,6.0.8)
+PYSEC-2026-4035        # django 4.2.30 (fixed in 5.2.17,6.0.8)
+GHSA-923m-gv2p-w5qp    # django 4.2.30 (fixed in 5.2.15,6.0.6)
+GHSA-h7pc-vwp9-298g    # django 4.2.30 (fixed in 5.2.15,6.0.6)
+GHSA-8cjm-8mp7-r2xf    # django 4.2.30 (fixed in 5.2.15,6.0.6)
+GHSA-3h9f-r86x-qvjx    # django 4.2.30 (fixed in 5.2.16,6.0.7)
+GHSA-crhf-3pfg-w68w    # django 4.2.30 (fixed in 5.2.16,6.0.7)
+GHSA-8qcx-xf44-272x    # django 4.2.30 (fixed in 5.2.16,6.0.7)
 
 # --- Pinned in #539 at the newest release that the deployed stack allows: Python 3.8
-# (Pillow, sqlparse, tornado, Werkzeug), Django 3.2 (djangorestframework 3.15.2+
-# needs Django 4.2), TensorFlow 2.13.1's typing-extensions<4.6 (cryptography 46+),
+# (Pillow, sqlparse, tornado, Werkzeug; djangorestframework 3.16+ needs Python 3.9),
+# TensorFlow 2.13.1's typing-extensions<4.6 (cryptography 46+),
 # Python 3.8 again for requests (2.33+ needs Python 3.10; the old astro-ghost
 # requests<2.29 cap is gone, #619), and the urllib3 1.26 line (urllib3 2
 # needs OpenSSL 1.1.1+ on the host).
@@ -34,9 +30,8 @@ PYSEC-2026-3552        # cryptography 45.0.7 (fixed in 50.0.0)
 PYSEC-2026-3553        # cryptography 45.0.7 (fixed in 49.0.0)
 PYSEC-2026-3554        # cryptography 45.0.7 (fixed in 49.0.0)
 GHSA-537c-gmf6-5ccf    # cryptography 45.0.7 (fixed in 48.0.1)
-PYSEC-2026-1304        # djangorestframework 3.15.1 (fixed in 3.15.2)
-PYSEC-2026-3827        # djangorestframework 3.15.1 (fixed in 3.17.2)
-PYSEC-2026-3828        # djangorestframework 3.15.1 (fixed in 3.17.2)
+PYSEC-2026-3827        # djangorestframework 3.15.2 (fixed in 3.17.2)
+PYSEC-2026-3828        # djangorestframework 3.15.2 (fixed in 3.17.2)
 PYSEC-2026-165         # pillow 10.4.0 (fixed in 12.2.0)
 PYSEC-2026-2250        # pillow 10.4.0 (fixed in 12.2.0)
 PYSEC-2026-2253        # pillow 10.4.0 (fixed in 12.3.0)

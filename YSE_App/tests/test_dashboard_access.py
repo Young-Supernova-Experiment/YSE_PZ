@@ -424,13 +424,20 @@ class PageFirstCountTests(TestCase):
             recent_mag=Subquery(latest.order_by("-obs_date").values("mag")[:1])
         )
 
-    def test_django_32_count_selects_annotations(self):
-        """The claim: the stock count() keeps every annotation in the derived table."""
+    def test_stock_count_and_annotations(self):
+        """Django 3.2's stock count() keeps every annotation in the derived table (the
+        reason for #453); from 4.2 it strips the unused ones itself."""
+        import django
+
         with CaptureQueriesContext(connection) as ctx:
             QuerySet.count(self._qs())
         sql = ctx.captured_queries[-1]["sql"].lower()
-        self.assertIn("yse_app_transientphotdata", sql)
-        self.assertIn("yse_app_transientinterest", sql)
+        if django.VERSION >= (4, 2):
+            self.assertNotIn("yse_app_transientphotdata", sql)
+            self.assertNotIn("yse_app_transientinterest", sql)
+        else:
+            self.assertIn("yse_app_transientphotdata", sql)
+            self.assertIn("yse_app_transientinterest", sql)
 
     def test_count_without_annotations(self):
         qs = self._qs()

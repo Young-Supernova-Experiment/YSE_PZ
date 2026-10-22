@@ -32,7 +32,7 @@ asdf-standard==1.0.3
 asdf-transform-schemas==0.4.0
 asdf-unit-schemas==0.2.0
 asdf-wcs-schemas==0.3.0
-asgiref==3.4.1
+asgiref==3.8.1
 asn1crypto==0.24.0
 astro-datalab==2.22.1
 astro-prost==1.2.13
@@ -67,7 +67,7 @@ cycler==0.10.0
 Cython==0.29.23
 DateTime==4.3
 decorator==5.0.8
-Django>=3.2,<4.0
+Django==4.2.30
 django-auditlog==1.0.0
 django-axes==5.41.1
 django-autoslug==1.9.8
@@ -84,7 +84,7 @@ django-redis==5.4.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
-djangorestframework==3.15.1
+djangorestframework==3.15.2
 dustmaps==1.0.8
 extinction==0.4.2
 filelock==3.16.1
