@@ -82,11 +82,9 @@ def _load_astropy_coords():
     from astropy.coordinates import EarthLocation, get_moon, SkyCoord, Angle
     from astropy.table import Table
     from astropy.time import Time
-    from astropy.utils import iers
     import astropy.units as u
     from astroplan import Observer
-    # Web workers never wait on an IERS download (#466); refresh by cron instead.
-    iers.conf.auto_download = False
+    # IERS downloads stay off (YSE_App/apps.py astropy_offline).
     _ASTROPY_COORDS_LOADED = True
 
 
