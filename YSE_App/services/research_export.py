@@ -315,12 +315,15 @@ class Exporter:
         demographics = [(self.people(uid), name, row.ciphertext, row.key_fingerprint)
                         for (uid, name), row in sorted(latest.items())]
         mentorships = []
-        for m in Mentorship.objects.filter(Q(mentee_id__in=consenting) | Q(mentor_id__in=consenting)):
+        # Each side keeps its own confirmed row; export the rows of consenting owners, saying
+        # whose side reported it (the same relation can appear once per side).
+        for m in Mentorship.objects.filter(owner_id__in=consenting, status=Mentorship.STATUS_CONFIRMED):
             mentee = self.people(m.mentee_id) if m.mentee_id in consenting else None
             mentor = self.people(m.mentor_id) if m.mentor_id in consenting else None
             if mentee is None and mentor is None:
                 continue
-            mentorships.append((mentor, mentee, m.kind, m.start_year, m.end_year))
+            reported_by = "mentor" if m.owner_id == m.mentor_id else "mentee"
+            mentorships.append((mentor, mentee, m.kind, m.start_year, m.end_year, reported_by))
         metrics = [(self.people(r.user_id), r.source, _value(r.fetched_at), r.h_index, r.citation_count,
                     r.refereed_count, r.first_author_count)
                    for r in ResearcherMetrics.objects.filter(user_id__in=consenting)]
@@ -329,7 +332,7 @@ class Exporter:
                               "institution", "pronouns", "research_interests", "time_zone"], participants),
             "participant_instruments": (["participant", "instrument"], instruments),
             "demographics": (["participant", "field", "ciphertext", "key_fingerprint"], demographics),
-            "mentorships": (["mentor", "mentee", "kind", "start_year", "end_year"], mentorships),
+            "mentorships": (["mentor", "mentee", "kind", "start_year", "end_year", "reported_by"], mentorships),
             "metrics": (["participant", "source", "fetched_at", "h_index", "citations", "refereed_papers",
                          "first_author_papers"], metrics),
         }

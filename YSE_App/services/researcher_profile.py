@@ -5,6 +5,7 @@ Nothing here decrypts anything: encrypted fields are write-only on the server.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -22,6 +23,8 @@ from YSE_App.models.researcher_models import (
     ResearcherProfile,
 )
 from YSE_App.services import research_crypto
+
+logger = logging.getLogger(__name__)
 
 # Bump to re-evaluate every session's cached "onboarding complete" flag after a rule change.
 RULES_VERSION = "2"  # 2: research fields required only with research consent (#744)
@@ -83,9 +86,25 @@ def get_profile(user: User) -> Optional[ResearcherProfile]:
         return None
 
 
+def own_mentorships(user: User):
+    """The user's own confirmed rows (each side keeps its own copy of a relation)."""
+    return Mentorship.objects.filter(owner=user, status=Mentorship.STATUS_CONFIRMED)
+
+
+def my_advisors(user: User):
+    """Rows where ``user`` is the mentee, on their own side (the "My advisors" list)."""
+    return own_mentorships(user).filter(mentee=user).select_related("mentor").order_by("-start_year", "-id")
+
+
+def pending_mentorships(user: User):
+    """Relations someone else entered with ``user`` that wait for ``user`` to confirm."""
+    return (Mentorship.objects.filter(owner=user, status=Mentorship.STATUS_PENDING)
+            .select_related("mentor", "mentee", "created_by").order_by("-created_at", "-id"))
+
+
 def current_advisor(user: User) -> Optional[Mentorship]:
     year = timezone.now().year
-    return (Mentorship.objects
+    return (own_mentorships(user)
             .filter(mentee=user, kind=Mentorship.KIND_CURRENT_ADVISOR)
             .filter(Q(end_year__isnull=True) | Q(end_year__gte=year))
             .select_related("mentor").order_by("-id").first())
@@ -231,8 +250,8 @@ def set_current_advisor(user: User, mentor: Optional[User], mentor_name: str,
     if existing is not None:
         existing.end_year = year
         existing.save(update_fields=["end_year"])
-    row = Mentorship.objects.create(
-        mentor=mentor, mentor_name="" if mentor else mentor_name, mentee=user,
+    row = create_mentorship(
+        owner=user, mentor=mentor, mentor_name=mentor_name, mentee=user,
         kind=Mentorship.KIND_CURRENT_ADVISOR, start_year=year, created_by=changed_by)
     label = row.mentor_label
     ProfileFieldHistory.objects.create(user=user, field_name="current_advisor", value_plain=label,
@@ -240,9 +259,81 @@ def set_current_advisor(user: User, mentor: Optional[User], mentor_name: str,
     return row
 
 
+@transaction.atomic
+def create_mentorship(*, owner: User, mentor: Optional[User] = None, mentor_name: str = "",
+                      mentee: Optional[User] = None, mentee_name: str = "", kind: str,
+                      start_year=None, end_year=None, created_by: Optional[User] = None) -> Mentorship:
+    """Add a relation on ``owner``'s side (confirmed at once).
+
+    When the other side is a YSE-PZ user, also give them a pending copy and notify them; it
+    shows on their side once they confirm. Free-form names need no confirmation.
+    """
+    row = Mentorship.objects.create(
+        owner=owner, status=Mentorship.STATUS_CONFIRMED,
+        mentor=mentor, mentor_name="" if mentor else (mentor_name or "").strip()[:200],
+        mentee=mentee, mentee_name="" if mentee else (mentee_name or "").strip()[:200],
+        kind=kind, start_year=start_year, end_year=end_year, created_by=created_by)
+    other = row.other_side()
+    if other is None or other.pk == owner.pk:
+        return row
+    already = Mentorship.objects.filter(owner=other, mentor=mentor, mentee=mentee, kind=kind).first()
+    if already is not None:
+        Mentorship.objects.filter(pk=row.pk).update(counterpart=already)
+        if already.counterpart_id is None:
+            Mentorship.objects.filter(pk=already.pk).update(counterpart=row)
+        return row
+    pending = Mentorship.objects.create(
+        owner=other, status=Mentorship.STATUS_PENDING, mentor=mentor, mentee=mentee, kind=kind,
+        start_year=start_year, end_year=end_year, created_by=created_by, counterpart=row)
+    Mentorship.objects.filter(pk=row.pk).update(counterpart=pending)
+    row.counterpart = pending
+    transaction.on_commit(lambda: _notify_pending(pending, owner))
+    return row
+
+
+def _relation_text(row: Mentorship, viewer: User) -> str:
+    """'your PhD advisor' / 'your advisee (PhD advisor)' from ``viewer``'s point of view."""
+    kind = row.get_kind_display()
+    if row.mentee_id == viewer.pk:
+        return "your %s" % kind
+    return "your advisee (%s)" % kind
+
+
+def _notify_pending(pending: Mentorship, entered_by: User) -> None:
+    from django.urls import reverse
+
+    from YSE_App.models.researcher_models import _display_name
+    from YSE_App.services import notify
+
+    who = _display_name(entered_by)
+    text = "%s listed themselves as %s. Confirm or decline on your profile." % (
+        who, _relation_text(pending, pending.owner))
+    try:
+        notify.notify([pending.owner], text, url=reverse("researcher_profile") + "#mentorship-requests",
+                      kind="mentorship", subject="Confirm a relationship with %s" % who,
+                      created_by=entered_by, exclude=[entered_by.pk])
+    except Exception:  # noqa: BLE001 - a notice never blocks saving the relation
+        logger.exception("mentorship notice for row %s failed", pending.pk)
+
+
+@transaction.atomic
+def confirm_mentorship(user: User, row: Mentorship) -> Mentorship:
+    """``user`` confirms a pending relation: it shows on their side from now on."""
+    row.status = Mentorship.STATUS_CONFIRMED
+    row.save(update_fields=["status"])
+    return row
+
+
+@transaction.atomic
+def decline_mentorship(user: User, row: Mentorship) -> None:
+    """``user`` declines: their pending copy goes; the other side's own row stays."""
+    Mentorship.objects.filter(counterpart=row).update(counterpart=None)
+    row.delete()
+
+
 def my_students(user: User, include_past: bool = True):
-    """Mentorships where ``user`` is the mentor (the "My students" list)."""
-    qs = Mentorship.objects.filter(mentor=user).select_related("mentee", "mentee__researcher_profile")
+    """Rows where ``user`` is the mentor, on their own side (the "My advisees" list)."""
+    qs = own_mentorships(user).filter(mentor=user).select_related("mentee", "mentee__researcher_profile")
     if not include_past:
         year = timezone.now().year
         qs = qs.filter(Q(end_year__isnull=True) | Q(end_year__gte=year))

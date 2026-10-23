@@ -1109,10 +1109,10 @@ class ProfileFieldHistoryAdmin(_ReadOnlyAdmin):
 
 @admin.register(Mentorship)
 class MentorshipAdmin(admin.ModelAdmin):
-	list_display = ("id", "kind", "mentor_label", "mentee_label", "start_year", "end_year")
-	list_filter = ("kind",)
+	list_display = ("id", "kind", "mentor_label", "mentee_label", "owner", "status", "start_year", "end_year")
+	list_filter = ("kind", "status")
 	search_fields = ("mentor__username", "mentee__username", "mentor_name", "mentee_name")
-	raw_id_fields = ("mentor", "mentee", "created_by")
+	raw_id_fields = ("mentor", "mentee", "created_by", "owner", "counterpart")
 
 
 @admin.register(AffiliationHistory)

@@ -98,6 +98,41 @@
 		</div>
 	</div>
 
+	{% if mentorship_requests %}
+	<div class="row" id="mentorship-requests">
+		<div class="col-12">
+			<div class="box box-warning box-solid">
+				<div class="box-header with-border"><strong>Relationships to confirm</strong> <span class="small">Someone listed you as their advisor or advisee. Confirm to add it to your profile, or decline.</span></div>
+				<div class="box-body p-0">
+					<table class="table table-sm mb-0" id="yse-mentorship-requests">
+						<thead><tr><th>Listed by</th><th>Relationship</th><th>Start</th><th>End</th><th></th></tr></thead>
+						<tbody>
+						{% for m in mentorship_requests %}
+						<tr>
+							<td>{% if m.mentee_id == user.pk %}{{ m.mentor_label }}{% else %}{{ m.mentee_label }}{% endif %}</td>
+							<td>{% if m.mentee_id == user.pk %}Your {{ m.get_kind_display }}{% else %}Your advisee ({{ m.get_kind_display }}){% endif %}</td>
+							<td>{{ m.start_year|default:"" }}</td>
+							<td>{{ m.end_year|default:"" }}</td>
+							<td class="text-nowrap">
+								<form method="post" action="{% url 'researcher_mentorship_decide' m.pk %}" class="d-inline">
+									{% csrf_token %}<input type="hidden" name="action" value="confirm">
+									<button type="submit" class="btn btn-sm btn-success">Confirm</button>
+								</form>
+								<form method="post" action="{% url 'researcher_mentorship_decide' m.pk %}" class="d-inline">
+									{% csrf_token %}<input type="hidden" name="action" value="decline">
+									<button type="submit" class="btn btn-sm btn-outline-danger">Decline</button>
+								</form>
+							</td>
+						</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				{% if not research_consented %}<div class="box-footer small text-muted">Confirming adds research information to your profile, so it needs <a href="{% url 'research_consent' %}?next={% url 'researcher_profile' %}">research consent</a>. You can decline without it.</div>{% endif %}
+			</div>
+		</div>
+	</div>
+	{% endif %}
 	{% if can_edit_advisors or mentors %}
 	<div class="row" id="my-advisors">
 		<div class="col-12">
@@ -159,7 +194,7 @@
 		</div>
 	</div>
 	{% endif %}
-	{% if can_mentor %}
+	{% if can_mentor or students %}
 	<div class="row" id="my-students">
 		<div class="col-12">
 			<div class="box box-default box-solid">
@@ -195,7 +230,7 @@
 						</tbody>
 					</table>
 				</div>
-				<div class="box-footer">
+				{% if can_mentor %}<div class="box-footer">
 					<form method="post" action="{% url 'researcher_student_add' %}" class="form-inline yse-user-picker" data-suggest-url="{% url 'researcher_advisor_suggest' %}">
 						{% csrf_token %}
 						<label class="mr-1" for="id_student_name">Add an advisee</label>
@@ -209,7 +244,7 @@
 						<input type="number" class="form-control form-control-sm mr-1" style="width:7em" name="end_year" placeholder="End year" aria-label="End year" min="1950">
 						<button type="submit" class="btn btn-sm btn-primary">Add</button>
 					</form>
-				</div>
+				</div>{% endif %}
 			</div>
 		</div>
 	</div>

@@ -172,12 +172,15 @@ def researcher_profile(request):
         "missing": rp.labels(m for m in missing if m != "profile"),
         "incomplete": bool(missing),
         "advisor": rp.current_advisor(user),
-        "mentors": Mentorship.objects.filter(mentee=user).select_related("mentor").order_by("-start_year", "-id"),
+        "mentors": rp.my_advisors(user),
+        "mentorship_requests": list(rp.pending_mentorships(user)),
         "can_edit_advisors": research_consented,
         "advisor_kind_default": (Mentorship.KIND_CURRENT_ADVISOR if profile and profile.is_student
                                  else Mentorship.KIND_POSTDOC_ADVISOR),
         "can_mentor": can_mentor,
-        "students": list(rp.my_students(user)) if can_mentor else [],
+        # Confirmed advisees show to anyone who consented (a postdoc a student listed as advisor),
+        # the add form only to scientific staff and faculty.
+        "students": list(rp.my_students(user)) if research_consented else [],
         "student_form": StudentForm(mentor=user) if can_mentor else None,
         "kind_choices": Mentorship.KIND_CHOICES,
         "metrics": (ResearcherMetrics.objects.filter(user=user).order_by("-fetched_at").first()
@@ -359,11 +362,12 @@ def researcher_student_add(request):
     if form.is_valid():
         data = form.cleaned_data
         student = data["student_user"]
-        Mentorship.objects.create(
-            mentor=request.user, mentee=student, mentee_name="" if student else data["student_name"].strip(),
+        rp.create_mentorship(
+            owner=request.user, mentor=request.user, mentee=student, mentee_name=data["student_name"],
             kind=data["kind"], start_year=data.get("start_year"), end_year=data.get("end_year"),
             created_by=request.user)
-        messages.success(request, "Advisee added.")
+        messages.success(request, "Advisee added." + (
+            " They are asked to confirm it on their side." if student else ""))
     else:
         errors = "; ".join("%s" % e for errs in form.errors.values() for e in errs)
         messages.error(request, "Advisee not added: %s" % errors)
@@ -374,7 +378,8 @@ def researcher_student_add(request):
 @require_POST
 def researcher_student_update(request, mentorship_id):
     _require_mentor(request)
-    row = get_object_or_404(Mentorship, pk=mentorship_id, mentor=request.user)
+    row = get_object_or_404(Mentorship, pk=mentorship_id, mentor=request.user, owner=request.user,
+                            status=Mentorship.STATUS_CONFIRMED)
     return _update_mentorship(request, row, "#my-students", "Advisee removed from your list.")
 
 
@@ -386,11 +391,12 @@ def researcher_advisor_add(request):
     if form.is_valid():
         data = form.cleaned_data
         advisor = data["advisor_user"]
-        Mentorship.objects.create(
-            mentee=request.user, mentor=advisor, mentor_name="" if advisor else data["advisor_name"].strip(),
+        rp.create_mentorship(
+            owner=request.user, mentee=request.user, mentor=advisor, mentor_name=data["advisor_name"],
             kind=data["kind"], start_year=data.get("start_year"), end_year=data.get("end_year"),
             created_by=request.user)
-        messages.success(request, "Advisor added.")
+        messages.success(request, "Advisor added." + (
+            " They are asked to confirm it on their side." if advisor else ""))
     else:
         errors = "; ".join("%s" % e for errs in form.errors.values() for e in errs)
         messages.error(request, "Advisor not added: %s" % errors)
@@ -401,13 +407,35 @@ def researcher_advisor_add(request):
 @require_POST
 def researcher_advisor_update(request, mentorship_id):
     _require_research_consent(request)
-    row = get_object_or_404(Mentorship, pk=mentorship_id, mentee=request.user)
+    row = get_object_or_404(Mentorship, pk=mentorship_id, mentee=request.user, owner=request.user,
+                            status=Mentorship.STATUS_CONFIRMED)
     return _update_mentorship(request, row, "#my-advisors", "Advisor removed from your list.")
+
+
+@login_required
+@require_POST
+def researcher_mentorship_decide(request, mentorship_id):
+    """Confirm or decline a relation someone else entered with you (it is then yours to edit)."""
+    row = get_object_or_404(Mentorship, pk=mentorship_id, owner=request.user, status=Mentorship.STATUS_PENDING)
+    action = request.POST.get("action")
+    if action == "confirm":
+        if not rc.has_consented(request.user):
+            messages.error(request, "Confirming adds research information to your profile, which needs "
+                                    "research consent. Consent first, or decline.")
+        else:
+            rp.confirm_mentorship(request.user, row)
+            messages.success(request, "Confirmed: it is now on your profile.")
+    elif action == "decline":
+        rp.decline_mentorship(request.user, row)
+        messages.success(request, "Declined. It is not on your profile.")
+    else:
+        return HttpResponseBadRequest("action must be confirm or decline")
+    return redirect(reverse("researcher_profile") + "#mentorship-requests")
 
 
 # The onboarding pages must never be gated themselves.
 for _view in ("agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_profile_confirm",
               "researcher_advisor_suggest", "researcher_student_add", "researcher_student_update",
-              "researcher_advisor_add", "researcher_advisor_update"):
+              "researcher_advisor_add", "researcher_advisor_update", "researcher_mentorship_decide"):
     globals()[_view].onboarding_exempt = True
 del _view
