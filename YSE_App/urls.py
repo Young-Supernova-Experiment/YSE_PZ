@@ -390,6 +390,8 @@ urlpatterns = [
     re_path(r'^profile/advisors/add/$', profile_views.researcher_advisor_add, name='researcher_advisor_add'),
     re_path(r'^profile/advisors/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_advisor_update,
             name='researcher_advisor_update'),
+    re_path(r'^profile/relationships/(?P<mentorship_id>[0-9]+)/decide/$', profile_views.researcher_mentorship_decide,
+            name='researcher_mentorship_decide'),
     # Research teams, invitation links (#445) and user settings (#440)
     re_path(r'^settings/$', group_views.user_settings, name='user_settings'),
     re_path(r'^teams/$', group_views.team_list, name='team_list'),

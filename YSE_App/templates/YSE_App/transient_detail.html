@@ -415,15 +415,22 @@
                 var eligible = isPublicGroup ? !!meta.is_public : yseGroupIdEligible(groupId, meta);
                 var $label = $cb.closest('.yse-followup-audience-label');
                 var $choice = $cb.closest('.yse-followup-audience-choice');
+                // Groups the selected resource does not allow are hidden (and stay disabled,
+                // so they are never submitted), not shown greyed out.
                 if (!eligible) {
                     $cb.prop('disabled', true).prop('checked', false);
-                    $label.addClass('text-muted');
-                    $choice.addClass('yse-followup-audience-ineligible');
+                    $label.removeClass('text-muted');
+                    $choice.addClass('yse-followup-audience-ineligible').hide();
                 } else {
                     $cb.prop('disabled', false);
                     $label.removeClass('text-muted');
-                    $choice.removeClass('yse-followup-audience-ineligible');
+                    $choice.removeClass('yse-followup-audience-ineligible').show();
                 }
+            });
+            // Fold-away "More groups" only when one of them can be picked.
+            $panel.find('details.yse-followup-audience-more').each(function() {
+                var $details = $(this);
+                $details.toggle($details.find('.yse-followup-audience-choice:not(.yse-followup-audience-ineligible)').length > 0);
             });
             if (resetEligible) {
                 /* Saved defaults (#440) among the eligible shown groups; else every eligible
