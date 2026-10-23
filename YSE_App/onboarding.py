@@ -66,6 +66,7 @@ EXEMPT_URL_NAMES = frozenset({
     # the onboarding pages themselves and the acknowledgements page they link to
     "agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
     "researcher_student_add", "researcher_student_update", "researcher_profile_confirm",
+    "researcher_advisor_add", "researcher_advisor_update", "researcher_mentorship_decide",
     "acknowledgements",
     # integrations and machine endpoints
     "slack_events", "external_service_run_callback", "query_api",

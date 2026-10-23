@@ -155,7 +155,19 @@ class ProfileFieldHistory(models.Model):
 
 
 class Mentorship(models.Model):
-    """Advisor/supervisor relation; either side may be a free-form name when not a user."""
+    """Advisor/supervisor relation; either side may be a free-form name when not a user.
+
+    Each side keeps its own row (``owner``), so one side's edits never change the other's.
+    When the other side is a YSE-PZ user, adding a relation also creates a *pending* row
+    owned by them; it shows on their side only after they confirm it (``status``).
+    """
+
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_PENDING = "pending"
+    STATUS_CHOICES = (
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_PENDING, "Waiting for confirmation"),
+    )
 
     KIND_PHD_ADVISOR = "phd_advisor"
     KIND_CURRENT_ADVISOR = "current_advisor"
@@ -181,6 +193,12 @@ class Mentorship(models.Model):
     end_year = models.SmallIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    # The side that keeps (sees and edits) this row; the mentor or the mentee user.
+    owner = models.ForeignKey(User, null=True, blank=True, on_delete=models.CASCADE,
+                              related_name="mentorships_owned")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_CONFIRMED, db_index=True)
+    # The other side's row for the same relation, when the other side is a user.
+    counterpart = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
     class Meta:
         ordering = ("-start_year", "-id")
@@ -204,6 +222,13 @@ class Mentorship(models.Model):
             raise ValidationError("The end year is before the start year.")
 
     def save(self, *args, **kwargs):
+        if self.owner_id is None:
+            # Rows written without an owner (older code on a shared database) belong to the
+            # side that entered them, else to the mentee.
+            if self.created_by_id and self.created_by_id in (self.mentor_id, self.mentee_id):
+                self.owner_id = self.created_by_id
+            else:
+                self.owner_id = self.mentee_id or self.mentor_id
         # Keep a name on each side so the row stays valid if a user account is deleted.
         if self.mentor_id and not self.mentor_name:
             self.mentor_name = _display_name(self.mentor)[:200]
@@ -218,6 +243,16 @@ class Mentorship(models.Model):
     @property
     def mentee_label(self) -> str:
         return _display_name(self.mentee) if self.mentee_id else self.mentee_name
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == self.STATUS_PENDING
+
+    def other_side(self):
+        """The user on the other side from the owner (None for a free-form name)."""
+        if self.owner_id and self.owner_id == self.mentor_id:
+            return self.mentee
+        return self.mentor
 
     @property
     def is_current(self) -> bool:
