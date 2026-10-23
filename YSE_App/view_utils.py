@@ -1242,7 +1242,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         short_filter = display_filter_label(band_obj.name)
         tel_label = telescope_display_name(inst_name, tel_name)
         color = band_display_color(band_obj.name, band_obj.disp_color, fallback_index=count)
-        symbol = telescope_display_symbol(inst_name, band_obj.disp_symbol)
+        symbol = telescope_display_symbol(inst_name, band_obj.disp_symbol, tel_name)
         if symbol and symbol != 'inverted_triangle':
             try:
                 plotmethod = getattr(ax, symbol)
@@ -1537,7 +1537,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         tel_label = telescope_display_name(inn, tel_name)
         color = band_display_color(bn, bc, fallback_index=count)
         count += 1
-        symbol = telescope_display_symbol(inn, bsym)
+        symbol = telescope_display_symbol(inn, bsym, tel_name)
         if symbol and symbol != 'inverted_triangle':
             try:
                 plotmethod = getattr(ax, symbol)
@@ -1789,7 +1789,9 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 bandcolor,
                 band_display_color(p.band.name, p.band.disp_color),
             )
-            sym = telescope_display_symbol(inst_name, p.band.disp_symbol)
+            point_tel = (p.band.instrument.telescope.name
+                         if inst_name and p.band.instrument.telescope_id else None)
+            sym = telescope_display_symbol(inst_name, p.band.disp_symbol, point_tel)
             if sym in py2bokeh_symboldict.keys():
                 bandsym = np.append(bandsym, str(py2bokeh_symboldict[sym]))
             else:
@@ -1879,7 +1881,9 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         color = band_display_color(raw_band_name, bc, fallback_index=count)
         count += 1
         inst_name = b.instrument.name if hasattr(b, 'instrument_id') and b.instrument_id else None
-        symbol = telescope_display_symbol(inst_name, bsym if bsym != 'None' else None)
+        tel_name = (b.instrument.telescope.name
+                    if inst_name and getattr(b.instrument, 'telescope_id', None) else None)
+        symbol = telescope_display_symbol(inst_name, bsym if bsym != 'None' else None, tel_name)
         if symbol and symbol != 'inverted_triangle':
             try:
                 plotmethod = getattr(ax, symbol)
