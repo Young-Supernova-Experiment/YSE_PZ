@@ -86,4 +86,4 @@ Every change starts as a GitHub issue and lands on `experimental` by pull reques
 see [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
 [docs/branching.md](docs/branching.md) for the promotion rules.
 
-**CI:** `.github/workflows/ci.yml` runs lint, `py_compile`, Docker compose, `manage.py check` and `YSE_App.tests` on pushes and PRs to all three branches. Tests run on Django 3.2 LTS, which the project stays on for now. Promotion order is enforced by `.github/workflows/promotion-guard.yml`.
+**CI:** `.github/workflows/ci.yml` runs lint, `py_compile`, Docker compose, `manage.py check` and `YSE_App.tests` on pushes and PRs to all three branches. Tests run on Django 4.2 LTS, the newest line that supports Python 3.8. Promotion order is enforced by `.github/workflows/promotion-guard.yml`.

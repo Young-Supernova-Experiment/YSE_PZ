@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 import requests
+from YSE_App.common.casjobs_credentials import configure_casjobs_env
 import urllib
 import json
 import time
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 import astropy.table as at
 from astropy.coordinates import SkyCoord, Angle
 import astropy.units as u
@@ -101,8 +104,7 @@ def get_ps_score(RA, DEC):
     # get the WSID and password if not already defined
     # get your WSID by going to https://mastweb.stsci.edu/ps1casjobs/changedetails.aspx after you login to Casjobs.
 
-    os.environ['CASJOBS_WSID'] = str(1862226089)
-    os.environ['CASJOBS_PW'] = 'tr4nsientsP!z'
+    configure_casjobs_env()  # credentials from settings.ini [casjobs] / env; raises if missing
     query = """select top 1 p.ps_score
     from pointsource_magnitudes_view as p
     inner join fGetNearbyObjEq(%.5f, %.5f, 0.05) nb on p.objid=nb.objid
@@ -195,7 +197,9 @@ class QUB(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         try:
             nsn = self.main()
@@ -270,12 +274,12 @@ class QUB(CronJobBase):
     def main(self):
 
         # grab CSV files
-        r = requests.get(url=self.options.psstlink_summary,
+        r = ingest_http.get(url=self.options.psstlink_summary,
                          auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
         if r.status_code != 200: raise RuntimeError('problem accessing summary link %s'%self.options.yselink_summary)
         summary = at.Table.read(r.text, format='ascii.csv', delimiter='|')
 
-        r = requests.get(url=self.options.psstlink_lc,
+        r = ingest_http.get(url=self.options.psstlink_lc,
                          auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
         if r.status_code != 200: raise RuntimeError('problem accessing lc link %s'%self.options.yselink_summary)
         lc = at.Table.read(r.text, format='ascii.csv', delimiter='|')
@@ -415,42 +419,42 @@ class QUB(CronJobBase):
                     # only download the files if the directory didn't exist before now.  AKA, don't
                     # continuously grab new stamps
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(psst_image_url,transientdict[k]['postage_stamp_ref'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(psst_image_url,transientdict[k]['postage_stamp_diff'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_file'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(psst_image_url,transientdict[k]['postage_stamp_file'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_file']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(psst_image_url,transientdict[k]['postage_stamp_ref_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref_fits']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(psst_image_url,transientdict[k]['postage_stamp_diff_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff_fits']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_file_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(psst_image_url,transientdict[k]['postage_stamp_file_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_file_fits']), 'wb') as fout:
@@ -462,8 +466,9 @@ class QUB(CronJobBase):
     def UploadTransients(self,TransientUploadDict):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
-        r = requests.post(url = url, data = json.dumps(TransientUploadDict),
-                          auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword))
+        r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
+                          auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
+                          timeout=upload_timeout())
 
         try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
         except: print(r.text)
@@ -511,7 +516,9 @@ class YSE(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         
         # read in the options from the param file and the command line
@@ -593,7 +600,7 @@ class YSE(CronJobBase):
         # get things with YSE Forced flag but no YSE flag
         urlbase = self.options.dburl.replace('/api/','')
         querytitle = 'YSE forced photometry for non-YSE, non-Antares transients'
-        r = requests.get('%s/query_api/%s/'%(urlbase,urllib.parse.quote(querytitle)),
+        r = ingest_http.get('%s/query_api/%s/'%(urlbase,urllib.parse.quote(querytitle)),
                          auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword))
         data = json.loads(r.text)
         
@@ -606,14 +613,14 @@ class YSE(CronJobBase):
                                                         ['local_designation']):
             
             # grab CSV files
-            r = requests.get(url=yselink_summary,
+            r = ingest_http.get(url=yselink_summary,
                              auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
 
             if r.status_code != 200: raise RuntimeError('problem accessing summary link %s'%self.options.yselink_summary)
             try: summary = at.Table.read(r.text, format='ascii', delimiter='|')
             except: continue
             
-            r = requests.get(url=yselink_lc,
+            r = ingest_http.get(url=yselink_lc,
                              auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
             if r.status_code != 200: raise RuntimeError('problem accessing lc link %s'%self.options.yselink_summary)
             try: lc = at.Table.read(r.text, format='ascii', delimiter='|')
@@ -685,12 +692,12 @@ class YSE(CronJobBase):
                 stat = os.stat(lcfile)
                 mjd_mod = Time(dateutil.parser.parse(time.ctime(stat.st_mtime))).mjd
                 if s['latest_mjd_forced'] > mjd_mod:
-                    r = requests.get(url='https://psweb.mp.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
+                    r = ingest_http.get(url='https://psweb.mp.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
                     if r.status_code != 200: raise RuntimeError('problem accessing lc link %s'%self.options.yselink_summary)
                     with open(lcfile,'w') as fout:
                         print(r.text,file=fout)
             else:
-                r = requests.get(url='https://psweb.mp.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
+                r = ingest_http.get(url='https://psweb.mp.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
                 if r.status_code != 200: raise RuntimeError('problem accessing lc link %s'%self.options.yselink_summary)
                 with open(lcfile,'w') as fout:
                     print(r.text,file=fout)
@@ -744,7 +751,8 @@ class YSE(CronJobBase):
                 hostdict = {'name':s['sherlock_object_id'][:64],
                             'ra':s['sherlock_host_ra'],
                             'dec':s['sherlock_host_dec'],
-                            'redshift':redshift}
+                            'redshift':redshift,
+                            'redshift_source':'Sherlock' if redshift is not None else None}
             if type(s['rb_factor_image']) == np.ma.core.MaskedConstant:
                 rb_factor = None
             else:
@@ -913,42 +921,42 @@ class YSE(CronJobBase):
                     # only download the files if the directory didn't exist before now.  AKA, don't
                     # continuously grab new stamps
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_ref'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_diff'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_file'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_file'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_file']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_ref_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref_fits']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_diff_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff_fits']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_file_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_file_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_file_fits']), 'wb') as fout:
@@ -961,7 +969,7 @@ class YSE(CronJobBase):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
                               auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
                               timeout=300)
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
@@ -1117,14 +1125,14 @@ class YSE_Stack(CronJobBase):
                 else:
                     self.next_name = 'YSEAGN%sa'%year
             
-            r = requests.get(url=summarylink,
+            r = ingest_http.get(url=summarylink,
                              auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
 
             if r.status_code != 200: raise RuntimeError('problem accessing summary link %s'%summarylink)
             summary = at.Table.read(r.text, format='ascii', delimiter='|')
 
 
-            r = requests.get(url=lclink,
+            r = ingest_http.get(url=lclink,
                              auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
             if r.status_code != 200: raise RuntimeError('problem accessing lc link %s'%lclink)
             lc = at.Table.read(r.text, format='ascii', delimiter='|')
@@ -1180,11 +1188,11 @@ class YSE_Stack(CronJobBase):
             else: stackname = None
 
             if naming_convention == 'stack':
-                #r = requests.get(url='https://star.pst.qub.ac.uk/sne/ps1ysestack/psdb/lightcurveforced/%s'%s['id'])
-                r = requests.get(url='https://psweb.mp.qub.ac.uk/sne/ps1ysestack/psdb/lightcurveforced/%s'%s['id'])
+                #r = ingest_http.get(url='https://star.pst.qub.ac.uk/sne/ps1ysestack/psdb/lightcurveforced/%s'%s['id'])
+                r = ingest_http.get(url='https://psweb.mp.qub.ac.uk/sne/ps1ysestack/psdb/lightcurveforced/%s'%s['id'])
             else:
-                #r = requests.get(url='https://star.pst.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
-                r = requests.get(url='https://psweb.mp.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
+                #r = ingest_http.get(url='https://star.pst.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
+                r = ingest_http.get(url='https://psweb.mp.qub.ac.uk/sne/ps1yse/psdb/lightcurveforced/%s'%s['id'])
                 
             if r.status_code != 200: raise RuntimeError('problem accessing forcedphot link %s')
             try:
@@ -1242,7 +1250,8 @@ class YSE_Stack(CronJobBase):
                 hostdict = {'name':s['sherlock_object_id'][:64],
                             'ra':s['sherlock_host_ra'],
                             'dec':s['sherlock_host_dec'],
-                            'redshift':redshift}
+                            'redshift':redshift,
+                            'redshift_source':'Sherlock' if redshift is not None else None}
             if type(s['rb_factor_image']) == np.ma.core.MaskedConstant:
                 rb_factor = None
             else:
@@ -1379,42 +1388,42 @@ class YSE_Stack(CronJobBase):
                     # only download the files if the directory didn't exist before now.  AKA, don't
                     # continuously grab new stamps
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_ref'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_diff'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_file'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_file'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_file']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_ref_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_ref_fits']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_diff_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_diff_fits']), 'wb') as fout:
                             fout.write(r.content)
 
                     if not os.path.exists("%s/%s"%(basedir,transientdict[k]['postage_stamp_file_fits'])):
-                        r = requests.get(
+                        r = ingest_http.get(
                             "%s/%s"%(yse_image_url,transientdict[k]['postage_stamp_file_fits'].split('/',1)[-1]),
                             auth=HTTPBasicAuth(self.options.qubuser,self.options.qubpass))
                         with iopen("%s/%s"%(basedir,transientdict[k]['postage_stamp_file_fits']), 'wb') as fout:
@@ -1427,7 +1436,7 @@ class YSE_Stack(CronJobBase):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
                               auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
                               timeout=300)
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
@@ -1484,70 +1493,36 @@ class YSE_Weekly(CronJobBase):
 
             
 class CheckDuplicates(CronJobBase):
-    
+    """Find possible duplicate transients and report them for review (#752, #753).
+
+    Changes nothing unless ``DUPLICATE_AUTO_MERGE`` is on; the detection,
+    report and (confirmed) merge live in ``YSE_App.services.duplicates``.
+    """
+
     RUN_EVERY_MINS = 30
 
     schedule = Schedule(run_every_mins=RUN_EVERY_MINS)
     code = 'YSE_App.data_ingest.QUB_data.CheckDuplicates'
 
     def do(self):
+        from YSE_App.services import duplicates
 
         print("starting duplicate check at {}".format(datetime.datetime.now().isoformat()))
-
         tstart = time.time()
-
-        # read in the options from the param file and the command line
-        # some convoluted syntax here, making it so param file is not required
         try:
-            nsn = self.main()
+            result = self.main()
         except Exception as e:
-            print(e)
-            nsn = 0
-            smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
-            from_addr = "%s@gmail.com" % options.SMTP_LOGIN
-            subject = "Duplicate Check Failure"
-            print("Sending error email")
-            html_msg = "Alert : YSE_PZ Failed to upload transients from YSE in QUB_data.py\n"
-            html_msg += "Error : %s"
-            sendemail(from_addr, options.dbemail, subject,
-                      html_msg%(e),
-                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-
-        print('Checking duplicates took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
+            print("Duplicate check failed: %s" % e)
+            duplicates.report_failure(e)
+            return
+        print('Checking duplicates took %.1f seconds: %s' % (time.time() - tstart, result))
 
     def main(self):
-        from YSE_App.models import Transient
-        
-        transients = Transient.objects.filter(modified_date__gt=datetime.datetime.now()-datetime.timedelta(1)).filter(name__startswith='1')
-        for t in transients:
-            if t.disc_date is None: continue
-            ramin,ramax,decmin,decmax = getRADecBox(t.ra,t.dec,size=0.00042)
-            dups = Transient.objects.filter(Q(ra__gt=ramin) & Q(ra__lt=ramax) &
-                                            Q(dec__gt=decmin) & Q(dec__lt=decmax) &
-                                            (Q(disc_date__gte=t.disc_date-datetime.timedelta(365)) &
-                                             Q(disc_date__lte=t.disc_date+datetime.timedelta(365))))
-            if len(dups) > 1:
-                print('deleting transient %s'%t.name)
-                t.delete()
+        from YSE_App.services import duplicates
 
-        transients = Transient.objects.filter(~Q(name=F('slug')))
-        for t in transients:
-            t_good = Transient.objects.filter(slug=t.name)
-            if not len(t_good): continue
-            t_good = t_good[0]
-            
-            tp = TransientPhotometry.objects.filter(transient__name=t.name)
-            ts = TransientSpectrum.objects.filter(transient__name=t.name)
-            for tps in tp:
-                tps.transient = t_good
-                tps.save()
-            for tss in ts:
-                tss.transient = t_good
-                tss.save()
-            print('deleting transient %s with slug %s'%(t.name,t.slug))
-            t.delete()
-        return len(transients)
-    
+        return duplicates.run_check()
+
+
 def jd_to_date(jd):
     time = Time(jd,scale='utc',format='jd')
     return time.isot
@@ -1566,7 +1541,7 @@ def fetch(url):
     count = 0
     while not urlresponse and count < 3:
         try:
-            urlresponse = urllib.request.urlopen(url).read()
+            urlresponse = urllib.request.urlopen(url, timeout=default_timeout()[1]).read()
             return url, urlresponse
         except Exception as e:
             pass
@@ -1629,7 +1604,7 @@ def get(url,json_list,api_key,tns_user_id,tns_user_name):
     # construct a dictionary of api key data and get obj data
     get_data={'api_key':api_key, 'data':json.dumps(json_file)}
     # get obj using request module
-    response=requests.post(get_url, headers=headers, data=get_data)
+    response=ingest_http.post(get_url, headers=headers, data=get_data)
     # return response
     return response
   except Exception as e:

@@ -104,8 +104,6 @@ function toggle(source) {
 
 
 {% block scripts %}
-<script src="{% static 'YSE_App/bower_components/datatables.net/js/jquery.dataTables.min.js' %}"></script>
-<script src="{% static 'YSE_App/bower_components/datatables.net-bs/js/dataTables.bootstrap.min.js' %}"></script>
 <!--<script type="text/javascript" src="https://mpld3.github.io/js/d3.v3.min.js"></script>
 <script type="text/javascript" src="https://mpld3.github.io/js/mpld3.v0.3.1.dev1.js"></script>-->
 <script type="text/javascript" src="{% static 'YSE_App/bokeh-2.4.2.min.js' %}"></script>
@@ -321,7 +319,7 @@ $(document).ready(function(){
         return cookieValue;
       }
 
-      var csrftoken = getCookie('csrftoken');
+      var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
       /*
       The functions below will create a header with csrftoken

@@ -106,15 +106,15 @@
 						<div id="yse-followup-audience-groups" class="yse-audience-groups yse-followup-audience-groups">
 							{% if form.show_audience_picker %}
 								<p class="text-muted small">
-									Select collaboration groups that can see the selected observing resource
-									(default: your saved defaults from settings, or else all eligible groups). Check <strong>Public</strong> to share
+									Only the groups that can see the selected observing resource are listed
+									(default: your saved defaults from settings, or else all of them). Check <strong>Public</strong> to share
 									with everyone in the Public group (only available for public observing resources).
 									For <strong>creator-only</strong> observing resources, you may leave all groups
 									unchecked so only you (the requester) can see the follow-up.
 								</p>
 								{% for choice in form.followup_audience_shown %}{% include "YSE_App/form_snippets/followup_audience_choice.html" %}{% endfor %}
 								{% if form.followup_audience_more %}
-								<details class="yse-followup-audience-more">
+								<details class="yse-followup-audience-more"{% if not form.followup_audience_more_eligible %} style="display: none;"{% endif %}>
 									<summary class="small text-muted">More groups (inactive, or hidden in your <a href="{% url 'user_settings' %}">settings</a>)</summary>
 									{% for choice in form.followup_audience_more %}{% include "YSE_App/form_snippets/followup_audience_choice.html" %}{% endfor %}
 								</details>

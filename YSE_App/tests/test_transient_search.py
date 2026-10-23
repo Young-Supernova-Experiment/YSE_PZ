@@ -16,9 +16,10 @@ import datetime
 import re
 
 from django.contrib.auth.models import Group
+from django.core.cache import cache
 from django.db import connection
 from django.http import QueryDict
-from django.test import Client, RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -68,6 +69,15 @@ def _point(photometry, band, days_ago, *, mag=None, flux=None, flux_err=None, zp
 
 class SearchFixture(TestCase):
     """Five transients that differ in every filtered property."""
+
+    def setUp(self):
+        # The LocMem cache is process-global and outlives each test's rollback,
+        # while sqlite reuses Query primary keys across tests. A name list that
+        # run_explorer_query_cached stored for an earlier test's Query id would
+        # otherwise be served to this test's Query (#388).
+        super().setUp()
+        cache.clear()
+        self.addCleanup(cache.clear)
 
     @classmethod
     def setUpTestData(cls):
@@ -277,6 +287,8 @@ class TimeFilterTests(SearchFixture):
         self.assertNames({"modified_date_gte": "2099-01-01T00:00:00Z"}, set())
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class PhotometryFilterTests(SearchFixture):
     def test_peak_and_latest_magnitude(self):
         self.assertNames({"peak_mag_max": "18"}, {"2026sea"})
@@ -330,6 +342,8 @@ class ClassificationFilterTests(SearchFixture):
         self.assertEqual(list(fs.qs.values_list("name", flat=True)), ["2026pub", "2026sea"])
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class RelationFilterTests(SearchFixture):
     def test_status_group_and_survey(self):
         self.assertNames({"status": "New"}, {"PS26abc", "2026pub"})
@@ -370,6 +384,8 @@ class RelationFilterTests(SearchFixture):
         self.assertEqual(list(fs.qs), [])
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class QueryCountTests(SearchFixture):
     ONE_QUERY_PARAMS = (
         {"ra": "10.0", "dec": "20.0", "radius_arcsec": "60", "ordering": "separation"},
@@ -444,8 +460,11 @@ class QuickSearchTests(TestCase):
         self.assertEqual(data["name_contains"], "x")
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class SearchPageTests(SearchFixture):
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.client.force_login(self.user)
 
@@ -534,8 +553,11 @@ class SearchPageTests(SearchFixture):
         self.assertEqual(response.status_code, 302)
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class ApiParityTests(SearchFixture):
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.client.force_login(self.user)
 

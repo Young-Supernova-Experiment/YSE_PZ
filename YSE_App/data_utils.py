@@ -1,5 +1,5 @@
 import django
-from django.http import HttpResponse,JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render, get_object_or_404
 from .models import *
 from django.db import models
@@ -47,8 +47,13 @@ from .queries import yse_python_queries
 import sys
 from urllib.parse import unquote
 from YSE_App.services.dashboard_queries import dashboard_sql_is_supported
-from YSE_App.services import photstat
+from YSE_App.services import change_log, photstat, program_links, redshift_precedence
+
+_UPLOADER = object()  # add_transient_host_util: record the uploader as the change-log actor (#737)
+from YSE_App.common.authz import bulk_ingest_denial, upload_denial
+from YSE_App.common.quality_mask import data_quality_mask
 from YSE_App.services.data_pis import apply_upload_pis
+from YSE_App.services.data_sharing import groups_allowed_for_upload, skipped_groups_message
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -241,6 +246,10 @@ def add_transient(request):
     username, password = credentials.split(':', 1)
     user = auth.authenticate(username=username, password=password)
 
+    denial = bulk_ingest_denial(user)
+    if denial:
+        return JsonResponse({"message": denial}, status=403)
+
     return add_transient_payload(transient_data, user)
 
 
@@ -252,6 +261,8 @@ def add_transient_payload(transient_data, user):
     position-based duplicate check and the photometry passthrough behave
     exactly like a TNS or ZTF upload.
     """
+    from YSE_App.services import tns_resync  # the TNS class rule (#755); imported late, it pulls in jobs
+
     subject = "TNS Transient Upload Failure"
     txt_msg = "Alert : YSE_PZ Failed to upload transient %s "
 
@@ -299,10 +310,17 @@ def add_transient_payload(transient_data, user):
 
                     transientdict[transientkey] = fk[0]
 
-            dbtransient = Transient.objects.filter(name=transient['name'])
+            dbtransient = Transient.objects.filter(name=transient['name']).order_by('pk')
             if len(dbtransient) > 1:
-                dbtransient.filter(~Q(pk=dbtransient[0].id)).delete()
-                dbtransient = Transient.objects.filter(name=transient['name'])
+                # Never delete here (#754): update the oldest, leave the others
+                # alone and report the conflict for a person to review.
+                _kept, _others = dbtransient[0], list(dbtransient[1:])
+                try:
+                    from YSE_App.services import duplicates
+                    duplicates.report_same_name_conflict(transient['name'], _kept, _others)
+                except Exception as exc:
+                    print('Duplicate report failed: %s' % exc)
+                dbtransient = Transient.objects.filter(pk=_kept.pk)
 
             if not len(dbtransient):
                 # check RA/dec
@@ -357,7 +375,13 @@ def add_transient_payload(transient_data, user):
                     #   for tag in transient['tags']:
                     #       tagobj = TransientTag.objects.get(name=tag)
                     #       taglist += [tagobj]
+                    _existing = dbtransient[0]  # read before the update: the change log compares (#737)
+                    redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
+                    if transient_data.get("TNS"):
+                        tns_resync.filter_tns_upload_classes(_existing, transientdict)  # #755
                     dbtransient.update(**transientdict)
+                    change_log.record_upload(_existing, transientdict, actor=user,
+                                             source_hint="TNS" if transient_data.get("TNS") else "")
                     if 'tags' in transientkeys:
                         for tag in transient['tags']:
                             tagobj = TransientTag.objects.get(name=tag)
@@ -382,7 +406,13 @@ def add_transient_payload(transient_data, user):
                     transientdict['postage_stamp_ref_fits'] = dbtransient[0].postage_stamp_ref_fits
                     transientdict['postage_stamp_diff_fits'] = dbtransient[0].postage_stamp_diff_fits
 
+                _existing = dbtransient[0]  # read before the update: the change log compares (#737)
+                redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
+                if transient_data.get("TNS"):
+                    tns_resync.filter_tns_upload_classes(_existing, transientdict)  # #755
                 dbtransient.update(**transientdict)
+                change_log.record_upload(_existing, transientdict, actor=user,
+                                         source_hint="TNS" if transient_data.get("TNS") else "")
                 if 'tags' in transientkeys:
                     for tag in transient['tags']:
                         if not len(dbtransient[0].tags.filter(name=tag)):
@@ -473,7 +503,7 @@ def _add_transient_data_stage(transient_data, user):
         transient = transient_data[transientlistkey]
         transientkeys = transient.keys()
 
-        dbtransient = Transient.objects.filter(name=transient['name'])
+        dbtransient = Transient.objects.filter(name=transient['name']).order_by('pk')  # the one updated above (#754)
         if not len(dbtransient):
             dbtransient = AlternateTransientNames.objects.filter(name=transient['name'])[0].transient
         else: dbtransient = dbtransient[0]
@@ -490,8 +520,9 @@ def _add_transient_data_stage(transient_data, user):
             add_transient_spec_util(transient['transientspectra'],dbtransient,user)
 
         if 'host' in transientkeys:
-            # host galaxy
-            add_transient_host_util(transient['host'],dbtransient,user)
+            # host galaxy; the TNS cron's hosts come from Prost (TNS_uploads.getProstHosts): change-log label
+            add_transient_host_util(transient['host'],dbtransient,user,
+                                    source_hint='Prost' if transient_data.get('TNS') else '')
 
     TransientPhotometry.objects.bulk_create(phot_entries)
 
@@ -503,7 +534,7 @@ def _add_transient_data_stage(transient_data, user):
         transient = transient_data[transientlistkey]
         transientkeys = transient.keys()
 
-        dbtransient = Transient.objects.filter(name=transient['name'])
+        dbtransient = Transient.objects.filter(name=transient['name']).order_by('pk')  # the oldest of any same-name rows (#754)
         if not len(dbtransient):
             dbtransient = AlternateTransientNames.objects.filter(name=transient['name'])[0].transient
         else: dbtransient = dbtransient[0]
@@ -588,7 +619,11 @@ def add_gw_candidate(request):
                     else: transientdict['status'] = dbtransient[0].status
                 else: transientdict['status'] = dbtransient[0].status
 
+                _existing = dbtransient[0]  # read before the update: the change log compares (#737)
+                redshift_precedence.filter_upload_fields(_existing, transientdict)  # #436, #437
                 dbtransient.update(**transientdict)
+                change_log.record_upload(_existing, transientdict, actor=user,
+                                         source_hint="TNS" if transient_data.get("TNS") else "")
                 dbtransient = dbtransient[0]
             if 'tags' in transientkeys:
                 for tag in transient['tags']:
@@ -691,7 +726,16 @@ def add_gw_candidate_util(gwdict,transient,user):
     return_dict = {"message":"GW success"}
     return JsonResponse(return_dict)
 
-def add_transient_host_util(hostdict,transient,user):
+def add_transient_host_util(hostdict,transient,user,*,service=None,actor=_UPLOADER,source_hint=''):
+    """Create or update the host in ``hostdict`` and link it to ``transient``.
+
+    Every change it makes (the link, the host's redshift and photo-z) is recorded in the
+    change log (#737) by ``service`` (default ``upload``) with ``actor`` (default the
+    uploader). ``source_hint`` labels values that carry no source of their own (``Prost``
+    for the TNS cron's hosts and ``prost_hosts.match_transient``).
+    """
+    service = service or change_log.SERVICE_UPLOAD
+    actor = user if actor is _UPLOADER else actor
 
     if 'name' not in hostdict.keys():
         return_dict = {"message":"no host"}
@@ -717,19 +761,241 @@ def add_transient_host_util(hostdict,transient,user):
     dbhost = Host.objects.filter(name=dbhostdict['name'])
     if not len(dbhost):
         dbhost = Host.objects.create(**dbhostdict)
+        change_log.record_upload(dbhost, dbhostdict, actor=actor, service=service, source_hint=source_hint,
+                                 created=True)
     else: #if clobber:
+        # never replace an override or a higher-ranked redshift (NED, DESI, ...; #436, #437)
+        existing = dbhost[0]
+        redshift_precedence.filter_upload_fields(existing, dbhostdict)
         dbhost.update(**dbhostdict)
+        change_log.record_upload(existing, dbhostdict, actor=actor, service=service, source_hint=source_hint)
         dbhost = dbhost[0]
 
+    old_host_id = transient.host_id
+    new_host = old_host_id != dbhost.pk
     transient.host = dbhost
     transient.save()
+    if new_host:
+        change_log.record_change(transient, 'host', change_log.host_label(old_host_id),
+                                 change_log.host_label(dbhost.pk), service=service, actor=actor,
+                                 category='host', source=source_hint, force=True)
+        from YSE_App.services.redshift_catalogs import queue_host_lookup
+        queue_host_lookup(dbhost)
 
     return_dict = {"message":"host success"}
     return JsonResponse(return_dict)
 
-def add_transient_phot_util(photdict,transient,user,do_photdata=True):
+# ---- photometry point ingest (#471) -----------------------------------------
+# One pass over the incoming points against the rows that existed before the
+# upload. It writes the same rows the old per-pair loop wrote; see
+# YSE_App/tests/test_phot_ingest_equivalence.py, which keeps a frozen copy of
+# that loop and compares the two on fixtures.
+
+_PHOTDATA_BULK_BATCH = 500
+
+
+def _obs_date_mjd(obs_date):
+    """MJD of one ``obs_date``, exactly as the old matching loop computed it."""
+    try:
+        return Time(obs_date.isoformat().split('+')[0], format='isot').mjd
+    except:  # noqa: E722 - the old loop's fallback, kept as is
+        return Time(obs_date, format='isot').mjd
+
+
+def _obs_date_mjds(rows):
+    """MJDs of ``rows``' obs_date with one vectorised ``Time`` (elementwise identical)."""
+    if not rows:
+        return np.array([], dtype=float)
+    try:
+        strings = [row.obs_date.isoformat().split('+')[0] for row in rows]
+        return np.array(Time(strings, format='isot').mjd, dtype=float, ndmin=1)
+    except Exception:
+        return np.array([_obs_date_mjd(row.obs_date) for row in rows], dtype=float)
+
+
+def _data_quality_for(value, cache):
+    """The DataQuality row for an upload's ``data_quality`` (unknown names: 'Bad'), memoised."""
+    if not value:
+        return None
+    key = (type(value), value)
+    if key not in cache:
+        dq = DataQuality.objects.filter(name=value)
+        if not dq:
+            dq = DataQuality.objects.filter(name='Bad')
+        cache[key] = dq[0]
+    return cache[key]
+
+
+def _write_photdata_points(points, transientphot, existing_qs, user, *, clobber,
+                           mjdmatchmin, band_for, with_diffimg, allocation_id=None):
+    """Match incoming points against ``existing_qs``, then update or insert rows.
+
+    Same rules as the per-pair loop it replaces (#471):
+    - only rows that existed before this call are matched (a point never
+      matches another point of the same upload);
+    - a match needs the same band and ``|mjd - pmjd| < mjdmatchmin``;
+    - with ``clobber`` every matching row is overwritten (and its new date is
+      what later points match against); without it, matches are left alone;
+    - an unmatched point becomes a new row.
+    New rows go in with ``bulk_create`` when nothing needs their primary key
+    (MySQL returns none). A row with a data-quality flag or a diff image is
+    created on its own, in upload order, and its flag becomes a bulk-inserted
+    through-row. bulk_create fires no post_save / m2m_changed, so the photstat
+    refresh those signals did is scheduled here explicitly.
+    """
+    through = TransientPhotData.data_quality.through
+    dq_cache = {}
+    pending = []
+    through_rows = []
+    state = {'existing': None, 'bulk_written': False}
+
+    def flush():
+        if pending:
+            rows = list(pending)
+            del pending[:]
+            TransientPhotData.objects.bulk_create(rows, batch_size=_PHOTDATA_BULK_BATCH)
+            state['bulk_written'] = True
+        if through_rows:
+            rows = list(through_rows)
+            del through_rows[:]
+            through.objects.bulk_create(rows, batch_size=_PHOTDATA_BULK_BATCH)
+            state['bulk_written'] = True
+
+    def existing_by_band():
+        # Read at the first point, as the old loop's cached queryset was.
+        if state['existing'] is None:
+            rows = [e for e in existing_qs if e.photometry_id == transientphot.id]
+            groups = {}
+            for idx, e in enumerate(rows):
+                groups.setdefault(e.band_id, []).append(idx)
+            mjds = _obs_date_mjds(rows)
+            state['existing'] = {
+                band_id: ([rows[i] for i in idxs], mjds[idxs])
+                for band_id, idxs in groups.items()
+            }
+        return state['existing']
+
+    with photstat.deferred_updates():
+        try:
+            for p in points:
+                pmjd = Time(p['obs_date'], format='isot').mjd
+                band = band_for(p)
+                obsExists = False
+
+                group = existing_by_band().get(band.id)
+                if group is not None:
+                    rows, mjds = group
+                    for i in np.nonzero(np.abs(mjds - pmjd) < mjdmatchmin)[0]:
+                        i = int(i)
+                        e = rows[i]
+                        obsExists = True
+                        if clobber:
+                            dq = _data_quality_for(p['data_quality'], dq_cache)
+
+                            e.obs_date = p['obs_date']
+                            e.flux = p['flux']
+                            e.flux_err = p['flux_err']
+                            e.flux_zero_point = p['flux_zero_point']
+                            e.mag = p['mag']
+                            e.mag_err = p['mag_err']
+                            e.forced = p['forced']
+                            e.diffim = p['diffim']
+
+                            # Because we're in CLOBBER mode, remove existing dq flags and add the one passed here.
+                            data_quality_flags = e.data_quality.all()
+                            for _dq in data_quality_flags:
+                                e.data_quality.remove(_dq)
+                            e.data_quality.add(dq)
+
+                            e.photometry = transientphot
+                            e.discovery_point = p['discovery_point']
+                            e.band = band
+                            e.modified_by_id = user.id
+                            e.save()
+                            # the old loop matched later points against the clobbered date
+                            mjds[i] = _obs_date_mjd(e.obs_date)
+
+                        if with_diffimg and 'diffimg' in p.keys():
+                            existing_diff = TransientDiffImage.objects.filter(phot_data=e)
+                            p['diffimg']['created_by_id'] = user.id
+                            p['diffimg']['modified_by_id'] = user.id
+                            p['diffimg']['phot_data_id'] = e.id
+                            if not len(existing_diff):
+                                TransientDiffImage.objects.create(**p['diffimg'])
+                            else:
+                                existing_diff.update(**p['diffimg'])
+
+                if obsExists:
+                    continue
+
+                dq = _data_quality_for(p['data_quality'], dq_cache)
+                e = TransientPhotData(
+                    allocation_id=allocation_id,  # the program of these points, if the caller knows it (#714)
+                    obs_date=p['obs_date'], flux=p['flux'], flux_err=p['flux_err'],
+                    mag=p['mag'], mag_err=p['mag_err'], forced=p['forced'],
+                    diffim=p['diffim'],
+                    photometry=transientphot,
+                    flux_zero_point=p['flux_zero_point'],
+                    discovery_point=p['discovery_point'], band=band,
+                    created_by_id=user.id, modified_by_id=user.id)
+                needs_diffimg = with_diffimg and 'diffimg' in p.keys()
+                if dq is None and not needs_diffimg:
+                    pending.append(e)
+                    if len(pending) >= _PHOTDATA_BULK_BATCH:
+                        flush()
+                    continue
+
+                # This row needs its primary key: write what is queued first so
+                # the ids keep the upload order.
+                flush()
+                if dq is not None:
+                    # the through row below is bulk-inserted (no m2m_changed): set the mask here (#81)
+                    e.quality_mask = data_quality_mask([dq.name], 'TransientPhotData')
+                e.save(force_insert=True)
+                if dq is not None:
+                    through_rows.append(through(transientphotdata_id=e.id, dataquality_id=dq.id))
+                if needs_diffimg:
+                    p['diffimg']['created_by_id'] = user.id
+                    p['diffimg']['modified_by_id'] = user.id
+                    p['diffimg']['phot_data_id'] = e.id
+                    TransientDiffImage.objects.create(**p['diffimg'])
+        finally:
+            # Rows before a failing point are written, as they were one by one.
+            flush()
+            if state['bulk_written']:
+                if transientphot.allocation_id or allocation_id:
+                    # bulk_create fires no post_save: give the new points the program's
+                    # standing access grants here (#648)
+                    from YSE_App.services import access_actions
+
+                    access_actions.apply_standing_grants_to_set(transientphot)
+                photstat.schedule_recompute(transientphot.transient_id, photometry_id=transientphot.id)
+
+
+def clean_upload_reference(value):
+    """Optional ``reference`` of an upload (#646): an ADS bibcode (19 characters) or free text
+    such as a TNS reference. Blank is None; nothing is rejected, only trimmed to the column."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value[:512] or None
+
+
+def apply_upload_reference(dataset, reference):
+    """Set ``reference`` on a photometry set or spectrum that has none; never overwrite one (#646)."""
+    reference = clean_upload_reference(reference)
+    if reference and not dataset.reference:
+        dataset.reference = reference
+        dataset.save(update_fields=['reference'])
+
+
+def add_transient_phot_util(photdict,transient,user,do_photdata=True,allocation=None):
+    """``allocation``: the program the caller knows these data were taken under (facility results,
+    #648); trusted, not read from the upload. An upload may name one per dataset (``allocation``)."""
 
     transientphot_entries = []
+    skipped_groups = []
+    link_skipped = []
     for k in photdict.keys():
         if k == 'clobber' or k == 'mjdmatchmin': continue
         photometry = photdict[k]
@@ -753,119 +1019,72 @@ def add_transient_phot_util(photdict,transient,user,do_photdata=True):
 
         transientphot = TransientPhotometry.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group)
         if not len(transientphot):
+            # #648: the program link of a new set (trusted caller's, or the upload's when permitted)
+            if allocation is not None:
+                new_allocation_id, link_message = allocation.pk, None
+            else:
+                new_allocation_id, link_message = program_links.new_dataset_allocation_id(
+                    user, photometry.get('allocation'))
+            if link_message:
+                link_skipped.append(link_message)
             transientphot = TransientPhotometry( #.objects.create
                 instrument=instrument, obs_group=obs_group, transient=transient,
-                reference=(photometry.get('reference') or None),  # #447: e.g. the TNS object of TNS imports
+                reference=clean_upload_reference(photometry.get('reference')),  # #447: e.g. the TNS object of TNS imports
+                allocation_id=new_allocation_id,
                 created_by_id=user.id, modified_by_id=user.id)
             transientphot_entries += [transientphot]
-        else: transientphot = transientphot[0]
+        else:
+            transientphot = transientphot[0]
+            apply_upload_reference(transientphot, photometry.get('reference'))
+            if allocation is None:  # a trusted caller's program goes on the new points, not the header (#714)
+                link_message = program_links.apply_upload_allocation(
+                    user, transientphot, photometry.get('allocation'), new_dataset=False)
+                if link_message:
+                    link_skipped.append(link_message)
         existingphot = TransientPhotData.objects.filter(photometry=transientphot)
         if do_photdata:
-            for k in photometry['photdata']:
-                p = photometry['photdata'][k]
-                pmjd = Time(p['obs_date'],format='isot').mjd
+            band_cache = {}
 
-                _og, _inst, band = lookup_instrument_band(
-                    user,
-                    photometry['instrument'],
-                    p['band'],
-                    obs_group_name=obs_group_name,
-                )
-                if _inst.id != instrument.id:
-                    instrument = _inst
-                if _og.id != obs_group.id:
-                    obs_group = _og
-                obsExists = False
+            def band_for(p, photometry=photometry, obs_group_name=obs_group_name, band_cache=band_cache):
+                # lookup_instrument_band get-or-creates, so one call per band name is enough.
+                if p['band'] not in band_cache:
+                    band_cache[p['band']] = lookup_instrument_band(
+                        user,
+                        photometry['instrument'],
+                        p['band'],
+                        obs_group_name=obs_group_name,
+                    )[2]
+                return band_cache[p['band']]
 
-                for idx,e in enumerate(existingphot):
-                    if e.photometry.id == transientphot.id:
-                        if e.band == band:
-                            try:
-                                mjd = Time(e.obs_date.isoformat().split('+')[0],format='isot').mjd
-                            except:
-                                mjd = Time(e.obs_date,format='isot').mjd
-
-                            if np.abs(mjd - pmjd) < photdict['mjdmatchmin']:
-                                obsExists = True
-                                if photdict['clobber']:
-
-                                    dq = None
-                                    if p['data_quality']:
-                                        dq = DataQuality.objects.filter(name=p['data_quality'])
-                                        if not dq:
-                                            dq = DataQuality.objects.filter(name='Bad')
-                                        dq = dq[0]
-
-                                    e.obs_date = p['obs_date']
-                                    e.flux = p['flux']
-                                    e.flux_err = p['flux_err']
-                                    e.flux_zero_point = p['flux_zero_point']
-                                    e.mag = p['mag']
-                                    e.mag_err = p['mag_err']
-                                    e.forced = p['forced']
-                                    e.diffim = p['diffim']
-
-                                    # Because we're in CLOBBER mode, remove existing dq flags and add the one passed here.
-                                    data_quality_flags = e.data_quality.all()
-                                    for _dq in data_quality_flags:
-                                        e.data_quality.remove(_dq)
-                                    e.data_quality.add(dq)
-
-                                    e.photometry = transientphot
-                                    e.discovery_point = p['discovery_point']
-                                    e.band = band
-                                    e.modified_by_id = user.id
-                                    e.save()
-
-                                if 'diffimg' in p.keys():
-                                    existing_diff = TransientDiffImage.objects.filter(phot_data=e)
-                                    p['diffimg']['created_by_id'] = user.id
-                                    p['diffimg']['modified_by_id'] = user.id
-                                    p['diffimg']['phot_data_id'] = e.id
-                                    if not len(existing_diff):
-                                        TransientDiffImage.objects.create(**p['diffimg'])
-                                    else:
-                                        existing_diff.update(**p['diffimg'])
-
-
-                if not obsExists:
-                    dq = None
-                    if p['data_quality']:
-                        dq = DataQuality.objects.filter(name=p['data_quality'])
-                        if not dq:
-                            dq = DataQuality.objects.filter(name='Bad')
-                        dq = dq[0]
-
-                    e = TransientPhotData.objects.create(
-                        obs_date=p['obs_date'],flux=p['flux'],flux_err=p['flux_err'],
-                        mag=p['mag'],mag_err=p['mag_err'],forced=p['forced'],
-                        diffim=p['diffim'],
-                        photometry=transientphot,
-                        flux_zero_point=p['flux_zero_point'],
-                        discovery_point=p['discovery_point'],band=band,
-                        created_by_id=user.id,modified_by_id=user.id)
-
-                    if dq is not None:
-                        # Set operator needs a list...
-                        e.data_quality.set([dq])
-                        e.save()
-                    if 'diffimg' in p.keys():
-                        p['diffimg']['created_by_id'] = user.id
-                        p['diffimg']['modified_by_id'] = user.id
-                        p['diffimg']['phot_data_id'] = e.id
-                        TransientDiffImage.objects.create(**p['diffimg'])
-
+            _write_photdata_points(
+                (photometry['photdata'][k] for k in photometry['photdata']),
+                transientphot, existingphot, user,
+                clobber=photdict['clobber'], mjdmatchmin=photdict['mjdmatchmin'],
+                band_for=band_for, with_diffimg=True,
+                allocation_id=allocation.pk if allocation is not None else None,
+            )
         group_names = collaboration_groups_from_photometry_upload(photometry)
         if transientphot.pk:
-            apply_collaboration_groups_to_photometry(transientphot, group_names)
+            # #647: adding groups to an existing restricted dataset needs a share role
+            wanted = list(Group.objects.filter(name__in=group_names))
+            allowed, skipped = groups_allowed_for_upload(user, transientphot, wanted)
+            if skipped:
+                skipped_groups.extend(g.name for g in skipped)
+            apply_collaboration_groups_to_photometry(transientphot, [g.name for g in allowed])
             # optional ``pis``: PrincipalInvestigator ids (#446)
             apply_upload_pis(transientphot, photometry.get('pis'))
 
     return_dict = {"message":"successfully added phot data"}
+    if skipped_groups:
+        return_dict["group_changes_skipped"] = sorted(set(skipped_groups))
+    if link_skipped:
+        return_dict["program_link_skipped"] = sorted(set(link_skipped))
     return JsonResponse(return_dict),transientphot_entries
 
 def add_transient_spec_util(specdict,transient,user):
 
+    skipped_groups = []
+    link_skipped = []
     for k in specdict.keys():
         if k == 'clobber': continue
         spectrum = specdict[k]
@@ -911,7 +1130,12 @@ def add_transient_spec_util(specdict,transient,user):
         del spectrum_copy['specdata']
         spectrum_copy.pop('groups', None)
         upload_pis = spectrum_copy.pop('pis', None)
+        upload_allocation = spectrum_copy.pop('allocation', None)  # #648: resolved and checked below
+        upload_reference = clean_upload_reference(spectrum_copy.pop('reference', None))
+        if upload_reference:
+            spectrum_copy['reference'] = upload_reference  # only used on create; see below
 
+        spectrum_is_new = not len(transientspec)
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(**spectrum_copy)
             # Need to use a set operation to associate many-to-many, also set takes an enumerable...
@@ -926,17 +1150,27 @@ def add_transient_spec_util(specdict,transient,user):
                     transientspec.data_quality.remove(_dq)
                 transientspec.data_quality.add(dq)
 
+                spectrum_copy.pop('reference', None)  # never overwrite an existing reference (#646)
                 transientspec.update(**spectrum_copy)
                 #transientspec.save()
             transientspec = transientspec[0]
+            apply_upload_reference(transientspec, upload_reference)
 
         if len(allgroups):
+            # #647: adding groups to an existing restricted dataset needs a share role
+            allgroups, skipped = groups_allowed_for_upload(user, transientspec, allgroups)
+            skipped_groups.extend(g.name for g in skipped)
             for group in allgroups:
                 if group not in transientspec.groups.all():
                     transientspec.groups.add(group)
                     transientspec.save()
         # optional ``pis``: PrincipalInvestigator ids (#446)
         apply_upload_pis(transientspec, upload_pis)
+        # optional ``allocation``: the program these data were taken under (#648)
+        link_message = program_links.apply_upload_allocation(
+            user, transientspec, upload_allocation, new_dataset=spectrum_is_new)
+        if link_message:
+            link_skipped.append(link_message)
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
@@ -959,6 +1193,10 @@ def add_transient_spec_util(specdict,transient,user):
         TransientSpecData.objects.bulk_create(specdata_entries)
 
     return_dict = {"message":"successfully added spec data"}
+    if skipped_groups:
+        return_dict["group_changes_skipped"] = sorted(set(skipped_groups))
+    if link_skipped:
+        return_dict["program_link_skipped"] = sorted(set(link_skipped))
     return JsonResponse(return_dict)
 
 @csrf_exempt
@@ -996,6 +1234,7 @@ def add_transient_phot(request):
         return JsonResponse(return_dict)
     status = status[0]
 
+    upload_groups = normalize_collaboration_group_names(ph['groups'])
     allgroups = []
     if ph['groups']:
         for photgroup in ph['groups'].split(','):
@@ -1005,6 +1244,19 @@ def add_transient_phot(request):
                 return JsonResponse(return_dict)
             group = group[0]
             allgroups += [group]
+
+    # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
+    existing_transient = Transient.objects.filter(name=tr['name']).first()
+    existing_phot = None
+    if existing_transient is not None:
+        existing_phot = TransientPhotometry.objects.filter(
+            transient=existing_transient, instrument=instrument, obs_group=obs_group).first()
+    replaced = []
+    if existing_phot is not None and (hd['clobber'] or upload_groups):
+        replaced = [existing_phot]
+    denial = upload_denial(user, upload_groups, replaced, existing_dataset=existing_phot)
+    if denial:
+        return JsonResponse({"message": denial}, status=403)
 
     # get or create transient
     transient = Transient.objects.filter(name=tr['name'])
@@ -1016,25 +1268,34 @@ def add_transient_phot(request):
     else: transient = transient[0]
     # get all existing photometry
     transientphot = TransientPhotometry.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group)
+    phot_is_new = not len(transientphot)
     if not len(transientphot):
         transientphot = TransientPhotometry.objects.create(
             instrument=instrument,obs_group=obs_group,transient=transient,
+            reference=clean_upload_reference(ph.get('reference')),
             created_by_id=user.id,modified_by_id=user.id)
     else:
         transientphot = transientphot[0]
+        apply_upload_reference(transientphot, ph.get('reference'))
         if hd['clobber']:
             transientphot.instrument = instrument
             transientphot.obs_group = obs_group
             transientphot.modified_by_id = user.id
             transientphot.save()
 
+    skipped = []
     if len(allgroups):
+        # #647: adding groups to an existing restricted dataset needs a share role
+        allgroups, skipped = groups_allowed_for_upload(user, transientphot, allgroups)
         for group in allgroups:
             if group not in transientphot.groups.all():
                 transientphot.groups.add(group)
                 transientphot.save()
     # optional ``pis`` in the photheader: PrincipalInvestigator ids (#446)
     apply_upload_pis(transientphot, ph.get('pis'))
+    # optional ``allocation`` in the photheader: the program these data were taken under (#648)
+    link_message = program_links.apply_upload_allocation(user, transientphot, ph.get('allocation'),
+                                                          new_dataset=phot_is_new)
 
     existingphot = TransientPhotData.objects.filter(photometry=transientphot)
 
@@ -1043,77 +1304,32 @@ def add_transient_phot(request):
         _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user)
 
     return_dict = {"message": "success"}
+    if skipped:
+        return_dict["group_changes_skipped"] = sorted(g.name for g in skipped)
+        return_dict["warning"] = skipped_groups_message(skipped)
+    if link_message:
+        return_dict["program_link_skipped"] = [link_message]
 
     return JsonResponse(return_dict)
 
 
 def _add_transient_phot_rows(phot_data, hd, ph, transientphot, existingphot, user):
-    for k in phot_data.keys():
-        if k == 'header' or k == 'transient' or k == 'photheader': continue
-        p = phot_data[k]
-        pmjd = Time(p['obs_date'],format='isot').mjd
-        band = PhotometricBand.objects.filter(name=p['band']).filter(instrument__name=ph['instrument'])
-        if len(band): band = band[0]
-        else: band = PhotometricBand.objects.filter(name='Unknown')[0]
+    band_cache = {}
 
-        obsExists = False
-        for e in existingphot:
-            if e.photometry.id == transientphot.id:
-                if e.band == band:
-                    try:
-                        mjd = Time(e.obs_date.isoformat().split('+')[0],format='isot').mjd
-                    except:
-                        mjd = Time(e.obs_date,format='isot').mjd
-                    if np.abs(mjd - pmjd) < hd['mjdmatchmin']:
-                        obsExists = True
-                        if hd['clobber']:
+    def band_for(p):
+        if p['band'] not in band_cache:
+            band = PhotometricBand.objects.filter(name=p['band']).filter(instrument__name=ph['instrument'])
+            if len(band): band = band[0]
+            else: band = PhotometricBand.objects.filter(name='Unknown')[0]
+            band_cache[p['band']] = band
+        return band_cache[p['band']]
 
-                            dq = None
-                            if p['data_quality']:
-                                dq = DataQuality.objects.filter(name=p['data_quality'])
-                                if not dq:
-                                    dq = DataQuality.objects.filter(name='Bad')
-                                dq = dq[0]
-
-                            e.obs_date = p['obs_date']
-                            e.flux = p['flux']
-                            e.flux_err = p['flux_err']
-                            e.flux_zero_point = p['flux_zero_point']
-                            e.mag = p['mag']
-                            e.mag_err = p['mag_err']
-                            e.forced = p['forced']
-                            e.diffim = p['diffim']
-
-                            # Because we're in CLOBBER mode, remove existing dq flags and add the one passed here.
-                            data_quality_flags = e.data_quality.all()
-                            for _dq in data_quality_flags:
-                                e.data_quality.remove(_dq)
-                            e.data_quality.add(dq)
-
-                            e.photometry = transientphot
-                            e.discovery_point = p['discovery_point']
-                            e.band = band
-                            e.modified_by_id = user.id
-                            e.save()
-
-        if not obsExists:
-            dq = None
-            if p['data_quality']:
-                dq = DataQuality.objects.filter(name=p['data_quality'])
-                if not dq:
-                    dq = DataQuality.objects.filter(name='Bad')
-                dq = dq[0]
-            tpd = TransientPhotData.objects.create(obs_date=p['obs_date'],flux=p['flux'],flux_err=p['flux_err'],
-                                                   mag=p['mag'],mag_err=p['mag_err'],forced=p['forced'],
-                                                   diffim=p['diffim'],
-                                                   photometry=transientphot,
-                                                   flux_zero_point=p['flux_zero_point'],
-                                                   discovery_point=p['discovery_point'],band=band,
-                                                   created_by_id=user.id,modified_by_id=user.id)
-            if dq is not None:
-                # Set operator needs a list...
-                tpd.data_quality.set([dq])
-                tpd.save()
+    _write_photdata_points(
+        (phot_data[k] for k in phot_data.keys() if k not in ('header', 'transient', 'photheader')),
+        transientphot, existingphot, user,
+        clobber=hd['clobber'], mjdmatchmin=hd['mjdmatchmin'],
+        band_for=band_for, with_diffimg=False,
+    )
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -1161,6 +1377,18 @@ def add_transient_spec(request):
             return JsonResponse(return_dict)
         else: transient = transient[0]
 
+        # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
+        upload_groups = normalize_collaboration_group_names(hd['groups'])
+        existing_spec = TransientSpectrum.objects.filter(
+            transient=transient, instrument=instrument, obs_group=obs_group,
+            obs_date=hd['obs_date']).first()
+        replaced = []
+        if existing_spec is not None and (hd['clobber'] or upload_groups):
+            replaced = [existing_spec]
+        denial = upload_denial(user, upload_groups, replaced, existing_dataset=existing_spec)
+        if denial:
+            return JsonResponse({"message": denial}, status=403)
+
         dq = None
         if hd['data_quality']:
             dq = DataQuality.objects.filter(name=hd['data_quality'])
@@ -1170,12 +1398,14 @@ def add_transient_spec(request):
 
         # get the spectrum
         transientspec = TransientSpectrum.objects.filter(transient=transient).filter(instrument=instrument).filter(obs_group=obs_group).filter(obs_date=hd['obs_date'])
+        spectrum_is_new = not len(transientspec)
         if not len(transientspec):
             transientspec = TransientSpectrum.objects.create(
                 ra=hd['ra'],dec=hd['dec'],instrument=instrument,obs_group=obs_group,transient=transient,
                 rlap=hd['rlap'],redshift=hd['redshift'],redshift_err=hd['redshift_err'],
                 redshift_quality=hd['redshift_quality'],spectrum_notes=hd['spectrum_notes'],
                 spec_phase=hd['spec_phase'],obs_date=hd['obs_date'],
+                reference=clean_upload_reference(hd.get('reference')),
                 created_by_id=user.id,modified_by_id=user.id)
             if dq is not None:
                 # set takes an enumerable
@@ -1183,6 +1413,7 @@ def add_transient_spec(request):
                 transientspec.save()
         else:
             transientspec = transientspec[0]
+            apply_upload_reference(transientspec, hd.get('reference'))
             if hd['clobber']:
                 if dq is not None:
                     # If dq flag exists and this is an existing spectrum, we need to remove the old DQ and add the new DQ
@@ -1201,13 +1432,19 @@ def add_transient_spec(request):
                 transientspec.spec_phase = hd['spec_phase']
                 transientspec.modified_by_id = user.id
                 transientspec.save()
+        skipped = []
         if len(allgroups):
+            # #647: adding groups to an existing restricted dataset needs a share role
+            allgroups, skipped = groups_allowed_for_upload(user, transientspec, allgroups)
             for group in allgroups:
                 if group not in transientspec.groups.all():
                     transientspec.groups.add(group)
                     transientspec.save()
         # optional ``pis`` in the header: PrincipalInvestigator ids (#446)
         apply_upload_pis(transientspec, hd.get('pis'))
+        # optional ``allocation`` in the header: the program these data were taken under (#648)
+        link_message = program_links.apply_upload_allocation(user, transientspec, hd.get('allocation'),
+                                                              new_dataset=spectrum_is_new)
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
@@ -1227,6 +1464,11 @@ def add_transient_spec(request):
                                              created_by_id=user.id,modified_by_id=user.id)
 
         return_dict = {"message":"success"}
+        if skipped:
+            return_dict["group_changes_skipped"] = sorted(g.name for g in skipped)
+            return_dict["warning"] = skipped_groups_message(skipped)
+        if link_message:
+            return_dict["program_link_skipped"] = [link_message]
         return JsonResponse(return_dict)
     except Exception as e:
         return_dict = {"message":e.__str__()}
@@ -1234,11 +1476,13 @@ def add_transient_spec(request):
 
 @login_or_basic_auth_required
 def get_transient(request, slug):
-    t = Transient.objects.filter(slug=slug)
+    from YSE_App.services.visibility import filter_listed_transients
+    # The listing rule (#607, #760): a transient the user may not list answers like an unknown slug.
+    t = filter_listed_transients(request.user, Transient.objects.filter(slug=slug))
 
     return_dict = {"transient":""}
-    if t.exists():
-        transient = t[0]
+    transient = t.first()
+    if transient is not None:
         serializer = TransientSerializer(instance=transient, context={"request":Request(request)})
         return_dict["transient"] = serializer.data
 
@@ -1246,7 +1490,12 @@ def get_transient(request, slug):
 
 @login_or_basic_auth_required
 def get_rising_transients(request,ndays):
-    qs = recent_rising_transient_queryset(ndays=ndays)
+    from YSE_App.services.visibility import filter_listed_transients
+    try:
+        ndays = float(ndays)
+    except ValueError:
+        return JsonResponse({"error": "ndays must be a number"}, status=400)
+    qs = filter_listed_transients(request.user, recent_rising_transient_queryset(ndays=ndays, user=request.user))
 
     return_dict = {"transient":""}
     for transient in qs:
@@ -1257,19 +1506,34 @@ def get_rising_transients(request,ndays):
 
 def find_separation(host_queryset, query_coord, sep_threshold):
 
-    ra,dec = [],[]
-    for host in host_queryset:
-        ra += [host.ra]; dec += [host.dec]
-    host_coords = SkyCoord(ra, dec, unit=(u.deg, u.deg))
+    # One read of the candidates (indexing the queryset per match re-queried it).
+    hosts = list(host_queryset)
+    if not hosts:
+        return
+    host_coords = SkyCoord([h.ra for h in hosts], [h.dec for h in hosts], unit=(u.deg, u.deg))
     sep = host_coords.separation(query_coord)
     for idx in np.where(sep.arcminute <= sep_threshold)[0]:
-        yield host_queryset[int(idx)],sep.arcminute[idx]
+        yield hosts[int(idx)],sep.arcminute[idx]
+
+
+def _host_cone_candidates(ra, dec, sep_arcmin):
+    """Hosts in an RA/Dec box around a cone of ``sep_arcmin`` arcmin (#475).
+
+    ``filters.transient_search.cone_q``: RA width corrected by 1/cos(dec), RA
+    wrap at 0/360 and pole caps handled. The box is padded a little so it
+    always contains the cone; the exact cut is ``find_separation``'s, as before.
+    Ordered by pk, the order the old full-table read returned.
+    """
+    from YSE_App.filters.transient_search import cone_q
+
+    radius_arcsec = float(sep_arcmin) * 60.0 * 1.01 + 1.0
+    return Host.objects.filter(cone_q(float(ra), float(dec), radius_arcsec)).order_by('pk')
 
 @login_or_basic_auth_required       
 def get_host(request, ra, dec, sep):
 
     query_coord = SkyCoord(ra,dec,unit=(u.deg, u.deg))
-    host_candidates = find_separation(Host.objects.all(), query_coord, float(sep))
+    host_candidates = find_separation(_host_cone_candidates(ra, dec, sep), query_coord, float(sep))
 
     serialized_hosts = []
     for host,sep in host_candidates:
@@ -1289,7 +1553,8 @@ def get_host(request, ra, dec, sep):
 @login_or_basic_auth_required       
 def get_rising_transients_box(request, ra, dec, ra_width, dec_width):
 
-    qs = recent_rising_transient_queryset(ndays=5)
+    from YSE_App.services.visibility import filter_listed_transients
+    qs = filter_listed_transients(request.user, recent_rising_transient_queryset(ndays=5, user=request.user))
     ramin,ramax,decmin,decmax = getRADecBox(float(ra),float(dec),float(ra_width),float(dec_width))
     qs = qs.filter(ra__gt=ramin).filter(ra__lt=ramax).filter(dec__gt=decmin).filter(dec__lt=decmax).filter(~Q(status__name='Ignore')).filter(
         Q(status__name='New') | Q(status__name='Watch') | Q(status__name='FollowupRequested') |
@@ -1352,67 +1617,130 @@ def get_all_transients_box(request, ra, dec, ra_width, dec_width):
     return JsonResponse(return_dict)
 
 
+def _query_api_service_account(user):
+    """Service readers only (#725): the ``[main] dblogin`` cron account and
+    ``DATA_SERVICE_READER_USERNAMES``. Staff, superusers and ``api_writers``
+    accounts are scoped like everyone else."""
+    from YSE_App.services.visibility import is_service_reader
+
+    return is_service_reader(user)
+
+
+def _query_api_may_run(user, query):
+    """Whether ``user`` may call saved ``query`` through /query_api/ (#524).
+
+    Titles on ``QUERY_API_ALLOWED_QUERIES``, the caller's own queries, and any
+    query for SQL Explorer users and service accounts.
+    """
+    from YSE_App.common.authz import explorer_access_allowed
+
+    if query.title in getattr(djangoSettings, 'QUERY_API_ALLOWED_QUERIES', ()):
+        return True
+    if query.created_by_user_id is not None and query.created_by_user_id == user.id:
+        return True
+    return explorer_access_allowed(user) or _query_api_service_account(user)
+
+
+def _query_api_filter_visible_rows(user, field_names, rows):
+    """Keep the rows whose transient ``user`` may view (#524).
+
+    The transient is identified by a ``transient_id`` column, else a
+    ``transient_name`` or ``name`` column, else the first column as a name
+    (the personal-dashboard convention). Rows that do not resolve to a visible
+    transient are dropped.
+    """
+    from YSE_App.services.visibility import filter_listed_transients
+
+    if not rows:
+        return rows
+    lowered = [str(f).lower() for f in field_names]
+    by_pk = 'transient_id' in lowered
+    for col in ('transient_id', 'transient_name', 'name'):
+        if col in lowered:
+            idx = lowered.index(col)
+            break
+    else:
+        idx = 0
+    keys = {row[idx] for row in rows if row[idx] is not None}
+    if by_pk:
+        keys = {k for k in keys if isinstance(k, int)}
+        base = Transient.objects.filter(pk__in=keys)
+        visible = set(filter_listed_transients(user, base).values_list('pk', flat=True))
+    else:
+        keys = {k for k in keys if isinstance(k, str)}
+        base = Transient.objects.filter(name__in=keys)
+        visible = set(filter_listed_transients(user, base).values_list('name', flat=True))
+    return [row for row in rows if row[idx] in visible]
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def query_api(request,query_name):
+    """Rows of a saved query (or a registered Python query) as JSON for the crons and scripts.
 
-    query = Query.objects.filter(title=unquote(query_name))
-    if len(query):
-        query = query[0]
-        if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
-        cursor = connections['explorer'].cursor()
-        cursor.execute(query.sql.replace('%','%%'), ())
-        #transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
-        field_names = [c[0] for c in cursor.description]
-        field_vals = [x for x in cursor]
-        cursor.close()
+    Saved queries: only those :func:`_query_api_may_run` allows (#524); others
+    are a 404, like an unknown title. Rows are limited to transients the caller
+    may view unless the caller is a service reader (#725;
+    ``QUERY_API_VISIBILITY_FILTER``); everyone else goes through the Explorer rewrite layer.
+    """
+    title = unquote(query_name)
+    filter_rows = (getattr(djangoSettings, 'QUERY_API_VISIBILITY_FILTER', True)
+                   and not _query_api_service_account(request.user))
+    query = Query.objects.filter(title=title).first()
+    if query is not None:
+        if not _query_api_may_run(request.user, query): raise Http404('Invalid Query')
+        scoped_viewer = request.user if filter_rows else None
+        if not dashboard_sql_is_supported(query.sql, scoped_viewer): raise Http404('Invalid Query')
+        # Cached for QUERY_API_CACHE_SECONDS on the capped explorer connection (#474).
+        from YSE_App.common.db_time_cap import QueryTimeout
+        from YSE_App.views import run_explorer_query_rows_cached
+        try:
+            field_names, field_vals = run_explorer_query_rows_cached(query, user=scoped_viewer)
+        except QueryTimeout as exc:
+            return JsonResponse({"message": "query %s: %s" % (query.title, exc)}, status=504)
+        if filter_rows:
+            field_vals = _query_api_filter_visible_rows(request.user, field_names, field_vals)
+        # Derived-value columns may select rows but are not returned to a viewer who
+        # cannot see the data (#715).
+        from YSE_App.services.page_query_scope import selection_only_result
+        field_names, field_vals = selection_only_result(query.sql, scoped_viewer, field_names, field_vals)
     else:
-        #query = UserQuery.objects.filter(python_query = unquote(query_name))
-        #if not len(query): return Http404('Invalid Query')
-        #query = query[0]
-        try: transients = getattr(yse_python_queries,unquote(query_name))() #.python_query)()
-        except: return Http404('Invalid Query')
+        try: transients = yse_python_queries.run_python_query(title, request.user if filter_rows else None)
+        except KeyError: raise Http404('Invalid Query')
+        if filter_rows:
+            from YSE_App.services.visibility import filter_listed_transients
+            transients = filter_listed_transients(request.user, transients)
+        field_names = ('transient_id', 'transient_name', 'transient_ra', 'transient_dec')
+        field_vals = [(t.id, t.name, t.ra, t.dec) for t in transients]
 
-    serialized_transients = []
-    for vals in field_vals:
-        #tdict = {"transient_ra":t.ra,"transient_dec":t.dec,
-        #        "transient_name":t.name,"transient_id":t.id}
-        tdict = {}
-        for f,v in zip(field_names,vals):
-            tdict[f] = v
-        serialized_transients.append(
-            tdict
-        )
+    serialized_transients = [dict(zip(field_names, vals)) for vals in field_vals]
 
-    return_dict = {"transients":serialized_transients }
-
-    return JsonResponse(return_dict)
+    return JsonResponse({"transients": serialized_transients})
 
 @csrf_exempt
 @login_or_basic_auth_required
 def box_search(request,ra,dec,radius):
+    """YSE-tagged transients from the last 90 days within ``radius`` deg of (ra, dec) (#476).
 
-    qs = None
+    The only caller (yse_utils/get_YSE_PAs.py) asks for radius 1.65 deg, half a
+    PS1 field, and cuts on separation <= 1.65 itself. The old SQL boxed RA by
+    +-radius with no 1/cos(dec) and no 0/360 wrap, then kept ``sep < 3.3`` (2 x
+    1.65, never binding inside that box). ``cone_q``'s box contains the old one,
+    so this returns everything the old query did, plus the in-field transients
+    the narrow RA box missed at higher dec or across RA 0. The separation cut is
+    kept at twice the radius (3.3 for the caller), on the parameterised ORM
+    ``separation_expression`` instead of %-formatted SQL.
+    """
+    from YSE_App.filters.transient_search import cone_q, separation_expression
 
     ra,dec,radius = float(ra),float(dec),float(radius)
 
-    d = float(dec)*np.pi/180
-    width_corr = float(radius)/np.abs(np.cos(d))
-
-    ra_offset = cd.Angle(width_corr, unit=u.deg)
-    dec_offset = cd.Angle(radius, unit=u.deg)
-
-    query= """SELECT t.name, ACOS(SIN(t.dec*3.14159/180)*SIN(%s*3.14159/180)+COS(t.dec*3.14159/180)*COS(%s*3.14159/180)*COS((t.ra-%s)*3.14159/180))*180/3.14159 as sep
-FROM YSE_App_transient t
-WHERE t.ra > %s AND t.ra < %s AND t.dec > %s AND t.dec < %s
-HAVING sep < 3.3
-""" % (
-    dec, dec, ra, ra-radius,ra+radius,
-    dec-radius,dec+radius)
-    cursor = connections['explorer'].cursor()
-    cursor.execute(query, ())
-
-    qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(90)).filter(name__in=(x[0] for x in cursor))
+    qs = (
+        Transient.objects.filter(cone_q(ra, dec, radius * 3600.0))
+        .annotate(box_search_sep=separation_expression(ra, dec))
+        .filter(box_search_sep__lt=2.0 * radius)
+        .filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(90))
+    )
 
     serialized_transients = []
     for t in qs.filter(Q(tags__name='YSE')):

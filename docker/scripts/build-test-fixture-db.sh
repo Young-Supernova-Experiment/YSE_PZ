@@ -22,7 +22,7 @@ load_dotenv() {
 
 db_password() {
   load_dotenv
-  echo "${DB_PWD:-password}"
+  echo "${DB_PWD:?DB_PWD is not set in docker/.env}"
 }
 
 cmd="${1:-}"

@@ -94,11 +94,12 @@ def analysis_tab_context(request, transient):
         "analysis_runs": run_rows,
         "analysis_active": any(not e["r"].is_finished for e in run_rows),
         "analysis_poll_seconds": POLL_SECONDS,
-        "analysis_services_json": json.dumps(
+        # plain JSON types for the template's json_script (#507)
+        "analysis_services_data": json.loads(json.dumps(
             [{"slug": s["slug"], "name": s["name"], "fields": s["fields"], "cap": s["cap"],
               "runner_kind": s["runner_kind"]} for s in services],
             default=str,
-        ),
+        )),
     }
 
 

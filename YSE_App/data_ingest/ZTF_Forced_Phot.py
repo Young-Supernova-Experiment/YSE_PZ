@@ -20,10 +20,11 @@ import random
 import re
 import shutil
 import string
-import subprocess
+import requests
 import sys
 import time
 import traceback
+from urllib.parse import urlparse
 from django.conf import settings as djangoSettings
 
 import matplotlib
@@ -34,41 +35,41 @@ import warnings
 warnings.filterwarnings("ignore") # We'll get warnings from log10 when there are non-detections
 
 
-#
-# Generic ZTF webdav login
-#
-_ztfuser = "ztffps"
-_ztfinfo = "dontgocrazy!"
+def ztf_webdav_auth():
+    """The (user, password) for downloading ZTF forced-photometry results (#758): the
+    generic login ZTF publishes, read from settings (``[ztf] ztfwebdavuser`` /
+    ``ztfwebdavpass`` or ``ZTF_WEBDAV_USER`` / ``ZTF_WEBDAV_PASS``)."""
+    return (djangoSettings.ZTF_WEBDAV_USER, djangoSettings.ZTF_WEBDAV_PASS)
+
+def ztf_account_address(login=None):
+    """The ZTF forced-photometry account address: SMTP_LOGIN as is when it is a full
+    address, else SMTP_LOGIN@gmail.com -- the rule settings.DEFAULT_FROM_EMAIL uses (#434)."""
+    login = (djangoSettings.SMTP_LOGIN if login is None else login).strip()
+    return login if '@' in login else '%s@gmail.com' % login
+
 
 class ZTFForcedPhotSubmitError(RuntimeError):
     """The request to ZTF could not be sent; the message is safe to show users (#411)."""
 
 
-def _wget_error_summary(stderr):
-    """wget's own error lines, without the request URL (it carries the ZTF credentials)."""
-    text = stderr.decode('utf-8', 'replace') if isinstance(stderr, bytes) else str(stderr or '')
-    lines = [l.strip() for l in text.splitlines()
-             if re.search(r'error|fail|denied|no such|not found|unable|cannot|refused|timed out', l, re.I)
-             and '://' not in l]
-    summary = '; '.join(lines[-3:]) or 'no error output'
-    summary = re.sub(r'(userpass|password|passwd)=\S*', r'\1=***', summary, flags=re.I)
-    return summary[:300]
+ZTF_HOST = 'ztfweb.ipac.caltech.edu'
+ZTF_REQUEST_URL = 'https://%s/cgi-bin/requestForcedPhotometry.cgi' % ZTF_HOST
+ZTF_TIMEOUT = (10, 120)  # connect, read seconds
 
 
-def _ztf_reply_error(path):
-    """The "Error: ..." line of a ZTF reply saved with --content-on-error; removes the file."""
-    try:
-        with open(path, errors='replace') as fh:
-            text = re.sub(r'<[^>]+>', ' ', fh.read())
-    except OSError:
-        return ''
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+def _ztf_reply_error(text):
+    """The "Error: ..." line of a ZTF reply page (#411); '' when there is none."""
+    text = re.sub(r'<[^>]+>', ' ', text or '')
     match = re.search(r'Error:\s*([^\n]+)', text)
     return re.sub(r'\s+', ' ', match.group(1)).strip()[:200] if match else ''
+
+
+def _check_ztf_url(url):
+    """Only https URLs on the ZTF service host are fetched with the ZTF credentials."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme != 'https' or (parsed.hostname or '').lower() != ZTF_HOST:
+        raise ZTFForcedPhotSubmitError('Refusing to download from a host other than %s.' % ZTF_HOST)
+    return parsed
 
 
 def random_log_file_name(log_file_dir='/tmp'):
@@ -83,18 +84,26 @@ def random_log_file_name(log_file_dir='/tmp'):
 
 
 def download_ztf_url(url, verbose=True):
-
-    wget_command = "wget --http-user=%s --http-password=%s -O %s \"%s\""%(
-        _ztfuser,_ztfinfo,url.split('/')[-1],url)
+    """Download a result file from the ZTF service into the working directory; returns its name.
+    No shell is involved and the credentials are sent as HTTP auth, never logged."""
+    parsed = _check_ztf_url(url)
+    file_name = re.sub(r'[^A-Za-z0-9._-]', '_', os.path.basename(parsed.path)).lstrip('.')
+    if not file_name:
+        raise ZTFForcedPhotSubmitError('The ZTF download URL has no usable file name.')
 
     if verbose:
         print("Downloading file...")
-        print('\t' + wget_command)
-    p = subprocess.Popen(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    stdout, stderr = p.communicate()
-
-    #os.system(wget_command)
-    return url.split('/')[-1]
+        print('\t' + url)
+    try:
+        response = requests.get(url, auth=ztf_webdav_auth(), timeout=ZTF_TIMEOUT,
+                                allow_redirects=False)
+    except requests.RequestException as exc:
+        raise ZTFForcedPhotSubmitError('ZTF download failed (%s).' % type(exc).__name__)
+    if response.status_code != 200:
+        raise ZTFForcedPhotSubmitError('ZTF download failed (HTTP %s).' % response.status_code)
+    with open(file_name, 'wb') as fh:
+        fh.write(response.content)
+    return file_name
 
 
 
@@ -180,6 +189,11 @@ class ZTF_Forced_Phot:
 
         if ztf_user_password is None: self._ztffp_user_password = os.environ["ztf_user_password"]
         else: self._ztffp_user_password = ztf_user_password
+        pw = (self._ztffp_user_password or '').strip()
+        if not pw or pw.startswith('<'):
+            raise ZTFForcedPhotSubmitError(
+                'The ZTF forced-photometry password is not configured '
+                '(ztfforcedphotpass in settings.ini or ZTF_FORCED_PHOT_PASS).')
 
     
     #
@@ -328,32 +342,33 @@ class ZTF_Forced_Phot:
             if verbose:
                 print("Sending ZTF request for (R.A.,Decl)=(%s,%s)"%(ra,decl))
 
-            wget_command = "wget --content-on-error --http-user=%s --http-passwd=%s -O %s \"https://ztfweb.ipac.caltech.edu/cgi-bin/requestForcedPhotometry.cgi?"%(_ztfuser,_ztfinfo,log_file_name) + \
-                           "ra=%s&"%ra_str + \
-                           "dec=%s&"%decl_str + \
-                           "jdstart=%s&"%jdstart_str +\
-                           "jdend=%s&"%jdend_str + \
-                           "email=%s&userpass=%s\""%(self._ztffp_user_address,self._ztffp_user_password)
+            params = {'ra': ra_str, 'dec': decl_str, 'jdstart': jdstart_str, 'jdend': jdend_str,
+                      'email': self._ztffp_user_address}
             if verbose:
-                print(wget_command)
+                print("Requesting %s with %s" % (ZTF_REQUEST_URL, params))
 
             if send:
 
-                # wget -O cannot create the log file in a missing directory (#411)
+                # the log file lives in a directory that may not exist yet (#411)
                 os.makedirs(os.path.dirname(log_file_name), exist_ok=True)
-                p = subprocess.Popen(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-                stdout, stderr = p.communicate()
-
-                #if verbose:
-                #    print(stdout.decode('utf-8'))
-
-                if p.returncode != 0 or not os.path.exists(log_file_name):
-                    # ZTF explains a rejection in the reply body ("Error: e-mail address is
-                    # unknown."); --content-on-error keeps it so the user sees why (#411)
-                    reason = _ztf_reply_error(log_file_name)
+                try:
+                    response = requests.get(
+                        ZTF_REQUEST_URL, params=dict(params, userpass=self._ztffp_user_password),
+                        auth=ztf_webdav_auth(), timeout=ZTF_TIMEOUT, allow_redirects=False)
+                except requests.RequestException as exc:
+                    # the exception text can carry the request URL, so only its type is shown
                     raise ZTFForcedPhotSubmitError(
-                        'wget exited with status %s: %s%s' % (
-                            p.returncode, _wget_error_summary(stderr), ' ZTF says: %s' % reason if reason else ''))
+                        'The request to ZTF failed (%s).' % type(exc).__name__)
+
+                if response.status_code != 200:
+                    # ZTF explains a rejection in the reply body ("Error: e-mail address is
+                    # unknown."); it is shown so the user sees why (#411)
+                    reason = _ztf_reply_error(response.text)
+                    raise ZTFForcedPhotSubmitError(
+                        'ZTF request failed with HTTP status %s.%s' % (
+                            response.status_code, ' ZTF says: %s' % reason if reason else ''))
+                with open(log_file_name, 'wb') as fh:
+                    fh.write(response.content)
 
             os.chmod(log_file_name,0o0777)
 

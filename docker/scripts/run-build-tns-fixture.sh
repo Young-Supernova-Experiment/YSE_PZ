@@ -30,7 +30,7 @@ fi
 docker exec \
   -e TNS_API_KEY \
   -e YSE_DB_LOGIN="${YSE_DB_LOGIN:-ci_admin}" \
-  -e YSE_DB_PASSWORD="${YSE_DB_PASSWORD:-ci_password}" \
+  -e YSE_DB_PASSWORD="${YSE_DB_PASSWORD:?set YSE_DB_PASSWORD (the DJANGO_SUPERUSER_PASSWORD in docker/.env)}" \
   ysepz_web_container \
   python3 manage.py build_tns_fixture --prefix "$PREFIX" "${EXTRA[@]}"
 

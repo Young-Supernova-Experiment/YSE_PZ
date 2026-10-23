@@ -51,10 +51,12 @@ class DataAccessRequest(BaseModel):
     STATUS_PENDING = "pending"
     STATUS_ACCEPTED = "accepted"
     STATUS_DECLINED = "declined"
+    STATUS_REVOKED = "revoked"
     STATUS_CHOICES = (
         (STATUS_PENDING, "Pending"),
         (STATUS_ACCEPTED, "Accepted"),
         (STATUS_DECLINED, "Declined"),
+        (STATUS_REVOKED, "Revoked"),
     )
 
     requester = models.ForeignKey(User, on_delete=models.CASCADE, related_name="data_access_requests")
@@ -96,6 +98,24 @@ class DataAccessRequest(BaseModel):
         help_text="Ids of the datasets the target group was added to on acceptance (for audit / revocation).",
     )
 
+    added_dataset_ids = JSONTextField(
+        null=True, blank=True,
+        help_text="The subset of granted_dataset_ids the target group was newly added to (it was not already "
+                  "on them); revoking removes the group only from these. Empty on older rows.",
+    )
+    # Revoke (#291): an accepted request can be taken back; going forward (default) or backwards.
+    DIRECTION_FORWARD = "forward"
+    DIRECTION_BACKWARDS = "backwards"
+    DIRECTION_CHOICES = (
+        (DIRECTION_FORWARD, "Going forward (earlier data stay visible)"),
+        (DIRECTION_BACKWARDS, "Backwards (earlier data hidden too)"),
+    )
+    revoked_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="data_access_revocations",
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoke_direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES, null=True, blank=True)
+
     class Meta:
         ordering = ("-created_date", "-id")
         indexes = [
@@ -113,6 +133,10 @@ class DataAccessRequest(BaseModel):
     @property
     def is_pending(self):
         return self.status == self.STATUS_PENDING
+
+    @property
+    def is_accepted(self):
+        return self.status == self.STATUS_ACCEPTED
 
     @property
     def status_label(self):

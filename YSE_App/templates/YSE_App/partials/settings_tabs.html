@@ -1,0 +1,10 @@
+{% comment %}Tabs shared by the account pages: profile, settings, teams, notification preferences.{% endcomment %}
+{% with current=request.resolver_match.url_name %}
+<ul class="nav nav-tabs mt-2 yse-settings-tabs" role="tablist">
+	<li class="nav-item"><a class="nav-link{% if current == 'researcher_profile' or current == 'researcher_profile_edit' %} active{% endif %}" href="{% url 'researcher_profile' %}">My profile</a></li>
+	<li class="nav-item"><a class="nav-link{% if current == 'user_settings' %} active{% endif %}" href="{% url 'user_settings' %}">Settings</a></li>
+	<li class="nav-item"><a class="nav-link{% if current == 'team_list' or current == 'team_detail' %} active{% endif %}" href="{% url 'team_list' %}">My teams</a></li>
+	<li class="nav-item"><a class="nav-link{% if current == 'notification_preferences' %} active{% endif %}" href="{% url 'notification_preferences' %}">Notification preferences</a></li>
+	<li class="nav-item"><a class="nav-link{% if current == 'research_consent' %} active{% endif %}" href="{% url 'research_consent' %}?next={% url 'researcher_profile' %}">Research consent</a></li>
+</ul>
+{% endwith %}

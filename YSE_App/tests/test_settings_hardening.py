@@ -69,10 +69,12 @@ def _load_settings(*, debug, site_extra="", database_extra="", env=None):
         target = os.path.join(tmp, "yse_settings_under_test.py")
         with open(src) as fh:
             open(target, "w").write(fh.read())
+        # Every YSE_* variable is dropped too: CI's docker/.env sets YSE_IS_DEBUG and
+        # YSE_LOGIN_LOCKOUT, which would override the scratch settings.ini.
         clean_env = {k: v for k, v in os.environ.items()
                      if k not in ("DJANGO_SECRET_KEY", "DJANGO_ALLOWED_HOSTS", "YSE_EXPLORER_MAX_EXECUTION_MS",
-                                  "REDIS_URL", "YSE_SESSION_COOKIE_NAME", "YSE_SESSION_COOKIE_PATH",
-                                  "YSE_CSRF_COOKIE_NAME", "YSE_CSRF_COOKIE_PATH")}
+                                  "REDIS_URL")
+                     and not k.startswith("YSE_")}
         clean_env.update(env or {})
         sys.path.insert(0, tmp)
         try:

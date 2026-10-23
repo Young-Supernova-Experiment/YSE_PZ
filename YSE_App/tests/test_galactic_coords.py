@@ -4,7 +4,7 @@ import math
 
 from django.core.management import call_command
 from django.db import connection
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 
 from YSE_App.common.galactic import (
@@ -66,6 +66,8 @@ class GalacticFormulaTests(TestCase):
             self.assertLess(sql_l, 360.0)
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['gal_save'])
 class TransientSaveTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -194,6 +196,8 @@ class SearchOnStoredColumnTests(TestCase):
         self.assertNotIn("ASIN", str(fs.qs.query).upper())
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['gal_page'])
 class SearchPageColumnTests(TestCase):
     @classmethod
     def setUpTestData(cls):

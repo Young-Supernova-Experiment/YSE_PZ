@@ -1,2 +1,2 @@
 [mysqld]
-local_infile=1
+# local_infile is no longer needed (LOAD DATA LOCAL INFILE was removed)

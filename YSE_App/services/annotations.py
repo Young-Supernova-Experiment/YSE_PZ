@@ -5,7 +5,8 @@
   records the run / service that produced it and rebuilds the indexed value
   rows.
 * :func:`visible_annotations` / :func:`annotations_for_transients` apply the
-  group audience (staff see everything).
+  group audience (staff follow the same rule as everyone else; only service
+  reader accounts, #706, read every annotation).
 * :func:`legacy_annotation` presents the annotation-like columns that already
   live on ``Transient`` (``point_source_probability``, ``real_bogus_score``,
   ``antares_classification``, ``mw_ebv``, ``has_hst``, ``has_jwst`` ...) as a read-only
@@ -26,7 +27,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 
 from YSE_App.models.annotation_models import (
@@ -165,12 +166,35 @@ def _base_qs():
             .prefetch_related(Prefetch("groups", queryset=Group.objects.only("id", "name"))))
 
 
+def sees_all_annotations(user) -> bool:
+    """Whether ``user`` reads every annotation regardless of its groups (#719): service readers only.
+
+    Staff and superusers follow the group rule like everyone else; they keep
+    their administrative actions (writing and deleting annotations).
+    """
+    from YSE_App.services.visibility import is_service_reader
+
+    return is_service_reader(user)
+
+
+def group_rule_q(user, prefix: str = ""):
+    """``Q`` limiting annotation rows (or rows reached through ``prefix``) to those ``user`` may see.
+
+    ``None`` means no restriction (a service reader). Anonymous users and
+    users without a request get only annotations that carry no group.
+    """
+    if user is not None and getattr(user, "is_authenticated", False):
+        if sees_all_annotations(user):
+            return None
+        return Q(**{prefix + "groups__isnull": True}) | Q(**{prefix + "groups__in": user.groups.all()})
+    return Q(**{prefix + "groups__isnull": True})
+
+
 def _visible_filter(qs, user):
     if user is None or not user.is_authenticated:
         return qs.none()
-    if user.is_staff or user.is_superuser:
-        return qs
-    return qs.filter(groups__isnull=True) | qs.filter(groups__in=user.groups.all())
+    q = group_rule_q(user)
+    return qs if q is None else qs.filter(q)
 
 
 def visible_annotations(transient: Transient, user) -> List[TransientAnnotation]:
@@ -377,5 +401,5 @@ __all__ = [
     "autorun_for_new_transient", "autorun_slugs", "badges_for", "can_manage", "can_run_service",
     "can_write_origin", "default_radius_arcsec", "delete_annotation", "ensure_builtin_services",
     "fail_stale_runs", "latest_runs", "legacy_annotation", "legacy_data", "start_annotation_run",
-    "upsert", "user_origin", "visible_annotations",
+    "upsert", "user_origin", "visible_annotations", "group_rule_q", "sees_all_annotations",
 ]

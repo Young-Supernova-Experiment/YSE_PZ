@@ -1,0 +1,157 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Data access: {{ transient.name }}</h1>
+	<p class="text-muted small mb-0"><a href="{% url 'transient_detail' transient.slug %}">Back to {{ transient.name }}</a> &middot; <a href="{% url 'access_dashboard' %}">Dashboard</a></p>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }} yse-access-message">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			{% if not phot_sets and not spectra %}
+			<div class="box box-default box-solid"><div class="box-body">
+				<p class="mb-0 text-muted">You may not set access for any of this object's data. Only the data's PIs and their deputies, the program's PI or deputies, and administrators can.</p>
+			</div></div>
+			{% else %}
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>One night</strong> <span class="text-muted small">all of this object's points from the night, in any filter, and that night's spectra</span></div>
+				<div class="box-body">
+					{% if nights %}
+					<table class="table table-sm mb-0" id="yse-access-nights">
+						<thead><tr><th>Night</th><th>Telescope</th><th>Points</th><th>Spectra</th><th></th></tr></thead>
+						<tbody>
+						{% for n in nights %}
+							<tr data-night="{{ n.night|date:'Y-m-d' }}">
+								<td>{{ n.night|date:"Y-m-d" }} <span class="text-muted small">(UTC{% if n.utc_offset >= 0 %}+{% endif %}{{ n.utc_offset }})</span></td>
+								<td><small>{{ n.telescopes|default:"-" }}</small></td>
+								<td>{{ n.points }}</td>
+								<td>{{ n.spectra }}</td>
+								<td>
+									<form method="post" class="form-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="night">
+										<input type="hidden" name="night_start" value="{{ n.start.isoformat }}">
+										<input type="hidden" name="night_end" value="{{ n.end.isoformat }}">
+										{% include "YSE_App/access_grantee_fields.html" with prefix="yse-night-" suffix=forloop.counter0 %}
+										<button type="submit" class="btn btn-sm btn-primary">Apply</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">No dated data.</p>
+					{% endif %}
+				</div>
+			</div>
+
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>One dataset</strong></div>
+				<div class="box-body">
+					<table class="table table-sm mb-0" id="yse-access-datasets">
+						<thead><tr><th>Dataset</th><th>Groups</th><th>Program</th><th></th></tr></thead>
+						<tbody>
+						{% for d in phot_sets %}
+							<tr data-kind="photometry" data-dataset-id="{{ d.id }}">
+								<td>Photometry: {{ d.instrument.name }}</td>
+								<td><small>{% for g in d.groups.all %}{{ g.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</small></td>
+								<td><small>{{ d.allocation.name|default:"-" }}</small></td>
+								<td>
+									<form method="post" class="form-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="dataset">
+										<input type="hidden" name="kind" value="photometry">
+										<input type="hidden" name="dataset_id" value="{{ d.id }}">
+										{% include "YSE_App/access_grantee_fields.html" with prefix="yse-phot-" suffix=d.id %}
+										<button type="submit" class="btn btn-sm btn-primary">Apply</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						{% for d in spectra %}
+							<tr data-kind="spectrum" data-dataset-id="{{ d.id }}">
+								<td>Spectrum: {{ d.instrument.name }}, {{ d.obs_date|date:"Y-m-d" }}</td>
+								<td><small>{% for g in d.groups.all %}{{ g.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</small></td>
+								<td><small>{{ d.allocation.name|default:"-" }}</small></td>
+								<td>
+									<form method="post" class="form-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="dataset">
+										<input type="hidden" name="kind" value="spectrum">
+										<input type="hidden" name="dataset_id" value="{{ d.id }}">
+										{% include "YSE_App/access_grantee_fields.html" with prefix="yse-spec-" suffix=d.id %}
+										<button type="submit" class="btn btn-sm btn-primary">Apply</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Rules on these data</strong></div>
+				<div class="box-body">
+					{% if rules %}
+					<table class="table table-sm mb-0" id="yse-access-rules">
+						<thead><tr><th>Dataset</th><th>Grantee</th><th>Allowed</th><th>Restricted</th><th></th></tr></thead>
+						<tbody>
+						{% for r in rules %}
+							<tr>
+								<td>{{ r.kind }} {{ r.dataset_id }}</td>
+								<td>{{ r.grantee }}</td>
+								<td>{{ r.allow }}</td>
+								<td>{{ r.deny }}</td>
+								<td>
+									{% if r.allow %}
+									<form method="post" class="form-inline d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="remove_allow">
+										<input type="hidden" name="kind" value="{{ r.kind }}">
+										<input type="hidden" name="dataset_id" value="{{ r.dataset_id }}">
+										{% if r.grantee_group_id %}<input type="hidden" name="grantee_group_id" value="{{ r.grantee_group_id }}">{% else %}<input type="hidden" name="grantee_username" value="{{ r.grantee_username }}">{% endif %}
+										{% include "YSE_App/access_direction.html" with id="yse-allow-"|add:r.kind n1=r.dataset_id n2=forloop.counter %}
+										<button type="submit" class="btn btn-sm btn-outline-secondary">Turn off</button>
+									</form>
+									{% endif %}
+									{% if r.deny %}
+									<form method="post" class="d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="lift">
+										<input type="hidden" name="kind" value="{{ r.kind }}">
+										<input type="hidden" name="dataset_id" value="{{ r.dataset_id }}">
+										{% if r.grantee_group_id %}<input type="hidden" name="grantee_group_id" value="{{ r.grantee_group_id }}">{% else %}<input type="hidden" name="grantee_username" value="{{ r.grantee_username }}">{% endif %}
+										<button type="submit" class="btn btn-sm btn-outline-primary">Lift restriction</button>
+									</form>
+									{% endif %}
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">No rules yet: the data's own groups decide who may see them.</p>
+					{% endif %}
+				</div>
+			</div>
+			{% endif %}
+		</div>
+		<div class="col-lg-3 col-12">
+			{% include "YSE_App/access_help.html" %}
+		</div>
+	</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+{% include "YSE_App/access_direction_script.html" %}
+{% endblock %}

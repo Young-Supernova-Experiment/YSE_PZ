@@ -1,0 +1,49 @@
+# Dependabot version updates (#538, #571). Pull requests go to `develop` (never
+# master); after each merge there, `develop` is merged back into `experimental`
+# (see CONTRIBUTING.md and docs/branching.md). Dependabot reads this file only from
+# the default branch (master), so it takes effect when develop -> master (#143) merges.
+# Alerts and security updates are switched on in the repository settings, not here;
+# security-update PRs always target the default branch, whatever target-branch says.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"            # requirements.txt, requirements-ingest.txt
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    # Archived image history (old pins such as Django 2.2); nothing builds from it.
+    exclude-paths:
+      - "docker/web_image_history/**"
+    ignore:
+      # Django 4.2 LTS is the newest line that supports Python 3.8 (the deployed
+      # stacks). 5.x waits for the Python upgrade (#133).
+      - dependency-name: "django"
+        versions: [">=5"]
+      # 3.16+ needs Python 3.9.
+      - dependency-name: "djangorestframework"
+        versions: [">=3.16"]
+      # TensorFlow 2.13.1 needs protobuf 3.x (#183) and typing-extensions < 4.6;
+      # cryptography 46+ needs typing-extensions >= 4.13.2. Revisit with #186.
+      - dependency-name: "protobuf"
+        versions: [">=4"]
+      - dependency-name: "typing-extensions"
+        versions: [">=4.6"]
+      - dependency-name: "cryptography"
+        versions: [">=46"]
+      # requests 2.33+ needs Python 3.10; production runs Python 3.8. (The older
+      # <2.29 cap came from astro-ghost, removed in #619.)
+      - dependency-name: "requests"
+        versions: [">=2.33"]
+      # urllib3 2 needs OpenSSL 1.1.1+ on the host; stay on 1.26.x.
+      - dependency-name: "urllib3"
+        versions: [">=2"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3

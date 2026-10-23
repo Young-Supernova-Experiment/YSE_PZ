@@ -1,15 +1,16 @@
 from rest_framework import serializers
 from YSE_App.models import *
+from .related_fields import IdHyperlinkedRelatedField, VisibleDatasetIdRelatedField, VisibleDatasetRelatedField
 from django.contrib.auth.models import User, Group
 from rest_framework.exceptions import PermissionDenied
 from .auth_helpers import NotAuthorizedToAccessParent
 
 class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
     transient = serializers.HyperlinkedRelatedField(queryset=Transient.objects.all(), view_name='transient-detail')
-    instrument = serializers.HyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
+    instrument = IdHyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
 
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
     followup = serializers.HyperlinkedRelatedField(queryset=TransientFollowup.objects.all(), allow_null=True, required=False, view_name='transientfollowup-detail')
 
     groups = serializers.HyperlinkedRelatedField(queryset=Group.objects.all(), many=True, view_name='group-detail')
@@ -20,7 +21,8 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = TransientPhotometry
-        fields = "__all__"
+        # Every field except the program link (#648), which only a data sharer may set (PR 3).
+        exclude = ("allocation",)
         extra_kwargs = {
             'url': {'view_name': 'transientphotometry-detail', 'lookup_field': 'id'}
         }
@@ -117,8 +119,8 @@ class TransientPhotometrySerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class HostPhotometrySerializer(serializers.HyperlinkedModelSerializer):
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), view_name='host-detail', lookup_field="id")
-    instrument = serializers.HyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), view_name='host-detail', lookup_field="id")
+    instrument = IdHyperlinkedRelatedField(queryset=Instrument.objects.all(), view_name='instrument-detail', lookup_field="id")
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
 
     followup = serializers.HyperlinkedRelatedField(queryset=HostFollowup.objects.all(), allow_null=True, required=False, view_name='hostfollowup-detail')
@@ -210,8 +212,8 @@ class HostPhotometrySerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
-    photometry = serializers.HyperlinkedRelatedField(queryset=TransientPhotometry.objects.all(), view_name='transientphotometry-detail', lookup_field="id")
-    band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
+    photometry = VisibleDatasetIdRelatedField(dataset_kind='photometry', queryset=TransientPhotometry.objects.all(), view_name='transientphotometry-detail', lookup_field="id")
+    band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
 
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
     data_quality = serializers.HyperlinkedRelatedField(queryset=DataQuality.objects.all(), many=True, view_name='dataquality-detail')
@@ -221,7 +223,10 @@ class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = TransientPhotData
-        fields = "__all__"
+        # Every field except the per-point program link (#714), set only by the ingest paths and data sharers.
+        exclude = ("allocation",)
+        # follows the DataQuality M2M while that is in use (#81); not written through the API
+        read_only_fields = ["quality_mask"]
 
     def create(self, validated_data):
 
@@ -288,8 +293,8 @@ class TransientPhotDataSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class HostPhotDataSerializer(serializers.HyperlinkedModelSerializer):
-    photometry = serializers.HyperlinkedRelatedField(queryset=HostPhotometry.objects.all(), view_name='hostphotometry-detail', lookup_field="id")
-    band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
+    photometry = IdHyperlinkedRelatedField(queryset=HostPhotometry.objects.all(), view_name='hostphotometry-detail', lookup_field="id")
+    band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), view_name='photometricband-detail', lookup_field="id")
 
     unit = serializers.HyperlinkedRelatedField(queryset=Unit.objects.all(), allow_null=True, required=False, view_name='unit-detail')
     data_quality = serializers.HyperlinkedRelatedField(queryset=DataQuality.objects.all(), many=True, view_name='dataquality-detail')
@@ -300,6 +305,8 @@ class HostPhotDataSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = HostPhotData
         fields = "__all__"
+        # follows the DataQuality M2M while that is in use (#81); not written through the API
+        read_only_fields = ["quality_mask"]
 
     def create(self, validated_data):
 
@@ -363,7 +370,7 @@ class HostPhotDataSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientImageSerializer(serializers.HyperlinkedModelSerializer):
-    phot_data = serializers.HyperlinkedRelatedField(queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
+    phot_data = VisibleDatasetRelatedField(dataset_kind='photdata', queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
@@ -390,7 +397,7 @@ class TransientImageSerializer(serializers.HyperlinkedModelSerializer):
         return instance
 
 class TransientDiffImageSerializer(serializers.HyperlinkedModelSerializer):
-    phot_data = serializers.HyperlinkedRelatedField(queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
+    phot_data = VisibleDatasetRelatedField(dataset_kind='photdata', queryset=TransientPhotData.objects.all(), view_name='transientphotdata-detail')
 
     created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
     modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')

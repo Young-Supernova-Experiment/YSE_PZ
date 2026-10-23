@@ -52,7 +52,6 @@
 
   <link rel="stylesheet" href="{% static 'YSE_App/bower_components/fullcalendar/dist/fullcalendar.min.css' %}">
   <link rel="stylesheet" href="{% static 'YSE_App/bower_components/fullcalendar/dist/fullcalendar.print.min.css' %}" media="print">
-  <script src="{% static 'YSE_App/bower_components/moment/moment.js' %}"></script>
   <script src="{% static 'YSE_App/bower_components/fullcalendar/dist/fullcalendar.min.js' %}"></script>
 
   <script>
@@ -140,7 +139,7 @@
         return cookieValue;
       }
 
-      var csrftoken = getCookie('csrftoken');
+      var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
       /*
       The functions below will create a header with csrftoken

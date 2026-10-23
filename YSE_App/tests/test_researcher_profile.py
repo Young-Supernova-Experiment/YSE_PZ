@@ -291,12 +291,19 @@ class MentorshipTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         advisor = rp.current_advisor(self.student)
         self.assertEqual(advisor.mentor, self.mentor)
+        # The advisor is asked to confirm; it is on their side only after they do.
+        self.assertEqual(list(rp.my_students(self.mentor)), [])
+        pending = rp.pending_mentorships(self.mentor).get()
+        self.client.force_login(self.mentor)
+        self.client.post(reverse("researcher_mentorship_decide", args=[pending.pk]), {"action": "confirm"})
         self.assertEqual([m.mentee for m in rp.my_students(self.mentor)], [self.student])
-        # Switching to a free-form advisor ends the previous row.
+        # Switching to a free-form advisor ends the student's previous row, not the advisor's copy.
+        self.client.force_login(self.student)
         self.client.post(reverse("researcher_profile_edit"), dict(
             BASE_POST, career_level="grad", advisor_name="Unlisted Advisor", advisor_user_id=""))
         self.assertEqual(rp.current_advisor(self.student).mentor_name, "Unlisted Advisor")
-        self.assertIsNotNone(Mentorship.objects.get(mentor=self.mentor).end_year)
+        self.assertIsNotNone(Mentorship.objects.get(owner=self.student, mentor=self.mentor).end_year)
+        self.assertIsNone(Mentorship.objects.get(owner=self.mentor, mentee=self.student).end_year)
 
     def test_student_without_advisor_is_refused(self):
         self.client.force_login(self.student)
@@ -316,7 +323,7 @@ class MentorshipTests(TestCase):
         students = list(rp.my_students(self.mentor))
         self.assertEqual(len(students), 2)
         page = self.client.get(reverse("researcher_profile"))
-        self.assertContains(page, "My students")
+        self.assertContains(page, "My advisees")
         self.assertContains(page, "Free Form Student")
         free = Mentorship.objects.get(mentee_name="Free Form Student")
         self.client.post(reverse("researcher_student_update", args=[free.pk]), {"end_year": "2026"})
@@ -333,13 +340,145 @@ class MentorshipTests(TestCase):
                                           {"student_name": "X", "kind": "phd_advisor"}).status_code, 404)
         self.assertEqual(self.client.post(reverse("researcher_student_update", args=[row.pk]),
                                           {"remove": "1"}).status_code, 404)
-        self.assertNotContains(self.client.get(reverse("researcher_profile")), "My students")
+        self.assertNotContains(self.client.get(reverse("researcher_profile")), "My advisees")
         # A mentor can only edit their own rows.
         other = User.objects.create_user("other_mentor", password="x")
         ResearcherProfile.objects.create(user=other, career_level="tenured", orcid=VALID_ORCIDS[0], **BASE_POST)
         self.client.force_login(other)
         self.assertEqual(self.client.post(reverse("researcher_student_update", args=[row.pk]),
                                           {"remove": "1"}).status_code, 404)
+
+    def test_advisee_row_edits_kind_and_years_in_place(self):
+        row = Mentorship.objects.create(kind=Mentorship.KIND_CURRENT_ADVISOR, mentor=self.mentor,
+                                        mentee=self.student, start_year=2020, owner=self.mentor)
+        self.client.force_login(self.mentor)
+        self.client.post(reverse("researcher_student_update", args=[row.pk]), {
+            "kind": Mentorship.KIND_FORMER_ADVISOR, "start_year": "2019", "end_year": "2024"})
+        row.refresh_from_db()
+        self.assertEqual((row.kind, row.start_year, row.end_year), (Mentorship.KIND_FORMER_ADVISOR, 2019, 2024))
+        # A form that sends only the end year leaves the kind and start year alone.
+        self.client.post(reverse("researcher_student_update", args=[row.pk]), {"end_year": "2025"})
+        row.refresh_from_db()
+        self.assertEqual((row.kind, row.start_year, row.end_year), (Mentorship.KIND_FORMER_ADVISOR, 2019, 2025))
+        # End before start is refused.
+        self.client.post(reverse("researcher_student_update", args=[row.pk]), {"start_year": "2026"})
+        row.refresh_from_db()
+        self.assertEqual(row.start_year, 2019)
+
+    def test_postdoc_manages_own_advisors(self):
+        postdoc = User.objects.create_user("postdoc_user", password="x")
+        ResearcherProfile.objects.create(user=postdoc, career_level="postdoc", orcid=VALID_ORCIDS[0], **BASE_POST)
+        consent(postdoc)
+        self.client.force_login(postdoc)
+        page = self.client.get(reverse("researcher_profile"))
+        self.assertContains(page, "My advisors")
+        self.assertContains(page, 'value="postdoc_advisor" selected')
+        self.assertNotContains(page, "My advisees")
+        self.client.post(reverse("researcher_advisor_add"), {
+            "advisor_name": "x", "advisor_user_id": str(self.mentor.pk), "kind": Mentorship.KIND_POSTDOC_ADVISOR,
+            "start_year": "2024"})
+        self.client.post(reverse("researcher_advisor_add"), {
+            "advisor_name": "Former PhD Advisor", "kind": Mentorship.KIND_PHD_ADVISOR,
+            "start_year": "2018", "end_year": "2023"})
+        rows = {m.mentor_label: m for m in Mentorship.objects.filter(owner=postdoc)}
+        self.assertEqual(set(rows), {"Former PhD Advisor", "Test Person"})
+        self.assertEqual(rows["Test Person"].mentor, self.mentor)
+        # The advisor is asked to confirm before the postdoc shows among their advisees.
+        self.assertNotIn(postdoc, [m.mentee for m in rp.my_students(self.mentor)])
+        self.assertEqual([m.mentee for m in rp.pending_mentorships(self.mentor)], [postdoc])
+        phd = rows["Former PhD Advisor"]
+        self.client.post(reverse("researcher_advisor_update", args=[phd.pk]), {
+            "kind": Mentorship.KIND_FORMER_ADVISOR, "start_year": "2017", "end_year": "2023"})
+        phd.refresh_from_db()
+        self.assertEqual((phd.kind, phd.start_year), (Mentorship.KIND_FORMER_ADVISOR, 2017))
+        self.client.post(reverse("researcher_advisor_update", args=[phd.pk]), {"remove": "1"})
+        self.assertFalse(Mentorship.objects.filter(pk=phd.pk).exists())
+        # Yourself is refused.
+        self.client.post(reverse("researcher_advisor_add"), {
+            "advisor_name": "x", "advisor_user_id": str(postdoc.pk), "kind": Mentorship.KIND_POSTDOC_ADVISOR})
+        self.assertFalse(Mentorship.objects.filter(mentee=postdoc, mentor=postdoc).exists())
+
+    def test_each_side_keeps_and_edits_its_own_copy(self):
+        self.client.force_login(self.mentor)
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("researcher_student_add"), {
+                "student_name": "x", "student_user_id": str(self.student.pk), "kind": Mentorship.KIND_PHD_ADVISOR,
+                "start_year": "2021"})
+        mine = Mentorship.objects.get(owner=self.mentor)
+        theirs = rp.pending_mentorships(self.student).get()
+        self.assertEqual((mine.counterpart_id, theirs.counterpart_id), (theirs.pk, mine.pk))
+        # The student is notified with a link to their profile.
+        from YSE_App.models import Notification
+        note = Notification.objects.get(recipient=self.student, kind="mentorship")
+        self.assertIn(reverse("researcher_profile"), note.url)
+        # Pending rows are not editable, not even by their owner.
+        self.client.force_login(self.student)
+        self.assertEqual(self.client.post(reverse("researcher_advisor_update", args=[theirs.pk]),
+                                          {"start_year": "2010"}).status_code, 404)
+        self.client.post(reverse("researcher_mentorship_decide", args=[theirs.pk]), {"action": "confirm"})
+        self.assertEqual([m.mentor for m in rp.my_advisors(self.student)], [self.mentor])
+        # Each side edits only its own copy.
+        self.client.post(reverse("researcher_advisor_update", args=[theirs.pk]), {"start_year": "2020"})
+        mine.refresh_from_db()
+        theirs.refresh_from_db()
+        self.assertEqual((mine.start_year, theirs.start_year), (2021, 2020))
+        self.assertEqual(self.client.post(reverse("researcher_advisor_update", args=[mine.pk]),
+                                          {"start_year": "2000"}).status_code, 404)
+
+    def test_decline_keeps_the_other_side(self):
+        self.client.force_login(self.mentor)
+        self.client.post(reverse("researcher_student_add"), {
+            "student_name": "x", "student_user_id": str(self.student.pk), "kind": Mentorship.KIND_PHD_ADVISOR})
+        pending = rp.pending_mentorships(self.student).get()
+        self.client.force_login(self.student)
+        self.client.post(reverse("researcher_mentorship_decide", args=[pending.pk]), {"action": "decline"})
+        self.assertFalse(Mentorship.objects.filter(pk=pending.pk).exists())
+        self.assertEqual([m.mentee for m in rp.my_students(self.mentor)], [self.student])
+        self.assertEqual(list(rp.my_advisors(self.student)), [])
+
+    def test_confirming_needs_research_consent(self):
+        no_consent = User.objects.create_user("mentorship_no_consent", password="x")
+        self.client.force_login(self.mentor)
+        self.client.post(reverse("researcher_student_add"), {
+            "student_name": "x", "student_user_id": str(no_consent.pk), "kind": Mentorship.KIND_PHD_ADVISOR})
+        pending = rp.pending_mentorships(no_consent).get()
+        self.client.force_login(no_consent)
+        self.client.post(reverse("researcher_mentorship_decide", args=[pending.pk]), {"action": "confirm"})
+        pending.refresh_from_db()
+        self.assertTrue(pending.is_pending)
+        # Only the owner decides.
+        self.client.force_login(self.student)
+        self.assertEqual(self.client.post(reverse("researcher_mentorship_decide", args=[pending.pk]),
+                                          {"action": "confirm"}).status_code, 404)
+
+    def test_migration_gives_existing_relations_a_confirmed_copy_per_side(self):
+        import importlib
+
+        from django.apps import apps as django_apps
+
+        migration = importlib.import_module("YSE_App.migrations.0055_mentorship_owner_status")
+        row = Mentorship.objects.create(kind=Mentorship.KIND_PHD_ADVISOR, mentor=self.mentor, mentee=self.student,
+                                        created_by=self.student)
+        Mentorship.objects.filter(pk=row.pk).update(owner=None, counterpart=None)
+        migration._split_sides(django_apps, None)
+        row.refresh_from_db()
+        self.assertEqual(row.owner, self.student)
+        copy = Mentorship.objects.get(pk=row.counterpart_id)
+        self.assertEqual((copy.owner, copy.status), (self.mentor, Mentorship.STATUS_CONFIRMED))
+        self.assertIn(self.student, [m.mentee for m in rp.my_students(self.mentor)])
+
+    def test_advisor_rows_need_consent_and_ownership(self):
+        row = Mentorship.objects.create(kind=Mentorship.KIND_PHD_ADVISOR, mentor_name="Someone", mentee=self.student)
+        no_consent = User.objects.create_user("no_consent_user", password="x")
+        ResearcherProfile.objects.create(user=no_consent, career_level="postdoc", orcid=VALID_ORCIDS[1], **BASE_POST)
+        self.client.force_login(no_consent)
+        self.assertEqual(self.client.post(reverse("researcher_advisor_add"),
+                                          {"advisor_name": "X", "kind": "phd_advisor"}).status_code, 404)
+        # Someone else's advisor row is not editable, even by a consenting user.
+        self.client.force_login(self.mentor)
+        self.assertEqual(self.client.post(reverse("researcher_advisor_update", args=[row.pk]),
+                                          {"remove": "1"}).status_code, 404)
+        self.assertTrue(Mentorship.objects.filter(pk=row.pk).exists())
 
     def test_advisor_suggest(self):
         inactive = User.objects.create_user("mentor_inactive", password="x", is_active=False)

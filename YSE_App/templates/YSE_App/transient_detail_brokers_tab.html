@@ -59,7 +59,7 @@
 		$.post($body.data('import-url'), {
 			broker: $btn.data('broker'), object_id: $btn.data('object-id'), instrument: $btn.data('instrument'),
 			obs_group: $btn.data('obs-group'), alias: '1',
-			csrfmiddlewaretoken: (document.querySelector('input[name=csrfmiddlewaretoken]') || {}).value || $.cookie && $.cookie('csrftoken') || ''
+			csrfmiddlewaretoken: (document.querySelector('input[name=csrfmiddlewaretoken]') || {}).value || $.cookie && $.cookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}') || ''
 		}).done(function(json) {
 			$status.text('Import job ' + json.job + ' queued for ' + json.object_id + '; photometry appears when the job runner has processed it.');
 			$btn.text('Queued');

@@ -94,9 +94,9 @@
             <tbody>
               {% for n in upcoming_observing_nights %}
                 <tr>
-                    <td>{{ n.telescope }}</td>
-                    <td data-order="{{ n.begin_date_valid|date:'c' }}">{{ n.begin_date_valid|date:'Y-m-d' }}</td>
-                    <td>{{ n.principal_investigator|default:'' }}</td>
+                    <td>{{ n.resource.telescope }}</td>
+                    <td data-order="{{ n.obs_date|date:'c' }}"><a href="{% if n.resource.principal_investigator %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' n.resource.principal_investigator.name %}{% else %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' 'None' %}{% endif %}">{{ n.obs_date|date:'Y-m-d' }}</a></td>
+                    <td>{{ n.resource.principal_investigator|default:'' }}</td>
                 </tr>
               {% endfor %}
               </tbody>
@@ -338,8 +338,6 @@
 
 
 {% block scripts %}
-  <script src="{% static 'YSE_App/bower_components/datatables.net/js/jquery.dataTables.min.js' %}"></script>
-  <script src="{% static 'YSE_App/bower_components/datatables.net-bs/js/dataTables.bootstrap.min.js' %}"></script>
   <!--<script type="text/javascript" src="https://mpld3.github.io/js/d3.v3.min.js"></script>
   <script type="text/javascript" src="https://mpld3.github.io/js/mpld3.v0.3.1.dev1.js"></script>-->
   <script type="text/javascript" src="{% static 'YSE_App/bokeh-2.4.2.min.js' %}"></script>
@@ -605,7 +603,7 @@
         return cookieValue;
       }
 
-      var csrftoken = getCookie('csrftoken');
+      var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
       /*
       The functions below will create a header with csrftoken

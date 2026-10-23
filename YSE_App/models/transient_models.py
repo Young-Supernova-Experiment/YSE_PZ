@@ -8,6 +8,7 @@ from YSE_App.models.tag_models import *
 from YSE_App.common.utilities import GetSexigesimalString
 from YSE_App.common.utilities import date_to_mjd
 from YSE_App.common.galactic import galactic_coords
+from YSE_App.common.quality_mask import legacy_good
 from YSE_App import models as yse_models
 from django.dispatch import receiver
 from pytz import timezone
@@ -21,6 +22,55 @@ import logging
 from auditlog.registry import auditlog
 
 logger = logging.getLogger(__name__)
+
+
+# Half-widths of the matching box, in degrees (RA is divided by |cos(dec)| of the transient).
+_NEAREST_FIELD_BOX = {'ztf': (6.9 / 2., 6.9 / 2.), 'yse': (15., 15.)}
+
+
+def batch_nearest_survey_fields(transients, kind):
+	"""
+	First matching SurveyField for each transient, with one query for the whole batch.
+
+	Same rule as the old per-row methods: the first field (lowest pk) whose centre lies in
+	the box around the transient (ZTF fields for kind 'ztf', all other groups for 'yse'),
+	and its separation in degrees to one decimal. Returns a list of
+	(field_id, '%.1f' separation) tuples, (None, None) where nothing matches.
+	"""
+	import numpy as np
+	transients = list(transients)
+	if not transients:
+		return []
+	fields = SurveyField.objects.order_by('pk')
+	if kind == 'ztf':
+		fields = fields.filter(obs_group__name='ZTF')
+	else:
+		fields = fields.exclude(obs_group__name='ZTF')
+	rows = list(fields.values_list('field_id', 'ra_cen', 'dec_cen'))
+	results = [(None, None)] * len(transients)
+	if not rows:
+		return results
+	f_id = [r[0] for r in rows]
+	f_ra = np.array([r[1] for r in rows], dtype=float)
+	f_dec = np.array([r[2] for r in rows], dtype=float)
+	t_ra = np.array([t.ra for t in transients], dtype=float)
+	t_dec = np.array([t.dec for t in transients], dtype=float)
+	ra_half, dec_half = _NEAREST_FIELD_BOX[kind]
+	with np.errstate(divide='ignore'):
+		ra_off = ra_half / np.abs(np.cos(t_dec * np.pi / 180))
+	match = ((f_ra[None, :] > (t_ra - ra_off)[:, None]) & (f_ra[None, :] < (t_ra + ra_off)[:, None]) &
+			 (f_dec[None, :] > (t_dec - dec_half)[:, None]) & (f_dec[None, :] < (t_dec + dec_half)[:, None]))
+	hit = match.any(axis=1)
+	if not hit.any():
+		return results
+	first = match.argmax(axis=1)  # first True per row = lowest pk
+	idx = np.nonzero(hit)[0]
+	sep = cd.SkyCoord(t_ra[idx], t_dec[idx], unit=u.deg).separation(
+		cd.SkyCoord(f_ra[first[idx]], f_dec[first[idx]], unit=u.deg)).degree
+	for i, s in zip(idx, sep):
+		results[i] = (f_id[first[i]], '%.1f' % s)
+	return results
+
 
 class Transient(BaseModel):
 
@@ -57,6 +107,8 @@ class Transient(BaseModel):
 	redshift = models.FloatField(null=True, blank=True)
 	redshift_err = models.FloatField(null=True, blank=True)
 	redshift_source = models.CharField(max_length=64, null=True, blank=True)
+	# Set by hand: wins over every catalogue and is never overwritten (#436, #437). NULL = False.
+	redshift_override = models.BooleanField(null=True, blank=True, default=False)
 	non_detect_date = models.DateTimeField(null=True, blank=True)
 	non_detect_limit = models.FloatField(null=True, blank=True)
 	mw_ebv = models.FloatField(null=True, blank=True)
@@ -108,6 +160,10 @@ class Transient(BaseModel):
 			models.Index(fields=['dec'], name='yse_transient_dec_idx'),
 			# Search |b| cuts and ORDER BY gal_b (#286).
 			models.Index(fields=['gal_b'], name='yse_transient_gal_b_idx'),
+			# Cone-search boxes (dec range AND ra range), dec first (#477).
+			models.Index(fields=['dec', 'ra'], name='yse_transient_dec_ra_idx'),
+			# created_date >= cutoff and ORDER BY created_date (#478).
+			models.Index(fields=['created_date'], name='yse_transient_created_idx'),
 		]
 
 	# (label, True/False/None) for the Summary tab's Archives badges and the search flags.
@@ -138,7 +194,7 @@ class Transient(BaseModel):
 	def Separation(self):
 		if not self.host_id:
 			return None
-		host = Host.objects.get(pk=self.host_id)
+		host = self.host  # select_related on the detail/summary views; one query otherwise
 		return '%.2f'%getSeparation(self.ra,self.dec,host.ra,host.dec)
 
 	def LikelyYSEField(self):
@@ -154,88 +210,44 @@ class Transient(BaseModel):
 						Q(dec_cen__gt = self.dec-dec_offset.degree) &
 						Q(dec_cen__lt = self.dec+dec_offset.degree)))
 
-		if len(sf): 
-			so = SurveyObservation.objects.filter(survey_field__field_id=sf[0].field_id).filter(obs_mjd__isnull=False).order_by('-obs_mjd')
-			if len(so):
-				time_since_last_obs = date_to_mjd(datetime.datetime.utcnow())-so[0].obs_mjd
+		# LIMIT 1 on the field and on the newest observation time: the old
+		# len()/[0] pattern loaded every matching field and every observation.
+		field = sf.first()
+		if field is not None:
+			last_obs_mjd = SurveyObservation.objects.filter(survey_field__field_id=field.field_id).\
+				filter(obs_mjd__isnull=False).order_by('-obs_mjd').\
+				values_list('obs_mjd', flat=True).first()
+			if last_obs_mjd is not None:
+				time_since_last_obs = date_to_mjd(datetime.datetime.utcnow())-last_obs_mjd
 			else:
 				time_since_last_obs = None
-			return sf[0].field_id, sf[0].ra_cen, sf[0].dec_cen, time_since_last_obs
+			return field.field_id, field.ra_cen, field.dec_cen, time_since_last_obs
 		else: return None,None,None,None
 
+	def _nearest_field_result(self, kind):
+		"""(field_id, sep string) for the first matching field of `kind` ('ztf' or 'yse').
+
+		Uses the per-page cache that the field tables fill (batch_nearest_survey_fields)
+		when present, otherwise computes it for this one transient."""
+		cache = self.__dict__.get('_nearest_field_cache')
+		if cache is None:
+			cache = self.__dict__['_nearest_field_cache'] = {}
+		if kind not in cache:
+			cache[kind] = batch_nearest_survey_fields([self], kind)[0]
+		return cache[kind]
+
 	def nearest_ztf_field(self):
-		d = self.dec*np.pi/180
-		width_corr = 6.9/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr/2., unit=u.deg)
-		dec_offset = cd.Angle(6.9/2., unit=u.deg)
-
-		sf = SurveyField.objects.filter(obs_group__name='ZTF').\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree)))
-
-		if len(sf): 
-			return sf[0].field_id
-		else: return None
+		return self._nearest_field_result('ztf')[0]
 
 	def nearest_ztf_field_sep(self):
-		d = self.dec*np.pi/180
-		width_corr = 6.9/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr/2., unit=u.deg)
-		dec_offset = cd.Angle(6.9/2., unit=u.deg)
-
-		sf = SurveyField.objects.filter(obs_group__name='ZTF').\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree))).select_related()
-
-		sc = cd.SkyCoord(self.ra,self.dec,unit=u.deg)
-		sc2 = cd.SkyCoord(sf[0].ra_cen,sf[0].dec_cen,unit=u.deg)
-		if len(sf): 
-			return '%.1f'%sc.separation(sc2).degree
-		else: return None
+		return self._nearest_field_result('ztf')[1]
 
 	def nearest_yse_field(self):
-		d = self.dec*np.pi/180
-		width_corr = 15/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr, unit=u.deg)
-		dec_offset = cd.Angle(15, unit=u.deg)
-
-		sf = SurveyField.objects.filter(~Q(obs_group__name='ZTF')).\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree)))
-
-		if len(sf): 
-			return sf[0].field_id
-		else: return None
+		return self._nearest_field_result('yse')[0]
 
 	def nearest_yse_field_sep(self):
-		d = self.dec*np.pi/180
-		width_corr = 15/np.abs(np.cos(d))
-		# Define the tile offsets:
-		ra_offset = cd.Angle(width_corr, unit=u.deg)
-		dec_offset = cd.Angle(15, unit=u.deg)
+		return self._nearest_field_result('yse')[1]
 
-		sf = SurveyField.objects.filter(~Q(obs_group__name='ZTF')).\
-			filter((Q(ra_cen__gt = self.ra-ra_offset.degree) &
-					Q(ra_cen__lt = self.ra+ra_offset.degree) &
-					Q(dec_cen__gt = self.dec-dec_offset.degree) &
-					Q(dec_cen__lt = self.dec+dec_offset.degree))).select_related()
-
-		sc = cd.SkyCoord(self.ra,self.dec,unit=u.deg)
-		sc2 = cd.SkyCoord(sf[0].ra_cen,sf[0].dec_cen,unit=u.deg)
-		if len(sf): 
-			return '%.1f'%sc.separation(sc2).degree
-		else: return None
-		
-		
 	def modified_date_pacific(self):
 		date_format = '%m/%d/%Y %H:%M:%S %Z'
 		mod_date = self.modified_date.astimezone(timezone('US/Pacific'))
@@ -258,7 +270,7 @@ class Transient(BaseModel):
 		phot_ids = all_phot.values('id')
 		phot_data_query = Q(photometry__id__in=phot_ids)
 		disc_query = Q(discovery_point = 1)
-		disc_mag = yse_models.TransientPhotData.objects.exclude(data_quality__isnull=False).filter(phot_data_query & disc_query)
+		disc_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(phot_data_query & disc_query)
 		if len(disc_mag):
 			return disc_mag[0].mag
 		else:
@@ -271,7 +283,7 @@ class Transient(BaseModel):
 		all_phot = yse_models.TransientPhotometry.objects.filter(transient_query)
 		phot_ids = all_phot.values('id')
 		phot_data_query = Q(photometry__id__in=phot_ids)
-		recent_mag = yse_models.TransientPhotData.objects.exclude(data_quality__isnull=False).filter(mag__isnull=False).filter(phot_data_query).order_by('-obs_date')
+		recent_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(mag__isnull=False).filter(phot_data_query).order_by('-obs_date')
 
 		if len(recent_mag):
 			return '%.2f'%(recent_mag[0].mag)
@@ -285,19 +297,21 @@ class Transient(BaseModel):
 		all_phot = yse_models.TransientPhotometry.objects.filter(transient_query)
 		phot_ids = all_phot.values('id')
 		phot_data_query = Q(photometry__id__in=phot_ids)
-		recent_mag = yse_models.TransientPhotData.objects.exclude(data_quality__isnull=False).filter(phot_data_query).order_by('-obs_date')
+		recent_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(phot_data_query).order_by('-obs_date')
 
 		if len(recent_mag):
 			return '%s'%(recent_mag[0].obs_date.strftime(date_format))
 		else:
 			return None
 
+	def best_z(self):
+		"""The redshift to use under the full precedence list (#736): a ``BestRedshift``."""
+		from YSE_App.services.redshift_precedence import best_redshift
+
+		return best_redshift(self)
+
 	def z_or_hostz(self):
-		if self.redshift:
-			return self.redshift
-		elif self.host and self.host.redshift:
-			return self.host.redshift
-		else: return None
+		return self.best_z().value
 
 	def name_table_sort(self):
 		if len(self.name) > 4:

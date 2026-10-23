@@ -13,6 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
+# Observation group of every photometry header written from a TNS report (#645), kept apart from the
+# survey's own (e.g. forced) photometry on the same transient.
+TNS_OBS_GROUP_NAME = "TNS"
+
 # TNS instrument name -> YSE telescope + instrument (+ optional obs_group hint)
 TNS_INSTRUMENT_MAP: Dict[str, Dict[str, str]] = {
     "ZTF-Cam": {"telescope": "P48", "instrument": "ZTF-Cam", "obs_group": "ZTF"},

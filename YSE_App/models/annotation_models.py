@@ -112,10 +112,12 @@ class TransientAnnotation(BaseModel):
         return json.dumps(self.data if isinstance(self.data, dict) else {}, indent=2, sort_keys=True, default=str)
 
     def visible_to(self, user) -> bool:
-        """Staff and superusers always; otherwise no groups, or a shared group."""
+        """Service readers always (#719); everyone else, staff included: no groups, or a shared group."""
         if user is None or not user.is_authenticated:
             return False
-        if user.is_staff or user.is_superuser:
+        from YSE_App.services.annotations import sees_all_annotations
+
+        if sees_all_annotations(user):
             return True
         group_ids = {g.pk for g in self.groups.all()}
         if not group_ids:

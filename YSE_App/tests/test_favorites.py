@@ -233,6 +233,12 @@ class ActivityTests(FavoriteBase):
     def test_new_spectrum(self):
         self.star(self.alice)
         attach_synthetic_spectrum(self.bob, self.transient)
+        # Announced by a delayed job, once the upload has set the spectrum's groups (#761).
+        self.assertEqual(self.activity(self.alice), [])
+        [job] = Job.objects.filter(kind=svc.SPECTRUM_JOB_KIND)
+        self.assertGreater(job.run_after, timezone.now())
+        Job.objects.filter(pk=job.pk).update(run_after=timezone.now() - datetime.timedelta(seconds=1))
+        run_pass(kinds=[svc.SPECTRUM_JOB_KIND])
         [row] = self.activity(self.alice)
         self.assertIn("new spectrum from", row.text)
         self.assertIn("observed", row.text)
