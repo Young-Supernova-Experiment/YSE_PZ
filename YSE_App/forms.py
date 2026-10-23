@@ -139,6 +139,7 @@ class TransientFollowupForm(ModelForm):
             self.followup_audience_more = [
                 c for c in self.followup_audience_choices if c["hidden"]
             ]
+            self.followup_audience_more_eligible = any(c["enabled"] for c in self.followup_audience_more)
             self.fields["audience_groups"].initial = eligible_ids
             self.resource_audience_map = build_followup_resource_audience_map(self)
             self.public_group_id = next(
