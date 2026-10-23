@@ -42,6 +42,8 @@ def _split_sides(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # MySQL cannot roll back DDL; the ALTER ... SET DEFAULT runs outside a transaction (as in 0036).
+    atomic = False
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
