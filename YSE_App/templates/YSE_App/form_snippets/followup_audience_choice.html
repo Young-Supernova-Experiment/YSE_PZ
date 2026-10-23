@@ -1,4 +1,5 @@
-<div class="checkbox yse-followup-audience-choice" data-group-id="{{ choice.group.pk }}">
+{# Groups the selected observing resource does not allow are hidden, not shown greyed out. #}
+<div class="checkbox yse-followup-audience-choice{% if not choice.enabled %} yse-followup-audience-ineligible{% endif %}" data-group-id="{{ choice.group.pk }}"{% if not choice.enabled %} style="display: none;"{% endif %}>
 	<label class="yse-followup-audience-label{% if not choice.enabled %} text-muted{% endif %}">
 		<input type="checkbox"
 			name="audience_groups"
