@@ -74,7 +74,7 @@ django-redis==5.4.0
 django-sql-explorer==2.3
 django-tables2==2.4.0
 django-widget-tweaks==1.4.9
-djangorestframework==3.13.1
+djangorestframework==3.18.2
 dustmaps==1.0.8
 extinction==0.4.2
 filelock==3.16.1
