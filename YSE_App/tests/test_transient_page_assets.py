@@ -307,9 +307,22 @@ class TransientPageAssetsTests(TestCase):
                 self.assertIn(reverse("delete_followup", args=[self.legacy_followup.id]), html)
 
     def test_inline_page_includes_followups_and_fragment_reload_url(self):
+        self.client.force_login(self.staff)
         html = self._detail_html(defer=False)
         for parent in (self.legacy_followup, self.shared_parent):
             self.assertEqual(html.count(f"Follow-up (id: {parent.id})"), 1)
+        # The follow-up id and the admin link are staff-only (#834).
+        self.client.force_login(self.user)
+        html = self._detail_html(defer=False)
+        for parent in (self.legacy_followup, self.shared_parent):
+            self.assertNotIn(f"Follow-up (id: {parent.id})", html)
+        self.assertNotIn("/admin/YSE_App/transientfollowup/", html)
+
+    def test_followup_fragment_empty_state(self):
+        self.client.force_login(self.user)
+        url = reverse("transient_detail_followup_fragment", args=[self.empty_transient.id])
+        html = self.client.get(url).content.decode("utf-8", errors="replace")
+        self.assertIn("No follow-up has been requested for this transient yet", html)
         self.assertIn(
             reverse("transient_detail_followup_fragment", args=[self.transient.id]), html
         )
