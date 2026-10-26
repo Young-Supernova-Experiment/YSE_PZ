@@ -414,10 +414,18 @@ body.yse-theme .badge-primary {
 }
 
 body.yse-theme .btn-primary:hover,
-body.yse-theme .btn-primary:focus {
+body.yse-theme .btn-primary:focus,
+body.yse-theme a.badge-primary:hover,
+body.yse-theme a.badge-primary:focus {
   background-color: #1d4ed8;
   border-color: #1d4ed8;
   color: #fff;
+}
+
+body.yse-theme .btn-primary:disabled,
+body.yse-theme .btn-primary.disabled {
+  background-color: var(--yse-primary-solid);
+  border-color: var(--yse-primary-solid);
 }
 
 body.yse-theme .btn-success,
@@ -428,10 +436,18 @@ body.yse-theme .badge-success {
 }
 
 body.yse-theme .btn-success:hover,
-body.yse-theme .btn-success:focus {
+body.yse-theme .btn-success:focus,
+body.yse-theme a.badge-success:hover,
+body.yse-theme a.badge-success:focus {
   background-color: #065f46;
   border-color: #065f46;
   color: #fff;
+}
+
+body.yse-theme .btn-success:disabled,
+body.yse-theme .btn-success.disabled {
+  background-color: var(--yse-success-solid);
+  border-color: var(--yse-success-solid);
 }
 
 body.yse-theme .btn-info,
@@ -442,10 +458,18 @@ body.yse-theme .badge-info {
 }
 
 body.yse-theme .btn-info:hover,
-body.yse-theme .btn-info:focus {
+body.yse-theme .btn-info:focus,
+body.yse-theme a.badge-info:hover,
+body.yse-theme a.badge-info:focus {
   background-color: #075985;
   border-color: #075985;
   color: #fff;
+}
+
+body.yse-theme .btn-info:disabled,
+body.yse-theme .btn-info.disabled {
+  background-color: var(--yse-info-solid);
+  border-color: var(--yse-info-solid);
 }
 
 body.yse-theme .btn-danger,
@@ -456,10 +480,18 @@ body.yse-theme .badge-danger {
 }
 
 body.yse-theme .btn-danger:hover,
-body.yse-theme .btn-danger:focus {
+body.yse-theme .btn-danger:focus,
+body.yse-theme a.badge-danger:hover,
+body.yse-theme a.badge-danger:focus {
   background-color: #991b1b;
   border-color: #991b1b;
   color: #fff;
+}
+
+body.yse-theme .btn-danger:disabled,
+body.yse-theme .btn-danger.disabled {
+  background-color: var(--yse-danger-solid);
+  border-color: var(--yse-danger-solid);
 }
 
 /* --- Compact boxes (dashboard, observing, global) --- */
