@@ -274,10 +274,13 @@ def quick_search_params(params):
     """A mutable copy of ``params`` (a ``QueryDict``) with ``q`` expanded.
 
     ``q=2026abc`` becomes ``alias=2026abc`` (name or any alternate name, #801);
-    ``q=10.5 -20.25`` becomes
-    ``ra=10.5&dec=-20.25&radius_arcsec=5``. Explicit filter parameters win
-    over ``q``. The copy is what the FilterSet and its form see, so the form
-    shows the values the quick search stood for and the URL stays shareable.
+    ``q=10.5 -20.25`` becomes ``ra=10.5&dec=-20.25&radius_arcsec=5``. ``q``
+    only fills the parameters it maps to: an explicit ``alias`` (or explicit
+    ``ra``/``dec``/``radius_arcsec`` for a coordinate ``q``) wins over it,
+    and every other explicit filter (``name_contains``, status, dates, ...)
+    is kept and combined with it. The copy is what the FilterSet and its
+    form see, so the form shows the values the quick search stood for and
+    the URL stays shareable.
     """
     data = params.copy()
     q = data.get('q')

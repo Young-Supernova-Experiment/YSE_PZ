@@ -14,19 +14,26 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<script>
 	(function () {
+		// An explicit choice ("yse-theme-choice", set only by the toggle) wins; otherwise
+		// follow the OS setting (#821). The old "yse-theme" key was written on every page
+		// load, so only a legacy "light" counts as a choice (it is copied to the new key).
+		var t = null;
 		try {
-			// An explicit choice wins; otherwise follow the OS setting (#821).
-			var t = localStorage.getItem("yse-theme");
+			t = localStorage.getItem("yse-theme-choice");
 			if (t !== "light" && t !== "dark") {
-				t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+				t = null;
+				if (localStorage.getItem("yse-theme") === "light") {
+					t = "light";
+					localStorage.setItem("yse-theme-choice", "light");
+				}
 			}
-			var dark = t !== "light";
-			document.documentElement.setAttribute("data-yse-theme", dark ? "dark" : "light");
-			document.documentElement.classList.toggle("dark-mode", dark);
-		} catch (e) {
-			document.documentElement.setAttribute("data-yse-theme", "dark");
-			document.documentElement.classList.add("dark-mode");
+		} catch (e) {}
+		if (!t) {
+			t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
 		}
+		var dark = t !== "light";
+		document.documentElement.setAttribute("data-yse-theme", dark ? "dark" : "light");
+		document.documentElement.classList.toggle("dark-mode", dark);
 	})();
 	</script>
 	<link rel="shortcut icon" type="image/png" href="{% static 'YSE_App/favicon.ico' %}"/>
@@ -46,7 +53,7 @@
 	// Sidebar starts expanded on wide screens; a remembered collapse wins (#839, see yse-chrome.js).
 	(function () {
 		try {
-			if (window.innerWidth >= 992 && localStorage.getItem("yse-sidebar") === "collapsed") {
+			if (document.documentElement.clientWidth > 992 && localStorage.getItem("yse-sidebar") === "collapsed") {
 				document.body.classList.add("sidebar-collapse");
 			}
 		} catch (e) {}

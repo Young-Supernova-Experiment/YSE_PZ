@@ -272,3 +272,30 @@ class ChromeNavTests(TestCase):
         # The OS default is applied without being stored; only the toggle stores a choice.
         self.assertIn("apply(currentTheme(), false)", js)
         self.assertIn('apply(currentTheme() === "dark" ? "light" : "dark", true)', js)
+        # The explicit choice lives in a new key; a legacy "yse-theme" only migrates "light".
+        self.assertIn('"yse-theme-choice"', js)
+        self.assertIn('localStorage.getItem("yse-theme-choice")', html)
+        self.assertNotIn('localStorage.setItem("yse-theme",', html)
+        self.assertNotIn("setItem(LEGACY_KEY", js)
+        # The sidebar state is stored only after a click on the toggle, and width is
+        # measured like AdminLTE (clientWidth, scrollbar excluded).
+        self.assertIn("userToggle && isWide()", js)
+        self.assertNotIn("innerWidth", js)
+        self.assertIn("document.documentElement.clientWidth > 992", html)
+
+    def test_standalone_pages_follow_os_theme_and_bust_cache(self):
+        """Pages outside base.html use the same theme rule and the new asset versions (#821)."""
+        from pathlib import Path
+
+        templates = Path(__file__).resolve().parents[1] / "templates"
+        paths = [templates / "YSE_App" / ("%s.html" % n) for n in (
+            "login", "signup", "signup_done", "signup_verify", "logout_confirm")]
+        paths += [templates / "YSE_App" / "staff_mfa" / "base.html", templates / "explorer" / "yse_bare.html"]
+        for path in paths:
+            src = path.read_text(encoding="utf-8")
+            self.assertIn('localStorage.getItem("yse-theme-choice")', src, path.name)
+            self.assertIn("prefers-color-scheme: light", src, path.name)
+            self.assertNotIn('getItem("yse-theme") || "dark"', src, path.name)
+            self.assertIn("yse-theme.css' %}?v=chrome-nav-1", src, path.name)
+            if "yse-chrome.js" in src:
+                self.assertIn("yse-chrome.js' %}?v=chrome-nav-1", src, path.name)

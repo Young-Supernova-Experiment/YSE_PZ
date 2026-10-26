@@ -1,22 +1,39 @@
 /**
  * YSE-PZ chrome: night/light theme toggle, sidebar state + BS3 widget shims.
  * With no stored choice the theme follows prefers-color-scheme (#821); a click on
- * the toggle stores the choice in localStorage key "yse-theme", which then wins.
- * The sidebar's collapse choice on wide screens is stored in "yse-sidebar" (#839).
+ * the toggle stores the choice in localStorage key "yse-theme-choice", which then
+ * wins. The old key "yse-theme" was written on every page load, so it is only read
+ * once for migration: a legacy "light" counts as a choice, a legacy "dark" does not.
+ * The sidebar's collapse choice on wide screens is stored in "yse-sidebar" (#839);
+ * only a click on the toggle is stored, not AdminLTE's own load/resize auto-collapse.
  * Head FOUC script in base.html must run first.
  */
 (function () {
-  var KEY = "yse-theme";
+  var KEY = "yse-theme-choice";
+  var LEGACY_KEY = "yse-theme";
   var SIDEBAR_KEY = "yse-sidebar";
   var WIDE = 992;
 
+  // Same test as AdminLTE's autoCollapse ($(window).width() <= 992, scrollbar excluded).
+  function isWide() {
+    return document.documentElement.clientWidth > WIDE;
+  }
+
   function storedTheme() {
+    var t = null;
     try {
-      var t = localStorage.getItem(KEY);
-      return t === "light" || t === "dark" ? t : null;
+      t = localStorage.getItem(KEY);
+      if (t !== "light" && t !== "dark") {
+        t = null;
+        if (localStorage.getItem(LEGACY_KEY) === "light") {
+          t = "light";
+          localStorage.setItem(KEY, "light");
+        }
+      }
     } catch (err) {
-      return null;
+      /* storage blocked: t is whatever was read */
     }
+    return t;
   }
 
   function currentTheme() {
@@ -67,7 +84,7 @@
     if (!body) {
       return;
     }
-    var expanded = window.innerWidth >= WIDE
+    var expanded = isWide()
       ? !body.classList.contains("sidebar-collapse")
       : body.classList.contains("sidebar-open");
     var toggles = document.querySelectorAll("[data-widget='pushmenu']");
@@ -81,14 +98,26 @@
     if (typeof window.jQuery === "undefined") {
       return;
     }
+    // AdminLTE fires the same events from autoCollapse() on load and resize, so only
+    // store a state that follows a click on the toggle. Capture phase runs before
+    // AdminLTE's own click handler, which triggers the events synchronously.
+    var userToggle = false;
+    document.addEventListener("click", function (event) {
+      var t = event.target;
+      if (t && t.closest && t.closest("[data-widget='pushmenu']")) {
+        userToggle = true;
+        window.setTimeout(function () { userToggle = false; }, 0);
+      }
+    }, true);
     window.jQuery(document).on("collapsed.lte.pushmenu shown.lte.pushmenu", function (event) {
-      if (window.innerWidth >= WIDE) {
+      if (userToggle && isWide()) {
         try {
           localStorage.setItem(SIDEBAR_KEY, event.type === "collapsed" ? "collapsed" : "expanded");
         } catch (err) {
           /* ignore quota / private mode */
         }
       }
+      userToggle = false;
       syncSidebarToggle();
     });
     window.addEventListener("resize", syncSidebarToggle);
