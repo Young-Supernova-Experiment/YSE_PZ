@@ -385,6 +385,11 @@ body.yse-theme .table-hover tbody tr:hover > * {
   background-color: rgba(59, 130, 246, 0.18);
 }
 
+/* Vendor .table-warning>td is opaque #ffeeba; tint it in dark mode */
+html[data-yse-theme="dark"] body.yse-theme .table .table-warning > * {
+  background-color: rgba(245, 158, 11, 0.22);
+}
+
 body.yse-theme .form-control,
 body.yse-theme .custom-select {
   background-color: var(--yse-card-bg);
