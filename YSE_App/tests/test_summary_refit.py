@@ -458,7 +458,8 @@ class SaltFitFragmentTests(SummaryRefitBase):
         self.assertIn(self.url(), html)
         self.assertIn(reverse("transient_detail_ngsf_fragment", args=[self.transient.id]), html)
         self.assertIn("yseFitStatusLoad('salt_fit_status')", html)
-        self.assertIn('id="archive_flags"', html)
+        # Archive badges are hidden until at least one flag has a value (#835).
+        self.assertNotIn('id="archive_flags"', html)
 
 
 class NgsfFragmentAndQueueTests(SummaryRefitBase):
@@ -637,6 +638,6 @@ class HasJwstFlagTests(TestCase):
         html = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug})).content.decode()
         self.assertIn('data-archive="JWST" data-flag="1"', html)
         self.assertIn('data-archive="HST" data-flag="0"', html)
-        self.assertIn('data-archive="Chandra" data-flag="unknown"', html)
+        self.assertNotIn('data-archive="Chandra"', html)
         self.assertIn(">HST: no<", html)
-        self.assertIn(">Chandra: ?<", html)
+        self.assertNotIn(">Chandra: ?<", html)

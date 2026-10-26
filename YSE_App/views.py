@@ -2482,6 +2482,10 @@ def download_spectra(request, slug):
     st = BytesIO()
     archive = zipfile.ZipFile(st, 'w', zipfile.ZIP_DEFLATED)
     authorized_spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient.id, includeBadData=True)
+    # "Download selected" on the Spectra tab (#812): ?ids=1,2 narrows the authorized set; never widens it.
+    if request.GET.get('ids'):
+        selected_ids = [int(i) for i in request.GET['ids'].split(',') if i.strip().isdigit()]
+        authorized_spectra = authorized_spectra.filter(id__in=selected_ids)
     if len(authorized_spectra):
 
         for s in authorized_spectra:
