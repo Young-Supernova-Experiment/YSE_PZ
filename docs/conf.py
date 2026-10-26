@@ -47,6 +47,29 @@ templates_path = ['_templates']
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'perf']
 
+# This documentation is published publicly. Markdown pages are published only
+# if they are listed here (an allowlist); every other docs/**/*.md file is
+# excluded at build time, so new Markdown files default to unpublished.
+# Before adding a page, check that it has no server paths, host names, ports,
+# account names, admin or deploy commands, security details, personal names or
+# internal planning notes.
+PUBLIC_MARKDOWN_PAGES = [
+    'access-rules-engine',
+    'annotations',
+    'archive-tabs',
+    'observability',
+]
+
+_docs_dir = os.path.dirname(os.path.abspath(__file__))
+for _root, _dirs, _files in os.walk(_docs_dir):
+    _dirs[:] = [d for d in _dirs if d not in ('_build', '_static', 'perf')]
+    for _name in _files:
+        if not _name.endswith('.md'):
+            continue
+        _rel = os.path.relpath(os.path.join(_root, _name), _docs_dir).replace(os.sep, '/')
+        if _rel[:-3] not in PUBLIC_MARKDOWN_PAGES:
+            exclude_patterns.append(_rel)
+
 pygments_style = 'sphinx'
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.

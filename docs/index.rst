@@ -26,45 +26,12 @@ The modern study of astrophysical transients has been transformed by an exponent
 
 .. toctree::
    :maxdepth: 1
-   :caption: Developer and operations guides
+   :caption: User guides
 
    access-rules-engine
-   ai-summaries
-   analysis-services
    annotations
    archive-tabs
-   astroscheduler
-   background-jobs
-   branching
-   broker-streams
-   brokers
-   credentials-and-external-services
-   dashboard-performance
-   data-access-rules
-   deploy-checklist-ci
-   facility-apis
-   favorites-and-notifications
-   feeds-einstein-probe
-   feeds-hermes
-   feeds-jpl-scout
-   instrument-logs-weather
-   interests-and-access-requests
-   ngsf
    observability
-   photstat
-   quality-mask
-   redshift-precedence
-   researcher-profile
-   rubin-antares-ingest
-   security-groups
-   sql-rewrites-2026-09-29
-   tns-sharing
-   transient-search
-   ui-workflow-roadmap
-   yse-speed-improvements-plan
-   ziggy-migration-repair
-   ziggy-runbook
-   ziggy-static-aliases
 
 Indices and tables
 ==================

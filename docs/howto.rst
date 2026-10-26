@@ -8,8 +8,7 @@ Using the Admin interface
 --------------------------
 
 Most day-to-day actions (changing a status, requesting follow-up) are done
-directly on the transient detail page and record who made the change
-automatically. The Admin interface is only available to staff. When you
+directly on the transient detail page, with no admin page involved. The Admin interface is only available to staff. When you
 change or add a field there, make sure your username is selected in the
 ‘modified_by’ fields.  This will allow us to keep track of changes and ask
 you questions if we’re confused by something.
@@ -19,8 +18,7 @@ Changing transient statuses
 The status section of the Summary tab on the detail page for each object
 has buttons for the common statuses (Following, Watch, Interesting, Ignore)
 and a drop-down menu with all other statuses. Click a button to change the
-status; no admin page is involved and your username is recorded
-automatically.
+status; no admin page is involved.
 
 If you changed the transient status to FollowupRequested or
 Following, be sure to communicate with the slack channel to make sure everyone
