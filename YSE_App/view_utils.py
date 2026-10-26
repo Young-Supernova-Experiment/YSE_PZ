@@ -923,7 +923,6 @@ def salt3fluxplot(request, transient_id, salt3fit):
 def _redirect_to_salt3(request, route_name, transient_id, fit):
     """Permanent redirect from an old ``salt2*`` URL to its SALT3 name, keeping the query string."""
     from django.shortcuts import redirect
-    from django.urls import reverse
     url = reverse(route_name, args=[transient_id, fit])
     query = request.META.get('QUERY_STRING')
     if query:
