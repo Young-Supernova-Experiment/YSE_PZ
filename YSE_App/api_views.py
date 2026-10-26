@@ -345,9 +345,109 @@ class PhotStatBatchMixin:
             super().perform_update(serializer)
 
 
+def _mjd_to_aware_datetime(mjd, param='obs_mjd'):
+    """UTC datetime for an MJD value (used by the ``obs_mjd__gte`` / ``__lte`` API filters).
+
+    An MJD that is not a finite number or lies outside the representable date range is a
+    client error (HTTP 400), not a server error.
+    """
+    import datetime as _dt
+    import math
+    from astropy.time import Time
+    from rest_framework.exceptions import ValidationError
+    try:
+        value = float(mjd)
+        if not math.isfinite(value):
+            raise ValueError('not finite')
+        return Time(value, format='mjd', scale='utc').to_datetime(timezone=_dt.timezone.utc)
+    except Exception:  # ValueError/OverflowError and astropy/erfa range errors
+        raise ValidationError({param: ['Enter an MJD within the supported date range.']})
+
+
+class _TransientDataFilterSet(django_filters.FilterSet):
+    """Shared filters of the transient photometry / spectra API lists (#811).
+
+    Subclasses set ``transient_path`` (ORM path to the transient) and
+    ``date_path`` (ORM path to the observation date) and add ``spec_phase`` filters
+    where they apply. Without filter parameters the queryset is unchanged.
+    """
+    transient_path = None
+    date_path = None
+
+    transient = django_filters.NumberFilter(method='filter_transient')
+    transient__name = django_filters.CharFilter(method='filter_transient_name')
+    obs_date__gte = django_filters.IsoDateTimeFilter(method='filter_obs_date_gte')
+    obs_date__lte = django_filters.IsoDateTimeFilter(method='filter_obs_date_lte')
+    obs_mjd__gte = django_filters.NumberFilter(method='filter_obs_mjd_gte')
+    obs_mjd__lte = django_filters.NumberFilter(method='filter_obs_mjd_lte')
+
+    def filter_transient(self, queryset, name, value):
+        return queryset.filter(**{self.transient_path: value})
+
+    def filter_transient_name(self, queryset, name, value):
+        return queryset.filter(**{self.transient_path + '__name': value})
+
+    def _date(self, queryset, lookup, value):
+        return queryset.filter(**{'%s__%s' % (self.date_path, lookup): value})
+
+    def filter_obs_date_gte(self, queryset, name, value):
+        return self._date(queryset, 'gte', value)
+
+    def filter_obs_date_lte(self, queryset, name, value):
+        return self._date(queryset, 'lte', value)
+
+    def filter_obs_mjd_gte(self, queryset, name, value):
+        return self._date(queryset, 'gte', _mjd_to_aware_datetime(value, name))
+
+    def filter_obs_mjd_lte(self, queryset, name, value):
+        return self._date(queryset, 'lte', _mjd_to_aware_datetime(value, name))
+
+
+class TransientPhotometryFilterSet(_TransientDataFilterSet):
+    """A header matches a date range when any of its points that the user may see does.
+
+    Only the per-point authorized points are considered, so a point hidden from the
+    user never makes its header match.
+    """
+    transient_path = 'transient'
+
+    def _date(self, queryset, lookup, value):
+        user = getattr(self.request, 'user', None)
+        points = PhotometryService.GetAuthorizedTransientPhotData_ByUser(user).filter(
+            **{'obs_date__%s' % lookup: value})
+        return queryset.filter(pk__in=points.values('photometry_id'))
+
+
+class TransientPhotDataFilterSet(_TransientDataFilterSet):
+    transient_path = 'photometry__transient'
+    date_path = 'obs_date'
+
+
+class TransientSpectrumFilterSet(_TransientDataFilterSet):
+    transient_path = 'transient'
+    date_path = 'obs_date'
+    spec_phase_path = 'spec_phase'
+    spec_phase__gte = django_filters.NumberFilter(method='filter_spec_phase_gte')
+    spec_phase__lte = django_filters.NumberFilter(method='filter_spec_phase_lte')
+
+    def filter_spec_phase_gte(self, queryset, name, value):
+        return queryset.filter(**{self.spec_phase_path + '__gte': value})
+
+    def filter_spec_phase_lte(self, queryset, name, value):
+        return queryset.filter(**{self.spec_phase_path + '__lte': value})
+
+
+class TransientSpecDataFilterSet(TransientSpectrumFilterSet):
+    transient_path = 'spectrum__transient'
+    date_path = 'spectrum__obs_date'
+    spec_phase_path = 'spectrum__spec_phase'
+
+
 class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotometrySerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientPhotometryFilterSet
     lookup_field = "id"
 
     def get_queryset(self):
@@ -367,6 +467,8 @@ class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 class TransientPhotDataViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientPhotDataFilterSet
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedTransientPhotData_ByUser(self.request.user)
@@ -474,6 +576,8 @@ class UserTelescopeToFollowViewSet(custom_viewsets.ListCreateRetrieveUpdateViewS
 class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpectrumSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientSpectrumFilterSet
     lookup_field = "id"
 
     def get_queryset(self):
@@ -493,6 +597,8 @@ class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpecDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientSpecDataFilterSet
 
     def get_queryset(self):
         allowed_spec_data = SpectraService.GetAuthorizedTransientSpecData_ByUser(self.request.user)

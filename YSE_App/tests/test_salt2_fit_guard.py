@@ -56,10 +56,10 @@ class Salt2FitGuardTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.client.force_login(self.user)
-        self.detail_fit_url = reverse("salt2plot", args=[self.transient.id, 1])
-        self.detail_nofit_url = reverse("salt2plot", args=[self.transient.id, 0])
-        self.flux_fit_url = reverse("salt2fluxplot", args=[self.transient.id, 1])
-        self.flux_nofit_url = reverse("salt2fluxplot", args=[self.transient.id, 0])
+        self.detail_fit_url = reverse("salt3plot", args=[self.transient.id, 1])
+        self.detail_nofit_url = reverse("salt3plot", args=[self.transient.id, 0])
+        self.flux_fit_url = reverse("salt3fluxplot", args=[self.transient.id, 1])
+        self.flux_nofit_url = reverse("salt3fluxplot", args=[self.transient.id, 0])
         # The plot stack is imported lazily; load it so the patches below hit
         # the module view_utils actually calls into.
         view_utils._load_heavy_plot_stack()

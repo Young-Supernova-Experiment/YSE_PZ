@@ -361,9 +361,9 @@ class DeployChecklistFlowTests(TestCase):
     def test_salt2_plot_endpoints_without_fit_return_200(self):
         """salt2fit=0 is the un-fitted branch; the real SALT3 fit needs the
         sncosmo model download and multi-band data (manual, see docs)."""
-        for name in ("salt2plot", "salt2fluxplot"):
+        for name in ("salt3plot", "salt3fluxplot"):
             response = self.client.get(
-                reverse(name, kwargs={"transient_id": self.transient.id, "salt2fit": "0"})
+                reverse(name, kwargs={"transient_id": self.transient.id, "salt3fit": "0"})
             )
             self.assertEqual(response.status_code, 200, name)
 

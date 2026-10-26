@@ -910,16 +910,33 @@ def view_yse_fields(request):
 
 
 @login_required
-def salt2plot(request, transient_id, salt2fit):
+def salt3plot(request, transient_id, salt3fit):
 
-    response = lightcurveplot_detail(request,transient_id,salt2=int(salt2fit))
+    response = lightcurveplot_detail(request,transient_id,salt2=int(salt3fit))
     return response
 
 @login_required
-def salt2fluxplot(request, transient_id, salt2fit):
+def salt3fluxplot(request, transient_id, salt3fit):
 
-    response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
+    response = lightcurveplot_flux(request,transient_id,salt2=int(salt3fit))
     return response
+
+def _redirect_to_salt3(request, route_name, transient_id, fit):
+    """Permanent redirect from an old ``salt2*`` URL to its SALT3 name, keeping the query string."""
+    from django.shortcuts import redirect
+    url = reverse(route_name, args=[transient_id, fit])
+    query = request.META.get('QUERY_STRING')
+    if query:
+        url = '%s?%s' % (url, query)
+    return redirect(url, permanent=True)
+
+@login_required
+def salt2plot_redirect(request, transient_id, salt2fit):
+    return _redirect_to_salt3(request, 'salt3plot', transient_id, salt2fit)
+
+@login_required
+def salt2fluxplot_redirect(request, transient_id, salt2fit):
+    return _redirect_to_salt3(request, 'salt3fluxplot', transient_id, salt2fit)
 
 @login_required
 def bazinplot(request, transient_id, bazinfit):

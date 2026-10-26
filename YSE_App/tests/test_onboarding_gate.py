@@ -36,6 +36,7 @@ BASIC_AUTH_URLS_WITH_ARGS = (
     ("download_photometry", ["2026abc"]),
     ("download_spectra", ["2026abc"]),
     ("download_bulk_photometry", ["some_query"]),
+    ("download_bulk_photometry_by_id", ["1"]),
     ("change_status_for_query", ["1", "2"]),
     ("get_host", ["10.0", "-5.0", "3"]),
     ("box_search", ["10.0", "-5.0", "3"]),

@@ -1837,7 +1837,7 @@
                 //$(".plotSALT2").html(buttontext);
                 //$(".plotSALT2").html("Hide SALT2 Fit");
                 if (buttontext.indexOf("Show") > -1){
-                    url = "{% url 'salt2plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot");
+                    url = "{% url 'salt3plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcplot").children().last();
                         lastNode.prev().remove();
@@ -1849,7 +1849,7 @@
                         $(".plotBazin").html("Show Bazin Fit");
                     });
                 } else {
-                    url = "{% url 'salt2plot' transient.id 0 %}" + ysePlotWidthQuery("#lcplot");
+                    url = "{% url 'salt3plot' transient.id 0 %}" + ysePlotWidthQuery("#lcplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcplot").children().last();
                         lastNode.prev().remove();
@@ -1891,7 +1891,7 @@
                 //$(".plotSALT2").html(buttontext);
                 //$(".plotSALT2").html("Hide SALT2 Fit");
                 if (buttontext.indexOf("Show") > -1){
-                    url = "{% url 'salt2fluxplot' transient.id 1 %}" + ysePlotWidthQuery("#lcfluxplot");
+                    url = "{% url 'salt3fluxplot' transient.id 1 %}" + ysePlotWidthQuery("#lcfluxplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcfluxplot").children().last();
                         lastNode.prev().remove();
@@ -1902,7 +1902,7 @@
                         $(".plotSALT2flux").html("Hide SALT3 Fit");
                     });
                 } else {
-                    url = "{% url 'salt2fluxplot' transient.id 0 %}" + ysePlotWidthQuery("#lcfluxplot");
+                    url = "{% url 'salt3fluxplot' transient.id 0 %}" + ysePlotWidthQuery("#lcfluxplot");
                     $.get(url).done(function(htmlresponse){
                         var lastNode = $("#lcfluxplot").children().last();
                         lastNode.prev().remove();
@@ -2655,7 +2655,7 @@
         function yseFitStatusRefreshSaltOverlay() {
             /* Only when the user has the SALT3 overlay showing: the button then reads "Hide". */
             if (($('#salt2plot').html() || '').indexOf('Hide') > -1) {
-                $.get("{% url 'salt2plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot")).done(function(html) {
+                $.get("{% url 'salt3plot' transient.id 1 %}" + ysePlotWidthQuery("#lcplot")).done(function(html) {
                     $('#lcplot').html(html);
                 });
             }

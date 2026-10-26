@@ -391,8 +391,17 @@ def _personal_dashboard_defer_enabled():
     return os.environ.get('YSE_PERSONAL_DASHBOARD_DEFER', '1') != '0'
 
 
+def _pd_download_url(q):
+    """Bulk-photometry download link of a dashboard panel: by query id (any title works, #810)."""
+    if q.query_id:
+        return reverse('download_bulk_photometry_by_id', args=[q.query_id])
+    if q.python_query:
+        return reverse('download_bulk_photometry', args=[q.python_query])
+    return ''
+
+
 def _personaldashboard_failed_row(q, title):
-    return (Transient.objects.none(), title, '', None, q.id, 0)
+    return (Transient.objects.none(), title, '', None, q.id, 0, '')
 
 
 def _personaldashboard_sql_query_prefix(query_title):
@@ -483,7 +492,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 table, transient_filter = _personaldashboard_configure_table(
                     request, prefix, empty_qs
                 )
-                return (table, q.query.title, prefix, transient_filter, q.id, 0)
+                return (table, q.query.title, prefix, transient_filter, q.id, 0, _pd_download_url(q))
             pks_by_name = _personaldashboard_visible_pks_by_name(request.user, cached_result)
             section_qs = _personaldashboard_section_queryset(pks_by_name, cached_result)
             prefix = _personaldashboard_sql_query_prefix(q.query.title)
@@ -491,7 +500,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 request, prefix, section_qs
             )
             return (table, q.query.title, prefix, transient_filter, q.id,
-                    _personaldashboard_section_count(pks_by_name, cached_result))
+                    _personaldashboard_section_count(pks_by_name, cached_result), _pd_download_url(q))
         except Exception as e:
             cache.delete(explorer_query_cache_key(q.query.id))
             logger.error(f"Error processing query {q.id}: {e}")
@@ -513,6 +522,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 transient_filter,
                 q.id,
                 transients.count(),
+                _pd_download_url(q),
             )
         except Exception as e:
             logger.error(f"Error processing Python query {q.python_query}: {e}")
@@ -553,7 +563,7 @@ def _personaldashboard_build_all_tables(request, queries):
         )
         tables.append(
             (table, q.query.title, prefix, transient_filter, q.id,
-             _personaldashboard_section_count(pks_by_name, transient_names))
+             _personaldashboard_section_count(pks_by_name, transient_names), _pd_download_url(q))
         )
     return tables
 
@@ -593,7 +603,7 @@ def personaldashboard(request):
                     title = q.python_query
                 else:
                     continue
-                tables.append((None, title, '', None, q.id, 0))
+                tables.append((None, title, '', None, q.id, 0, _pd_download_url(q)))
         if timing_enabled():
             log_sections('personaldashboard_shell', timing_sections)
         return render(
@@ -2195,6 +2205,75 @@ def download_data(request, slug):
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_data.json'%slug
     return response
 
+# Legend of the SNANA photometry export header (#813). The header keys stay the upper-case
+# field names older exports used (``# RA: ...``), so existing parsers keep working; the fields
+# exported are those of ``services.visibility.EXPORT_TRANSIENT_HEADER_ALLOWLIST``.
+SNANA_HEADER_LEGEND = {
+    'name': 'transient name',
+    'slug': 'URL name of the transient',
+    'ra': 'right ascension (deg)',
+    'dec': 'declination (deg)',
+    'disc_date': 'discovery date (UTC)',
+    'status': 'transient status',
+    'obs_group': 'observation group',
+    'mw_ebv': 'Milky Way E(B-V) (mag)',
+    'redshift': 'redshift',
+    'redshift_err': 'redshift uncertainty',
+    'redshift_source': 'source of the redshift',
+    'non_detect_date': 'date of the last non-detection (UTC)',
+    'non_detect_limit': 'limiting magnitude of the last non-detection (mag)',
+    'non_detect_band': 'band of the last non-detection',
+    'TNS_spec_class': 'TNS spectroscopic class',
+}
+
+
+def snana_header_comment_lines(fields):
+    """Legend block, then ``# KEY: value`` lines for the transient's exportable metadata.
+
+    Keys and their order are as in older exports (upper-case field names in model order),
+    limited to ``EXPORT_TRANSIENT_HEADER_ALLOWLIST``. Legend lines contain no colon so
+    ``KEY: value`` parsers do not read them as header keys.
+    """
+    from YSE_App.services.visibility import EXPORT_TRANSIENT_HEADER_ALLOWLIST
+
+    keys = [k for k in fields if k in EXPORT_TRANSIENT_HEADER_ALLOWLIST]
+    lines = ['# Header keys (legend)\n']
+    for k in keys:
+        lines.append('#   %s = %s\n' % (k.upper(), SNANA_HEADER_LEGEND.get(k, k.replace('_', ' '))))
+    lines.extend('# %s: %s\n' % (k.upper(), fields[k]) for k in keys)
+    return ''.join(lines)
+
+
+# Readable header of each spectrum CSV in the spectra zip (#813): (attribute, label).
+SPECTRUM_HEADER_FIELDS = (
+    ('obs_date', 'Observation date (UTC)'), ('ra', 'RA (deg)'), ('dec', 'Dec (deg)'),
+    ('spec_phase', 'Phase (days)'), ('redshift', 'Redshift'), ('redshift_err', 'Redshift error'),
+    ('redshift_quality', 'Redshift quality'), ('reference', 'Reference'),
+    ('wavelength_medium', 'Wavelength medium'), ('host_subtraction', 'Host subtraction'),
+    ('quality_mask', 'Quality mask'), ('spectrum_notes', 'Notes'),
+)
+
+
+def spectrum_header_comment_lines(spectrum):
+    """``# Label: value`` lines for one spectrum: instrument, group, flux unit and the fields above (no database ids)."""
+    lines = ['# Instrument: %s\n' % spectrum.instrument.name,
+             '# Observation group: %s\n' % spectrum.obs_group.name]
+    for attr, label in SPECTRUM_HEADER_FIELDS:
+        value = getattr(spectrum, attr, None)
+        if value is None or value == '':
+            continue
+        display = getattr(spectrum, 'get_%s_display' % attr, None)
+        if attr == 'obs_date':
+            from YSE_App.common.utc_dates import utc_day
+            value = utc_day(value)  # YYYYMMDD.ddd (#807)
+        elif display is not None:
+            value = display()  # choice label, e.g. "Vacuum"
+        lines.append('# %s: %s\n' % (label, str(value).replace('\n', ' ')))
+    if spectrum.unit_id is not None:
+        lines.append('# Flux unit: %s\n' % spectrum.unit.name)
+    return ''.join(lines)
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def download_photometry(request, slug):
@@ -2213,9 +2292,7 @@ def download_photometry(request, slug):
     transient = Transient.objects.filter(slug=slug)
     data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
     data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
-    for k in data[transient[0].name]['transient'][0]['fields'].keys():
-        if k not in ['created_by','modified_by','candidate_hosts']:
-            content += "# %s: %s\n"%(k.upper(),data[transient[0].name]['transient'][0]['fields'][k])
+    content += snana_header_comment_lines(data[transient[0].name]['transient'][0]['fields'])
             
     content += "\n"
     content += "VARLIST:  MJD        FLT  FLUXCAL   FLUXCALERR    MAG     MAGERR     MAGSYS   TELESCOPE    INSTRUMENT   DQ\n"
@@ -2303,6 +2380,7 @@ def bulk_photometry_zip_response(user, transients):
     """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284)."""
     s = BytesIO()
     archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
+    skipped = []  # (transient name, MJD, band, reason) for README.txt (#809)
     for transient in transients:
         
         content = ""
@@ -2318,8 +2396,8 @@ def bulk_photometry_zip_response(user, transients):
             content += "# %s: %s\n"%(k.upper(),header_fields[k])
 
         content += "\n"
-        content += "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT\n"
-        linefmt =  "%.3f,%s,%.3f,%.3f,%.3f,%.3f,%s,%s,%s\n"
+        content += "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT,DQ\n"
+        linefmt =  "%.3f,%s,%.3f,%.3f,%.3f,%.3f,%s,%s,%s,%s\n"
 
 
         # Get photometry by user & transient
@@ -2338,6 +2416,8 @@ def bulk_photometry_zip_response(user, transients):
 
                 for d in data[transient.name]['photometry'][pd]['data']:
                     mjd = date_to_mjd(d['fields']['obs_date'])
+                    # Data-quality flags by name; ";" because the file is comma-separated.
+                    data_quality = ';'.join(str(q) for q in (d['fields'].get('data_quality') or []))
                     if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
                         if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
                         else: flux_err = 0
@@ -2348,7 +2428,7 @@ def bulk_photometry_zip_response(user, transients):
                         mag_err = 2.5/np.log(10)*flux_err/flux
 
                         content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument)
+                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
                     elif not d['fields']['flux'] and d['fields']['mag']:
                         if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
@@ -2358,7 +2438,7 @@ def bulk_photometry_zip_response(user, transients):
                         flux_err = 0.4*np.log(10)*flux*mag_err
 
                         content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument)
+                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
                     elif d['fields']['flux'] and d['fields']['flux_zero_point'] and d['fields']['mag']:
                         if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
@@ -2370,17 +2450,65 @@ def bulk_photometry_zip_response(user, transients):
                         flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
 
                         content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument)
+                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
                     else:
-                        continue
+                        # Same points as before (#809); the reason says what is missing.
+                        if d['fields']['flux'] and not d['fields']['flux_zero_point']:
+                            if d['fields']['mag']:
+                                reason = 'flux without a flux zero point (magnitude present but not used with flux)'
+                            else:
+                                reason = 'flux without a flux zero point and no magnitude'
+                        else:
+                            reason = 'no flux and no magnitude'
+                        skipped.append((transient.name, mjd, d['fields']['band'].split(' - ')[-1], reason))
 
         archive.writestr('%s.csv'%transient.name,content)
 
+    readme = [
+        'YSE-PZ bulk photometry export',
+        '',
+        'One CSV per transient. Columns: MJD, FLT, FLUXCAL, FLUXCALERR, MAG, MAGERR, MAGSYS, TELESCOPE,',
+        'INSTRUMENT, DQ. FLUXCAL is in units with zero point 27.5. DQ lists the data-quality flags set on',
+        'the point, separated by ";" (empty: none). Flagged points are included, not removed.',
+        '',
+        'Points skipped (no usable flux, or flux without a flux zero point): %d' % len(skipped),
+    ]
+    for name, mjd, band, reason in skipped:
+        readme.append('%s  MJD %.3f  %s  %s' % (name, mjd, band, reason))
+    archive.writestr('README.txt', '\n'.join(readme) + '\n')
     archive.close()
     response = HttpResponse(s.getvalue(), content_type='application/x-zip-compressed')
     response['Content-Disposition'] = 'attachment; filename=YSEPZ_transient_photometry.zip'
     return response
+
+def _bulk_photometry_query_transients(user, query):
+    """Transients of a saved Explorer query that ``user`` may list."""
+    try:
+        names = run_explorer_query_cached(query, user=user if user is not None else AnonymousUser())
+    except PageQueryRefused:
+        raise Http404('Invalid Query')
+    transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
+    return filter_listed_transients(user, transients)
+
+
+@csrf_exempt
+@login_or_basic_auth_required
+def download_bulk_photometry_by_id(request, query_id):
+    """Bulk photometry zip of a saved query identified by its id, so any title works (#810)."""
+    if 'HTTP_AUTHORIZATION' in request.META.keys():
+        auth_method, credentials = request.META['HTTP_AUTHORIZATION'].split(' ', 1)
+        credentials = base64.b64decode(credentials.strip()).decode('utf-8')
+        username, password = credentials.split(':', 1)
+        user = auth.authenticate(username=username, password=password)
+    else:
+        user = request.user
+
+    query = Query.objects.filter(pk=query_id).first()
+    if query is None:
+        raise Http404('Invalid Query')
+    return bulk_photometry_zip_response(user, _bulk_photometry_query_transients(user, query))
+
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2397,12 +2525,7 @@ def download_bulk_photometry(request, query_title):
 
     query = Query.objects.filter(title=unquote(query_title))
     if len(query):
-        try:
-            names = run_explorer_query_cached(query[0], user=user if user is not None else AnonymousUser())
-        except PageQueryRefused:
-            raise Http404('Invalid Query')
-        transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
-        transients = filter_listed_transients(user, transients)
+        transients = _bulk_photometry_query_transients(user, query[0])
 
     elif query_title in yse_python_queries.python_query_reg.all:
         transients = yse_python_queries.run_python_query(query_title, user)
@@ -2441,9 +2564,7 @@ def download_spectra(request, slug):
             data = {}
             #data['spectra'] = json.loads(serializers.serialize("json", s, use_natural_foreign_keys=True))
             #import pdb; pdb.set_trace()
-            for k in s.__dict__.keys(): #data['spectra'].keys():
-                if k not in ['_state', 'id', 'created_by_id', 'created_date', 'modified_by_id', 'modified_date']:
-                    content += "# %s: %s\n"%(k.upper(),s.__dict__[k])
+            content += spectrum_header_comment_lines(s)
             
             specdata = SpectraService.GetAuthorizedTransientSpecData_BySpectrum(user, s.id, includeBadData=True)
             if specdata:
