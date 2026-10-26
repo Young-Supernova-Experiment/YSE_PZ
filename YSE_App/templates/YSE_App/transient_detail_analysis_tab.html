@@ -1,4 +1,4 @@
-{# Analysis tab body (#314): loaded into #analysis_container; the page's JS (transient_detail.html) drives the form, polling and actions. #}
+{% load analysis_extras %}{# Analysis tab body (#314): loaded into #analysis_container; the page's JS (transient_detail.html) drives the form, polling and actions. #}
 {# clear:both keeps the flex .row below the floated tab headers of the AdminLTE nav. #}
 <div class="yse-analysis-tab" id="yse_analysis_tab_body" style="clear: both;"
      data-run-url="{% url 'transient_analysis_run' transient.id %}"
@@ -62,7 +62,7 @@
 						<td>{% if r.duration %}{{ r.duration.total_seconds|floatformat:1 }} s{% else %}-{% endif %}</td>
 						<td class="small">
 							{% if r.status == 'failed' %}<span class="text-danger">{{ r.error|truncatechars:120 }}</span>
-							{% else %}{% for key, value in row.summary %}<span class="text-nowrap"><strong>{{ key }}</strong> {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
+							{% else %}{% for key, value in row.summary %}<span class="text-nowrap"><strong title="{{ key }}">{{ key|analysis_label }}</strong> {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
 						</td>
 						<td class="text-nowrap analysis-run-actions">
 							{% if row.can_manage %}
@@ -105,7 +105,7 @@
 					{% if row.rows %}
 					<table class="table table-sm table-condensed analysis-results-table">
 						<tbody>
-							{% for key, value in row.rows %}<tr><th class="small">{{ key }}</th><td class="small">{{ value }}</td></tr>{% endfor %}
+							{% for key, value in row.rows %}<tr><th class="small" title="{{ key }}">{{ key|analysis_label }}</th><td class="small">{{ value }}</td></tr>{% endfor %}
 						</tbody>
 					</table>
 					{% endif %}
