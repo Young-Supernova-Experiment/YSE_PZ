@@ -1,10 +1,12 @@
 <h4>Spectra for {{ transient.name }}</h4>
 {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows_spectrum %}
 {% if all_transient_spectra %}
-<table class="table table-bordered table-striped">
+<table class="table table-bordered table-striped" id="yse_spectra_table">
     <thead>
         <tr>
+            <th><span class="sr-only">Select</span></th>
             <th>Date (UTC)</th>
+            <th title="Phase stored with the spectrum; — when none was recorded">Phase (days)</th>
             <th>Instrument</th>
             <th>Telescope</th>
             <th>Redshift</th>
@@ -16,10 +18,12 @@
     <tbody>
         {% for spec in all_transient_spectra %}
         <tr>
-            <td>{{ spec.obs_date }}</td>
+            <td><input type="checkbox" class="yse-spec-select" value="{{ spec.id }}" aria-label="Select the {{ spec.instrument.name }} spectrum from {{ spec.obs_date }}"></td>
+            <td data-order="{{ spec.obs_date|date:'U' }}">{{ spec.obs_date }}</td>
+            <td data-order="{% if spec.spec_phase is not None %}{{ spec.spec_phase|stringformat:'f' }}{% else %}-1000000{% endif %}">{% if spec.spec_phase is not None %}{{ spec.spec_phase|floatformat:1 }}{% else %}—{% endif %}</td>
             <td>{{ spec.instrument.name }}</td>
             <td>{{ spec.instrument.telescope.name }}</td>
-            <td>{{ spec.redshift|default:"—" }}</td>
+            <td data-order="{% if spec.redshift is not None %}{{ spec.redshift|stringformat:'f' }}{% else %}-1{% endif %}">{{ spec.redshift|default:"—" }}</td>
             <td class="yse-data-pis">{{ spec.pis.all|join:", "|default:"—" }}</td>
             <td>{{ spec.n_points }}</td>
             <td>{% if spec.n_points %}<a href="#" class="specPlotChange" spec_plot-id="{{ spec.id }}">Plot on Summary tab</a>{% else %}<span class="text-muted" title="This spectrum has a record but no wavelength/flux points in the database, so there is nothing to plot.">No data points to plot</span>{% endif %}</td>
@@ -30,7 +34,32 @@
 <p>
     <button type="button" class="btn btn-primary specPlotChange" spec_plot-id="all">Plot all on Summary tab</button>
     <button type="button" class="btn btn-secondary" onclick="window.open('{% url 'download_spectra' transient.slug %}')">Download spectra</button>
+    <button type="button" class="btn btn-secondary" id="yse_spec_download_selected" data-url="{% url 'download_spectra' transient.slug %}" disabled title="Tick one or more spectra in the table first">Download selected</button>
 </p>
+<script>
+(function yseInitSpectraTable() {
+    // This tab is either included in the page (before jQuery loads) or fetched into it later.
+    if (!window.jQuery) { document.addEventListener('DOMContentLoaded', yseInitSpectraTable); return; }
+    var $ = window.jQuery, $t = $('#yse_spectra_table');
+    if (!$t.length) { return; }
+    if ($.fn.DataTable && !$.fn.DataTable.isDataTable($t)) {
+        // Sortable columns; the server's row order is kept until a header is clicked.
+        $t.DataTable({
+            paging: false, searching: false, info: false, autoWidth: false,
+            order: [],
+            columnDefs: [{targets: [0, 8], orderable: false}]
+        });
+    }
+    var $btn = $('#yse_spec_download_selected');
+    $t.on('change', '.yse-spec-select', function() {
+        $btn.prop('disabled', !$t.find('.yse-spec-select:checked').length);
+    });
+    $btn.on('click', function() {
+        var ids = $t.find('.yse-spec-select:checked').map(function() { return this.value; }).get();
+        if (ids.length) { window.open($btn.data('url') + '?ids=' + ids.join(',')); }
+    });
+})();
+</script>
 {% else %}
 <p class="text-muted">No authorized spectra for this transient.</p>
 {% endif %}
