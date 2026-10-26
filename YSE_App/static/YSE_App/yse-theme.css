@@ -7,7 +7,7 @@
 :root {
   --yse-font-size-base: 14px;
   --yse-font-size-sm: 12px;
-  --yse-font-size-xs: 11px;
+  --yse-font-size-xs: 12px;
   --yse-space-xs: 4px;
   --yse-space-sm: 8px;
   --yse-space-md: 12px;
@@ -26,6 +26,12 @@
   --yse-warning: #f59e0b;
   --yse-danger: #ef4444;
   --yse-focus-ring: 2px solid var(--yse-color-accent);
+  /* Contrast-checked chip/button fills with white text (#824) */
+  --yse-primary-solid: #2563eb;
+  --yse-success-solid: #047857;
+  --yse-info-solid: #0369a1;
+  --yse-danger-solid: #b91c1c;
+  --yse-border-input: #475569;
 }
 
 /* AstroScheduler night tokens — only on dark, so light can actually differ */
@@ -57,6 +63,7 @@ html[data-yse-theme="light"] {
   --yse-sidebar-text: #1e293b;
   --yse-sidebar-hover-bg: rgba(15, 23, 42, 0.06);
   --yse-link: #1d4ed8;
+  --yse-border-input: #64748b;
 }
 
 body.yse-theme {
@@ -82,6 +89,29 @@ body.yse-theme a:hover {
   color: var(--yse-color-cyan);
 }
 
+/* Light mode: cyan hover on white is 2.4:1 (#827) */
+html[data-yse-theme="light"] body.yse-theme a:hover {
+  color: #0e7490;
+}
+
+/* Light-mode status text (#827); dark-mode danger text (#827) */
+html[data-yse-theme="light"] body.yse-theme .text-warning {
+  color: #92400e !important;
+}
+
+html[data-yse-theme="light"] body.yse-theme .text-success {
+  color: #047857 !important;
+}
+
+html[data-yse-theme="dark"] body.yse-theme .text-danger {
+  color: #f87171 !important;
+}
+
+html[data-yse-theme="light"] body.yse-theme .form-control::placeholder {
+  color: #6b7280;
+  opacity: 1;
+}
+
 /* --- Accessibility --- */
 .yse-skip-link {
   position: absolute;
@@ -89,7 +119,7 @@ body.yse-theme a:hover {
   top: 0;
   z-index: 10000;
   padding: var(--yse-space-sm) var(--yse-space-md);
-  background: var(--yse-color-accent);
+  background: #2563eb;
   color: #fff;
 }
 
@@ -105,7 +135,12 @@ body.yse-theme select:focus-visible,
 body.yse-theme textarea:focus-visible,
 body.yse-theme .btn:focus-visible,
 body.yse-theme .nav-tabs > li > a:focus-visible,
-body.yse-theme .nav-link:focus-visible {
+body.yse-theme .nav-link:focus-visible,
+body.yse-theme .dropdown-item:focus-visible,
+body.yse-theme .page-link:focus-visible,
+body.yse-theme .custom-select:focus-visible,
+body.yse-theme .select2-selection:focus-visible,
+body.yse-theme [tabindex]:not([tabindex="-1"]):focus-visible {
   outline: var(--yse-focus-ring);
   outline-offset: var(--yse-focus-offset);
 }
@@ -131,7 +166,7 @@ body.yse-theme .yse-header-search .form-control {
   width: 100%;
   background: var(--yse-card-bg);
   color: var(--yse-color-text);
-  border-color: var(--yse-border);
+  border-color: var(--yse-border-input);
 }
 
 body.yse-theme .yse-theme-toggle {
@@ -331,21 +366,35 @@ body.yse-theme .nav-tabs .nav-link.active {
   color: var(--yse-color-text);
 }
 
+body.yse-theme .table {
+  background-color: var(--yse-card-bg);
+}
+
 body.yse-theme .table,
 body.yse-theme .table td,
 body.yse-theme .table th {
   color: var(--yse-color-text);
-  background-color: var(--yse-card-bg);
 }
 
-body.yse-theme .table-striped tbody tr:nth-of-type(odd) {
-  background-color: rgba(148, 163, 184, 0.08);
+/* Cells stay transparent so row stripes and hover show through (#825) */
+body.yse-theme .table-striped tbody tr:nth-of-type(odd) > * {
+  background-color: rgba(148, 163, 184, 0.10);
 }
 
-body.yse-theme .form-control {
+body.yse-theme .table-hover tbody tr:hover > * {
+  background-color: rgba(59, 130, 246, 0.18);
+}
+
+/* Vendor .table-warning>td is opaque #ffeeba; tint it in dark mode */
+html[data-yse-theme="dark"] body.yse-theme .table .table-warning > * {
+  background-color: rgba(245, 158, 11, 0.22);
+}
+
+body.yse-theme .form-control,
+body.yse-theme .custom-select {
   background-color: var(--yse-card-bg);
   color: var(--yse-color-text);
-  border-color: var(--yse-border);
+  border-color: var(--yse-border-input);
 }
 
 body.yse-theme .dropdown-menu {
@@ -362,9 +411,92 @@ body.yse-theme .dropdown-item:hover {
   color: var(--yse-color-text);
 }
 
-body.yse-theme .btn-primary {
-  background-color: var(--yse-color-accent);
-  border-color: var(--yse-color-accent);
+body.yse-theme .btn-primary,
+body.yse-theme .badge-primary {
+  background-color: var(--yse-primary-solid);
+  border-color: var(--yse-primary-solid);
+  color: #fff;
+}
+
+body.yse-theme .btn-primary:hover,
+body.yse-theme .btn-primary:focus,
+body.yse-theme a.badge-primary:hover,
+body.yse-theme a.badge-primary:focus {
+  background-color: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+body.yse-theme .btn-primary:disabled,
+body.yse-theme .btn-primary.disabled {
+  background-color: var(--yse-primary-solid);
+  border-color: var(--yse-primary-solid);
+}
+
+body.yse-theme .btn-success,
+body.yse-theme .badge-success {
+  background-color: var(--yse-success-solid);
+  border-color: var(--yse-success-solid);
+  color: #fff;
+}
+
+body.yse-theme .btn-success:hover,
+body.yse-theme .btn-success:focus,
+body.yse-theme a.badge-success:hover,
+body.yse-theme a.badge-success:focus {
+  background-color: #065f46;
+  border-color: #065f46;
+  color: #fff;
+}
+
+body.yse-theme .btn-success:disabled,
+body.yse-theme .btn-success.disabled {
+  background-color: var(--yse-success-solid);
+  border-color: var(--yse-success-solid);
+}
+
+body.yse-theme .btn-info,
+body.yse-theme .badge-info {
+  background-color: var(--yse-info-solid);
+  border-color: var(--yse-info-solid);
+  color: #fff;
+}
+
+body.yse-theme .btn-info:hover,
+body.yse-theme .btn-info:focus,
+body.yse-theme a.badge-info:hover,
+body.yse-theme a.badge-info:focus {
+  background-color: #075985;
+  border-color: #075985;
+  color: #fff;
+}
+
+body.yse-theme .btn-info:disabled,
+body.yse-theme .btn-info.disabled {
+  background-color: var(--yse-info-solid);
+  border-color: var(--yse-info-solid);
+}
+
+body.yse-theme .btn-danger,
+body.yse-theme .badge-danger {
+  background-color: var(--yse-danger-solid);
+  border-color: var(--yse-danger-solid);
+  color: #fff;
+}
+
+body.yse-theme .btn-danger:hover,
+body.yse-theme .btn-danger:focus,
+body.yse-theme a.badge-danger:hover,
+body.yse-theme a.badge-danger:focus {
+  background-color: #991b1b;
+  border-color: #991b1b;
+  color: #fff;
+}
+
+body.yse-theme .btn-danger:disabled,
+body.yse-theme .btn-danger.disabled {
+  background-color: var(--yse-danger-solid);
+  border-color: var(--yse-danger-solid);
 }
 
 /* --- Compact boxes (dashboard, observing, global) --- */
@@ -528,6 +660,10 @@ body.yse-theme .yse-mention {
   font-weight: 600;
 }
 
+html[data-yse-theme="light"] body.yse-theme .yse-mention {
+  color: #1d4ed8;
+}
+
 body.yse-theme .yse-mention-instrument {
   color: var(--yse-color-text);
   opacity: 0.85;
@@ -608,6 +744,11 @@ body.yse-theme .yse-comment-submit {
 body.yse-theme .yse-comments-new-badge {
   margin-left: var(--yse-space-sm);
   font-size: var(--yse-font-size-xs);
+}
+
+body.yse-theme .navbar-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
 }
 
 /* Login (standalone page, no AdminLTE wrapper) */
@@ -698,18 +839,18 @@ body.yse-theme #associated-events-list {
   min-height: 8rem;
 }
 
-body.yse-theme .bg-red { background-color: #dd4b39 !important; color: #fff !important; }
-body.yse-theme .bg-yellow { background-color: #f39c12 !important; color: #fff !important; }
-body.yse-theme .bg-aqua { background-color: #00c0ef !important; color: #fff !important; }
+body.yse-theme .bg-red { background-color: #c0392b !important; color: #fff !important; }
+body.yse-theme .bg-yellow { background-color: #f39c12 !important; color: #111 !important; }
+body.yse-theme .bg-aqua { background-color: #00c0ef !important; color: #111 !important; }
 body.yse-theme .bg-blue { background-color: #0073b7 !important; color: #fff !important; }
-body.yse-theme .bg-light-blue { background-color: #3c8dbc !important; color: #fff !important; }
-body.yse-theme .bg-green { background-color: #00a65a !important; color: #fff !important; }
+body.yse-theme .bg-light-blue { background-color: #2b6f99 !important; color: #fff !important; }
+body.yse-theme .bg-green { background-color: #047857 !important; color: #fff !important; }
 body.yse-theme .bg-navy { background-color: #001f3f !important; color: #fff !important; }
-body.yse-theme .bg-teal { background-color: #39cccc !important; color: #fff !important; }
-body.yse-theme .bg-olive { background-color: #3d9970 !important; color: #fff !important; }
+body.yse-theme .bg-teal { background-color: #39cccc !important; color: #111 !important; }
+body.yse-theme .bg-olive { background-color: #2f7a57 !important; color: #fff !important; }
 body.yse-theme .bg-lime { background-color: #01ff70 !important; color: #111 !important; }
-body.yse-theme .bg-orange { background-color: #ff851b !important; color: #fff !important; }
-body.yse-theme .bg-fuchsia { background-color: #f012be !important; color: #fff !important; }
+body.yse-theme .bg-orange { background-color: #ff851b !important; color: #111 !important; }
+body.yse-theme .bg-fuchsia { background-color: #b0128a !important; color: #fff !important; }
 body.yse-theme .bg-purple { background-color: #605ca8 !important; color: #fff !important; }
 body.yse-theme .bg-maroon { background-color: #d81b60 !important; color: #fff !important; }
 body.yse-theme .bg-black { background-color: #111111 !important; color: #fff !important; }
@@ -807,7 +948,7 @@ body.yse-theme table .btn-group .btn,
 body.yse-theme table .btn-group .dropdown-toggle,
 body.yse-theme table .btn-group .dropbtn {
   font-size: var(--yse-font-size-xs) !important;
-  line-height: 1.2;
+  line-height: 1.3;
   padding: 1px 6px;
 }
 
@@ -959,6 +1100,10 @@ body.yse-theme .fc-event .fc-time {
 .yse-fav-star { color: #999; text-decoration: none; font-size: 1.05em; }
 .yse-fav-star:hover, .yse-fav-star:focus { color: #f0ad4e; text-decoration: none; }
 .yse-fav-star.yse-fav-on { color: #f0ad4e; }
+/* Light mode: contrast-safe star colors; the fa-star / fa-star-o shape carries the state (#827) */
+html[data-yse-theme="light"] .yse-fav-star { color: #6b7280; }
+html[data-yse-theme="light"] .yse-fav-star:hover, html[data-yse-theme="light"] .yse-fav-star:focus,
+html[data-yse-theme="light"] .yse-fav-star.yse-fav-on { color: #b45309; }
 .yse-fav-star.yse-fav-busy { opacity: 0.5; }
 .yse-fav-star-header { font-size: 0.6em; vertical-align: middle; margin-left: 0.4em; }
 .yse-fav-star-header .yse-fav-count { font-size: 0.55em; vertical-align: super; margin-left: 0.15em; }
