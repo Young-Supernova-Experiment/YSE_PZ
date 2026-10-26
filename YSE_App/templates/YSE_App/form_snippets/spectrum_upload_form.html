@@ -26,25 +26,25 @@
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Instrument</label>
+						<label for="{{ form.instrument.id_for_label }}">Instrument</label>
 						{% render_field form.instrument class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Obs. Group</label>
+						<label for="{{ form.obs_group.id_for_label }}">Obs. Group</label>
 						{% render_field form.obs_group class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Phase</label>
+						<label for="{{ form.spec_phase.id_for_label }}">Phase (days)</label>
 						{% render_field form.spec_phase class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Data Quality</label>
+						<label for="{{ form.data_quality.id_for_label }}">Data Quality</label>
 						{% render_field form.data_quality class+="form-control" %}
 					</div>
 				</div>
@@ -56,26 +56,26 @@
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>Permissions</label>
+						<label for="{{ form.permissions.id_for_label }}">Permissions</label>
 						{% render_field form.permissions class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>PI(s) <span class="text-muted small">(optional; shown by name on the data tables)</span></label>
+						<label for="{{ form.pis.id_for_label }}">PI(s) <span class="text-muted small">(optional; shown by name on the data tables)</span></label>
 						{% render_field form.pis class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>Reference <span class="text-muted small">(optional; ADS bibcode for literature data)</span></label>
+						<label for="{{ form.reference.id_for_label }}">Reference <span class="text-muted small">(optional; ADS bibcode for literature data)</span></label>
 						{% render_field form.reference class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
 						<br>
-						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>
+						<button type="submit" class="btn btn-block btn-primary btn-lg">Upload spectrum</button>
 					</div>
 				</div>
 			</form>

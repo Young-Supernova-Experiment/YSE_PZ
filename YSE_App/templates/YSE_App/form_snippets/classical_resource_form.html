@@ -16,13 +16,13 @@
 				{% endfor %}
 				<div class="col-6">
 					<div class="form-group">
-						<label>Telescope</label>
+						<label for="{{ form.telescope.id_for_label }}">Telescope</label>
 						{% render_field form.telescope class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>PI</label>
+						<label for="{{ form.principal_investigator.id_for_label }}">PI</label>
 						{% render_field form.principal_investigator class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>

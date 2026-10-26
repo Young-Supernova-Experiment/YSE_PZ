@@ -16,43 +16,43 @@
 				{% endfor %}
 				<div class="col-6">
 					<div class="form-group">
-						<label>Telescope</label>
+						<label for="{{ form.telescope.id_for_label }}">Telescope</label>
 						{% render_field form.telescope class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>PI</label>
+						<label for="{{ form.principal_investigator.id_for_label }}">PI</label>
 						{% render_field form.principal_investigator class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>ToO Hours</label>
+						<label for="{{ form.awarded_too_hours.id_for_label }}">ToO Hours</label>
 						{% render_field form.awarded_too_hours class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Used ToO Hours</label>
+						<label for="{{ form.used_too_hours.id_for_label }}">Used ToO Hours</label>
 						{% render_field form.used_too_hours class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>ToO Triggers</label>
+						<label for="{{ form.awarded_too_triggers.id_for_label }}">ToO Triggers</label>
 						{% render_field form.awarded_too_triggers class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Used ToO Triggers</label>
+						<label for="{{ form.used_too_triggers.id_for_label }}">Used ToO Triggers</label>
 						{% render_field form.used_too_triggers class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Date Range</label>
+						<label for="too_resource_date_range">Date Range</label>
 						<div class="input-group">
 							<div class="input-group-addon">
 								<i class="fa fa-clock-o"></i>

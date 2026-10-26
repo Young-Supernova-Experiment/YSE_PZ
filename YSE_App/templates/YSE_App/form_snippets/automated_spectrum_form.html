@@ -16,19 +16,19 @@
 				{% endfor %}
 				<div class="col-6">
 					<div class="form-group">
-						<label>Instrument</label>
+						<label for="{{ form.instrument.id_for_label }}">Instrument</label>
 						{% render_field form.instrument class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Exposure Time</label>
+						<label for="{{ form.exp_time.id_for_label }}">Exposure Time (s)</label>
 						{% render_field form.exp_time class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>Date Range</label>
+						<label for="automated_spectrum_date_range">Date Range (UTC)</label>
 						<div class="input-group">
 							<div class="input-group-addon">
 								<i class="fa fa-clock-o"></i>
@@ -43,7 +43,7 @@
 				<div class="col-12">
 					<div class="form-group">
 						<br>
-						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>
+						<button type="submit" class="btn btn-block btn-primary btn-lg">Request spectrum</button>
 					</div>
 				</div>
 			</form>

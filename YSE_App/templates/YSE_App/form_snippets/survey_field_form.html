@@ -13,37 +13,37 @@
 				{% endfor %}
 				<div class="col-6">
 					<div class="form-group">
-						<label>ID</label>
+						<label for="{{ form.field_id.id_for_label }}">ID</label>
 						{% render_field form.field_id class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Coordinates</label>
+						<label for="{{ form.coord.id_for_label }}">Coordinates</label>
 						{% render_field form.coord class+="form-control" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Cadence</label>
+						<label for="{{ form.cadence.id_for_label }}">Cadence</label>
 						{% render_field form.cadence class+="form-control" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Instrument</label>
+						<label for="{{ form.instrument.id_for_label }}">Instrument</label>
 						{% render_field form.instrument class+="form-control" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>ZTF ID</label>
+						<label for="{{ form.ztf_field_id.id_for_label }}">ZTF ID</label>
 						{% render_field form.ztf_field_id class+="form-control" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Date Range (UT)</label>
+						<label for="survey_field_date_range">Date Range (UT)</label>
 						<div class="input-group">
 							<div class="input-group-addon">
 								<i class="fa fa-clock-o"></i>
@@ -56,37 +56,37 @@
 				</div>
 				<!--<div class="col-6">
 					<div class="form-group">
-						<label>Spec Priority</label>
+						<label for="{{ form.spec_priority.id_for_label }}">Spec Priority</label>
 						{% render_field form.spec_priority class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Phot Priority</label>
+						<label for="{{ form.phot_priority.id_for_label }}">Phot Priority</label>
 						{% render_field form.phot_priority class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset Star RA</label>
+						<label for="{{ form.offset_star_ra.id_for_label }}">Offset Star RA</label>
 						{% render_field form.offset_star_ra class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset Star DEC</label>
+						<label for="{{ form.offset_star_dec.id_for_label }}">Offset Star DEC</label>
 						{% render_field form.offset_star_dec class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset North</label>
+						<label for="{{ form.offset_north.id_for_label }}">Offset North</label>
 						{% render_field form.offset_north class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset East</label>
+						<label for="{{ form.offset_east.id_for_label }}">Offset East</label>
 						{% render_field form.offset_east class+="form-control" %}
 					</div>
 				</div>-->

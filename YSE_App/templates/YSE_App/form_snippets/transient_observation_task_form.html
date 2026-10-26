@@ -26,31 +26,31 @@
 					<input type="hidden" id="observation_task_followup_pk"/>
 					<div class="col-6">
 						<div class="form-group">
-							<label>Task Status</label>
+							<label for="{{ form.status.id_for_label }}">Task Status</label>
 							{% render_field form.status class+="form-control" style+="width: 100%;"%}
 						</div>
 					</div>
 					<div class="col-6">
 						<div class="form-group">
-							<label>Instrument Config</label>
+							<label for="{{ form.instrument_config.id_for_label }}">Instrument Config</label>
 							{% render_field form.instrument_config class+="form-control" style+="width: 100%;"%}
 						</div>
 					</div>
 					<div class="col-6">
 						<div class="form-group">
-							<label>Exposure Time</label>
+							<label for="{{ form.exposure_time.id_for_label }}">Exposure Time</label>
 							{% render_field form.exposure_time class+="form-control" %}
 						</div>
 					</div>
 					<div class="col-6">
 						<div class="form-group">
-							<label>Number of Exposures</label>
+							<label for="{{ form.number_of_exposures.id_for_label }}">Number of Exposures</label>
 							{% render_field form.number_of_exposures class+="form-control" %}
 						</div>
 					</div>
 					<div class="col-6">
 						<div class="form-group">
-							<label>Desired Obs Date</label>
+							<label for="obs_task_desired_picker">Desired Obs Date</label>
 							<div class="input-group">
 								<div class="input-group-addon">
 									<i class="fa fa-clock-o"></i>
@@ -62,7 +62,7 @@
 					</div>
 					<div class="col-6">
 						<div class="form-group">
-							<label>Actual Obs Date</label>
+							<label for="obs_task_actual_picker">Actual Obs Date</label>
 							<div class="input-group">
 								<div class="input-group-addon">
 									<i class="fa fa-clock-o"></i>
@@ -74,7 +74,7 @@
 					</div>
 					<div class="col-12">
 						<div class="form-group">
-							<label>Description</label>
+							<label for="{{ form.description.id_for_label }}">Description</label>
 							{% render_field form.description class+="form-control" %}
 						</div>
 					</div>
