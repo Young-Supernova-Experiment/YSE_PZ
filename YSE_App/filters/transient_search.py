@@ -273,7 +273,8 @@ def parse_quick_search(text):
 def quick_search_params(params):
     """A mutable copy of ``params`` (a ``QueryDict``) with ``q`` expanded.
 
-    ``q=2026abc`` becomes ``name_contains=2026abc``; ``q=10.5 -20.25`` becomes
+    ``q=2026abc`` becomes ``alias=2026abc`` (name or any alternate name, #801);
+    ``q=10.5 -20.25`` becomes
     ``ra=10.5&dec=-20.25&radius_arcsec=5``. Explicit filter parameters win
     over ``q``. The copy is what the FilterSet and its form see, so the form
     shows the values the quick search stood for and the URL stays shareable.
@@ -289,7 +290,7 @@ def quick_search_params(params):
         data.setdefault('dec', '%.6f' % dec)
         data.setdefault('radius_arcsec', ('%g' % radius))
     elif parsed[1]:
-        data.setdefault('name_contains', parsed[1])
+        data.setdefault('alias', parsed[1])
     return data
 
 

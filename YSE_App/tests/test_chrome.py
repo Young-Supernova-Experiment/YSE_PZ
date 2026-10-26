@@ -2,7 +2,7 @@
 
 
 from django.contrib.auth.models import Group
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from YSE_App.models import TransientTag, WebAppColor
 from YSE_App.tests.fixtures_minimal import create_minimal_transient, create_test_user
@@ -34,7 +34,9 @@ class ChromeSmokeTests(TestCase):
         self.assertIn("yse-theme.css", html)
         self.assertIn("yse-chrome.js", html)
         self.assertIn("vendor/adminlte-3.2/css/adminlte.min.css", html)
-        self.assertIn("vendor/bootstrap-4.6/css/bootstrap.min.css", html)
+        # AdminLTE 3.2's stylesheet already contains Bootstrap 4.6 (#819).
+        self.assertNotIn("vendor/bootstrap-4.6/css/bootstrap.min.css", html)
+        self.assertIn("vendor/bootstrap-4.6/js/bootstrap.bundle.min.js", html)
         self.assertNotIn("skin-red", html)
         self.assertNotIn("user-scalable=no", html)
         return html
@@ -191,3 +193,82 @@ class LoginChromeTests(TestCase):
         self.assertIn("yse-theme.css", html)
         self.assertIn('autocomplete="username"', html)
         self.assertIn('autocomplete="current-password"', html)
+
+
+@override_settings(ONBOARDING_GATE_ENABLED=False)
+class ChromeNavTests(TestCase):
+    """Sidebar links, asset loading, OS theme and sidebar state (#801 #802 #819 #821 #823 #839)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.staff = create_test_user("chrome_nav_staff", is_staff=True)
+        cls.member = create_test_user("chrome_nav_member", is_staff=False)
+
+    def _html(self, user, url="/dashboard/"):
+        client = Client()
+        client.force_login(user)
+        response = client.get(url)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode("utf-8", errors="replace")
+
+    def test_sidebar_has_search_and_favorites(self):
+        from django.urls import reverse
+
+        html = self._html(self.member)
+        self.assertIn('href="%s"' % reverse("search"), html)
+        self.assertIn("<p>Transient Search</p>", html)
+        self.assertIn('href="%s"' % reverse("my_favorites"), html)
+        self.assertIn("<p>Favorites</p>", html)
+        # Acknowledgements stay in the sidebar and the footer for everyone.
+        self.assertIn("<p>Acknowledgements</p>", html)
+        self.assertIn('class="main-footer yse-footer"', html)
+
+    @override_settings(EXPLORER_RESTRICTED_ACCESS=False, EXPLORER_OPEN_TO_ALL_USERS=False)
+    def test_admin_and_explorer_links_only_for_allowed_users(self):
+        from django.urls import reverse
+
+        html = self._html(self.staff)
+        self.assertIn("<p>Admin</p>", html)
+        self.assertIn("<p>Query Explorer</p>", html)
+        self.assertIn('href="%s"' % reverse("explorer_index"), html)
+        html = self._html(self.member)
+        self.assertNotIn("<p>Admin</p>", html)
+        self.assertNotIn("<p>Query Explorer</p>", html)
+
+    @override_settings(EXPLORER_OPEN_TO_ALL_USERS=True, EXPLORER_QUERY_SCOPE="enforce")
+    def test_explorer_link_for_open_explorer(self):
+        html = self._html(self.member)
+        self.assertNotIn("<p>Admin</p>", html)
+        self.assertIn("<p>Query Explorer</p>", html)
+
+    def test_unused_assets_not_loaded(self):
+        html = self._html(self.member)
+        for gone in ("morris.css", "jquery-jvectormap.css", "bootstrap3-wysihtml5.min.css",
+                     "datatables.net-bs/js/dataTables.bootstrap.min.js"):
+            self.assertNotIn(gone, html)
+        self.assertEqual(html.count("adminlte.min.css"), 1)
+        self.assertIn("vendor/datatables-bs4/dataTables.bootstrap4.min.js", html)
+        # Still used by date pickers on several pages.
+        self.assertIn("bootstrap-datepicker.min.css", html)
+        self.assertIn("daterangepicker.css", html)
+        self.assertNotIn('form-control select2"', html)
+
+    def test_sidebar_starts_expanded_and_theme_follows_os(self):
+        import re
+        from pathlib import Path
+
+        html = self._html(self.member)
+        body = re.search(r"<body class=\"([^\"]*)\"", html).group(1).split()
+        self.assertIn("sidebar-mini", body)
+        self.assertNotIn("sidebar-collapse", body)
+        self.assertIn('localStorage.getItem("yse-sidebar")', html)
+        self.assertIn("prefers-color-scheme: light", html)
+        js = (Path(__file__).resolve().parents[1] / "static" / "YSE_App" / "yse-chrome.js").read_text(encoding="utf-8")
+        self.assertIn("prefers-color-scheme: light", js)
+        self.assertIn('"yse-sidebar"', js)
+        self.assertIn("collapsed.lte.pushmenu shown.lte.pushmenu", js)
+        self.assertIn("navbar-light", js)
+        self.assertIn("btn-outline-secondary", js)
+        # The OS default is applied without being stored; only the toggle stores a choice.
+        self.assertIn("apply(currentTheme(), false)", js)
+        self.assertIn('apply(currentTheme() === "dark" ? "light" : "dark", true)', js)
