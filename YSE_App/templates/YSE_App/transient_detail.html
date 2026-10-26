@@ -331,7 +331,7 @@
 
 {% block scripts %}
     <script type="text/javascript" src="{% static 'YSE_App/bokeh-2.4.2.min.js' %}"></script>
-    <script src="{% static 'YSE_App/yse-dates.js' %}"></script>
+    <script src="{% static 'YSE_App/yse-dates.js' %}?v=ux-dates-1"></script>
     <script src="{% static 'YSE_App/bower_components/bootstrap-timepicker/js/bootstrap-timepicker.js' %}"></script>
 
     <script>
@@ -1637,7 +1637,7 @@
                     '<div class="yse-comment-meta"><strong class="yse-comment-author">' +
                     yseEscapeHtml(data.created_by) +
                     '</strong> <time class="yse-comment-time text-muted">' +
-                    (data.modified_date_utc ? yseUtcDateHtml(data.modified_date_utc) : yseEscapeHtml(data.modified_date) + ' UT') + '</time></div>' +
+                    (data.modified_date_utc ? yseUtcDateHtml(data.modified_date_utc) : yseEscapeHtml(data.modified_date)) + ' UTC' + '</time></div>' +
                     '<div class="yse-comment-body">' + yseEscapeHtml(data.comment) + '</div>'
                 );
                 $('#yse-comment-thread').prepend(row);

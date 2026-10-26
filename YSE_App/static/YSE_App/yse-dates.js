@@ -3,12 +3,15 @@
  * Same output as the Django `utcdate` filter (YSE_App/common/utc_dates.py):
  *   yseUtcDateHtml("2026-10-24T08:41:17Z")
  *     -> '<span class="yse-utcdate" title="MJD 61337.362">20261024.362</span>'
- * Values without a time zone are taken as UTC. Unparseable values come back
- * escaped and unchanged; null/undefined/"" give "".
+ * Values without a time zone are taken as UTC. A date-only "YYYY-MM-DD" value
+ * has no time of day, so it prints as plain "YYYYMMDD" (no fraction, no MJD
+ * tooltip). Unparseable values come back escaped and unchanged;
+ * null/undefined/"" give "".
  */
 (function () {
   var MJD_UNIX_EPOCH = 40587; // MJD of 1970-01-01
   var UNIT_MS = 86400; // 1/1000 of a day in milliseconds
+  var DATE_ONLY_RE = /^\s*(\d{4})-(\d{2})-(\d{2})\s*$/;
   var RE = /^\s*(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?\s*(Z|[+-]\d{2}:?\d{2})?\s*$/i;
 
   function escapeHtml(text) {
@@ -38,6 +41,12 @@
 
   function parts(value) {
     if (value === null || value === undefined || value === "") return null;
+    var dateOnly = DATE_ONLY_RE.exec(String(value));
+    if (dateOnly) {
+      var check = new Date(Date.UTC(+dateOnly[1], +dateOnly[2] - 1, +dateOnly[3]));
+      if (isNaN(check.getTime()) || check.getUTCDate() !== +dateOnly[3]) return null;
+      return {utc: dateOnly[1] + dateOnly[2] + dateOnly[3], mjd: null};
+    }
     var ms = parseUtcMs(value);
     if (ms === null) return null;
     var units = Math.floor(ms / UNIT_MS + 0.5) + MJD_UNIX_EPOCH * 1000; // thousandths of a day, half up
@@ -59,6 +68,7 @@
   window.yseUtcDateHtml = function (value) {
     var p = parts(value);
     if (!p) return value === null || value === undefined ? "" : escapeHtml(value);
+    if (p.mjd === null) return p.utc;
     return '<span class="yse-utcdate" title="MJD ' + p.mjd + '">' + p.utc + "</span>";
   };
 })();

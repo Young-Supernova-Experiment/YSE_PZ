@@ -7,15 +7,23 @@ the MJD always agree (an instant that rounds up to ``.000`` of the next day show
 the next day in both).
 
 Accepted values: aware datetimes (converted to UTC), naive datetimes (taken as
-UTC, the site's ``TIME_ZONE``), dates (midnight UTC), ISO strings Django can
-parse, and None. Anything else gives an empty string.
+UTC, the site's ``TIME_ZONE``), dates, ISO strings Django can parse, and None.
+Anything else gives an empty string.
+
+A value with no time of day (a ``datetime.date`` that is not a datetime, or a
+``'YYYY-MM-DD'`` string) has no fraction to show, so it prints as plain
+``YYYYMMDD`` with no MJD tooltip. Night labels and allocation / semester bounds
+stored as midnight DateTimeFields use :func:`utc_night` (the ``utcnight``
+filter), which also prints only ``YYYYMMDD``.
 
 * :func:`utc_day` -> ``"20261024.362"`` (plain text: CSV, emails, plot hovers, titles)
 * :func:`mjd_string` -> ``"61337.362"``
 * :func:`utc_day_html` -> ``<span class="yse-utcdate" title="MJD 61337.362">20261024.362</span>``
+* :func:`utc_night` -> ``"20261024"``
 
-The template filters ``utcdate`` / ``utcdate_text`` (``{% load date_extras %}``)
-wrap these. MJD columns stay MJD; this is for every other date shown to people.
+The template filters ``utcdate`` / ``utcdate_text`` / ``utcnight`` wrap these.
+They are builtins from ``YSE_App.templatetags.display_extras`` (no ``{% load %}``
+needed). MJD columns stay MJD; this is for every other date shown to people.
 """
 
 from __future__ import annotations
@@ -31,6 +39,30 @@ _US_PER_UNIT = 86_400_000  # microseconds in 1/1000 of a day
 
 #: Column header for these dates.
 DATE_HEADER = 'Date (UTC)'
+
+
+def _is_date_only(value) -> bool:
+    """True for a ``datetime.date`` that is not a datetime, or a ``'YYYY-MM-DD'`` string."""
+    if isinstance(value, datetime.datetime):
+        return False
+    if isinstance(value, datetime.date):
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        return len(text) == 10 and text[4] == '-' and text[7] == '-' and as_utc_datetime(text) is not None
+    return False
+
+
+def utc_night(value) -> str:
+    """The UTC calendar day as ``"YYYYMMDD"`` (no fraction), or ``""``.
+
+    For night labels and date bounds (stored as dates or midnight datetimes),
+    where a fraction of the day would be noise.
+    """
+    dt = as_utc_datetime(value)
+    if dt is None:
+        return ''
+    return '%04d%02d%02d' % (dt.year, dt.month, dt.day)
 
 
 def as_utc_datetime(value) -> Optional[datetime.datetime]:
@@ -69,7 +101,9 @@ def _day_and_thousandths(value) -> Optional[Tuple[int, int]]:
 
 
 def utc_day(value) -> str:
-    """``"YYYYMMDD.ddd"`` in UTC, or ``""`` for None / unparseable values."""
+    """``"YYYYMMDD.ddd"`` in UTC (``"YYYYMMDD"`` for a date-only value), or ``""``."""
+    if _is_date_only(value):
+        return utc_night(value)
     parts = _day_and_thousandths(value)
     if parts is None:
         return ''
@@ -88,8 +122,11 @@ def mjd_string(value) -> str:
 
 
 def utc_day_html(value) -> str:
-    """``utc_day`` in a span whose tooltip is the MJD; ``""`` for None."""
+    """``utc_day`` in a span whose tooltip is the MJD; ``""`` for None.
+
+    A date-only value gives plain ``"YYYYMMDD"`` (no span, no tooltip).
+    """
     text = utc_day(value)
-    if not text:
-        return ''
+    if not text or _is_date_only(value):
+        return text
     return format_html('<span class="yse-utcdate" title="MJD {}">{}</span>', mjd_string(value), text)

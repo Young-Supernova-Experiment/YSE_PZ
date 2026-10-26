@@ -28,7 +28,7 @@
 						<tbody>
 						{% for n in nights %}
 							<tr data-night="{{ n.night|date:'Y-m-d' }}">
-								<td>{{ n.night|utcdate }} <span class="text-muted small">(UTC{% if n.utc_offset >= 0 %}+{% endif %}{{ n.utc_offset }})</span></td>
+								<td>{{ n.night|utcnight }} <span class="text-muted small">(UTC{% if n.utc_offset >= 0 %}+{% endif %}{{ n.utc_offset }})</span></td>
 								<td><small>{{ n.telescopes|default:"-" }}</small></td>
 								<td>{{ n.points }}</td>
 								<td>{{ n.spectra }}</td>

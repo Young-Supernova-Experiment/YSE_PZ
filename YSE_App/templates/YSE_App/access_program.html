@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>Data access: {{ allocation.name }}</h1>
-	<p class="text-muted small mb-0"><a href="{% url 'access_dashboard' %}">Dashboard</a> &middot; {{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|utcdate }} to {{ allocation.end_date|utcdate }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
+	<p class="text-muted small mb-0"><a href="{% url 'access_dashboard' %}">Dashboard</a> &middot; {{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|utcnight }} to {{ allocation.end_date|utcnight }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
 </section>
 
 <section class="content">
@@ -30,7 +30,7 @@
 						{% if classical_nights %}
 						<label class="sr-only" for="yse-grant-classical">Classical night</label>
 						<select name="classical_night" id="yse-grant-classical" class="form-control form-control-sm mr-1">
-							{% for n in classical_nights %}<option value="{{ n.id }}">{{ n.night|utcdate }}</option>{% endfor %}
+							{% for n in classical_nights %}<option value="{{ n.id }}">{{ n.night|utcnight }}</option>{% endfor %}
 						</select>
 						{% endif %}
 						<label class="sr-only" for="yse-grant-night">Night</label>
@@ -48,7 +48,7 @@
 				<div class="box-body">
 					{% if grants %}
 					<table class="table table-sm mb-0" id="yse-standing-grants">
-						<thead><tr><th>Effect</th><th>Grantee</th><th>Data</th><th>Set by</th><th>Since</th><th>Stopped</th><th></th></tr></thead>
+						<thead><tr><th>Effect</th><th>Grantee</th><th>Data</th><th>Set by</th><th>Since (UTC)</th><th>Stopped (UTC)</th><th></th></tr></thead>
 						<tbody>
 						{% for g in grants %}
 							<tr data-grant-id="{{ g.id }}" class="{% if g.stopped_at %}text-muted{% endif %}">
@@ -85,7 +85,7 @@
 				<div class="box-body">
 					{% if deputies %}
 					<table class="table table-sm mb-2" id="yse-program-deputies">
-						<thead><tr><th>Deputy</th><th>Note</th><th>Since</th><th></th></tr></thead>
+						<thead><tr><th>Deputy</th><th>Note</th><th>Since (UTC)</th><th></th></tr></thead>
 						<tbody>
 						{% for d in deputies %}
 							<tr data-deputy-id="{{ d.id }}">

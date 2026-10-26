@@ -1746,6 +1746,7 @@ def _visible_diff_images(visible_photdata, transient_id):
         'phot_data',
         'phot_data__photometry',
         'phot_data__band',
+        'phot_data__mag_sys',
     )
 
 
@@ -1888,7 +1889,7 @@ def transient_detail(request, slug):
                 request.user, transient_id
             ).filter(
                 mag__isnull=False,
-            ).filter(legacy_good('TransientPhotData')).select_related('band')
+            ).filter(legacy_good('TransientPhotData')).select_related('band', 'mag_sys')
             lastphotdata = good_photdata.order_by('-obs_date').first()
             firstphotdata = view_utils.get_disc_mag_from_photdata(good_photdata)
             allphotdata = None
@@ -1902,6 +1903,7 @@ def transient_detail(request, slug):
                 visible_photdata
                 .select_related(
                     'band',
+                    'mag_sys',
                     'photometry',
                     'photometry__instrument',
                     'photometry__instrument__telescope',
@@ -1993,11 +1995,14 @@ def transient_detail(request, slug):
             )
             context['recent_filter'] = lastphotdata.band
             context['recent_magdate'] = lastphotdata.obs_date
+            # Magnitude system as stored on the point (#832); None when not recorded.
+            context['recent_mag_sys'] = lastphotdata.mag_sys
             context['first_mag'] = format_magnitude_with_error(
                 firstphotdata.mag, firstphotdata.mag_err
             )
             context['first_filter'] = firstphotdata.band
             context['first_magdate'] = firstphotdata.obs_date
+            context['first_mag_sys'] = firstphotdata.mag_sys
             if allphotdata is not None:
                 dq = _clean_dq(request.GET.get('dq'))
                 context['allphotdata'] = _apply_dq_filter(allphotdata, dq)

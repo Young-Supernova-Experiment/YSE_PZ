@@ -23,7 +23,7 @@
 				</div>
 				<div class="box-footer">
 					{% if accepted %}
-					<p class="mb-0 text-success">You accepted this version on {{ accepted.accepted_at|utcdate }}.</p>
+					<p class="mb-0 text-success">You accepted this version on {{ accepted.accepted_at|utcdate }} UTC.</p>
 					<a class="btn btn-primary mt-2" href="{{ continue_url }}" id="yse-agreement-continue">Continue</a>
 					{% else %}
 					<form method="post" action="{% url 'agreement' %}{% if next_url %}?next={{ next_url|urlencode:'' }}{% endif %}" id="yse-agreement-form">

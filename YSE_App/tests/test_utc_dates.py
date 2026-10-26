@@ -9,7 +9,7 @@ from django.template import Context, Template
 from django.test import SimpleTestCase
 
 from YSE_App.common.status_display import TRANSIENT_STATUS_DISPLAY, status_definition, status_label
-from YSE_App.common.utc_dates import as_utc_datetime, mjd_string, utc_day, utc_day_html
+from YSE_App.common.utc_dates import as_utc_datetime, mjd_string, utc_day, utc_day_html, utc_night
 from YSE_App.services.redshift_precedence import BestRedshift
 
 UTC = datetime.timezone.utc
@@ -30,9 +30,26 @@ class UtcDayTests(SimpleTestCase):
         # 2026-10-23 22:00 PDT is 2026-10-24 05:00 UTC
         self.assertEqual(utc_day(datetime.datetime(2026, 10, 23, 22, 0, tzinfo=pdt)), '20261024.208')
 
-    def test_date_is_midnight_utc(self):
-        self.assertEqual(utc_day(datetime.date(2026, 10, 24)), '20261024.000')
+    def test_date_only_values_have_no_fraction_or_tooltip(self):
+        self.assertEqual(utc_day(datetime.date(2026, 10, 24)), '20261024')
+        self.assertEqual(utc_day_html(datetime.date(2026, 10, 24)), '20261024')
+        self.assertEqual(utc_day('2026-10-24'), '20261024')
+        self.assertEqual(utc_day_html(' 2026-10-24 '), '20261024')
         self.assertEqual(mjd_string(datetime.date(2026, 10, 24)), '61337.000')
+
+    def test_midnight_datetime_keeps_the_fraction(self):
+        value = datetime.datetime(2026, 10, 24, tzinfo=UTC)
+        self.assertEqual(utc_day(value), '20261024.000')
+
+    def test_utc_night(self):
+        self.assertEqual(utc_night(datetime.datetime(2026, 10, 24, tzinfo=UTC)), '20261024')
+        self.assertEqual(utc_night(datetime.datetime(2026, 10, 24, 23, 59, 59, tzinfo=UTC)), '20261024')
+        self.assertEqual(utc_night(datetime.date(2026, 10, 24)), '20261024')
+        self.assertEqual(utc_night('2026-10-24'), '20261024')
+        pdt = datetime.timezone(datetime.timedelta(hours=-7))
+        self.assertEqual(utc_night(datetime.datetime(2026, 10, 23, 22, 0, tzinfo=pdt)), '20261024')
+        for value in (None, '', 'not a date', 42):
+            self.assertEqual(utc_night(value), '')
 
     def test_none_and_junk(self):
         for value in (None, '', 'not a date', 42):
@@ -43,7 +60,7 @@ class UtcDayTests(SimpleTestCase):
 
     def test_iso_strings(self):
         self.assertEqual(utc_day('2026-10-24T12:00:00Z'), '20261024.500')
-        self.assertEqual(utc_day('2026-10-24'), '20261024.000')
+        self.assertEqual(utc_day('2026-10-24 06:00'), '20261024.250')
 
     def test_rounding_up_rolls_over_to_the_next_day(self):
         value = datetime.datetime(2026, 10, 24, 23, 59, 59, tzinfo=UTC)
@@ -76,6 +93,14 @@ class TemplateFilterTests(SimpleTestCase):
         self.assertEqual(self.render('{{ v|utcdate }}', v=value),
                          '<span class="yse-utcdate" title="MJD 61337.500">20261024.500</span>')
         self.assertEqual(self.render('{{ v|utcdate_text }}', v=value), '20261024.500')
+
+    def test_utcnight_is_a_builtin(self):
+        value = datetime.datetime(2026, 10, 24, tzinfo=UTC)
+        self.assertEqual(self.render('{{ v|utcnight }}', v=value), '20261024')
+        self.assertEqual(self.render('{{ v|utcnight|default:"-" }}', v=None), '-')
+
+    def test_utcdate_of_a_date_is_plain(self):
+        self.assertEqual(self.render('{{ v|utcdate }}', v=datetime.date(2026, 10, 24)), '20261024')
 
     def test_none_falls_through_to_default(self):
         self.assertEqual(self.render('{{ v|utcdate|default:"-" }}', v=None), '-')
@@ -117,3 +142,16 @@ class RedshiftKindTests(SimpleTestCase):
         self.assertEqual(BestRedshift(0.05, source='Legacy photo-z', origin='transient').kind, 'phot')
         self.assertEqual(BestRedshift(None).kind, '')
         self.assertEqual(BestRedshift(None).kind_title, '')
+
+
+class MagSystemLabelTests(SimpleTestCase):
+    """Magnitude headers never claim a system that is not stored (#832)."""
+
+    def test_no_hard_coded_ab_header(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1] / 'templates' / 'YSE_App'
+        for name in ('transient_detail_photometry_tables.html', 'transient_detail/summary_tab.html'):
+            text = (root / name).read_text()
+            self.assertNotIn('Mag (AB)', text, name)
+            self.assertIn('mag_sys', text, name)

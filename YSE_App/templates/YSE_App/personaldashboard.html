@@ -223,6 +223,8 @@ $(document).ready(function(){
 
       $('.transientStatusChange').on('click', function(event){
         var status_id = $(this).attr('data-status_id')
+        var status_name = $(this).attr('data-status_name')
+        var status_title = $(this).attr('title') || ''
         var transient_id = $(this).attr('transient_id')
         var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);
         var status_target = "{% url 'transientstatus-list' %}" + status_id + "/"
@@ -248,9 +250,12 @@ $(document).ready(function(){
             if (jqXHR.status == 200 && textStatus == "success") {
 
               var tokens = data.status.split("/")
-              var status_name = tokens[tokens.length-2]
-              var button_id = "#"+transient_id+"_status_name"
-              $(button_id).text(status_name)
+              if (tokens[tokens.length-2] == status_id){
+                var button_id = "#"+transient_id+"_status_name"
+                $(button_id).text(status_name).attr('title', status_title)
+              } else {
+                transientStatusChangeErr()
+              }
               
               {#alert(textStatus)#}
             } else {

@@ -10,7 +10,7 @@
                         <h3 class="box-title">Follow-up{% if user.is_staff %} (id: {{f.id}}){% endif %}</h3>
                     </div>
                     <div class="col-4">
-                        <h3 class="box-title">Valid: {{ f.valid_start|utcdate }} - {{ f.valid_stop|utcdate }}</h3>
+                        <h3 class="box-title">Valid: {{ f.valid_start|utcdate }} - {{ f.valid_stop|utcdate }} UTC</h3>
                     </div>
                     <div class="col-4">
                         <h3 style="float:right;padding-right:10px" class="box-title">Requestors: {{f.requestors}}</h3>

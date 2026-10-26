@@ -215,7 +215,7 @@
                                                     <tr>
                                                         <th></th>
                                                         <th>Date (UTC)</th>
-                                                        <th>Mag (AB)</th>
+                                                        <th>Mag</th>
                                                         <th>Mag Lim</th>
                                                         <th>Filter</th>
                                                     </tr>
@@ -224,7 +224,7 @@
                                                     <tr>
                                                         <td>Disc Mag</td>
                                                         <td>{{ first_magdate|utcdate }}</td>
-                                                        <td>{{ first_mag }}</td>
+                                                        <td>{{ first_mag }}{% if first_mag and first_mag_sys %} <small class="text-muted yse-mag-sys">{{ first_mag_sys }}</small>{% endif %}</td>
                                                         <td></td>
                                                         <td>{{ first_filter }}</td>
                                                     </tr>
@@ -238,7 +238,7 @@
                                                     <tr>
                                                         <td>Recent Mag</td>
                                                         <td>{{ recent_magdate|utcdate }}</td>
-                                                        <td>{{ recent_mag }}</td>
+                                                        <td>{{ recent_mag }}{% if recent_mag and recent_mag_sys %} <small class="text-muted yse-mag-sys">{{ recent_mag_sys }}</small>{% endif %}</td>
                                                         <td></td>
                                                         <td>{{ recent_filter }}</td>
                                                     </tr>

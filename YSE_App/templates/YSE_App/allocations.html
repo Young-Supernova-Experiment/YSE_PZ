@@ -51,7 +51,7 @@
 							<td><a href="{% url 'allocation_edit' a.id %}">{{ a.name }}</a>{% if a.proposal_id %}<br><small class="text-muted">{{ a.proposal_id }}</small>{% endif %}</td>
 							<td>{{ a.telescope.name }}{% if a.instrument %}<br><small>{{ a.instrument.name }}</small>{% endif %}</td>
 							<td>{% if a.principal_investigator %}{{ a.principal_investigator.name }}{% else %}-{% endif %}</td>
-							<td>{{ a.start_date|utcdate }} &ndash; {{ a.end_date|utcdate }}</td>
+							<td>{{ a.start_date|utcnight }} &ndash; {{ a.end_date|utcnight }}</td>
 							<td><small>{{ row.group_names }}</small></td>
 							<td style="min-width: 160px">
 								<div class="progress progress-xs" title="{{ a.percent_used }}% used">

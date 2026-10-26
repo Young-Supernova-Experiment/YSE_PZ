@@ -9,7 +9,7 @@
 <!-- Content Header (Page header) -->
     <section class="content-header">
       <h1>
-        {{ telescope }} Observing Night, {{ obs_date|utcdate|default:obs_date }}
+        {{ telescope }} Observing Night, {{ obs_date|utcnight|default:obs_date }} UTC
         {% if planner_enabled %}
         <a class="btn btn-primary btn-sm" id="plan-night-btn" style="margin-left: 12px; vertical-align: middle;"
            href="{% url 'night_planner' classical_obs_date.pk %}">Plan this night</a>
@@ -103,6 +103,7 @@ $(document).ready(function(){
       $('.transientStatusChange').on('click', function(event){
         var status_id = $(this).attr('data-status_id')
         var status_name = $(this).attr('data-status_name')
+        var status_title = $(this).attr('title') || ''
         var transient_id = $(this).attr('transient_id')
         var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);
         var status_target = "{% url 'transientstatus-list' %}" + status_id + "/";
@@ -132,7 +133,7 @@ $(document).ready(function(){
               //alert("hi "+status_name+" hi");
               if (status_id_out == status_id){
                   var button_id = "#"+transient_id+"_status_name"
-                  $(button_id).text(status_name)
+                  $(button_id).text(status_name).attr('title', status_title)
               } else {
                 transientStatusChangeErr()
               }

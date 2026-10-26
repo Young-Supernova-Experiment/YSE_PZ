@@ -24,7 +24,7 @@
 				<div class="box-footer">
 					<p class="text-muted small">Taking part is optional and never limits your use of YSE-PZ. You can change your choice at any time from your profile.</p>
 					{% if latest %}
-					<p id="yse-research-consent-status">Your current choice: <strong>{{ latest.get_decision_display }}</strong> on {{ latest.decided_at|utcdate }}.</p>
+					<p id="yse-research-consent-status">Your current choice: <strong>{{ latest.get_decision_display }}</strong> on {{ latest.decided_at|utcdate }} UTC.</p>
 					{% endif %}
 					<form method="post" action="{% url 'research_consent' %}{% if next_url %}?next={{ next_url|urlencode:'' }}{% endif %}" id="yse-research-consent-form">
 						{% csrf_token %}

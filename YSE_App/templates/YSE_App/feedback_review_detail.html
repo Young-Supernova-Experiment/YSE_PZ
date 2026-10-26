@@ -14,10 +14,10 @@
 				<div class="box-body">
 					<dl class="mb-0">
 						<dt>From</dt><dd>{{ item.user.get_username|default:"(deleted user)" }}</dd>
-						<dt>Sent</dt><dd>{{ item.created|utcdate }}</dd>
+						<dt>Sent</dt><dd>{{ item.created|utcdate }} UTC</dd>
 						<dt>Type</dt><dd>{{ item.get_kind_display }}</dd>
 						<dt>Page</dt><dd>{% if item.page_url %}<a href="{{ item.page_url }}"><code>{{ item.page_url }}</code></a>{% else %}<span class="text-muted">not included</span>{% endif %}</dd>
-						<dt>Status</dt><dd>{{ item.get_status_display }}{% if item.reviewed_by %} by {{ item.reviewed_by.get_username }} {{ item.reviewed_at|utcdate }}{% endif %}</dd>
+						<dt>Status</dt><dd>{{ item.get_status_display }}{% if item.reviewed_by %} by {{ item.reviewed_by.get_username }} {{ item.reviewed_at|utcdate }} UTC{% endif %}</dd>
 						{% if item.github_issue_url %}<dt>GitHub issue</dt><dd><a href="{{ item.github_issue_url }}" target="_blank" rel="noopener noreferrer">{{ item.github_issue_url }}</a></dd>{% endif %}
 						<dt>Title</dt><dd>{{ item.title|default:"-" }}</dd>
 						<dt>Text</dt><dd><pre class="mb-0" style="white-space: pre-wrap;">{{ item.text }}</pre></dd>

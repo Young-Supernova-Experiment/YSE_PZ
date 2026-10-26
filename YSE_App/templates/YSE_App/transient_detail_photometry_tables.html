@@ -14,7 +14,7 @@
                         <th>Date (UTC)</th>
                         <th>Flux</th>
                         <th>Flux Error</th>
-                        <th>Mag (AB)</th>
+                        <th>Mag</th>
                         <th>Mag Error</th>
                         <th>Mag Lim</th>
                         <th>Filter</th>
@@ -30,7 +30,7 @@
                         <td>{{diff.phot_data.obs_date|utcdate}}</td>
                         <td>{{diff.phot_data.flux|floatformat:3}}</td>
                         <td>{{diff.phot_data.flux_err|floatformat:3}}</td>
-                        <td>{{diff.phot_data.mag|floatformat:2}}</td>
+                        <td>{{diff.phot_data.mag|floatformat:2}}{% if diff.phot_data.mag is not None and diff.phot_data.mag_sys %} <small class="text-muted yse-mag-sys">{{ diff.phot_data.mag_sys }}</small>{% endif %}</td>
                         <td>{{diff.phot_data.mag_err|floatformat:2}}</td>
                         <td>{{diff.phot_data.mag_lim|floatformat:2}}</td>
                         <td>{{diff.phot_data.band.name}}</td>
@@ -86,7 +86,7 @@
         <tr>
             <th>Date (UTC)</th>
             <th>MJD</th>
-            <th>Mag (AB)</th>
+            <th>Mag</th>
             <th>Mag Error</th>
             <th>Filter</th>
             <th>Instrument</th>
@@ -99,7 +99,7 @@
         <tr>
             <td>{{allphot.obs_date|utcdate}}</td>
             <td>{{allphot.date_to_mjd|floatformat:1}}</td>
-            <td>{{allphot.mag|floatformat:2}}</td>
+            <td>{{allphot.mag|floatformat:2}}{% if allphot.mag is not None and allphot.mag_sys %} <small class="text-muted yse-mag-sys">{{ allphot.mag_sys }}</small>{% endif %}</td>
             <td>{{allphot.mag_err|floatformat:2}}</td>
             <td>{{allphot.band.name}}</td>
             <td>{{allphot.band.instrument.name}}</td>
