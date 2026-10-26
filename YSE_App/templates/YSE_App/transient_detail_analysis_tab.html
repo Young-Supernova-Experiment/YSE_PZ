@@ -31,8 +31,8 @@
 						<span class="text-danger small" id="analysis_run_error"></span>
 					</form>
 					{% else %}
-					<p class="text-muted">No analysis service is enabled for your groups. Staff register services with
-						<code>manage.py register_analysis_service</code> (see <em>docs/analysis-services.md</em>).</p>
+					<p class="text-muted">No analysis service is enabled for your groups.{% if user.is_staff %} Staff register services with
+						<code>manage.py register_analysis_service</code> (see <em>docs/analysis-services.md</em>).{% endif %}</p>
 					{% endif %}
 				</div>
 			</div>

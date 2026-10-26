@@ -6,7 +6,7 @@
                                 <div class="box box-primary">
                                     <div class="box-header">
                                         <h3 class="box-title">Transient Detail</h3>
-                                        <a target="_blank" href="{% url 'admin:YSE_App_transient_change' transient.id %}">(Edit)</a>
+                                        {% if user.is_staff %}<a target="_blank" href="{% url 'admin:YSE_App_transient_change' transient.id %}">(Edit)</a>{% endif %}
                                     </div>
                                     <div class="box-body">
                                         <div class="col-4">
@@ -126,15 +126,17 @@
                                                 </p>
                                             </div>
                                         </div>
+                                        {% if transient.known_archive_flags %}
                                         <div class="col-4">
                                             <div class="form-group yse-archive-flags" id="archive_flags"
                                                  title="Known archive coverage at this position: set at ingest (HST, Chandra, Spitzer) and refreshed when the archive tabs answer (HST, JWST, Chandra). Searchable as has_hst / has_jwst / has_chandra.">
                                                 <strong>Archives</strong>
                                                 <p class="text-muted">
-                                                    {% for label, flag in transient.archive_flags %}<span class="badge yse-archive-flag {% if flag %}badge-success{% elif flag is False %}badge-light{% else %}badge-secondary{% endif %}" data-archive="{{ label }}" data-flag="{% if flag %}1{% elif flag is False %}0{% else %}unknown{% endif %}">{{ label }}{% if flag %}{% elif flag is False %}: no{% else %}: ?{% endif %}</span> {% endfor %}
+                                                    {% for label, flag in transient.known_archive_flags %}<span class="badge yse-archive-flag {% if flag %}badge-success{% elif flag is False %}badge-light{% else %}badge-secondary{% endif %}" data-archive="{{ label }}" data-flag="{% if flag %}1{% elif flag is False %}0{% else %}unknown{% endif %}">{{ label }}{% if flag %}{% elif flag is False %}: no{% else %}: ?{% endif %}</span> {% endfor %}
                                                 </p>
                                             </div>
                                         </div>
+                                        {% endif %}
                                         {% if transient.point_source_probability %}
                                         <div class="col-4">
                                             <div class="form-group">
@@ -161,15 +163,6 @@
                                         {% endif %}
                                         <div class="col-4">
                                             <div class="form-group">
-                                                <strong>Phot. Class (don't use)</strong>
-                                                <p class="text-muted">
-                                                    {{ transient.photo_class }}
-                                                </p>
-                                                <br>
-                                            </div>
-                                        </div>
-                                        <div class="col-4">
-                                            <div class="form-group">
                                                 <strong>YSE Field</strong>
                                                 <p class="text-muted">
                                                     {% with transient.LikelyYSEField as ysefield %}
@@ -187,19 +180,17 @@
                                                 <br>
                                             </div>
                                         </div>
+                                        {% if transient.real_bogus_score is not None %}
                                         <div class="col-4">
                                             <div class="form-group">
                                                 <strong>Real/Bogus Score</strong>
                                                 <p class="text-muted">
-                                                    {% if transient.real_bogus_score %}
                                                     {{ transient.real_bogus_score }}
-                                                    {% else %}
-                                                    None
-                                                    {% endif %}
                                                 </p>
                                                 <br>
                                             </div>
                                         </div>
+                                        {% endif %}
                                         <div class="col-4">
                                             <div class="form-group">
                                                 <strong>Best Distance</strong>
@@ -342,12 +333,15 @@
                                 <div class="box box-primary">
                                     <div class="box-header">
                                         <h3 class="box-title">Host Detail &amp; External Resources</h3>
-                                        {% if transient.host %}
+                                        {% if transient.host and user.is_staff %}
                                             <a target="_blank" href="{% url 'admin:YSE_App_host_change' transient.host.id %}">(Edit)</a>
                                         {% endif %}
                                     </div>
                                     <div class="box-body">
                                         <div class="row">
+                                        {% if not transient.host %}
+                                        <div class="col-12"><p class="text-muted">No host galaxy</p></div>
+                                        {% else %}
                                         <div class="col-4">
                                             <div class="form-group">
                                                 <strong>Host Name</strong>
@@ -464,6 +458,7 @@
                                             </div>
                                         </div>
 
+                                        {% endif %}
 
                                         <!-- Start 2 column -->
                                         <div class="col-12">
@@ -613,7 +608,8 @@
                                         </div>
                                         <p></p>
                                     </div>
-                                                                        <div class="box box-primary">
+                                                                        {% if transient.postage_stamp_file %}
+                                        <div class="box box-primary">
                                         <div class="box-header">
                                             <h3 class="box-title">Image Stamps</h3>
                                         </div>
@@ -649,6 +645,7 @@
               </div>
               {% endif %}
           </div>
+                                {% endif %}
                                 </div>
                                 <div class="col-12">
                                     <div class="col-6">
