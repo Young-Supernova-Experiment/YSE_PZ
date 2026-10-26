@@ -1015,11 +1015,11 @@
                             $("#associated-events-list").append("<div data-tag_id=\""+tag_id+"\" class=\"external-event bg-"+color+"\">"+tags_list.value+"</div>");
 
                         } else {
-                            alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                            alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                         }
                     },
                     error: function(XMLHttpRequest, textStatus, errorThrown) {
-                        // alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                        // alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                         alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                     }
                 });
@@ -1084,11 +1084,11 @@
                             if (textStatus == "success") {
 
                             } else {
-                                alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                                alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             }
                         },
                         error: function(XMLHttpRequest, textStatus, errorThrown) {
-                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                         }
                     });
@@ -1143,11 +1143,11 @@
                             if (textStatus == "success") {
 
                             } else {
-                                alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                                alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             }
                         },
                         error: function(XMLHttpRequest, textStatus, errorThrown) {
-                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                         }
                     });
@@ -1224,12 +1224,12 @@
                             //Remove event from text input
                             $('#new-event').val('')
                           // transientStatusChangeErr()
-                          alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                          alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                       }
                   },
                   error: function(XMLHttpRequest, textStatus, errorThrown) {
                         $('#new-event').val('')
-                        alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                        alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                       // alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                       //Remove event from text input
 
@@ -1661,7 +1661,7 @@
             // Follow-up submit is wired in the early script block (yseTriggerFollowupSubmit).
 
             function ChangeErr() {
-                alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.")
+                alert("Transient Status may not have changed -- please use YSE Admin and contact the site admins.")
             }
 
             $('.transientStatusChange').on('click', function(event){
