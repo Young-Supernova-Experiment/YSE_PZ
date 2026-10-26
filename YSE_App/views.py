@@ -804,12 +804,12 @@ def calendar(request):
     colors = ['#dd4b39', 
                 '#f39c12', 
                 '#00c0ef', 
-                '#0073b7', 
+                '#6ea8fe', 
                 '#f012be', 
                 '#3c8dbc',
                 '#00a65a',
                 '#d2d6de',
-                '#001f3f']
+                '#9ec5fe']
 
     user_colors = {}
     calendar_users = User.objects.filter(
@@ -832,12 +832,12 @@ def yse_oncall_calendar(request):
     colors = ['#dd4b39', 
               '#f39c12', 
               '#00c0ef', 
-              '#0073b7', 
+              '#6ea8fe', 
               '#f012be', 
               '#3c8dbc',
               '#00a65a',
               '#d2d6de',
-              '#001f3f']
+              '#9ec5fe']
 
     user_colors = {}
     for i, u in enumerate(users): #User.objects.all().exclude(username='admin').order_by()):
@@ -864,12 +864,12 @@ def observing_calendar(request):
     colors = ['#dd4b39', 
                 '#f39c12', 
                 '#00c0ef', 
-                '#0073b7', 
+                '#6ea8fe', 
                 '#f012be', 
                 '#3c8dbc',
                 '#00a65a',
                 '#d2d6de',
-                '#001f3f']
+                '#9ec5fe']
 
     all_dates = (
         GetAuthorizedClassicalObservingDate_ByUser(request.user)
@@ -896,12 +896,12 @@ def too_calendar(request):
     colors = ['#dd4b39', 
               '#f39c12', 
               '#00c0ef', 
-              '#0073b7', 
+              '#6ea8fe', 
               '#f012be', 
               '#3c8dbc',
               '#00a65a',
               '#d2d6de',
-              '#001f3f']
+              '#9ec5fe']
 
     # don't show everything, for speed
     first_calendar_date = (datetime.datetime.utcnow()-datetime.timedelta(60)).replace(tzinfo=pytz.UTC)

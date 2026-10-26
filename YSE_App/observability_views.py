@@ -64,7 +64,7 @@ def _plot_json(payload):
     fig.yaxis.axis_label = "Altitude (deg)"
     fig.xaxis.axis_label = "UT"
     fig.xaxis.axis_label_text_font_size = fig.yaxis.axis_label_text_font_size = "9pt"
-    fig.xaxis.major_label_text_font_size = fig.yaxis.major_label_text_font_size = "8pt"
+    fig.xaxis.major_label_text_font_size = fig.yaxis.major_label_text_font_size = "9pt"
     fig.yaxis.ticker = [0, 30, 60, 90]
     fig.min_border_left = 40
 
@@ -96,7 +96,7 @@ def _plot_json(payload):
     target = fig.line("t", "alt", source=source, line_color="#1f77b4", line_width=2.2,
                       legend_label=payload["transient"]["name"])
     fig.legend.location = "top_left"
-    fig.legend.label_text_font_size = "8pt"
+    fig.legend.label_text_font_size = "9pt"
     fig.legend.padding = 2
     fig.legend.spacing = 0
     fig.legend.background_fill_alpha = 0.6
