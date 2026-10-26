@@ -54,7 +54,7 @@
 									<th>Name</th>
 									<th>RA</th>
 									<th>Dec</th>
-									<th>Disc. Date</th>
+									<th>Disc. Date (UTC)</th>
 									<th>Spec Class</th>
 									<th>Internal Survey</th>
 								</tr>
@@ -74,6 +74,7 @@
 
 
 {% block scripts %}
+	<script src="{% static 'YSE_App/yse-dates.js' %}?v=ux-dates-1"></script>
 	<script>
 
 		$(function() {
@@ -155,7 +156,7 @@
 											"<td><a href='" + target_url + "'>" + name + "</a></td>" +
 											"<td>" + ra + "</td>" +
 											"<td>" + dec + "</td>" +
-											"<td>" + disc_date + "</td>" +
+											"<td>" + yseUtcDateHtml(disc_date) + "</td>" +
 											"<td>" + spec_class + "</td>" +
 											"<td>" + internal_survey + "</td>" +
 										"</tr>";

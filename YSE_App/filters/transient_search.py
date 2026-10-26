@@ -273,10 +273,14 @@ def parse_quick_search(text):
 def quick_search_params(params):
     """A mutable copy of ``params`` (a ``QueryDict``) with ``q`` expanded.
 
-    ``q=2026abc`` becomes ``name_contains=2026abc``; ``q=10.5 -20.25`` becomes
-    ``ra=10.5&dec=-20.25&radius_arcsec=5``. Explicit filter parameters win
-    over ``q``. The copy is what the FilterSet and its form see, so the form
-    shows the values the quick search stood for and the URL stays shareable.
+    ``q=2026abc`` becomes ``alias=2026abc`` (name or any alternate name, #801);
+    ``q=10.5 -20.25`` becomes ``ra=10.5&dec=-20.25&radius_arcsec=5``. ``q``
+    only fills the parameters it maps to: an explicit ``alias`` (or explicit
+    ``ra``/``dec``/``radius_arcsec`` for a coordinate ``q``) wins over it,
+    and every other explicit filter (``name_contains``, status, dates, ...)
+    is kept and combined with it. The copy is what the FilterSet and its
+    form see, so the form shows the values the quick search stood for and
+    the URL stays shareable.
     """
     data = params.copy()
     q = data.get('q')
@@ -289,7 +293,7 @@ def quick_search_params(params):
         data.setdefault('dec', '%.6f' % dec)
         data.setdefault('radius_arcsec', ('%g' % radius))
     elif parsed[1]:
-        data.setdefault('name_contains', parsed[1])
+        data.setdefault('alias', parsed[1])
     return data
 
 
@@ -468,6 +472,19 @@ class NameMultipleChoiceFilter(django_filters.ModelMultipleChoiceFilter):
     field_class = _NameChoiceField
 
 
+class _StatusNameChoiceField(_NameChoiceField):
+    """Transient statuses labelled from the one status display map (#831); values stay the names."""
+
+    def label_from_instance(self, obj):
+        from YSE_App.common.status_display import status_label
+
+        return status_label(obj.name)
+
+
+class StatusNameMultipleChoiceFilter(NameMultipleChoiceFilter):
+    field_class = _StatusNameChoiceField
+
+
 def _bool(method, label):
     return django_filters.BooleanFilter(method=method, label=label, widget=AnyBooleanWidget())
 
@@ -511,9 +528,9 @@ def _legacy_filter_columns(legacy_columns):
             for c in legacy_columns.values()}
 
 
-def _names(model, label, **kwargs):
+def _names(model, label, filter_class=None, **kwargs):
     """Multi-select of ``model`` rows addressed by ``name`` (``?status=New&status=Watch``)."""
-    return NameMultipleChoiceFilter(
+    return (filter_class or NameMultipleChoiceFilter)(
         queryset=model.objects.order_by('name'), to_field_name='name', label=label,
         distinct=False, **kwargs,
     )
@@ -630,7 +647,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     redshift_max = django_filters.NumberFilter(method='filter_redshift_max', label='Redshift at most')
 
     # --- relations -------------------------------------------------------
-    status = _names(TransientStatus, 'Status', method=_by_pk('status'))
+    status = _names(TransientStatus, 'Status', filter_class=StatusNameMultipleChoiceFilter, method=_by_pk('status'))
     status_in = django_filters.BaseInFilter(field_name='status__name')  # legacy
     obs_group = _names(ObservationGroup, 'Observation group', method=_by_pk('obs_group'))
     internal_survey = _names(InternalSurvey, 'Internal survey', method=_by_pk('internal_survey'))

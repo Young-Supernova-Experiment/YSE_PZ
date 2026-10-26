@@ -136,7 +136,7 @@
         <option value="photometry">Download photometry (zip)</option>
       </select>
       <select name="status_id" id="search-bulk-status" class="form-control form-control-sm mr-2" style="display:none">
-        {% for st in all_transient_statuses %}<option value="{{ st.id }}">{{ st.name }}</option>{% endfor %}
+        {% for st in all_transient_statuses %}<option value="{{ st.id }}" title="{{ st.name|status_title }}">{{ st.name|status_label }}</option>{% endfor %}
       </select>
       <select name="tag_id" id="search-bulk-tag" class="form-control form-control-sm mr-2" style="display:none">
         {% for tag in all_transient_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
@@ -235,6 +235,7 @@ $(function() {
     var status_id = $(this).attr('data-status_id');
     var transient_id = $(this).attr('transient_id');
     var status_name = $(this).attr('data-status_name');
+    var status_title = $(this).attr('title') || '';
     var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);
     var status_target = "{% url 'transientstatus-list' %}" + status_id + "/";
     var base_url = window.location.protocol + "//" + window.location.host;
@@ -247,7 +248,7 @@ $(function() {
         if (jqXHR.status == 200 && textStatus == "success") {
           var tokens = data.status.split("/");
           if (tokens[tokens.length - 2] == status_id) {
-            $("#" + transient_id + "_status_name").text(status_name);
+            $("#" + transient_id + "_status_name").text(status_name).attr('title', status_title);
           } else {
             transientStatusChangeErr();
           }

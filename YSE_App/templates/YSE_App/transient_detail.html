@@ -158,7 +158,7 @@
                     <div class="tab-pane" id="resources_tab">
                         <div class="row">
                             <div class="col-12">
-                                <h4>Current UTC Time: <strong>{{ nowtime }}</strong></h4>
+                                <h4>Current UTC Time: <strong>{{ nowtime|utcdate }}</strong></h4>
                                 <ul>
                                   <li><a target="_blank" href="{% url 'finderchart' transient.id %}">Generate Finder Chart</a></li>
                                 </ul>
@@ -258,7 +258,7 @@
                         <table class="table table-bordered table-striped">
                             <thead>
                                 <tr>
-                                    <th>Date</th>
+                                    <th>Date (UTC)</th>
                                     <th>Filter</th>
                                     <th>Instrument</th>
                                     <th>Image</th>
@@ -274,7 +274,7 @@
                         <table class="table table-bordered table-striped" id="jwst_observation_table">
                             <thead>
                                 <tr>
-                                    <th>Date (UT)</th>
+                                    <th>Date (UTC)</th>
                                     <th>Instrument</th>
                                     <th>Filter</th>
                                     <th>Program</th>
@@ -294,7 +294,7 @@
                         <table class="table table-bordered table-striped">
                             <thead>
                                 <tr>
-                                    <th>Date</th>
+                                    <th>Date (UTC)</th>
                                     <th>Exp. Time</th>
                                     <th>Image</th>
                                 </tr>
@@ -331,6 +331,7 @@
 
 {% block scripts %}
     <script type="text/javascript" src="{% static 'YSE_App/bokeh-2.4.2.min.js' %}"></script>
+    <script src="{% static 'YSE_App/yse-dates.js' %}?v=ux-dates-1"></script>
     <script src="{% static 'YSE_App/bower_components/bootstrap-timepicker/js/bootstrap-timepicker.js' %}"></script>
 
     <script>
@@ -938,7 +939,7 @@
             }
             $(rows).append(htmltext);
             for (var ju in json.jpegurl) {
-                var htmltextfull = "<tr><td>" + json.obsdate[ju] + "</td><td>" + json.filters[ju] + "</td><td>" + json.inst[ju] + "</td><td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td></tr>";
+                var htmltextfull = "<tr><td>" + yseUtcDateHtml(json.obsdate[ju]) + "</td><td>" + json.filters[ju] + "</td><td>" + json.inst[ju] + "</td><td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td></tr>";
                 $(rows_full).append(htmltextfull);
             }
         }).fail(function (xhr) {
@@ -960,7 +961,7 @@
             }
             $(rows).append(htmltext);
             for (var ju in json.jpegurl) {
-                var htmltextfull = "<tr><td>" + json.obsdate[ju] + "</td><td>" + json.exptime[ju] + "</td><td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td></tr>";
+                var htmltextfull = "<tr><td>" + yseUtcDateHtml(json.obsdate[ju]) + "</td><td>" + json.exptime[ju] + "</td><td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td></tr>";
                 $(rows_full).append(htmltextfull);
             }
             $(rows_exp).prepend(json.totalexp + "s ");
@@ -1636,7 +1637,7 @@
                     '<div class="yse-comment-meta"><strong class="yse-comment-author">' +
                     yseEscapeHtml(data.created_by) +
                     '</strong> <time class="yse-comment-time text-muted">' +
-                    yseEscapeHtml(data.modified_date) + ' UT</time></div>' +
+                    (data.modified_date_utc ? yseUtcDateHtml(data.modified_date_utc) : yseEscapeHtml(data.modified_date)) + ' UTC' + '</time></div>' +
                     '<div class="yse-comment-body">' + yseEscapeHtml(data.comment) + '</div>'
                 );
                 $('#yse-comment-thread').prepend(row);
@@ -1693,6 +1694,7 @@
             $('.transientStatusChange').on('click', function(event){
                 var status_id = $(this).attr('data-status_id')
                 var status_name = $(this).attr('data-status_name')
+                var status_title = $(this).attr('title') || ''
                 var url_target = "{% url 'transient-detail' transient.id %}"
                 var status_target = "{% url 'transientstatus-list' %}" + status_id + "/"
 
@@ -1718,7 +1720,7 @@
                           var tokens = data.status.split("/")
                           var status_id_out = tokens[tokens.length-2]
                           if (status_id_out == status_id){
-                              $('#transient_status_name').text(status_name)
+                              $('#transient_status_name').text(status_name).attr('title', status_title)
                           } else {
                               transientStatusChangeErr()
                           }
@@ -2307,7 +2309,7 @@
 
                 for(var ju in json.jpegurl){
                     var htmltextfull = "<tr>" +
-                    "<td>" + json.obsdate[ju] + "</td>" +
+                    "<td>" + yseUtcDateHtml(json.obsdate[ju]) + "</td>" +
                     "<td>" + json.filters[ju] + "</td>" +
                     "<td>" + json.inst[ju] + "</td>" +
                     "<td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td>" //+
@@ -2366,7 +2368,7 @@
                 inst += ' <span class="text-muted small" title="MAST calibration level">(L' + yseEscapeHtml(row.calib_level) + ')</span>';
             }
             return '<tr>' +
-                '<td title="MJD ' + yseEscapeHtml(row.mjd) + '">' + yseEscapeHtml(row.obsdate || '') + '</td>' +
+                '<td>' + yseUtcDateHtml(row.obsdate || '') + '</td>' +
                 '<td>' + inst + '</td>' +
                 '<td>' + yseEscapeHtml(row.filters || '') + '</td>' +
                 '<td>' + yseEscapeHtml(row.program || '') + (row.pi ? '<br><span class="text-muted small">' + yseEscapeHtml(row.pi) + '</span>' : '') + '</td>' +
@@ -2427,7 +2429,7 @@
 
                 for(var ju in json.jpegurl){
                     var htmltextfull = "<tr>" +
-                    "<td>" + json.obsdate[ju] + "</td>" +
+                    "<td>" + yseUtcDateHtml(json.obsdate[ju]) + "</td>" +
                     "<td>" + json.exptime[ju] + "</td>" +
                     "<td><a href='" + json.fitsurl[ju] + "' target='_blank'><img src='" + json.jpegurl[ju] + "' style='width:240px' alt='' /></a></td>" +
                     "</tr>"

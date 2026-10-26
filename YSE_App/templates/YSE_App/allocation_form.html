@@ -29,7 +29,7 @@
 									<div class="form-check">{% render_field field class+="form-check-input" %} <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label></div>
 								{% elif field.name == 'groups' %}
 									<label for="{{ field.id_for_label }}">{{ field.label }}</label>
-									{% render_field field class+="form-control select2" style+="width: 100%;" %}
+									{% render_field field class+="form-control" style+="width: 100%;" %}
 								{% else %}
 									<label for="{{ field.id_for_label }}">{{ field.label }}</label>
 									{% render_field field class+="form-control" %}
@@ -73,7 +73,7 @@
 							<td><a href="{% url 'transient_detail' r.transient.slug %}#followup_tab">{{ r.transient.name }}</a></td>
 							<td><span class="badge badge-{% if r.state == 'complete' %}success{% elif r.state == 'failed' %}danger{% elif r.state == 'cancelled' %}secondary{% elif r.state == 'queued' or r.state == 'draft' %}warning{% else %}info{% endif %}">{{ r.get_state_display }}</span></td>
 							<td>{{ r.submitted_by.username }}</td>
-							<td>{{ r.created_date|date:"Y-m-d H:i" }}</td>
+							<td>{{ r.created_date|utcdate }}</td>
 						</tr>
 						{% empty %}
 						<tr><td colspan="4" class="text-muted">No requests yet.</td></tr>

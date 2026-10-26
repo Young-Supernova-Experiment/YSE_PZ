@@ -121,7 +121,7 @@
 									{% csrf_token %}
 									<input type="hidden" name="next" value="{{ request.get_full_path }}">
 									<select name="status" class="form-control form-control-sm d-inline-block w-auto" title="status of the saved transient">
-										{% for s in transient_statuses %}<option value="{{ s }}"{% if s == 'New' %} selected{% endif %}>{{ s }}</option>{% endfor %}
+										{% for s in transient_statuses %}<option value="{{ s }}"{% if s == 'New' %} selected{% endif %} title="{{ s|status_title }}">{{ s|status_label }}</option>{% endfor %}
 									</select>
 									<button type="submit" class="btn btn-sm btn-success" title="Create or link a YSE-PZ transient">Save</button>
 								</form>

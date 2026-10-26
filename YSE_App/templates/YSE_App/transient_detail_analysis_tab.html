@@ -44,7 +44,7 @@
 						<th>Service</th>
 						<th>Status</th>
 						<th>Requested by</th>
-						<th>Started</th>
+						<th>Started (UTC)</th>
 						<th>Duration</th>
 						<th>Results</th>
 						<th></th>
@@ -58,7 +58,7 @@
 						<td><span class="badge badge-{% if r.status == 'succeeded' %}success{% elif r.status == 'failed' %}danger{% elif r.status == 'cancelled' %}secondary{% elif r.status == 'running' %}info{% else %}warning{% endif %} analysis-status">{{ r.get_status_display }}</span>
 							{% if not r.is_finished %}<i class="fa fa-spinner fa-spin text-muted"></i>{% endif %}</td>
 						<td>{{ r.created_by.username }}</td>
-						<td title="requested {{ r.created_date|date:'Y-m-d H:i:s' }} UTC">{{ r.started_at|date:"Y-m-d H:i"|default:"-" }}</td>
+						<td title="requested {{ r.created_date|utcdate_text }} UTC">{{ r.started_at|utcdate|default:"-" }}</td>
 						<td>{% if r.duration %}{{ r.duration.total_seconds|floatformat:1 }} s{% else %}-{% endif %}</td>
 						<td class="small">
 							{% if r.status == 'failed' %}<span class="text-danger">{{ r.error|truncatechars:120 }}</span>
@@ -84,7 +84,7 @@
 	<div class="card card-outline {% if r.status == 'succeeded' %}card-success{% else %}card-danger{% endif %} analysis-result-card" id="analysis_run_{{ r.uuid }}" data-run-uuid="{{ r.uuid }}">
 		<div class="card-header">
 			<h3 class="card-title">{{ r.service.name }}
-				<small class="text-muted">&mdash; {{ r.created_by.username }}, {{ r.finished_at|date:"Y-m-d H:i" }} UTC{% if row.summary_text %} &mdash; {{ row.summary_text }}{% endif %}</small></h3>
+				<small class="text-muted">&mdash; {{ r.created_by.username }}, {{ r.finished_at|utcdate }} UTC{% if row.summary_text %} &mdash; {{ row.summary_text }}{% endif %}</small></h3>
 			<div class="card-tools"><button type="button" class="btn btn-tool" data-card-widget="collapse"><i class="fa fa-minus"></i></button></div>
 		</div>
 		<div class="card-body">

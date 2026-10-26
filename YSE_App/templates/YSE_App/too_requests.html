@@ -9,7 +9,7 @@
 <!-- Content Header (Page header) -->
     <section class="content-header">
       <h1>
-        {{ telescope }} Observing Night, {{ obs_date }}
+        {{ telescope }} Observing Night, {{ obs_date|utcnight|default:obs_date }} UTC
       </h1>
       <ol class="breadcrumb">
         <li><i class="fa fa-dashboard"></i> Home</li>

@@ -228,6 +228,25 @@ class BestRedshift:
     origin: str = ""  # "transient" | "host" | "host photo-z" | ""
     override: bool = False
 
+    @property
+    def kind(self) -> str:
+        """Short source label for display (#832): ``phot``, ``host`` or ``spec``; ``""`` if unknown."""
+        if self.value is None or not self.origin:
+            return ""
+        if self.origin == "host photo-z" or is_photometric(self.source):
+            return "phot"
+        if self.origin == "host":
+            return "host"
+        return "spec"
+
+    @property
+    def kind_title(self) -> str:
+        return {
+            "phot": "Photometric redshift",
+            "host": "Spectroscopic redshift of the host galaxy",
+            "spec": "Spectroscopic redshift of the transient",
+        }.get(self.kind, "")
+
 
 def best_redshift(transient) -> BestRedshift:
     """The redshift to use for ``transient`` under the one precedence list.

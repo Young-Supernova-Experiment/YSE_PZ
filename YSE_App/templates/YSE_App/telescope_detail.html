@@ -57,7 +57,7 @@
 					<tbody>
 					{% for row in recent_logs %}
 					<tr data-source="{{ row.source }}">
-						<td class="text-nowrap text-muted">{{ row.start|date:"Y-m-d H:i" }}</td>
+						<td class="text-nowrap text-muted">{{ row.start|utcdate }}</td>
 						<td><a href="{% url 'instrument_logs' row.instrument_id %}">{{ row.instrument.name }}</a></td>
 						<td>{{ row.summary|truncatechars:140 }}{% if row.source == 'api' %} <span class="badge badge-info">api</span>{% endif %}</td>
 					</tr>
@@ -75,7 +75,7 @@
 					<thead><tr><th>Allocation</th><th>Instrument</th><th>PI</th><th>Facility</th><th>Until</th></tr></thead>
 					<tbody>
 					{% for a in allocations %}
-					<tr><td>{% if request.user.is_staff %}<a href="{% url 'allocation_edit' a.id %}">{{ a.name }}</a>{% else %}{{ a.name }}{% endif %}</td><td>{{ a.instrument.name|default:"any" }}</td><td>{{ a.principal_investigator.name|default:"-" }}</td><td>{{ a.facility|default:"manual" }}</td><td>{{ a.end_date|date:"Y-m-d" }}</td></tr>
+					<tr><td>{% if request.user.is_staff %}<a href="{% url 'allocation_edit' a.id %}">{{ a.name }}</a>{% else %}{{ a.name }}{% endif %}</td><td>{{ a.instrument.name|default:"any" }}</td><td>{{ a.principal_investigator.name|default:"-" }}</td><td>{{ a.facility|default:"manual" }}</td><td>{{ a.end_date|utcnight }}</td></tr>
 					{% endfor %}
 					</tbody>
 				</table>

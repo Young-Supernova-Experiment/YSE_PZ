@@ -45,6 +45,7 @@ from .common.legend_layout import (
 )
 from .common.quality_mask import is_legacy_flagged
 from .common.utilities import date_to_mjd
+from .common.utc_dates import utc_day
 from .services.visibility import group_access_plot_cache_token
 from .services import bazin as bazin_fits
 from .services import phot_points
@@ -1208,7 +1209,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
 
     # Convert observation dates to MJD
     mjd = date_to_mjd(obs_date)
-    obs_date_str = [p["obs_date"].strftime("%m/%d/%Y") for p in phot_values]
+    obs_date_str = [utc_day(p["obs_date"]) for p in phot_values]
 
     # Initialize plot
     colorlist = ['#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9']
@@ -1216,7 +1217,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         ("mag", "$y"),
         ("telescope", "@telescope"),
         ("filter", "@filter"),
-        ("date", "@date"),
+        ("date (UTC)", "@date"),
         ("dq", "@data_quality"),
         ("magsys", "@magsys"),
     ]
@@ -1502,7 +1503,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     mags = np.array([p.mag for p in phot_rows], dtype=object)
     mag_errs = np.array([p.mag_err for p in phot_rows], dtype=object)
     disc_points = np.array([p.discovery_point for p in phot_rows], dtype=bool)
-    obs_dates_str = np.array([p.obs_date.strftime('%m/%d/%Y') for p in phot_rows])
+    obs_dates_str = np.array([utc_day(p.obs_date) for p in phot_rows])
     mjds = date_to_mjd(np.array([p.obs_date for p in phot_rows]))
     data_quality = np.array([_phot_data_quality_label(p) for p in phot_rows])
     flagged = np.array([_phot_flagged(p) for p in phot_rows], dtype=bool)
@@ -1530,7 +1531,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ('mag','$y'),
         ('telescope','@telescope'),
         ('filter','@filter'),
-        ('date','@date'),
+        ('date (UTC)','@date'),
         ('dq','@data_quality'),
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
@@ -1781,7 +1782,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 limmjd = dbmjd-30
                 
             mjd = np.append(mjd,[dbmjd])
-            date = np.append(date,[p.obs_date.strftime('%m/%d/%Y')])
+            date = np.append(date,[utc_day(p.obs_date)])
             mag = np.append(mag,[p.mag])
             if p.mag_sys is None: magsys = np.append(magsys,['None'])
             else: magsys = np.append(magsys,[p.mag_sys])
@@ -1828,7 +1829,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 
         elif p.flux and p.flux_zero_point and p.flux + 3*p.flux_err > 0:
             upperlimmjd = np.append(upperlimmjd,[dbmjd])
-            upperlimdate = np.append(upperlimdate,[p.obs_date.strftime('%m/%d/%Y')])
+            upperlimdate = np.append(upperlimdate,[utc_day(p.obs_date)])
             upperlimmag = np.append(upperlimmag,[-2.5*np.log10(p.flux + 3*p.flux_err) + p.flux_zero_point])
             upperlimbandstr = np.append(upperlimbandstr,str(p.band))
             upperlimband = np.append(upperlimband,p.band)
@@ -1849,7 +1850,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
 
     if transient.non_detect_limit and transient.non_detect_band:
         upperlimmjd = np.append(upperlimmjd,[date_to_mjd(transient.non_detect_date)])
-        upperlimdate = np.append(upperlimdate,[transient.non_detect_date.strftime('%m/%d/%Y')])
+        upperlimdate = np.append(upperlimdate,[utc_day(transient.non_detect_date)])
         upperlimmag = np.append(upperlimmag,transient.non_detect_limit)
         upperlimmagsys = np.append(upperlimmagsys,'None')
         upperlimbandstr = np.append(upperlimbandstr,str(transient.non_detect_band))
@@ -1876,7 +1877,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ('mag','$y'),
         ('telescope','@telescope'),
         ('filter','@filter'),
-        ('date','@date'),
+        ('date (UTC)','@date'),
         ('dq','@data_quality'),
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
@@ -2106,7 +2107,7 @@ def _spectra_for_plot(dbspectra):
         flux_interp = np.interp(wave_interp, wave, flux)
 
         flagged = _spectrum_flagged(spectrum)
-        label = f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}'
+        label = f'{spectrum.instrument.name} - {utc_day(spectrum.obs_date)}'
         spectra.append({
             'wave': wave_interp,
             'flux': flux_interp,
@@ -2330,7 +2331,7 @@ def spectrumplotsingle(request, transient_id, spec_id):
     # Step plot centred on each pixel, so individual pixels are visible.
     ax.step(np.sort(wave),np.array(flux)[np.argsort(wave)],mode='center',color='black')
         
-    ax.title.text = "%s, %s, %s, Phase: %s, DQ: %s"%(transient.name,spectrum.obs_date.strftime('%m/%d/%Y'),spectrum.instrument,spectrum.spec_phase,','.join([d.name for d in spectrum.data_quality.all()]))
+    ax.title.text = "%s, %s, %s, Phase: %s, DQ: %s"%(transient.name,utc_day(spectrum.obs_date),spectrum.instrument,spectrum.spec_phase,','.join([d.name for d in spectrum.data_quality.all()]))
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
     g = file_html(ax,CDN,"my plot")

@@ -14,7 +14,7 @@
         {% if weather.pressure_hpa is not None and not compact %}<dt class="col-6 col-sm-5">Pressure</dt><dd class="col-6 col-sm-7" data-field="pressure_hpa">{{ weather.pressure_hpa|floatformat:0 }} hPa</dd>{% endif %}
       </dl>
       <div class="text-muted small yse-weather-meta">
-        {% if weather.observed_at %}observed {{ weather.observed_at }} &middot; {% endif %}fetched {{ weather.fetched_at }} from {{ weather.source }}{% if stale %} <span class="badge badge-warning" title="Older than the cache window">stale</span>{% endif %}
+        {% if weather.observed_at %}observed {{ weather.observed_at|utcdate|default:weather.observed_at }} &middot; {% endif %}fetched {{ weather.fetched_at|utcdate|default:weather.fetched_at }} from {{ weather.source }}{% if stale %} <span class="badge badge-warning" title="Older than the cache window">stale</span>{% endif %}
         {% if weather.error %}<br><span class="text-warning"><i class="fa fa-exclamation-triangle"></i> last fetch failed: {{ weather.error|truncatechars:120 }}</span>{% endif %}
       </div>
     </div>
