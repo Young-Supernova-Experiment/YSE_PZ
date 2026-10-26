@@ -58,7 +58,7 @@
 									{% if n.subject %}<strong>{{ n.subject }}</strong><br>{% endif %}
 									<span class="yse-notification-text">{{ n.text|linebreaksbr }}</span>
 									<div class="text-muted small mt-1">
-										{{ n.created|date:"Y-m-d H:i" }} UTC
+										{{ n.created|utcdate }} UTC
 										{% if n.transient %} &middot; <a href="{% url 'transient_detail' n.transient.slug %}">{{ n.transient.name }}</a>{% endif %}
 									</div>
 								</div>

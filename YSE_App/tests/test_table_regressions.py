@@ -32,14 +32,15 @@ from YSE_App.tests.fixtures_minimal import (
 
 
 class LastObsDateColumnTests(TestCase):
-    def test_render_formats_datetime_like_production(self):
+    def test_render_formats_datetime_as_utc_day_fraction(self):
         value = timezone.make_aware(datetime.datetime(2026, 9, 3, 21, 29, 24))
-        self.assertEqual(LastObsDateColumn().render(value), '09/03/2026')
+        self.assertEqual(LastObsDateColumn().render(value),
+                         '<span class="yse-utcdate" title="MJD 61286.895">20260903.895</span>')
 
     def test_render_passes_preformatted_string_through(self):
         # Un-annotated querysets fall back to Transient.recent_magdate(),
-        # which already returns MM/DD/YYYY.
-        self.assertEqual(LastObsDateColumn().render('09/03/2026'), '09/03/2026')
+        # which already returns YYYYMMDD.ddd.
+        self.assertEqual(LastObsDateColumn().render('20260903.895'), '20260903.895')
 
     def test_dashboard_table_cell_matches_model_method_format(self):
         user = create_test_user(username='last_obs_date_user')
@@ -57,8 +58,8 @@ class LastObsDateColumnTests(TestCase):
         cell = list(table.rows)[0].get_cell('recent_magdate')
 
         expected = transient.recent_magdate()
-        self.assertRegex(expected, r'^\d{2}/\d{2}/\d{4}$')
-        self.assertEqual(cell, expected)
+        self.assertRegex(expected, r'^\d{8}\.\d{3}$')
+        self.assertIn('>%s</span>' % expected, cell)
 
 
 # The fixture account reads all data as a service reader; staff alone no longer do (#706).

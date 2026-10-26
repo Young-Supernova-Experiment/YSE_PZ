@@ -28,7 +28,7 @@
 						<tbody>
 						{% for n in nights %}
 							<tr data-night="{{ n.night|date:'Y-m-d' }}">
-								<td>{{ n.night|date:"Y-m-d" }} <span class="text-muted small">(UTC{% if n.utc_offset >= 0 %}+{% endif %}{{ n.utc_offset }})</span></td>
+								<td>{{ n.night|utcnight }} <span class="text-muted small">(UTC{% if n.utc_offset >= 0 %}+{% endif %}{{ n.utc_offset }})</span></td>
 								<td><small>{{ n.telescopes|default:"-" }}</small></td>
 								<td>{{ n.points }}</td>
 								<td>{{ n.spectra }}</td>
@@ -77,7 +77,7 @@
 						{% endfor %}
 						{% for d in spectra %}
 							<tr data-kind="spectrum" data-dataset-id="{{ d.id }}">
-								<td>Spectrum: {{ d.instrument.name }}, {{ d.obs_date|date:"Y-m-d" }}</td>
+								<td>Spectrum: {{ d.instrument.name }}, {{ d.obs_date|utcdate }}</td>
 								<td><small>{% for g in d.groups.all %}{{ g.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</small></td>
 								<td><small>{{ d.allocation.name|default:"-" }}</small></td>
 								<td>

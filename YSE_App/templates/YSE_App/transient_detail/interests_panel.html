@@ -26,7 +26,7 @@ interests_show_withdrawn. Withdrawn rows are hidden unless ?interests=all.
                 <li class="yse-interest-item{% if i.is_withdrawn %} text-muted{% endif %}" data-interest-id="{{ i.id }}" data-status="{{ i.status }}">
                     <span class="badge {% if i.status == 'published' %}badge-success{% elif i.status == 'withdrawn' %}badge-light{% elif i.status == 'submitted' %}badge-info{% elif i.status == 'in_progress' %}badge-primary{% else %}badge-secondary{% endif %} yse-interest-status">{{ i.status_label }}</span>
                     <strong class="yse-interest-title">{{ i.title }}</strong>
-                    <span class="text-muted small">&mdash; {{ i.user_display }}{% if i.group %} ({{ i.group.name }}){% endif %}, {{ i.role_label|lower }}, since {{ i.created_date|date:"Y-m-d" }}{% if i.doi %}, <a href="https://doi.org/{{ i.doi }}" target="_blank" rel="noopener">{{ i.doi }}</a>{% endif %}</span>
+                    <span class="text-muted small">&mdash; {{ i.user_display }}{% if i.group %} ({{ i.group.name }}){% endif %}, {{ i.role_label|lower }}, since {{ i.created_date|utcdate }} UTC{% if i.doi %}, <a href="https://doi.org/{{ i.doi }}" target="_blank" rel="noopener">{{ i.doi }}</a>{% endif %}</span>
                     {% if i.description %}<div class="small yse-interest-description">{{ i.description|linebreaksbr }}</div>{% endif %}
                     {% if i.user_id == user.id or user.is_staff %}
                     <form method="post" action="{% url 'interest_status' i.id %}" class="form-inline d-inline yse-interest-status-form">

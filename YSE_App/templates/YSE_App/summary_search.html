@@ -46,7 +46,7 @@
     <div class="yse-summary-result" data-transient="{{ r.transient.name }}" data-score="{{ r.score }}">
       <div>
         <a href="{% url 'transient_detail' r.transient.slug %}"><strong>{{ r.transient.name }}</strong></a>
-        <span class="badge badge-light">{{ r.transient.status }}</span>
+        <span class="badge badge-light" title="{{ r.transient.status|status_title }}">{{ r.transient.status|status_label }}</span>
         {% if r.transient.best_spec_class %}<span class="badge badge-info">{{ r.transient.best_spec_class }}</span>{% endif %}
         {% with bz=r.transient.best_z %}{% if bz.value is not None %}<span class="small text-muted">z = {{ bz.value|floatformat:4 }}</span>{% endif %}{% endwith %}
         {% if search_mode == 'embedding' %}<span class="small text-muted yse-summary-score float-right pull-right" title="cosine similarity">{{ r.score|floatformat:3 }}</span>{% endif %}

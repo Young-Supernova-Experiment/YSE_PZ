@@ -32,7 +32,7 @@
   <div class="box" id="{{transient_cat.2}}">
     <div class="box-header with-border">
       <!--<h3 class="box-title">{{ transient_cat.1 }}</h3>-->
-      <p style="text-align:left;margin:0;padding:0;"><h3 class="box-title">{{ transient_cat.1 }}</h3><span style="float:right;"><a href="{% url 'transient_summary' transient_cat.2 %}"><h3 class="box-title">Summary View</h3></a></span></p>
+      <p style="text-align:left;margin:0;padding:0;"><h3 class="box-title" title="{{ transient_cat.2|status_title }}">{{ transient_cat.1 }}</h3><span style="float:right;"><a href="{% url 'transient_summary' transient_cat.2 %}"><h3 class="box-title">Summary View</h3></a></span></p>
     </div>
     <div align='right'>
       {% if transient_cat.3 %}
@@ -103,6 +103,7 @@ $(document).ready(function(){
         var status_id = $(this).attr('data-status_id')
         var transient_id = $(this).attr('transient_id')
         var status_name = $(this).attr('data-status_name')
+        var status_title = $(this).attr('title') || ''
         var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);
         var status_target = "{% url 'transientstatus-list' %}" + status_id + "/"
 
@@ -129,7 +130,7 @@ $(document).ready(function(){
               var status_id_out = tokens[tokens.length-2]
               if (status_id_out == status_id){
                   var button_id = "#"+transient_id+"_status_name"
-                  $(button_id).text(status_name)
+                  $(button_id).text(status_name).attr('title', status_title)
               } else {
                 transientStatusChangeErr()
               }

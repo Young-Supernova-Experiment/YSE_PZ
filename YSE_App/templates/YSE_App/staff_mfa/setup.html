@@ -5,7 +5,7 @@
     <p>Set up a new authenticator. Your current one stops working once you confirm the new one.</p>
   {% else %}
     <p>Staff accounts sign in with a password and a code from an authenticator app.
-      {% if can_skip and enforce_after %}This is required from {{ enforce_after|date:"Y-m-d" }}.{% endif %}</p>
+      {% if can_skip and enforce_after %}This is required from {{ enforce_after|utcdate }} UTC.{% endif %}</p>
   {% endif %}
   <ol class="small pl-3">
     <li>In Duo Mobile tap <em>Add</em> &rarr; <em>Use QR code</em> (a third-party account), or use any authenticator app.</li>

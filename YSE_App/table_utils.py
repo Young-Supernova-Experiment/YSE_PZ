@@ -31,6 +31,7 @@ from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
 from .common.magnitude_format import format_magnitude
+from .common.utc_dates import DATE_HEADER, utc_day_html
 # Circular: table_utils is imported from yse_pa during views import, before
 # follow-up request helpers are safe to load. Import in render methods.
 rcParams['figure.figsize'] = (7,7)
@@ -322,13 +323,13 @@ class LastDetColumn(_LastPhotColumn):
 
 
 class LastObsColumn(_LastPhotColumn):
-    """"Last Obs.": date of the newest point, plus its limit and band when it is a non-detection."""
+    """"Last Obs. (UTC)": date of the newest point (YYYYMMDD.ddd, MJD on hover, #807),
+    plus its limit and band when it is a non-detection."""
 
-    DATE_FORMAT = '%m/%d/%Y'
     stat_field = RECENT_PHOT_ORDER_FIELDS['recent_magdate']
 
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault('verbose_name', 'Last Obs.')
+        kwargs.setdefault('verbose_name', 'Last Obs. (UTC)')
         super().__init__(*args, **kwargs)
 
     def render(self, record, table, bound_column):
@@ -337,9 +338,10 @@ class LastObsColumn(_LastPhotColumn):
         info = self._info(record, table)
         if not info or info['obs_date'] is None:
             return bound_column.default
-        text = info['obs_date'].strftime(self.DATE_FORMAT)
+        text = utc_day_html(info['obs_date'])
         if info['limit'] is not None:
-            text += ' (>%s %s)' % (format_magnitude(info['limit']), display_filter_label(info['limit_band']))
+            text = format_html('{} (>{} {})', text, format_magnitude(info['limit']),
+                               display_filter_label(info['limit_band']))
         return text
 
 
@@ -556,21 +558,41 @@ class MagnitudeColumn(tables.Column):
 
 
 class LastObsDateColumn(tables.Column):
-    """Dashboard 'Last Obs. Date' column rendered as MM/DD/YYYY.
+    """Dashboard 'Last Obs. Date' column rendered as YYYYMMDD.ddd with the MJD on hover (#807).
 
     ``annotate_dashboard_transient_fields`` supplies a raw datetime via a
     Subquery, whereas ``Transient.recent_magdate()`` (used on un-annotated
-    querysets and on production before the annotation) returns a string that
-    is already ``strftime('%m/%d/%Y')``-formatted. Format the datetime here so
-    both paths render the same way.
+    querysets) returns a string that is already YYYYMMDD.ddd. Format the
+    datetime here so both paths show the same date.
     """
-
-    DATE_FORMAT = '%m/%d/%Y'
 
     def render(self, value):
         if hasattr(value, 'strftime'):
-            return value.strftime(self.DATE_FORMAT)
+            return utc_day_html(value)
         return value
+
+
+class UtcDateColumn(tables.Column):
+    """A date shown as YYYYMMDD.ddd (UTC) with the MJD on hover (#807)."""
+
+    def render(self, value):
+        return utc_day_html(value) or self.default
+
+
+class BestRedshiftColumn(tables.Column):
+    """Best redshift with its source kind (spec / host / phot) when known (#832).
+
+    The accessor is ``best_z`` (a ``BestRedshift``); the value is what
+    ``z_or_hostz`` showed before.
+    """
+
+    def render(self, value):
+        if value is None or getattr(value, 'value', None) is None:
+            return self.default
+        if not value.kind:
+            return value.value
+        return format_html('{} <small class="text-muted yse-z-kind" title="{}">{}</small>',
+                           value.value, value.kind_title, value.kind)
 
 
 class PeakMagColumn(MagnitudeColumn):
@@ -648,13 +670,13 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
     peak_mag = PeakMagColumn(accessor='peak_mag',
                              verbose_name='Peak Mag',orderable=True)
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
 
     #mw_ebv = tables.Column(accessor='mw_ebv',
@@ -673,11 +695,11 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -835,11 +857,11 @@ class FieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tables.Ta
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
     ztf_field = tables.Column(accessor='nearest_ztf_field',
                               verbose_name='ZTF Field',orderable=False)
@@ -866,11 +888,11 @@ class FieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tables.Ta
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -927,11 +949,11 @@ class AdjustFieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tab
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
     yse_field = tables.Column(accessor='nearest_yse_field',
                               verbose_name='YSE Field',orderable=False)
@@ -958,11 +980,11 @@ class AdjustFieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tab
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -1019,11 +1041,11 @@ class YSETransientTable(RecentPhotOrderMixin, tables.Table):
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
     requested_followup_resources = tables.Column(accessor='pk',verbose_name='Req. Followup')
     successful_followup_resources = tables.Column(accessor='pk',verbose_name='Followed By')
@@ -1048,11 +1070,11 @@ class YSETransientTable(RecentPhotOrderMixin, tables.Table):
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name_yse" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -1117,11 +1139,11 @@ class YSEFullTransientTable(RecentPhotOrderMixin, tables.Table):
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
     context_class = tables.Column(accessor='context_class',
                                   verbose_name='QUB Class.',orderable=True)
@@ -1143,11 +1165,11 @@ class YSEFullTransientTable(RecentPhotOrderMixin, tables.Table):
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name_yse" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -1209,11 +1231,11 @@ class YSERisingTransientTable(RecentPhotOrderMixin, tables.Table):
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
     context_class = tables.Column(accessor='context_class',
                                   verbose_name='QUB Class.',orderable=True)
@@ -1241,11 +1263,11 @@ class YSERisingTransientTable(RecentPhotOrderMixin, tables.Table):
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name_yse" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name_yse" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -1312,11 +1334,11 @@ class NewTransientTable(RecentPhotOrderMixin, tables.Table):
                               verbose_name='RA',orderable=True,order_by='ra')
     dec_string = tables.Column(accessor='CoordString.1',
                                verbose_name='DEC',orderable=True,order_by='dec')
-    disc_date_string = tables.Column(accessor='disc_date_string',
-                                     verbose_name='Disc. Date',orderable=True,order_by='disc_date')
+    disc_date_string = UtcDateColumn(accessor='disc_date',
+                                     verbose_name='Disc. Date (UTC)',orderable=True,order_by='disc_date')
     recent_mag = LastDetColumn()
     recent_magdate = LastObsColumn()
-    best_redshift = tables.Column(accessor='z_or_hostz',
+    best_redshift = BestRedshiftColumn(accessor='best_z',
                                   verbose_name='Redshift',orderable=True,order_by='best_redshift')
     ps_score = tables.Column(accessor='point_source_probability',
                              verbose_name='PS Score',orderable=True)
@@ -1337,11 +1359,11 @@ class NewTransientTable(RecentPhotOrderMixin, tables.Table):
 
     status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.id }}_status_name" class="dropbtn">{{ record.status }}</span>
+                                            <span id="{{ record.id }}_status_name" class="dropbtn" title="{{ record.status|status_title }}">{{ record.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -1401,7 +1423,10 @@ class FollowupTable(FollowupRecentMagMixin, tables.Table):
 
 
     observation_window = tables.Column(accessor='observation_window',
-                              verbose_name='Observation Window',orderable=True,order_by='valid_start')
+                              verbose_name='Observation Window (UTC)',orderable=True,order_by='valid_start')
+
+    def render_observation_window(self, record):
+        return format_html('{} - {}', utc_day_html(record.valid_start), utc_day_html(record.valid_stop))
 
     action = tables.TemplateColumn("<a target=\"_blank\" href=\"{% url 'admin:YSE_App_transientfollowup_change' record.id %}\">Edit</a>",
                                    verbose_name='Action',orderable=False)
@@ -1477,11 +1502,11 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibil
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.transient.id }}_status_name" class="dropbtn">{{ record.transient.status }}</span>
+                                            <span id="{{ record.transient.id }}_status_name" class="dropbtn" title="{{ record.transient.status|status_title }}">{{ record.transient.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.transient.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.transient.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
@@ -1575,11 +1600,11 @@ class ToOFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMi
 
     transient_status_string = tables.TemplateColumn("""<div class="btn-group">
 <button style="margin-bottom:-5px;margin-top:-10px;padding:1px 5px" type="button" class="btn btn-secondary btn-sm dropdown-toggle" data-toggle="dropdown">
-                                            <span id="{{ record.transient.id }}_status_name" class="dropbtn">{{ record.transient.status }}</span>
+                                            <span id="{{ record.transient.id }}_status_name" class="dropbtn" title="{{ record.transient.status|status_title }}">{{ record.transient.status|status_label }}</span>
                                         </button>
                                         <ul class="dropdown-menu">
                                             {% for status in all_transient_statuses %}
-                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" transient_id="{{ record.transient.id }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" transient_id="{{ record.transient.id }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                             {% endfor %}
                                         </ul>
 </div>""",
