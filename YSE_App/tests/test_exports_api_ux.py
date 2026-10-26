@@ -3,6 +3,7 @@
 
 import datetime
 import io
+import os
 import zipfile
 from unittest import mock
 
@@ -254,6 +255,18 @@ class BulkPhotometryTests(ExportsApiFixture):
         uq = mock.Mock(query_id=query.id, python_query=None)
         self.assertEqual(_pd_download_url(uq), reverse("download_bulk_photometry_by_id", args=[query.id]))
 
+    def test_dashboard_page_renders_the_download_button_deferred_and_not(self):
+        from YSE_App.models import UserQuery
+        query = Query.objects.create(title="Dash dl", sql="select 1", created_by_user=self.user)
+        UserQuery.objects.create(user=self.user, query=query, **audit_fields(self.user))
+        url = reverse("download_bulk_photometry_by_id", args=[query.id])
+        for defer in ("1", "0"):
+            with self.subTest(defer=defer), mock.patch.dict(os.environ, {"YSE_PERSONAL_DASHBOARD_DEFER": defer}), \
+                    mock.patch("YSE_App.views.run_explorer_query_cached", return_value=[]):
+                response = self.client.get(reverse("personaldashboard"))
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(url, response.content.decode())
+
 
 @override_settings(DATA_SERVICE_READER_USERNAMES=[READER])
 class ReadableHeaderTests(ExportsApiFixture):
@@ -290,6 +303,8 @@ class ReadableHeaderTests(ExportsApiFixture):
         content = archive.read(archive.namelist()[0]).decode()
         self.assertIn("# Instrument:", content)
         self.assertIn("# Phase (days): 5.0", content)
+        from YSE_App.common.utc_dates import utc_day
+        self.assertIn("# Observation date (UTC): %s\n" % utc_day(self.spec1.obs_date), content)
         self.assertIn("# Wavelength medium: Vacuum\n", content)
         self.assertIn("# Host subtraction: Template\n", content)
         self.assertIn("# Quality mask: ", content)

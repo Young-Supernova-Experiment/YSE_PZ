@@ -603,7 +603,7 @@ def personaldashboard(request):
                     title = q.python_query
                 else:
                     continue
-                tables.append((None, title, '', None, q.id, 0))
+                tables.append((None, title, '', None, q.id, 0, _pd_download_url(q)))
         if timing_enabled():
             log_sections('personaldashboard_shell', timing_sections)
         return render(
@@ -2223,8 +2223,6 @@ SNANA_HEADER_LEGEND = {
     'non_detect_date': 'date of the last non-detection (UTC)',
     'non_detect_limit': 'limiting magnitude of the last non-detection (mag)',
     'non_detect_band': 'band of the last non-detection',
-    'non_detect_instrument': 'instrument of the last non-detection',
-    'TNS_name': 'TNS name',
     'TNS_spec_class': 'TNS spectroscopic class',
 }
 
@@ -2265,7 +2263,10 @@ def spectrum_header_comment_lines(spectrum):
         if value is None or value == '':
             continue
         display = getattr(spectrum, 'get_%s_display' % attr, None)
-        if display is not None:
+        if attr == 'obs_date':
+            from YSE_App.common.utc_dates import utc_day
+            value = utc_day(value)  # YYYYMMDD.ddd (#807)
+        elif display is not None:
             value = display()  # choice label, e.g. "Vacuum"
         lines.append('# %s: %s\n' % (label, str(value).replace('\n', ' ')))
     if spectrum.unit_id is not None:
