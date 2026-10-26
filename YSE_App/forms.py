@@ -417,13 +417,34 @@ class TransientObservationTaskForm(ModelForm):
 
 class QueryModelChoiceField(forms.ModelChoiceField):
     def label_from_instance(self, obj):
-        return obj.__str__
+        return str(obj)
 
 class AddDashboardQueryForm(ModelForm):
     query = QueryModelChoiceField(Query.objects.all(),required=False)
     query_names = [('', '---------')] + [(q,q) for i,q in enumerate(python_query_reg.all.keys())]
     python_query = forms.ChoiceField(choices=query_names,required=False)
-    #import pdb; pdb.set_trace()
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Built-in lists: show readable names, keep the registry key as the value.
+        self.fields['python_query'].choices = [('', '---------')] + [
+            (key, str(key).replace('_', ' ')) for key in python_query_reg.all.keys()
+        ]
+        # Saved queries: "My queries" first, then everyone else's as "Shared" (#815).
+        # The queryset (and so validation) is unchanged; only the presentation is grouped.
+        if user is not None and getattr(user, 'pk', None) is not None:
+            field = self.fields['query']
+            queries = list(field.queryset.order_by('title'))
+            mine = [(q.pk, field.label_from_instance(q)) for q in queries
+                    if q.created_by_user_id == user.pk]
+            shared = [(q.pk, field.label_from_instance(q)) for q in queries
+                      if q.created_by_user_id != user.pk]
+            groups = [('', field.empty_label)]
+            if mine:
+                groups.append(('My queries', mine))
+            if shared:
+                groups.append(('Shared', shared))
+            field.choices = groups
 
     class Meta:
         model = UserQuery
