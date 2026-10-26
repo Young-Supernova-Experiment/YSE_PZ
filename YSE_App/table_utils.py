@@ -743,6 +743,7 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
                   'obs_group','best_spec_class','best_redshift','status_string','interest_count','favorite')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No transients in this list yet. Widen the date or status filters, or check back after the next survey ingest.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -801,6 +802,7 @@ class SearchTransientTable(TransientTable):
         return (stable_order_by(queryset, 'gal_b', is_descending), True)
 
     class Meta(TransientTable.Meta):
+        empty_text = 'No transients match your search. Try fewer terms or loosen the filters.'
         fields = ('select', 'name_string', 'separation', 'ra_string', 'dec_string', 'gal_b', 'disc_date_string', 'recent_mag',
                   'recent_magdate', 'peak_mag', 'mw_ebv', 'obs_group', 'best_spec_class', 'best_redshift',
                   'annotation_value', 'status_string', 'interest_count', 'favorite')
@@ -815,6 +817,7 @@ class FavoriteTransientTable(TransientTable):
                                          orderable=True)
 
     class Meta(TransientTable.Meta):
+        empty_text = 'No favorites yet. Click the star on a transient to add it here.'
         fields = ('favorite', 'name_string', 'ra_string', 'dec_string', 'disc_date_string', 'recent_mag',
                   'recent_magdate', 'peak_mag', 'obs_group', 'best_spec_class', 'best_redshift', 'status_string',
                   'interest_count', 'favorited_at')
@@ -919,6 +922,7 @@ class FieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tables.Ta
                   'obs_group','best_spec_class','best_redshift','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No transients found in this field. Try a different field or widen the date range.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1010,6 +1014,7 @@ class AdjustFieldTransientTable(NearestFieldPageMixin, RecentPhotOrderMixin, tab
                   'obs_group','best_spec_class','best_redshift','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No transients found for these fields. Try a different field or widen the date range.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1108,6 +1113,7 @@ class YSETransientTable(RecentPhotOrderMixin, tables.Table):
                   'obs_group','best_spec_class','best_redshift','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No transients in this list yet. Widen the date or status filters, or check back after the next survey ingest.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1199,6 +1205,7 @@ class YSEFullTransientTable(RecentPhotOrderMixin, tables.Table):
                   'obs_group','best_spec_class','best_redshift','context_class','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No transients in this list yet. Widen the date or status filters, or check back after the next survey ingest.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1300,6 +1307,7 @@ class YSERisingTransientTable(RecentPhotOrderMixin, tables.Table):
                   'obs_group','best_spec_class','best_redshift','context_class','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No rising transients right now. Check back after the next survey ingest.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1384,6 +1392,7 @@ class NewTransientTable(RecentPhotOrderMixin, tables.Table):
                   'obs_group','best_spec_class','best_redshift','ps_score','status_string')
 
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No new transients right now. Check back after the next survey ingest.'
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1449,6 +1458,7 @@ class FollowupTable(FollowupRecentMagMixin, tables.Table):
         model = TransientFollowup
         fields = ('name_string','ra_string','dec_string','recent_mag','transient.status','observation_window','action')
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = "No follow-up requests for this telescope yet. Request follow-up from a transient's Follow-up tab."
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1546,6 +1556,7 @@ class ObsNightFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibil
                   'rise_time','set_time','moon_angle','transient_status_string',
                   'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = "No follow-up targets for this night. Request follow-up from a transient's Follow-up tab."
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1637,6 +1648,7 @@ class ToOFollowupTable(FollowupRecentMagMixin, BazinMagMixin, TargetVisibilityMi
                   'rise_time','set_time','moon_angle','transient_status_string',
                   'requestors','priority','comment')
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = "No follow-up targets for this ToO. Request follow-up from a transient's Follow-up tab."
         attrs = {
             'th' : {
                 '_ordering': {
@@ -1694,6 +1706,7 @@ class YSEObsNightTable(TargetVisibilityMixin, tables.Table):
         model = SurveyObservation
         fields = ('field_id','ra_string','dec_string','rise_time','set_time','moon_angle')#,'transient.status')
         template_name='YSE_App/django-tables2/bootstrap.html'
+        empty_text = 'No observations planned for this night yet.'
         attrs = {
             'th' : {
                 '_ordering': {

@@ -173,6 +173,11 @@ class Transient(BaseModel):
 	def archive_flags(self):
 		return [(label, getattr(self, field)) for label, field in self.ARCHIVE_FLAG_FIELDS]
 
+	@property
+	def known_archive_flags(self):
+		"""Only the archive flags that have a value (True or False); unknown ones are omitted."""
+		return [(label, flag) for label, flag in self.archive_flags if flag is not None]
+
 	def save(self, *args, **kwargs):
 		"""Keep gal_l / gal_b in step with ra / dec (also when update_fields names one of them)."""
 		update_fields = kwargs.get('update_fields')

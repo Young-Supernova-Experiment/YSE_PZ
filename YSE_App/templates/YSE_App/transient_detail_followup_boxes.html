@@ -7,7 +7,7 @@
         {% endif %}
                 <div class="box-header">
                     <div class="col-4">
-                        <h3 class="box-title">Follow-up (id: {{f.id}})</h3>
+                        <h3 class="box-title">Follow-up{% if user.is_staff %} (id: {{f.id}}){% endif %}</h3>
                     </div>
                     <div class="col-4">
                         <h3 class="box-title">Valid: {{ f.valid_start|utcdate }} - {{ f.valid_stop|utcdate }}</h3>
@@ -47,7 +47,7 @@
                                     {% for fr in f.facility_requests.all %}<br><span class="badge badge-{% if fr.state == 'complete' %}success{% elif fr.state == 'failed' or fr.state == 'cancelled' %}danger{% else %}info{% endif %} facility-followup-badge" title="{{ fr.state_detail }}">{{ fr.allocation.facility }}: {{ fr.get_state_display }}{% if fr.external_id %} {{ fr.external_id|truncatechars:20 }}{% endif %}</span>{% endfor %}
                                 </td>
                                 <td>{{ f.requestors }}</td>
-                                <td><a target='_blank' href="{% url 'admin:YSE_App_transientfollowup_change' f.id %}">Edit</a></td>
+                                <td>{% if user.is_staff %}<a target='_blank' href="{% url 'admin:YSE_App_transientfollowup_change' f.id %}">Edit</a>{% else %}&mdash;{% endif %}</td>
                                 <td>
                                     {% if f.can_delete %}
                                         <a href="{% url 'delete_followup' f.id %}">Delete</a>
@@ -89,5 +89,9 @@
                     </table>
                 </div>
             </div>
+    </div>
+{% empty %}
+    <div class="col-12">
+        <p class="text-muted">No follow-up has been requested for this transient yet. Use the request form above to ask for follow-up.</p>
     </div>
 {% endfor %}

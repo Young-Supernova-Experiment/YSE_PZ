@@ -77,9 +77,9 @@
 				{% if page.has_previous %}<a href="?{{ request.GET.urlencode }}&amp;page={{ page.previous_page_number }}">&laquo; previous</a>{% endif %}
 				{% if page.has_next %}<a href="?{{ request.GET.urlencode }}&amp;page={{ page.next_page_number }}">next &raquo;</a>{% endif %} &middot;
 				{% endif %}
-				Requests are submitted from a transient's follow-up tab; open requests at facilities with a status endpoint are polled by the
-				<code>FacilityPoll</code> cron (or <code>manage.py poll_facility_requests</code>).{% if user.is_staff %} <a href="{% url 'allocations' %}">Allocations</a>.{% endif %}
-				See <code>docs/facility-apis.md</code>.
+				Requests are submitted from a transient's follow-up tab; {% if user.is_staff %}open requests at facilities with a status endpoint are polled by the
+				<code>FacilityPoll</code> cron (or <code>manage.py poll_facility_requests</code>). <a href="{% url 'allocations' %}">Allocations</a>.
+				See <code>docs/facility-apis.md</code>.{% else %}open requests at facilities with a status endpoint are updated automatically.{% endif %}
 			</div>
 		</div>
 	</div>
