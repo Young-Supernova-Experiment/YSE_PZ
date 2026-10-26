@@ -454,7 +454,8 @@ class QuickSearchTests(TestCase):
         data = quick_search_params(QueryDict("q=10.0 20.0&radius_arcsec=30"))
         self.assertEqual(data["radius_arcsec"], "30")
         data = quick_search_params(QueryDict("q=2026abc"))
-        self.assertEqual(data["name_contains"], "2026abc")
+        self.assertEqual(data["alias"], "2026abc")
+        self.assertNotIn("name_contains", data)
         self.assertNotIn("ra", data)
         data = quick_search_params(QueryDict("name_contains=x"))
         self.assertEqual(data["name_contains"], "x")
@@ -496,6 +497,9 @@ class SearchPageTests(SearchFixture):
 
     def test_header_quick_search_name_and_cone(self):
         html = self.client.get("/search/?q=PS26").content.decode()
+        self.assertEqual(self._names_in_table(html), {"PS26abc"})
+        # The header box also matches alternate names (#801).
+        html = self.client.get("/search/?q=ztf26").content.decode()
         self.assertEqual(self._names_in_table(html), {"PS26abc"})
         html = self.client.get("/search/?q=10.0+20.0+60").content.decode()
         self.assertEqual(self._names_in_table(html), {"2026sea", "PS26abc"})
