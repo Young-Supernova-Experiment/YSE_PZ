@@ -16,6 +16,7 @@
 
 {% block content %}
 <div class="yse-page-dashboard">
+{% include "YSE_App/form_snippets/dashboard_per_page.html" %}
 
 <div class="box" id="yse-favorites-box">
   <div class="box-header with-border">
@@ -53,7 +54,7 @@
           {% for hidden_field in form.hidden_fields %}
           {{ hidden_field }}
           {% endfor %}
-          &nbsp;<button type="submit" class="fa fa-trash-o fa-border"></button>
+          &nbsp;<button type="submit" class="fa fa-trash-o fa-border" aria-label="Remove this telescope notification" title="Remove this telescope notification"></button>
         </form>
       </h3>
   </div>
@@ -82,7 +83,7 @@
         {% for hidden_field in form.hidden_fields %}
          {{ hidden_field }}
         {% endfor %}
-          &nbsp;<button type="submit" class="fa fa-trash-o fa-border"></button>
+          &nbsp;<button type="submit" class="fa fa-trash-o fa-border" aria-label="Remove query {{ transient_cat.1 }} from dashboard" title="Remove query {{ transient_cat.1 }} from dashboard"></button>
       </form>
     </h3><span style="float:right;"><a href="{% url 'transient_summary' transient_cat.1 %}"><h3 class="box-title">Summary View</h3></a></span>
       <div class="btn-group">
@@ -150,7 +151,7 @@
           {% for hidden_field in form.hidden_fields %}
           {{ hidden_field }}
           {% endfor %}
-          &nbsp;<button type="submit" class="fa fa-trash-o fa-border"></button>
+          &nbsp;<button type="submit" class="fa fa-trash-o fa-border" aria-label="Remove this telescope notification" title="Remove this telescope notification"></button>
         </form>
       </h3>
   </div>

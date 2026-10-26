@@ -17,6 +17,7 @@
 
 {% block content %}
 <div class="yse-page-dashboard">
+{% include "YSE_App/form_snippets/dashboard_per_page.html" %}
   {% if broker_stale_heartbeats %}
   <div class="alert alert-warning yse-broker-stale-banner" role="alert">
     <i class="fa fa-exclamation-triangle"></i>
