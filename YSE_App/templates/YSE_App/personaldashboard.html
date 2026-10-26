@@ -85,6 +85,9 @@
           &nbsp;<button type="submit" class="fa fa-trash-o fa-border"></button>
       </form>
     </h3><span style="float:right;"><a href="{% url 'transient_summary' transient_cat.1 %}"><h3 class="box-title">Summary View</h3></a></span>
+      {% if transient_cat.6 %}
+      <a href="{{ transient_cat.6 }}" class="btn btn-secondary" style="margin-bottom:5px;" title="Download the photometry of every transient in this query as a zip of CSV files"><i class="fa fa-download"></i> Download photometry</a>
+      {% endif %}
       <div class="btn-group">
         <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
           Change All Statuses For Query<span class="caret"></span>

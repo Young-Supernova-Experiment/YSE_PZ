@@ -322,7 +322,7 @@ class StoredSaltOverlayTests(SummaryRefitBase):
         model = mock.MagicMock(name="Model")
         fit_lc = mock.MagicMock(name="fit_lc")
         with mock.patch.multiple(view_utils.sncosmo, Model=model, fit_lc=fit_lc):
-            for name in ("salt2plot", "salt2fluxplot"):
+            for name in ("salt3plot", "salt3fluxplot"):
                 with self.subTest(name=name):
                     response = self.client.get(reverse(name, args=[self.transient.id, 1]))
                     self.assertEqual(response.status_code, 200)
@@ -344,9 +344,9 @@ class StoredSaltOverlayTests(SummaryRefitBase):
         self.assertIn("by refit_staff", labels[-1])
 
         with mock.patch.object(view_utils.sncosmo, "fit_lc") as fit_lc:
-            without = self.client.get(reverse("salt2plot", args=[self.transient.id, 0])).content.decode()
-            with_fit = self.client.get(reverse("salt2plot", args=[self.transient.id, 1])).content.decode()
-            flux = self.client.get(reverse("salt2fluxplot", args=[self.transient.id, 1])).content.decode()
+            without = self.client.get(reverse("salt3plot", args=[self.transient.id, 0])).content.decode()
+            with_fit = self.client.get(reverse("salt3plot", args=[self.transient.id, 1])).content.decode()
+            flux = self.client.get(reverse("salt3fluxplot", args=[self.transient.id, 1])).content.decode()
         self.assertFalse(fit_lc.called)
         self.assertNotIn(view_utils.SALT_FIT_NONE_TEXT, with_fit)
         self.assertNotIn(view_utils.SALT_FIT_NONE_TEXT, flux)
@@ -373,7 +373,7 @@ class StoredSaltOverlayTests(SummaryRefitBase):
         seed_sncosmo_lightcurve(self.staff, self.transient, t0_offset=10)
         with override_settings(YSE_PLOT_HTML_CACHE=True), mock.patch.object(view_utils, "_plot_html_cache_enabled", return_value=True), \
                 mock.patch.object(view_utils.cache, "set", wraps=view_utils.cache.set) as cache_set:
-            self.client.get(reverse("salt2plot", args=[self.transient.id, 1]))
+            self.client.get(reverse("salt3plot", args=[self.transient.id, 1]))
         keys = [c.args[0] for c in cache_set.call_args_list if str(c.args[0]).startswith("lc_detail")]
         self.assertTrue(keys and keys[0].endswith("_salt0"), keys)
 
