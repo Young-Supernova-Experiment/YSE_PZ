@@ -79,7 +79,6 @@ urlpatterns = [
     re_path(r'^contact/$', surveypages.contact, name='contact'),
     re_path(r'^acknowledgements/$', surveypages.acknowledgements, name='acknowledgements'),
     
-    re_path(r'^dashboard_example/$', views.dashboard_example, name='dashboard_example'),
     re_path(r'^transient_edit/$', views.transient_edit, name='transient_edit'),
     re_path(r'^transient_edit/(?P<transient_id>[0-9]+)/$', views.transient_edit, name='transient_edit'),
     re_path(
