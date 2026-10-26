@@ -13,14 +13,14 @@
 				{% endfor %}
 				<div class="col-6">
 					<div class="form-group">
-						<label>SQL</label>
+						<label for="{{ form.query.id_for_label }}">Saved query</label>
 						<!--<label>Query</label>-->
 						{% render_field form.query class+="form-control select2" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Python Function</label>
+						<label for="{{ form.python_query.id_for_label }}">Built-in list</label>
 						<!--<label>Query</label>-->
 						{% render_field form.python_query class+="form-control select2" style+="width: 100%;" %}
 					</div>
@@ -28,7 +28,7 @@
                 <div class="col-6">
                     <div class="form-group">
                         <!--<br>-->
-                            <button type="submit" class="btn btn-block btn-primary">Submit</button>
+                            <button type="submit" class="btn btn-block btn-primary">Add query</button>
                         </div>
                     </div>
 			</form>

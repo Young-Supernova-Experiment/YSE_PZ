@@ -17,6 +17,7 @@
 
 {% block content %}
 <div class="yse-page-dashboard">
+{% include "YSE_App/form_snippets/dashboard_per_page.html" %}
   {% if broker_stale_heartbeats %}
   <div class="alert alert-warning yse-broker-stale-banner" role="alert">
     <i class="fa fa-exclamation-triangle"></i>
@@ -55,10 +56,10 @@
     <!-- /.box-body -->
     <div class="box-footer">
     </div>
-    {% endfor %}
     <!-- /.box-footer-->
   </div>
   <!-- /.box -->
+  {% endfor %}
 </div>
 {% endblock %}
 
@@ -95,7 +96,7 @@ $(document).ready(function(){
 {% endif %}
     $(function() {
       function transientStatusChangeErr() {
-        alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.")
+        alert("Transient Status may not have changed -- please use YSE Admin and contact the site admins.")
       }
 
       $('.transientStatusChange').on('click', function(event){
