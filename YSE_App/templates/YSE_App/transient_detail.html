@@ -34,6 +34,32 @@
         {% endif %}
         <a href="#" class="yse-fav-star yse-fav-star-header{% if is_favorite %} yse-fav-on{% endif %}" id="yse-fav-header" data-transient-id="{{ transient.id }}" data-state="{% if is_favorite %}on{% else %}off{% endif %}" title="{% if is_favorite %}Remove from my favorites{% else %}Add to my favorites{% endif %}" aria-label="Toggle favorite for {{ transient.name }}" aria-pressed="{% if is_favorite %}true{% else %}false{% endif %}"><i class="fa {% if is_favorite %}fa-star{% else %}fa-star-o{% endif %}" aria-hidden="true"></i><span class="yse-fav-count badge badge-light" title="Users who starred this transient">{{ favorite_count|default:'' }}</span></a><br/>
         <small><a href="{% url 'index' %}">Back</a></small>
+        <button type="button" class="btn btn-xs btn-outline-secondary yse-copy-btn" data-copy-label="Copy link" data-copy-path="{% url 'transient_detail' transient.slug %}" aria-label="Copy a link to {{ transient.name }}" title="Copy a link to this transient">Copy link</button>
+        <button type="button" class="btn btn-xs btn-outline-secondary yse-copy-btn" data-copy-label="Copy coordinates" data-copy-text="{{ transient.CoordString.0 }} {{ transient.CoordString.1 }} ({{ transient.RADecimalString }} {{ transient.DecDecimalString }} deg)" aria-label="Copy the coordinates of {{ transient.name }}" title="Copy R.A./Dec in sexagesimal and degrees">Copy coordinates</button>
+        <span class="sr-only" role="status" aria-live="polite" id="yse-copy-status"></span>
+        <script>
+        (function() {
+            // #814: copy the permalink or the coordinates, with a brief "Copied" confirmation.
+            function copy(btn) {
+                var text = btn.getAttribute('data-copy-text') ||
+                    (window.location.origin + btn.getAttribute('data-copy-path'));
+                var label = btn.getAttribute('data-copy-label');
+                var done = function() {
+                    btn.textContent = 'Copied';
+                    document.getElementById('yse-copy-status').textContent = label.replace('Copy ', '') + ' copied';
+                    setTimeout(function() { btn.textContent = label; }, 1500);
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(done, function() { window.prompt(label, text); });
+                } else {
+                    window.prompt(label, text);
+                }
+            }
+            document.querySelectorAll('.yse-copy-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() { copy(btn); });
+            });
+        })();
+        </script>
     </h1>
     <ol class="breadcrumb">
         <li><a href="{% url 'dashboard' %}"><i class="fa fa-dashboard"></i> Home</a></li>
@@ -168,10 +194,10 @@
                                 </div>
                                 &ensp;&nbsp;<div class="btn-group">
                                     <button style="margin-bottom:5px;" type="button" class="plotSALT2flux" id="salt2fluxplot">
-                                    Show SALT3 Fit</span>
+                                    Show SALT3 Fit
                                     </button>
                                     </div>
-                                <td><button type="button" class="plotFlux">Show Flux Plot</button></td>
+                                <button type="button" class="plotFlux">Show Flux Plot</button>
                                 <div class="box-body" id="lcfluxplot"></div>
                             </div>
                         </div>
@@ -638,7 +664,7 @@
     })();
 
 {% if transient_detail_defer %}
-        /* Tab label: "No HST" only when the archive answered "nothing here".
+        /* Tab is hidden only when the archive answered "nothing here" (#838).
            A timeout or error (server-side `error`, or the request failing /
            timing out client-side) is NOT "no data": say the lookup failed and
            leave the tab usable so opening it retries. */
@@ -646,7 +672,7 @@
             $tab.text(failLabel);
             $tab.attr('title', message || 'Archive lookup failed; open the tab to retry.');
         }
-        function yseUpdateArchiveTabLabel($tab, url, emptyLabel, failLabel) {
+        function yseUpdateArchiveTabLabel($tab, url, failLabel) {
             if (!$tab.length) {
                 return;
             }
@@ -655,7 +681,10 @@
                     if (!json || json.error || json.has_data === null || json.has_data === undefined) {
                         yseMarkArchiveTabUnknown($tab, failLabel, json && json.message);
                     } else if (!json.has_data) {
-                        $tab.text(emptyLabel);
+                        /* Known empty: hide the tab (unless the user already opened it). */
+                        if (!$tab.hasClass('active')) {
+                            $tab.closest('.nav-item').hide();
+                        }
                     } else {
                         /* Data: the static label ("HST Data", "JWST Data")
                            stands; tab labels carry no counts (#387). */
@@ -671,19 +700,16 @@
         yseUpdateArchiveTabLabel(
             $("#hst_tab_header"),
             "{% url 'get_hst_status' transient.id %}",
-            "No HST",
             "HST (lookup failed)"
         );
         yseUpdateArchiveTabLabel(
             $("#chandra_tab_header"),
             "{% url 'get_chandra_status' transient.id %}",
-            "No Chandra",
             "Chandra (lookup failed)"
         );
         yseUpdateArchiveTabLabel(
             $("#jwst_tab_header"),
             "{% url 'get_jwst_status' transient.id %}",
-            "No JWST",
             "JWST (lookup failed)"
         );
 
@@ -1015,11 +1041,11 @@
                             $("#associated-events-list").append("<div data-tag_id=\""+tag_id+"\" class=\"external-event bg-"+color+"\">"+tags_list.value+"</div>");
 
                         } else {
-                            alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                            alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                         }
                     },
                     error: function(XMLHttpRequest, textStatus, errorThrown) {
-                        // alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                        // alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                         alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                     }
                 });
@@ -1084,11 +1110,11 @@
                             if (textStatus == "success") {
 
                             } else {
-                                alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                                alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             }
                         },
                         error: function(XMLHttpRequest, textStatus, errorThrown) {
-                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                         }
                     });
@@ -1143,11 +1169,11 @@
                             if (textStatus == "success") {
 
                             } else {
-                                alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                                alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             }
                         },
                         error: function(XMLHttpRequest, textStatus, errorThrown) {
-                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                            // alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                             alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                         }
                     });
@@ -1224,12 +1250,12 @@
                             //Remove event from text input
                             $('#new-event').val('')
                           // transientStatusChangeErr()
-                          alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                          alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                       }
                   },
                   error: function(XMLHttpRequest, textStatus, errorThrown) {
                         $('#new-event').val('')
-                        alert("Transient Tag may not have been created -- please use YSE Admin and contact Dave C or David J.")
+                        alert("Transient Tag may not have been created -- please use YSE Admin and contact the site admins.")
                       // alert("Error: " + String(errorThrown) + String(textStatus) + String(XMLHttpRequest.responseText));
                       //Remove event from text input
 
@@ -1661,7 +1687,7 @@
             // Follow-up submit is wired in the early script block (yseTriggerFollowupSubmit).
 
             function ChangeErr() {
-                alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.")
+                alert("Transient Status may not have changed -- please use YSE Admin and contact the site admins.")
             }
 
             $('.transientStatusChange').on('click', function(event){

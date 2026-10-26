@@ -17,43 +17,43 @@
 				{% endfor %}
 				<div class="col-6">
 					<div class="form-group">
-						<label>Follow-up Status</label>
+						<label for="{{ form.status.id_for_label }}">Follow-up Status</label>
 						{% render_field form.status class+="form-control select2" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>ToO Resource</label>
+						<label for="{{ form.too_resource.id_for_label }}">ToO Resource</label>
 						{% render_field form.too_resource class+="form-control select2" style+="width: 100%;"%}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Classical Resource</label>
+						<label for="{{ form.classical_resource.id_for_label }}">Classical Resource</label>
 						{% render_field form.classical_resource class+="form-control select2" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Queued Resource</label>
+						<label for="{{ form.queued_resource.id_for_label }}">Queued Resource</label>
 						{% render_field form.queued_resource class+="form-control select2" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Priority (1.0 highest, 5.0 lowest)</label>
+						<label for="{{ form.priority.id_for_label }}">Priority (1.0 highest, 5.0 lowest)</label>
 						{% render_field form.priority class+="form-control" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Comments</label>
+						<label for="{{ form.comment.id_for_label }}">Comments</label>
 						{% render_field form.comment class+="form-control" style+="width: 100%;" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Date Range (ToO/Queue only)</label>
+						<label for="follow_date_range">Date Range (ToO/Queue only)</label>
 						<div class="input-group">
 							<div class="input-group-addon">
 								<i class="fa fa-clock-o"></i>
@@ -66,37 +66,37 @@
 				</div>
 				<!--<div class="col-6">
 					<div class="form-group">
-						<label>Spec Priority</label>
+						<label for="{{ form.spec_priority.id_for_label }}">Spec Priority</label>
 						{% render_field form.spec_priority class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Phot Priority</label>
+						<label for="{{ form.phot_priority.id_for_label }}">Phot Priority</label>
 						{% render_field form.phot_priority class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset Star RA</label>
+						<label for="{{ form.offset_star_ra.id_for_label }}">Offset Star RA</label>
 						{% render_field form.offset_star_ra class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset Star DEC</label>
+						<label for="{{ form.offset_star_dec.id_for_label }}">Offset Star DEC</label>
 						{% render_field form.offset_star_dec class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset North</label>
+						<label for="{{ form.offset_north.id_for_label }}">Offset North (arcsec)</label>
 						{% render_field form.offset_north class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Offset East</label>
+						<label for="{{ form.offset_east.id_for_label }}">Offset East (arcsec)</label>
 						{% render_field form.offset_east class+="form-control" %}
 					</div>
 				</div>-->
@@ -127,7 +127,7 @@
 					<div class="form-group">
 						<div class="yse-followup-submit-error alert alert-danger" role="alert" style="display:none; margin-top:10px;"></div>
 						<br>
-						<button type="button" class="btn btn-block btn-primary btn-lg yse-followup-submit-btn">Submit</button>
+						<button type="button" class="btn btn-block btn-primary btn-lg yse-followup-submit-btn">Request follow-up</button>
 					</div>
 				</div>
 			</form>
