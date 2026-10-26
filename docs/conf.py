@@ -48,21 +48,23 @@ templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'perf']
 
 # This documentation is published publicly. Markdown pages are published only
-# if they are listed here (an allowlist); every other docs/**/*.md file is
-# excluded at build time, so new Markdown files default to unpublished.
-# Before adding a page, check that it has no server paths, host names, ports,
-# account names, admin or deploy commands, security details, personal names or
-# internal planning notes.
+# if they are listed here (an allowlist); every other docs/**/*.md file, at any
+# depth, is excluded at build time, so new Markdown files default to
+# unpublished. Before adding a page, check that it has no server paths, host
+# names, ports, account names, admin or deploy commands, security details,
+# personal names or internal planning notes.
+# NOTE: docs/_static is copied verbatim into the published site; never place
+# anything private there.
 PUBLIC_MARKDOWN_PAGES = [
-    'access-rules-engine',
-    'annotations',
     'archive-tabs',
     'observability',
 ]
 
 _docs_dir = os.path.dirname(os.path.abspath(__file__))
 for _root, _dirs, _files in os.walk(_docs_dir):
-    _dirs[:] = [d for d in _dirs if d not in ('_build', '_static', 'perf')]
+    # Skip only the top-level build output directory (exact path), for speed.
+    if _root == _docs_dir:
+        _dirs[:] = [d for d in _dirs if d != '_build']
     for _name in _files:
         if not _name.endswith('.md'):
             continue

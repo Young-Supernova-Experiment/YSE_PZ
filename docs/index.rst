@@ -28,8 +28,6 @@ The modern study of astrophysical transients has been transformed by an exponent
    :maxdepth: 1
    :caption: User guides
 
-   access-rules-engine
-   annotations
    archive-tabs
    observability
 

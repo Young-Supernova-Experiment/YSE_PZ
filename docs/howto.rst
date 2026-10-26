@@ -8,8 +8,9 @@ Using the Admin interface
 --------------------------
 
 Most day-to-day actions (changing a status, requesting follow-up) are done
-directly on the transient detail page, with no admin page involved. The Admin interface is only available to staff. When you
-change or add a field there, make sure your username is selected in the
+directly on the transient detail page, with no admin page involved. The
+Admin interface is only available to staff. When you change or add a field
+there, make sure your username is selected in the
 ‘modified_by’ fields.  This will allow us to keep track of changes and ask
 you questions if we’re confused by something.
 
