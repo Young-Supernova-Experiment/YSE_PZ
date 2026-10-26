@@ -262,6 +262,7 @@ class BulkPhotometryTests(ExportsApiFixture):
         url = reverse("download_bulk_photometry_by_id", args=[query.id])
         for defer in ("1", "0"):
             with self.subTest(defer=defer), mock.patch.dict(os.environ, {"YSE_PERSONAL_DASHBOARD_DEFER": defer}), \
+                    mock.patch("YSE_App.views.dashboard_sql_is_supported", return_value=True), \
                     mock.patch("YSE_App.views.run_explorer_query_cached", return_value=[]):
                 response = self.client.get(reverse("personaldashboard"))
                 self.assertEqual(response.status_code, 200)
