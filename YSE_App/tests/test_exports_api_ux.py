@@ -264,7 +264,7 @@ class ReadableHeaderTests(ExportsApiFixture):
         # old upper-case keys are kept for existing parsers
         self.assertIn("# NAME: %s" % self.t1.name, text)
         for key in ("RA", "DEC", "REDSHIFT", "MW_EBV", "NON_DETECT_DATE", "NON_DETECT_LIMIT",
-                    "NON_DETECT_BAND", "TNS_NAME"):
+                    "NON_DETECT_BAND", "TNS_SPEC_CLASS"):
             self.assertIn("\n# %s: " % key, text)
         # one legend block explains them
         self.assertIn("# Header keys (legend)\n", text)
