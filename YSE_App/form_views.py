@@ -689,6 +689,11 @@ class AddDashboardQueryFormView(FormView):
 	form_class = AddDashboardQueryForm
 	template_name = 'YSE_App/form_snippets/dashboard_query_form.html'
 	success_url = '/form-success/'
+
+	def get_form_kwargs(self):
+		kwargs = super().get_form_kwargs()
+		kwargs['user'] = self.request.user
+		return kwargs
 	
 	def form_invalid(self, form):
 		response = super(AddDashboardQueryFormView, self).form_invalid(form)

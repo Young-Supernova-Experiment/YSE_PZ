@@ -16,9 +16,9 @@
 		<div class="card">
 			<div class="card-header">
 				<strong>Feed sources</strong>
-				<span class="text-muted ml-2">poll cron {% if poll_cron_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}
+				{% if is_staff %}<span class="text-muted ml-2">poll cron {% if poll_cron_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}
 				&middot; minor-planet screening: sweep {% if screen_cron_enabled %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %},
-				on create {% if screen_on_create %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</span>
+				on create {% if screen_on_create %}<span class="badge badge-success">on</span>{% else %}<span class="badge badge-secondary">off</span>{% endif %}</span>{% endif %}
 				{% if is_staff %}<a class="btn btn-sm btn-outline-secondary float-right" href="{% url 'admin:YSE_App_feedsource_add' %}">Add source</a>{% endif %}
 			</div>
 			<div class="card-body table-responsive p-0">

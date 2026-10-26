@@ -168,6 +168,37 @@ _DASHBOARD_STATUS_SECTIONS = (
 )
 
 
+DASHBOARD_PER_PAGE_CHOICES = (10, 25, 50, 100)
+DASHBOARD_PER_PAGE_DEFAULT = 10
+_DASHBOARD_PER_PAGE_SESSION_KEY = 'dashboard_per_page'
+
+
+def dashboard_per_page(request):
+    """Rows per page for dashboard section tables (#820).
+
+    ``?dash_per_page=N`` (one of DASHBOARD_PER_PAGE_CHOICES) is remembered in the
+    user's session; otherwise the remembered value, otherwise 10.
+    """
+    def _valid(value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+        return value if value in DASHBOARD_PER_PAGE_CHOICES else None
+
+    requested = _valid(request.GET.get('dash_per_page'))
+    session = getattr(request, 'session', None)
+    if requested is not None:
+        if session is not None:
+            session[_DASHBOARD_PER_PAGE_SESSION_KEY] = requested
+        return requested
+    if session is not None:
+        stored = _valid(session.get(_DASHBOARD_PER_PAGE_SESSION_KEY))
+        if stored is not None:
+            return stored
+    return DASHBOARD_PER_PAGE_DEFAULT
+
+
 def _main_dashboard_defer_enabled():
     """Load New synchronously; other status sections via AJAX (default on)."""
     return os.environ.get('YSE_MAIN_DASHBOARD_DEFER', '1') != '0'
@@ -191,7 +222,7 @@ def _dashboard_section_tuple(request, title, statusname, status_by_name):
         table = NewTransientTable(transientfilter.qs, prefix=statusname.lower())
     else:
         table = TransientTable(transientfilter.qs, prefix=statusname.lower())
-    RequestConfig(request, paginate={'per_page': 10}).configure(table)
+    RequestConfig(request, paginate={'per_page': dashboard_per_page(request)}).configure(table)
     return (table, title, statusname.lower(), transientfilter)
 
 
@@ -233,6 +264,8 @@ def dashboard(request):
         'anchor': anchor,
         'main_dashboard_defer': defer,
         'broker_stale_heartbeats': _broker_stale_heartbeats(),
+        'dashboard_per_page': dashboard_per_page(request),
+        'dashboard_per_page_choices': DASHBOARD_PER_PAGE_CHOICES,
     }
 
     return render(request, 'YSE_App/dashboard.html', context)
@@ -388,7 +421,7 @@ def _personaldashboard_configure_table(request, prefix, queryset):
     try:
         transient_filter = TransientFilter(request.GET, request=request, queryset=queryset, prefix=prefix)
         table = TransientTable(transient_filter.qs, prefix=prefix)
-        RequestConfig(request, paginate={'per_page': 10}).configure(table)
+        RequestConfig(request, paginate={'per_page': dashboard_per_page(request)}).configure(table)
         return table, transient_filter
     finally:
         request.GET = saved_get
@@ -474,7 +507,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 request.GET, request=request, queryset=transients, prefix=q.python_query
             )
             table = TransientTable(transient_filter.qs, prefix=q.python_query)
-            RequestConfig(request, paginate={'per_page': 10}).configure(table)
+            RequestConfig(request, paginate={'per_page': dashboard_per_page(request)}).configure(table)
             return (
                 table,
                 q.python_query,
@@ -534,7 +567,9 @@ def _personaldashboard_context(request, tables, *, personal_dashboard_defer=Fals
         'transient_categories': tables,
         'all_transient_statuses': TransientStatus.objects.order_by('name'),
         'anchor': anchor,
-        'add_dashboard_query_form': AddDashboardQueryForm(),
+        'add_dashboard_query_form': AddDashboardQueryForm(user=request.user),
+        'dashboard_per_page': dashboard_per_page(request),
+        'dashboard_per_page_choices': DASHBOARD_PER_PAGE_CHOICES,
         'add_followup_notice_form': AddFollowupNoticeForm(),
         'followup_notices': UserTelescopeToFollow.objects.filter(
             profile__user=request.user
@@ -706,8 +741,8 @@ def transient_summary(request,status_or_query_name,
     }
     if transient_followup_form.fields["valid_start"].initial:
         context['followup_initial_dates'] = \
-            (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-             transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))
+            (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+             transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'))
     
     if extra_context is not None:
         context.update(extra_context)
@@ -1593,8 +1628,8 @@ def _transient_followup_form_context(request, transient_obj):
     ctx.update(facility_panel_context(request.user, transient_obj))
     if transient_followup_form.fields["valid_start"].initial:
         ctx['followup_initial_dates'] = (
-            transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-            transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'),
+            transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+            transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'),
         )
     return ctx
 
@@ -1970,8 +2005,8 @@ def transient_detail(request, slug):
 
         if not defer_detail and transient_followup_form.fields["valid_start"].initial:
             context['followup_initial_dates'] = \
-                (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-                 transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))           
+                (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+                 transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'))           
         
         # Stored photometry statistics (#268): peak, detections, rise/decay.
         # A transient the backfill has not reached yet gets its row computed
@@ -2398,6 +2433,10 @@ def download_spectra(request, slug):
     st = BytesIO()
     archive = zipfile.ZipFile(st, 'w', zipfile.ZIP_DEFLATED)
     authorized_spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient.id, includeBadData=True)
+    # "Download selected" on the Spectra tab (#812): ?ids=1,2 narrows the authorized set; never widens it.
+    if request.GET.get('ids'):
+        selected_ids = [int(i) for i in request.GET['ids'].split(',') if i.strip().isdigit()]
+        authorized_spectra = authorized_spectra.filter(id__in=selected_ids)
     if len(authorized_spectra):
 
         for s in authorized_spectra:

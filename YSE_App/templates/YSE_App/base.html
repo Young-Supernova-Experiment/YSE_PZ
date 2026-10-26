@@ -109,7 +109,7 @@
 		</a>
 		<div class="sidebar">
 			<nav class="mt-2" aria-label="Main">
-				<ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu" data-accordion="false">
+				<ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" data-accordion="false">
 					<li class="nav-header yse-nav-core">Core</li>
 					<li class="nav-item">
 						<a href="{% url 'dashboard' %}" class="nav-link{% if url_name == 'dashboard' %} active{% endif %}">
@@ -120,7 +120,7 @@
 					<li class="nav-item">
 						<a href="{% url 'personaldashboard' %}" class="nav-link{% if url_name == 'personaldashboard' %} active{% endif %}">
 							<i class="nav-icon fa fa-id-card"></i>
-							<p>{{ user.first_name }}'s Dashboard</p>
+							<p>{% if user.first_name %}{{ user.first_name }}'s Dashboard{% else %}My dashboard{% endif %}</p>
 						</a>
 					</li>
 					<li class="nav-item">
