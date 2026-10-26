@@ -16,7 +16,7 @@ Context: telescope_obj, weather_widget (services.weather.widget_context), recent
         <tbody>
         {% for row in recent_instrument_logs %}
           <tr data-source="{{ row.source }}">
-            <td class="text-nowrap text-muted small">{{ row.start|utcdate }}</td>
+            <td class="text-nowrap text-muted small">{{ row.start|utcdate }} UTC</td>
             <td class="small"><a href="{% url 'instrument_logs' row.instrument_id %}">{{ row.instrument.name }}</a></td>
             <td class="small">{{ row.summary|truncatechars:120 }}{% if row.source == 'api' %} <span class="badge badge-info">api</span>{% endif %}</td>
           </tr>

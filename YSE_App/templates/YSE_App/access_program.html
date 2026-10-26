@@ -54,7 +54,7 @@
 							<tr data-grant-id="{{ g.id }}" class="{% if g.stopped_at %}text-muted{% endif %}">
 								<td>{{ g.get_effect_display }}</td>
 								<td>{% if g.grantee_group %}group {{ g.grantee_group.name }}{% else %}{{ g.grantee_user.username }}{% endif %}</td>
-								<td>{% if g.night_start %}night of {{ g.night_start|utcdate }} UTC{% else %}all of the program's data{% endif %}</td>
+								<td>{% if g.night_start %}from {{ g.night_start|utcdate }} UTC{% else %}all of the program's data{% endif %}</td>
 								<td><small>{{ g.created_by.username|default:"-" }} ({{ g.get_created_as_display }})</small></td>
 								<td><small>{{ g.created_at|utcdate }}</small></td>
 								<td><small>{% if g.stopped_at %}{{ g.stopped_at|utcdate }}{% else %}-{% endif %}</small></td>

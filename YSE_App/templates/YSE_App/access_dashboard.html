@@ -30,7 +30,7 @@
 								<td>{{ g.allocation.name }}</td>
 								<td>{{ g.get_effect_display }}</td>
 								<td>{% if g.grantee_group %}group {{ g.grantee_group.name }}{% else %}{{ g.grantee_user.username }}{% endif %}</td>
-								<td>{% if g.night_start %}night of {{ g.night_start|utcdate }} UTC{% else %}all of the program's data{% endif %}</td>
+								<td>{% if g.night_start %}from {{ g.night_start|utcdate }} UTC{% else %}all of the program's data{% endif %}</td>
 								<td>
 									<form method="post" class="form-inline">
 										{% csrf_token %}
