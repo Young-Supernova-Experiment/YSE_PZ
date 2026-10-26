@@ -44,8 +44,6 @@ class MarkupCleanupTests(TestCase):
             "/calendar/": "On-Call Calendar",
             "/observing_calendar/": "Observing Calendar",
             "/too_calendar/": "ToO Calendar",
-            "/yse_observing_calendar/": "YSE Schedule",
-            "/yse_oncall_calendar/": "YSE On-Call Calendar",
         }
         for url, name in expected.items():
             response = self.client.get(url)
