@@ -345,11 +345,23 @@ class PhotStatBatchMixin:
             super().perform_update(serializer)
 
 
-def _mjd_to_aware_datetime(mjd):
-    """UTC datetime for an MJD value (used by the ``obs_mjd__gte`` / ``__lte`` API filters)."""
+def _mjd_to_aware_datetime(mjd, param='obs_mjd'):
+    """UTC datetime for an MJD value (used by the ``obs_mjd__gte`` / ``__lte`` API filters).
+
+    An MJD that is not a finite number or lies outside the representable date range is a
+    client error (HTTP 400), not a server error.
+    """
     import datetime as _dt
+    import math
     from astropy.time import Time
-    return Time(float(mjd), format='mjd', scale='utc').to_datetime(timezone=_dt.timezone.utc)
+    from rest_framework.exceptions import ValidationError
+    try:
+        value = float(mjd)
+        if not math.isfinite(value):
+            raise ValueError('not finite')
+        return Time(value, format='mjd', scale='utc').to_datetime(timezone=_dt.timezone.utc)
+    except Exception:  # ValueError/OverflowError and astropy/erfa range errors
+        raise ValidationError({param: ['Enter an MJD within the supported date range.']})
 
 
 class _TransientDataFilterSet(django_filters.FilterSet):
@@ -385,18 +397,24 @@ class _TransientDataFilterSet(django_filters.FilterSet):
         return self._date(queryset, 'lte', value)
 
     def filter_obs_mjd_gte(self, queryset, name, value):
-        return self._date(queryset, 'gte', _mjd_to_aware_datetime(value))
+        return self._date(queryset, 'gte', _mjd_to_aware_datetime(value, name))
 
     def filter_obs_mjd_lte(self, queryset, name, value):
-        return self._date(queryset, 'lte', _mjd_to_aware_datetime(value))
+        return self._date(queryset, 'lte', _mjd_to_aware_datetime(value, name))
 
 
 class TransientPhotometryFilterSet(_TransientDataFilterSet):
-    """A header matches a date range when any of its points does."""
+    """A header matches a date range when any of its points that the user may see does.
+
+    Only the per-point authorized points are considered, so a point hidden from the
+    user never makes its header match.
+    """
     transient_path = 'transient'
 
     def _date(self, queryset, lookup, value):
-        points = TransientPhotData.objects.filter(**{'obs_date__%s' % lookup: value})
+        user = getattr(self.request, 'user', None)
+        points = PhotometryService.GetAuthorizedTransientPhotData_ByUser(user).filter(
+            **{'obs_date__%s' % lookup: value})
         return queryset.filter(pk__in=points.values('photometry_id'))
 
 

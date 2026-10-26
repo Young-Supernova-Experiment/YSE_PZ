@@ -6,17 +6,27 @@ import io
 import zipfile
 from unittest import mock
 
+from django.contrib.auth.models import Group
+from django.core.cache import cache
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from explorer.models import Query
 
-from YSE_App.models import DataQuality, TransientPhotData, TransientSpecData
+from YSE_App.models import (
+    DataAccessRule,
+    DataQuality,
+    TransientPhotData,
+    TransientPhotometry,
+    TransientSpecData,
+    Unit,
+)
 from YSE_App.common.utilities import date_to_mjd
 from YSE_App.tests.fixtures_minimal import (
     attach_synthetic_photometry,
     attach_synthetic_spectrum,
     audit_fields,
+    create_instrument_stack,
     create_minimal_transient,
     create_test_user,
 )
@@ -112,6 +122,64 @@ class ApiFilterTests(ExportsApiFixture):
         mjd = float(date_to_mjd(timezone.now() - datetime.timedelta(days=10)))
         self.assertEqual(len(_results(self.client.get("/api/transientspectra/", {"obs_mjd__lte": mjd}))), 1)
 
+    def test_out_of_range_mjd_is_a_client_error(self):
+        for url in ("transientphotometry", "transientphotdata", "transientspectra", "transientspecdata"):
+            for param in ("obs_mjd__gte", "obs_mjd__lte"):
+                for value in ("1e30", "-1e30", "99999999999"):
+                    with self.subTest(url=url, param=param, value=value):
+                        r = self.client.get("/api/%s/" % url, {param: value})
+                        self.assertEqual(r.status_code, 400)
+                        self.assertIn(param, r.json())
+
+
+@override_settings(DATA_ACCESS_GRANTS_ENABLED=True)
+class PhotometryHeaderPerPointFilterTests(TestCase):
+    """A header's date-range match only considers the points the user may see (#811, per-point access)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = create_test_user("exports_ux_pp_admin", is_staff=True)
+        cls.member = create_test_user("exports_ux_pp_member", is_staff=False)
+        group, _ = Group.objects.get_or_create(name="exports-ux-pp-g")
+        cls.member.groups.add(group)
+        obs_group, instrument, band = create_instrument_stack(cls.admin, obs_group_name="exports-ux-pp")
+        audit = audit_fields(cls.admin)
+        transient = create_minimal_transient(cls.admin, name="2026uxpp")
+        cls.header = TransientPhotometry.objects.create(
+            transient=transient, instrument=instrument, obs_group=obs_group, **audit)
+        cls.header.groups.add(group)
+        now = timezone.now()
+        cls.old_date = now - datetime.timedelta(days=100)
+        cls.new_date = now - datetime.timedelta(days=1)
+        cls.visible = TransientPhotData.objects.create(
+            photometry=cls.header, band=band, mag=19.0, mag_err=0.05, obs_date=cls.old_date, **audit)
+        cls.hidden = TransientPhotData.objects.create(
+            photometry=cls.header, band=band, mag=18.0, mag_err=0.05, obs_date=cls.new_date, **audit)
+        DataAccessRule.objects.create(
+            transient_phot_data=cls.hidden, grantee_user=cls.member, effect="deny", granted_as="pi")
+
+    def setUp(self):
+        cache.clear()
+        self.client = Client()
+        self.client.force_login(self.member)
+
+    def _ids(self, params):
+        # The serializer is hyperlinked (no "id" field): read the pk from each row's URL.
+        r = self.client.get("/api/transientphotometry/", params)
+        self.assertEqual(r.status_code, 200)
+        return [int(str(row["url"]).rstrip("/").rsplit("/", 1)[-1]) for row in _results(r)]
+
+    def test_header_is_listed_through_its_visible_point(self):
+        self.assertIn(self.header.pk, self._ids({}))
+        older = (self.old_date + datetime.timedelta(days=1)).isoformat()
+        self.assertIn(self.header.pk, self._ids({"obs_date__lte": older}))
+
+    def test_only_the_hidden_point_in_range_does_not_match(self):
+        recent = (self.new_date - datetime.timedelta(hours=1)).isoformat()
+        self.assertNotIn(self.header.pk, self._ids({"obs_date__gte": recent}))
+        mjd = float(date_to_mjd(self.new_date)) - 0.01
+        self.assertNotIn(self.header.pk, self._ids({"obs_mjd__gte": mjd}))
+
 
 @override_settings(DATA_SERVICE_READER_USERNAMES=[READER])
 class Salt3UrlTests(ExportsApiFixture):
@@ -149,6 +217,10 @@ class BulkPhotometryTests(ExportsApiFixture):
         points[1].flux = 12.0
         points[1].flux_zero_point = None
         points[1].save()
+        # flux without a zero point but with a magnitude: skipped as before, reason says so
+        points[2].flux = 15.0
+        points[2].flux_zero_point = None
+        points[2].save()
         query = Query.objects.create(title="Search: status New; tags young", sql="select 1",
                                      created_by_user=self.user)
         with mock.patch("YSE_App.views.run_explorer_query_cached", return_value=[self.t1.name]):
@@ -160,12 +232,13 @@ class BulkPhotometryTests(ExportsApiFixture):
         header = [ln for ln in csv_lines if ln.startswith("MJD,")][0]
         self.assertTrue(header.endswith(",DQ"))
         rows = [ln for ln in csv_lines if ln and not ln.startswith(("#", "MJD,"))]
-        self.assertEqual(len(rows), 3)  # four points, one skipped
+        self.assertEqual(len(rows), 2)  # four points, two skipped
         self.assertTrue(any(ln.endswith(",exports-ux-dq") for ln in rows))
         readme = archive.read("README.txt").decode()
-        self.assertIn("skipped because they have no usable flux or magnitude: 1", readme)
+        self.assertIn("Points skipped (no usable flux, or flux without a flux zero point): 2", readme)
         self.assertIn(self.t1.name, readme)
-        self.assertIn("flux zero point", readme)
+        self.assertIn("flux without a flux zero point and no magnitude", readme)
+        self.assertIn("flux without a flux zero point (magnitude present but not used with flux)", readme)
 
     def test_by_id_unknown_is_404_and_old_title_url_still_works(self):
         self.assertEqual(
@@ -188,17 +261,40 @@ class ReadableHeaderTests(ExportsApiFixture):
         r = self.client.get(reverse("download_photometry", args=[self.t1.slug]))
         self.assertEqual(r.status_code, 200)
         text = r.content.decode()
-        self.assertIn("# Name: %s" % self.t1.name, text)
-        self.assertIn("# RA (deg):", text)
-        self.assertNotIn("# NAME:", text)
+        # old upper-case keys are kept for existing parsers
+        self.assertIn("# NAME: %s" % self.t1.name, text)
+        for key in ("RA", "DEC", "REDSHIFT", "MW_EBV", "NON_DETECT_DATE", "NON_DETECT_LIMIT",
+                    "NON_DETECT_BAND", "NON_DETECT_INSTRUMENT", "TNS_NAME"):
+            self.assertIn("\n# %s: " % key, text)
+        # one legend block explains them
+        self.assertIn("# Header keys (legend)\n", text)
+        self.assertIn("#   RA = right ascension (deg)\n", text)
+        self.assertIn("#   NON_DETECT_LIMIT = limiting magnitude of the last non-detection (mag)\n", text)
+        legend = [ln for ln in text.splitlines() if ln.startswith("#   ")]
+        self.assertTrue(legend)
+        self.assertFalse(any(":" in ln for ln in legend))
         self.assertNotIn("CREATED_BY", text.upper())
+        self.assertNotIn("CANDIDATE_HOSTS", text.upper())
+        self.assertIn("VARLIST:  MJD        FLT  FLUXCAL", text)
 
     def test_spectra_header_has_no_database_ids(self):
+        unit = Unit.objects.create(name="exports-ux-flam", **audit_fields(self.user))
+        self.spec1.unit = unit
+        self.spec1.wavelength_medium = "vacuum"
+        self.spec1.host_subtraction = "template"
+        self.spec1.redshift_quality = True
+        self.spec1.save()
         r = self.client.get(reverse("download_spectra", args=[self.t1.slug]))
         self.assertEqual(r.status_code, 200)
         archive = zipfile.ZipFile(io.BytesIO(r.content))
         content = archive.read(archive.namelist()[0]).decode()
         self.assertIn("# Instrument:", content)
         self.assertIn("# Phase (days): 5.0", content)
-        self.assertNotIn("_ID", content.upper().split("WAVELENGTH")[0])
+        self.assertIn("# Wavelength medium: Vacuum\n", content)
+        self.assertIn("# Host subtraction: Template\n", content)
+        self.assertIn("# Quality mask: ", content)
+        self.assertIn("# Redshift quality: True\n", content)
+        self.assertIn("# Flux unit: exports-ux-flam\n", content)
+        header = [ln for ln in content.splitlines() if ln.startswith("#")]
+        self.assertFalse(any("_ID" in ln.upper() for ln in header))
         self.assertIn("wavelength,flux,fluxerr", content)
