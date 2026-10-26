@@ -14,7 +14,7 @@
                                                 <strong>R.A./Dec (2000)</strong>
                                                 <p class="text-muted">
                                                     {{ transient.CoordString.0 }}&nbsp;&nbsp;&nbsp;{{ transient.CoordString.1 }}<br>
-                                                    <small>{{ transient.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }}</small><br>
+                                                    <small>{{ transient.RADecimalString }} deg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.DecDecimalString }} deg</small><br>
                                                     <a class="btn btn-xs btn-outline-primary yse-observability-link" href="{% url 'observability' transient.id %}" title="Tonight's altitude, airmass and moon at every telescope">Observability</a>
                                                 </p>
                                             </div>
@@ -24,7 +24,7 @@
                                                 <strong>Disc. Date (UTC)</strong>
                                                 <p class="text-muted">
                                                     {% if transient.disc_date %}
-                                                        {{ transient.disc_date }}
+                                                        {{ transient.disc_date|utcdate }}
                                                     {% else %}
                                                         Unknown
                                                     {% endif %}
@@ -36,22 +36,22 @@
                                             <div class="box box-default box-solid">
                                                 <div class="box-header with-border">
                                                     <strong style="float:left;margin-right:10px;">Status:</strong>
-                                                    <p style="float:left" id="transient_status_name" >{{ transient.status }}</p>
+                                                    <p style="float:left" id="transient_status_name" title="{{ transient.status|status_title }}">{{ transient.status|status_label }}</p>
                                                     <span id="annotation_badges" style="float:left;margin-left:10px;"></span>
                                                 </div>
                                                 <div class="box-body">
                                                     <div class="btn-group-horizontal">
-                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_follow.id }}" data-status_name="{{ transient_status_follow.name }}" class="transientStatusChange btn btn-primary">{{ transient_status_follow.name }}</button>
-                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_watch.id }}" data-status_name="{{ transient_status_watch.name }}" class="transientStatusChange btn btn-warning">{{ transient_status_watch.name }}</button>
-                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_interesting.id }}" data-status_name="{{ transient_status_interesting.name }}" class="transientStatusChange btn btn-success">{{ transient_status_interesting.name }}</button>
-                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_ignore.id }}" data-status_name="{{ transient_status_ignore.name }}" class="transientStatusChange btn btn-danger">{{ transient_status_ignore.name }}</button>
+                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_follow.id }}" data-status_name="{{ transient_status_follow.name|status_label }}" title="{{ transient_status_follow.name|status_title }}" class="transientStatusChange btn btn-primary">{{ transient_status_follow.name|status_label }}</button>
+                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_watch.id }}" data-status_name="{{ transient_status_watch.name|status_label }}" title="{{ transient_status_watch.name|status_title }}" class="transientStatusChange btn btn-warning">{{ transient_status_watch.name|status_label }}</button>
+                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_interesting.id }}" data-status_name="{{ transient_status_interesting.name|status_label }}" title="{{ transient_status_interesting.name|status_title }}" class="transientStatusChange btn btn-success">{{ transient_status_interesting.name|status_label }}</button>
+                                                        <button style="margin-bottom:5px;" type="button" data-status_id="{{ transient_status_ignore.id }}" data-status_name="{{ transient_status_ignore.name|status_label }}" title="{{ transient_status_ignore.name|status_title }}" class="transientStatusChange btn btn-danger">{{ transient_status_ignore.name|status_label }}</button>
                                                         <div class="btn-group">
                                                             <button style="margin-bottom:5px;" type="button" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown">
                                                                 <span class="caret"></span>
                                                             </button>
                                                             <ul class="dropdown-menu">
                                                                 {% for status in all_transient_statuses %}
-                                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name }}" class="transientStatusChange" href="#">{{ status.name }}</a></li>
+                                                                    <li><a data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}" class="transientStatusChange" href="#">{{ status.name|status_label }}</a></li>
                                                                 {% endfor %}
                                                             </ul>
                                                         </div>
@@ -65,7 +65,7 @@
                                                 <p class="text-muted">
                                                     {% with bz=transient.best_z %}
                                                     {% if bz.value is not None %}
-                                                        {{ bz.value }}
+                                                        {{ bz.value }}{% if bz.kind %} <span class="badge badge-light yse-z-kind" title="{{ bz.kind_title }}">{{ bz.kind }}</span>{% endif %}
                                                             {% if bz.error %}
                                                                 +/- {{ bz.error }}
                                                             {% endif %}
@@ -192,7 +192,7 @@
                                                 <strong>Real/Bogus Score</strong>
                                                 <p class="text-muted">
                                                     {% if transient.real_bogus_score %}
-                                                    {{ transient.real_bogus_score }}
+                                                    {{ transient.real_bogus_score|floatformat:2 }} <small title="Real/bogus score from 0 (bogus) to 1 (real)">(0&ndash;1, 1 = real)</small>
                                                     {% else %}
                                                     None
                                                     {% endif %}
@@ -223,8 +223,8 @@
                                                 <thead>
                                                     <tr>
                                                         <th></th>
-                                                        <th>Date</th>
-                                                        <th>Mag</th>
+                                                        <th>Date (UTC)</th>
+                                                        <th>Mag (AB)</th>
                                                         <th>Mag Lim</th>
                                                         <th>Filter</th>
                                                     </tr>
@@ -232,21 +232,21 @@
                                                 <tbody>
                                                     <tr>
                                                         <td>Disc Mag</td>
-                                                        <td>{{ first_magdate }}</td>
+                                                        <td>{{ first_magdate|utcdate }}</td>
                                                         <td>{{ first_mag }}</td>
                                                         <td></td>
                                                         <td>{{ first_filter }}</td>
                                                     </tr>
                                                     <tr>
                                                         <td>Last Non-detection</td>
-                                                        <td>{{ transient.non_detect_date }}</td>
+                                                        <td>{{ transient.non_detect_date|utcdate }}</td>
                                                         <td></td>
                                                         <td>{{ transient.non_detect_limit }}</td>
                                                         <td>{{ transient.non_detect_band }}</td>
                                                     </tr>
                                                     <tr>
                                                         <td>Recent Mag</td>
-                                                        <td>{{ recent_magdate }}</td>
+                                                        <td>{{ recent_magdate|utcdate }}</td>
                                                         <td>{{ recent_mag }}</td>
                                                         <td></td>
                                                         <td>{{ recent_filter }}</td>
@@ -254,7 +254,7 @@
                                                     {% if photstat and photstat.has_detections %}
                                                     <tr id="photstat-peak-row">
                                                         <td>Peak Mag</td>
-                                                        <td>{{ photstat.peak_date|date:"N j, Y, P" }}</td>
+                                                        <td>{{ photstat.peak_date|utcdate }}</td>
                                                         <td>{{ photstat.peak_mag|floatformat:2 }}</td>
                                                         <td></td>
                                                         <td>{{ photstat.peak_band }}</td>
@@ -276,7 +276,7 @@
                                                     </tr>
                                                     <tr id="photstat-limits">
                                                         <td>Upper limits (deepest)</td>
-                                                        <td><strong>{{ photstat.num_limits_global }}</strong>{% if photstat.has_detections %} pre-detection{% endif %}{% if photstat.deepest_limit is not None %} (deepest {{ photstat.deepest_limit|floatformat:2 }} mag{% if photstat.deepest_limit_band %} in {{ photstat.deepest_limit_band.name }}{% endif %} on {{ photstat.deepest_limit_date|date:"N j, Y" }}){% endif %}</td>
+                                                        <td><strong>{{ photstat.num_limits_global }}</strong>{% if photstat.has_detections %} pre-detection{% endif %}{% if photstat.deepest_limit is not None %} (deepest {{ photstat.deepest_limit|floatformat:2 }} mag{% if photstat.deepest_limit_band %} in {{ photstat.deepest_limit_band.name }}{% endif %} on {{ photstat.deepest_limit_date|utcdate }}){% endif %}</td>
                                                     </tr>
                                                     <tr id="photstat-rise">
                                                         <td>Rise rate</td>
@@ -288,7 +288,7 @@
                                                     </tr>
                                                     <tr id="photstat-nondetection">
                                                         <td>Last non-detection before discovery</td>
-                                                        <td>{% if photstat.last_non_detection_mjd is not None and photstat.time_to_non_detection is not None %}{{ photstat.last_non_detection_date|date:"N j, Y, P" }} (MJD {{ photstat.last_non_detection_mjd|floatformat:2 }}{% if photstat.last_non_detection_band %}; {{ photstat.last_non_detection_band.name }}{% endif %}){% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                                                        <td>{% if photstat.last_non_detection_mjd is not None and photstat.time_to_non_detection is not None %}{{ photstat.last_non_detection_date|utcdate }} (MJD {{ photstat.last_non_detection_mjd|floatformat:2 }}{% if photstat.last_non_detection_band %}; {{ photstat.last_non_detection_band.name }}{% endif %}){% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
                                                     </tr>
                                                     <tr id="photstat-time-to-nondetection">
                                                         <td>Time to non-detection</td>
@@ -368,7 +368,7 @@
                                                 <p class="text-muted">
                                                     {% if transient.host %}
                                                         {{ transient.host.CoordString.0 }}&nbsp;&nbsp;&nbsp;{{ transient.host.CoordString.1 }}<br>
-                                                    <small>{{ transient.host.RADecimalString }}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.host.DecDecimalString }}</small>
+                                                    <small>{{ transient.host.RADecimalString }} deg&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.host.DecDecimalString }} deg</small>
                                                     {% else %}
                                                         Unknown
                                                     {% endif %}

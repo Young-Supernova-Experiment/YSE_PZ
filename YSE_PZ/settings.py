@@ -422,6 +422,8 @@ TEMPLATES = [
                 # csrf_cookie_name for inline scripts (per-stack CSRF_COOKIE_NAME, #637).
                 'YSE_App.context_processors.csrf_cookie_name',
             ],
+            # utcdate / status_label filters on every template without {% load %} (#807, #831).
+            'builtins': ['YSE_App.templatetags.display_extras'],
         },
     },
 ]

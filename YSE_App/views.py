@@ -57,6 +57,7 @@ from astroplan import moon_illumination
 from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
+from YSE_App.common.status_display import status_label
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
 from django.contrib.auth.models import AnonymousUser
 from YSE_App.services.page_query_scope import PageQueryRefused, page_query_cache_suffix, page_query_sql
@@ -157,14 +158,11 @@ def auth_logout(request):
         return render(request, 'YSE_App/logout_confirm.html')
     return render(request, 'YSE_App/index.html')
 
-_DASHBOARD_STATUS_SECTIONS = (
-    ('New Transients', 'New'),
-    ('Followup Requested', 'FollowupRequested'),
-    ('Following', 'Following'),
-    ('Interesting', 'Interesting'),
-    ('Watch', 'Watch'),
-    ('Finished Following', 'FollowupFinished'),
-    ('Needs Template', 'NeedsTemplate'),
+# (heading, status name); headings are the one status display map's labels (#831).
+_DASHBOARD_STATUS_SECTIONS = tuple(
+    (status_label(name), name)
+    for name in ('New', 'FollowupRequested', 'Following', 'Interesting', 'Watch',
+                 'FollowupFinished', 'NeedsTemplate')
 )
 
 
@@ -1930,14 +1928,13 @@ def transient_detail(request, slug):
         )
         
         date = datetime.datetime.now(tz=pytz.utc)
-        date_format='%m/%d/%Y %H:%M:%S'
 
         context = {
             'transient':transient_obj,
             'followups':followups,
             'observing_nights': obsnights,
             'too_resource_list': too_resources.select_related(),
-            'nowtime':date.strftime(date_format),
+            'nowtime':date,  # shown as YYYYMMDD.ddd (#807)
             'transient_followup_form': transient_followup_form,
             'transient_observation_task_form': transient_observation_task_form,
             'transient_comment_form': transient_comment_form,
@@ -2897,7 +2894,7 @@ def search_bulk_action(request):
         n_changed = Transient.objects.filter(pk__in=visible_pks).exclude(status=status_obj).update(
             status=status_obj, modified_by=request.user, modified_date=timezone.now())
         return _search_bulk_redirect(
-            params, 'Status set to %s on %d of %d transients.' % (status_obj.name, n_changed, len(visible_pks)))
+            params, 'Status set to %s on %d of %d transients.' % (status_label(status_obj.name), n_changed, len(visible_pks)))
     through = Transient.tags.through
     have = set(through.objects.filter(transienttag_id=tag_obj.pk, transient_id__in=visible_pks)
                .values_list('transient_id', flat=True))
@@ -2946,8 +2943,11 @@ def search_export_csv(request):
     response['Content-Disposition'] = 'attachment; filename="yse_pz_search.csv"'
     writer = csv.writer(response)
     writer.writerow([label for label, _ in columns])
+    from YSE_App.common.utc_dates import utc_day
+
     for row in rows[:SEARCH_EXPORT_MAX_ROWS]:
-        writer.writerow([_csv_safe(v.isoformat() if hasattr(v, 'isoformat') else ('' if v is None else v)) for v in row])
+        # Dates as plain YYYYMMDD.ddd UTC (#807); the MJD columns stay MJD.
+        writer.writerow([_csv_safe(utc_day(v) if hasattr(v, 'isoformat') else ('' if v is None else v)) for v in row])
     if truncated:
         writer.writerow(['# truncated at %d rows; narrow the search' % SEARCH_EXPORT_MAX_ROWS])
     return response

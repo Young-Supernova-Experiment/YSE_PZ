@@ -59,8 +59,8 @@
 						<tbody>
 						{% for inv in invitations %}
 						<tr>
-							<td>{{ inv.created_at|date:"Y-m-d" }}</td>
-							<td>{{ inv.expires_at|date:"Y-m-d H:i" }}</td>
+							<td>{{ inv.created_at|utcdate }}</td>
+							<td>{{ inv.expires_at|utcdate }}</td>
 							<td>{{ inv.use_count }} / {{ inv.max_uses }}</td>
 							<td>{{ inv.status }}</td>
 							<td>{% if inv.status == "open" %}<form method="post" action="{% url 'team_invite_revoke' group.pk inv.pk %}">{% csrf_token %}<button type="submit" class="btn btn-xs btn-outline-danger">Revoke</button></form>{% endif %}</td>
@@ -88,7 +88,7 @@
 					<td>{{ req.user.get_username }}</td>
 					<td>{{ req.user.researcher_profile.institution|default:"" }}</td>
 					<td>{{ req.message|linebreaksbr }}</td>
-					<td>{{ req.created_at|date:"Y-m-d" }}</td>
+					<td>{{ req.created_at|utcdate }}</td>
 					<td class="text-nowrap">
 						<form method="post" action="{% url 'team_request_decide' group.pk req.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="approve"><button type="submit" class="btn btn-xs btn-success">Approve</button></form>
 						<form method="post" action="{% url 'team_request_decide' group.pk req.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="deny"><button type="submit" class="btn btn-xs btn-outline-danger">Deny</button></form>

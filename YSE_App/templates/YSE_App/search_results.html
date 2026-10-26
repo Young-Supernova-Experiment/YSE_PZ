@@ -135,7 +135,7 @@
         <option value="photometry">Download photometry (zip)</option>
       </select>
       <select name="status_id" id="search-bulk-status" class="form-control form-control-sm mr-2" style="display:none">
-        {% for st in all_transient_statuses %}<option value="{{ st.id }}">{{ st.name }}</option>{% endfor %}
+        {% for st in all_transient_statuses %}<option value="{{ st.id }}" title="{{ st.name|status_title }}">{{ st.name|status_label }}</option>{% endfor %}
       </select>
       <select name="tag_id" id="search-bulk-tag" class="form-control form-control-sm mr-2" style="display:none">
         {% for tag in all_transient_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}

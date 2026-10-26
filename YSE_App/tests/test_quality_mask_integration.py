@@ -21,6 +21,7 @@ import datetime
 
 from django.utils import timezone
 
+from YSE_App.common.utc_dates import utc_day
 from YSE_App.common.quality_mask import PhotFlag
 from YSE_App.models import TransientPhotData, TransientPhotometry
 from YSE_App.models.phot_stat_models import TransientPhotStat
@@ -65,7 +66,7 @@ class TransientMagReaderEquivalenceTests(MixedPhotometryFixture):
         self.assertNotEqual(newest.pk, self.points[7].pk)
         self.assertEqual(self.transient.recent_mag(), '%.2f' % newest.mag)
         newest_any = _anti_join(self.transient).order_by('-obs_date').first()
-        self.assertEqual(self.transient.recent_magdate(), newest_any.obs_date.strftime('%m/%d/%Y'))
+        self.assertEqual(self.transient.recent_magdate(), utc_day(newest_any.obs_date))
 
     def test_everything_flagged_leaves_nothing(self):
         for p in self.points:

@@ -10,7 +10,7 @@
 <!-- Content Header (Page header) -->
     <section class="content-header">
       <h1>
-        YSE Observing Night, {{ obs_date }} (UT)
+        YSE Observing Night, {{ obs_date|utcdate|default:obs_date }} (UTC)
       </h1>
       <ol class="breadcrumb">
         <li><i class="fa fa-dashboard"></i> Home</li>

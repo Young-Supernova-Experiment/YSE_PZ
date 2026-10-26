@@ -46,6 +46,8 @@ def log_to_comment_dict(log: Log) -> Dict[str, Any]:
         "id": log.id,
         "created_by": str(log.created_by),
         "modified_date": format_comment_datetime(log.modified_date),
+        # The page shows YYYYMMDD.ddd with the MJD on hover (#807); "modified_date" is kept as is.
+        "modified_date_utc": log.modified_date.isoformat() if log.modified_date else None,
         "comment": log.comment,
     }
 

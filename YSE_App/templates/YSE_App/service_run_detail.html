@@ -17,9 +17,9 @@
 					<tr><th>Service</th><td>{{ run.service.name }} <code>{{ run.service.slug }}</code> ({{ run.service.get_kind_display }})</td></tr>
 					<tr><th>Target</th><td>{% if run.transient %}<a href="{% url 'transient_detail' run.transient.slug %}">{{ run.transient.name }}</a>{% else %}{{ run.target_display }}{% endif %}</td></tr>
 					<tr><th>Requested by</th><td>{{ run.created_by.username }}</td></tr>
-					<tr><th>Created</th><td>{{ run.created_date|date:"Y-m-d H:i:s" }} UTC</td></tr>
-					<tr><th>Started</th><td>{% if run.started_at %}{{ run.started_at|date:"Y-m-d H:i:s" }} UTC{% else %}-{% endif %}</td></tr>
-					<tr><th>Finished</th><td>{% if run.finished_at %}{{ run.finished_at|date:"Y-m-d H:i:s" }} UTC{% if run.duration %} ({{ run.duration }}){% endif %}{% else %}-{% endif %}</td></tr>
+					<tr><th>Created</th><td>{{ run.created_date|utcdate }} UTC</td></tr>
+					<tr><th>Started</th><td>{% if run.started_at %}{{ run.started_at|utcdate }} UTC{% else %}-{% endif %}</td></tr>
+					<tr><th>Finished</th><td>{% if run.finished_at %}{{ run.finished_at|utcdate }} UTC{% if run.duration %} ({{ run.duration }}){% endif %}{% else %}-{% endif %}</td></tr>
 					<tr><th>Attempts</th><td>{{ run.attempts }}</td></tr>
 					<tr><th>External id</th><td>{{ run.external_id|default:"-" }}</td></tr>
 					<tr><th>Artifact</th><td>{% if run.artifact_link %}<a href="{{ run.artifact_link }}" target="_blank" rel="noopener noreferrer">{{ run.artifact_link }}</a>{% else %}-{% endif %}</td></tr>

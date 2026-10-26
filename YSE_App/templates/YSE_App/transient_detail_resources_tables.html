@@ -4,7 +4,7 @@
         <thead>
             <tr>
                 <th>Telescope (Classical)</th>
-                <th>Next Obs. Night</th>
+                <th>Next Obs. Night (UTC)</th>
                 <th>Rise Time (UT)</th>
                 <th>Set Time (UT)</th>
                 <th>Moon Angle</th>
@@ -15,7 +15,7 @@
             {% for obsnight in observing_nights %}
                 <tr>
                     <td>{{ obsnight.resource.telescope }}</td>
-                    <td>{{ obsnight.obs_date }}</td>
+                    <td>{{ obsnight.obs_date|utcdate }}</td>
                     <td id="rise_time_{{ obsnight.id }}"></td>
                     <td id="set_time_{{ obsnight.id }}"></td>
                     <td id="moon_angle_{{ obsnight.id }}"></td>

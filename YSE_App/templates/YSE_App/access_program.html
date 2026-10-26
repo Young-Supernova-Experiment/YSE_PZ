@@ -3,7 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>Data access: {{ allocation.name }}</h1>
-	<p class="text-muted small mb-0"><a href="{% url 'access_dashboard' %}">Dashboard</a> &middot; {{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|date:"Y-m-d" }} to {{ allocation.end_date|date:"Y-m-d" }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
+	<p class="text-muted small mb-0"><a href="{% url 'access_dashboard' %}">Dashboard</a> &middot; {{ allocation.telescope.name }}{% if allocation.proposal_id %}, {{ allocation.proposal_id }}{% endif %}; {{ allocation.start_date|utcdate }} to {{ allocation.end_date|utcdate }}. Linked data: {{ linked_photometry }} photometry set{{ linked_photometry|pluralize }}, {{ linked_spectra }} spectr{{ linked_spectra|pluralize:"um,a" }}. <a href="{% url 'access_programs' %}">All programs</a></p>
 </section>
 
 <section class="content">
@@ -30,7 +30,7 @@
 						{% if classical_nights %}
 						<label class="sr-only" for="yse-grant-classical">Classical night</label>
 						<select name="classical_night" id="yse-grant-classical" class="form-control form-control-sm mr-1">
-							{% for n in classical_nights %}<option value="{{ n.id }}">{{ n.night|date:"Y-m-d" }}</option>{% endfor %}
+							{% for n in classical_nights %}<option value="{{ n.id }}">{{ n.night|utcdate }}</option>{% endfor %}
 						</select>
 						{% endif %}
 						<label class="sr-only" for="yse-grant-night">Night</label>
@@ -54,10 +54,10 @@
 							<tr data-grant-id="{{ g.id }}" class="{% if g.stopped_at %}text-muted{% endif %}">
 								<td>{{ g.get_effect_display }}</td>
 								<td>{% if g.grantee_group %}group {{ g.grantee_group.name }}{% else %}{{ g.grantee_user.username }}{% endif %}</td>
-								<td>{% if g.night_start %}night of {{ g.night_start|date:"Y-m-d H:i" }} UTC{% else %}all of the program's data{% endif %}</td>
+								<td>{% if g.night_start %}night of {{ g.night_start|utcdate }} UTC{% else %}all of the program's data{% endif %}</td>
 								<td><small>{{ g.created_by.username|default:"-" }} ({{ g.get_created_as_display }})</small></td>
-								<td><small>{{ g.created_at|date:"Y-m-d" }}</small></td>
-								<td><small>{% if g.stopped_at %}{{ g.stopped_at|date:"Y-m-d" }}{% else %}-{% endif %}</small></td>
+								<td><small>{{ g.created_at|utcdate }}</small></td>
+								<td><small>{% if g.stopped_at %}{{ g.stopped_at|utcdate }}{% else %}-{% endif %}</small></td>
 								<td>
 									{% if not g.stopped_at %}
 									<form method="post" class="form-inline">
@@ -91,7 +91,7 @@
 							<tr data-deputy-id="{{ d.id }}">
 								<td>{{ d.user.username }}</td>
 								<td><small>{{ d.note|default:"-" }}</small></td>
-								<td><small>{{ d.created_at|date:"Y-m-d" }}</small></td>
+								<td><small>{{ d.created_at|utcdate }}</small></td>
 								<td>
 									<form method="post" class="d-inline">
 										{% csrf_token %}

@@ -62,7 +62,9 @@ class TransientFollowup(Followup):
 		return "Transient Followup: [%s]; Valid: %s to %s" % (self.transient.name, self.valid_start.strftime('%m/%d/%Y'), self.valid_stop.strftime('%m/%d/%Y'))
 
 	def observation_window(self):
-		return "%s - %s" % (self.valid_start.strftime('%m/%d/%Y'), self.valid_stop.strftime('%m/%d/%Y'))		
+		from YSE_App.common.utc_dates import utc_day
+
+		return "%s - %s" % (utc_day(self.valid_start), utc_day(self.valid_stop))
 
 class TransientFollowupRequest(BaseModel):
 	"""One observing-request submit attached to a parent TransientFollowup.

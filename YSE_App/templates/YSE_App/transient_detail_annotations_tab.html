@@ -38,7 +38,7 @@
 								<pre class="small mb-0" style="max-height: 14rem; overflow: auto; white-space: pre-wrap; color: inherit; background: transparent;">{{ row.json }}</pre>
 							</details>
 						</td>
-						<td class="small">{% if row.a %}{{ row.a.modified_date|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">from the transient row</span>{% endif %}</td>
+						<td class="small">{% if row.a %}{{ row.a.modified_date|utcdate }}{% else %}<span class="text-muted">from the transient row</span>{% endif %}</td>
 						<td class="small">{{ row.by|default:"-" }}</td>
 						<td class="text-nowrap">
 							{% if row.can_rerun %}<button type="button" class="btn btn-xs btn-sm btn-outline-primary" data-annotation-action="run" data-service="{{ row.service.slug }}" title="Run {{ row.service.name }} again"><i class="fa fa-refresh"></i> Rerun</button>{% endif %}
@@ -61,7 +61,7 @@
 						{% for e in annotation_services %}
 						<li class="mb-2 annotation-service" data-service="{{ e.slug }}" data-status="{% if e.run %}{{ e.run.status }}{% else %}none{% endif %}">
 							<strong>{{ e.name }}</strong>
-							{% if e.active %}<i class="fa fa-spinner fa-spin text-muted" title="running"></i>{% elif e.run and e.run.status == 'failed' %}<span class="badge badge-danger" title="{{ e.run.error }}">failed</span>{% elif e.run %}<span class="badge badge-light">{{ e.run.finished_at|date:"Y-m-d H:i" }}</span>{% endif %}
+							{% if e.active %}<i class="fa fa-spinner fa-spin text-muted" title="running"></i>{% elif e.run and e.run.status == 'failed' %}<span class="badge badge-danger" title="{{ e.run.error }}">failed</span>{% elif e.run %}<span class="badge badge-light">{{ e.run.finished_at|utcdate }}</span>{% endif %}
 							<br><small class="text-muted">{{ e.description }}</small>
 							{% if e.can_run %}<br><button type="button" class="btn btn-xs btn-sm btn-primary mt-1" data-annotation-action="run" data-service="{{ e.slug }}"{% if e.active %} disabled{% endif %}><i class="fa fa-play"></i> {% if e.run %}Rerun{% else %}Check{% endif %}</button>{% endif %}
 						</li>

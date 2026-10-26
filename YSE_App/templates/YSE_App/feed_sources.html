@@ -52,7 +52,7 @@
 								{% if r.source.has_credential %}<i class="fa fa-key text-muted ml-1" title="credential attached"></i>{% endif %}
 								{% if r.can_consume %}<i class="fa fa-bolt text-muted ml-1" title="stream consumer available"></i>{% endif %}
 							</td>
-							<td>{% if r.source.last_polled %}{{ r.source.last_polled|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">never</span>{% endif %}</td>
+							<td>{% if r.source.last_polled %}{{ r.source.last_polled|utcdate }}{% else %}<span class="text-muted">never</span>{% endif %}</td>
 							<td>
 								{% if r.source.last_error %}<span class="text-danger" title="{{ r.source.last_error }}">{{ r.source.last_error|truncatechars:90 }}</span>
 								{% else %}{{ r.source.last_summary|default:"-" }}{% endif %}
@@ -118,7 +118,7 @@
 							<td>{{ j.pk }}</td>
 							<td><code>{{ j.kind }}</code>{% if j.transient %} <a href="{% url 'transient_detail' j.transient.slug %}">{{ j.transient.name }}</a>{% endif %}</td>
 							<td><span class="badge badge-{% if j.status == 'succeeded' %}success{% elif j.status == 'failed' %}danger{% elif j.status == 'running' %}info{% else %}warning{% endif %}">{{ j.status }}</span></td>
-							<td>{{ j.created_at|date:"Y-m-d H:i" }}</td>
+							<td>{{ j.created_at|utcdate }}</td>
 							<td><small>{% if j.error %}<span class="text-danger">{{ j.error|truncatechars:100 }}</span>{% elif j.result.summary %}{{ j.result.summary }}{% elif j.result %}{{ j.result|truncatechars:100 }}{% else %}-{% endif %}</small></td>
 						</tr>
 						{% empty %}

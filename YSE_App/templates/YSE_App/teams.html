@@ -76,7 +76,7 @@
 				{% for req in my_requests %}
 				<tr>
 					<td>{{ req.group.name }}</td>
-					<td>{{ req.created_at|date:"Y-m-d" }}</td>
+					<td>{{ req.created_at|utcdate }}</td>
 					<td>{{ req.status }}</td>
 					<td>{% if req.is_pending %}<form method="post" action="{% url 'team_request_cancel' req.pk %}">{% csrf_token %}<button type="submit" class="btn btn-xs btn-outline-secondary">Withdraw</button></form>{% endif %}</td>
 				</tr>

@@ -9,7 +9,7 @@
 <!-- Content Header (Page header) -->
     <section class="content-header">
       <h1>
-        {{ telescope }} Observing Night, {{ obs_date }}
+        {{ telescope }} Observing Night, {{ obs_date|utcdate|default:obs_date }}
         {% if planner_enabled %}
         <a class="btn btn-primary btn-sm" id="plan-night-btn" style="margin-left: 12px; vertical-align: middle;"
            href="{% url 'night_planner' classical_obs_date.pk %}">Plan this night</a>

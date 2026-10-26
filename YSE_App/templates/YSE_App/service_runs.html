@@ -49,8 +49,8 @@
 							<td>{% if run.transient %}<a href="{% url 'transient_detail' run.transient.slug %}">{{ run.transient.name }}</a>{% else %}{{ run.target_display }}{% endif %}</td>
 							<td><span class="badge badge-{% if run.status == 'succeeded' %}success{% elif run.status == 'failed' %}danger{% elif run.status == 'running' %}info{% elif run.status == 'cancelled' %}secondary{% else %}warning{% endif %}">{{ run.get_status_display }}</span></td>
 							<td>{{ run.created_by.username }}</td>
-							<td>{{ run.created_date|date:"Y-m-d H:i" }}</td>
-							<td>{% if run.finished_at %}{{ run.finished_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+							<td>{{ run.created_date|utcdate }}</td>
+							<td>{% if run.finished_at %}{{ run.finished_at|utcdate }}{% else %}-{% endif %}</td>
 						</tr>
 						{% empty %}
 						<tr><td colspan="7" class="text-muted">No runs recorded{% if selected_service or selected_status %} for this filter{% endif %}.</td></tr>

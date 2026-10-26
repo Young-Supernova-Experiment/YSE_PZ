@@ -16,7 +16,7 @@
     <tbody>
         {% for spec in all_transient_spectra %}
         <tr>
-            <td>{{ spec.obs_date }}</td>
+            <td>{{ spec.obs_date|utcdate }}</td>
             <td>{{ spec.instrument.name }}</td>
             <td>{{ spec.instrument.telescope.name }}</td>
             <td>{{ spec.redshift|default:"—" }}</td>

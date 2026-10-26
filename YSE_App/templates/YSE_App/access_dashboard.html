@@ -30,7 +30,7 @@
 								<td>{{ g.allocation.name }}</td>
 								<td>{{ g.get_effect_display }}</td>
 								<td>{% if g.grantee_group %}group {{ g.grantee_group.name }}{% else %}{{ g.grantee_user.username }}{% endif %}</td>
-								<td>{% if g.night_start %}night of {{ g.night_start|date:"Y-m-d H:i" }} UTC{% else %}all of the program's data{% endif %}</td>
+								<td>{% if g.night_start %}night of {{ g.night_start|utcdate }} UTC{% else %}all of the program's data{% endif %}</td>
 								<td>
 									<form method="post" class="form-inline">
 										{% csrf_token %}
@@ -94,7 +94,7 @@
 						{% for row in datasets %}
 							<tr data-kind="{{ row.kind }}" data-dataset-id="{{ row.dataset.id }}">
 								<td><a href="{% url 'access_transient_rules' row.transient.id %}">{{ row.transient.name }}</a></td>
-								<td><small>{{ row.kind }}: {{ row.dataset.instrument.name }}{% if row.kind == 'spectrum' %}, {{ row.dataset.obs_date|date:"Y-m-d" }}{% endif %}</small></td>
+								<td><small>{{ row.kind }}: {{ row.dataset.instrument.name }}{% if row.kind == 'spectrum' %}, {{ row.dataset.obs_date|utcdate }}{% endif %}</small></td>
 								<td>
 									{% for g in row.groups %}
 									<form method="post" class="form-inline mb-1">

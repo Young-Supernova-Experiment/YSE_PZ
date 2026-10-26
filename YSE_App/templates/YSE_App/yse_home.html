@@ -95,7 +95,7 @@
               {% for n in upcoming_observing_nights %}
                 <tr>
                     <td>{{ n.resource.telescope }}</td>
-                    <td data-order="{{ n.obs_date|date:'c' }}"><a href="{% if n.resource.principal_investigator %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' n.resource.principal_investigator.name %}{% else %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' 'None' %}{% endif %}">{{ n.obs_date|date:'Y-m-d' }}</a></td>
+                    <td data-order="{{ n.obs_date|date:'c' }}"><a href="{% if n.resource.principal_investigator %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' n.resource.principal_investigator.name %}{% else %}{% url 'observing_night' n.resource.telescope|replace_space n.obs_date|date:'Y-m-d' 'None' %}{% endif %}">{{ n.obs_date|utcdate }}</a></td>
                     <td>{{ n.resource.principal_investigator|default:'' }}</td>
                 </tr>
               {% endfor %}
@@ -128,7 +128,7 @@
               {% for t in too_resources %}
                 <tr>
                     <td>{{ t.telescope }}</td>
-                    <td data-order="{{ t.begin_date_valid|date:'c' }}">{{ t.begin_date_valid|date:'Y-m-d' }} to {{ t.end_date_valid|date:'Y-m-d' }}</td>
+                    <td data-order="{{ t.begin_date_valid|date:'c' }}">{{ t.begin_date_valid|utcdate }} to {{ t.end_date_valid|utcdate }}</td>
                     <td>{% if t.remaining_hours is not None %}{{ t.remaining_hours }} of {{ t.awarded_too_hours }}{% endif %}</td>
                     <td>{{ t.principal_investigator|default:'' }}</td>
                 </tr>

@@ -60,8 +60,8 @@
 							<td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank" rel="noopener noreferrer">{{ r.external_id|truncatechars:30 }}</a>{% else %}{{ r.external_id|default:"-"|truncatechars:30 }}{% endif %}
 								{% if r.run and user.is_staff %}<br><a href="{% url 'external_service_run_detail' r.run.uuid %}"><small>run {{ r.run.uuid|slice:":8" }}</small></a>{% endif %}</td>
 							<td>{{ r.submitted_by.username }}</td>
-							<td>{{ r.submitted_at|date:"Y-m-d H:i"|default:"-" }}</td>
-							<td>{{ r.last_polled|date:"Y-m-d H:i"|default:"-" }}</td>
+							<td>{{ r.submitted_at|utcdate|default:"-" }}</td>
+							<td>{{ r.last_polled|utcdate|default:"-" }}</td>
 							<td>{{ r.hours_charged|floatformat:2 }}{% if r.charged_at %} <i class="fa fa-check text-success" title="charged"></i>{% endif %}</td>
 						</tr>
 						{% endwith %}
