@@ -317,15 +317,17 @@ class TransientPageAssetsTests(TestCase):
         for parent in (self.legacy_followup, self.shared_parent):
             self.assertNotIn(f"Follow-up (id: {parent.id})", html)
         self.assertNotIn("/admin/YSE_App/transientfollowup/", html)
+        self.client.force_login(self.staff)
+        html = self._detail_html(defer=False)
+        self.assertIn(
+            reverse("transient_detail_followup_fragment", args=[self.transient.id]), html
+        )
 
     def test_followup_fragment_empty_state(self):
         self.client.force_login(self.user)
         url = reverse("transient_detail_followup_fragment", args=[self.empty_transient.id])
         html = self.client.get(url).content.decode("utf-8", errors="replace")
         self.assertIn("No follow-up has been requested for this transient yet", html)
-        self.assertIn(
-            reverse("transient_detail_followup_fragment", args=[self.transient.id]), html
-        )
 
     @override_settings(TEMPLATES=_strict_templates())
     def test_followup_fragments_reference_no_missing_variables(self):
