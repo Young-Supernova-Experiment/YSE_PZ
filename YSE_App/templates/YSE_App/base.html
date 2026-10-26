@@ -120,7 +120,7 @@
 					<li class="nav-item">
 						<a href="{% url 'personaldashboard' %}" class="nav-link{% if url_name == 'personaldashboard' %} active{% endif %}">
 							<i class="nav-icon fa fa-id-card"></i>
-							<p>{{ user.first_name }}'s Dashboard</p>
+							<p>{% if user.first_name %}{{ user.first_name }}'s Dashboard{% else %}My dashboard{% endif %}</p>
 						</a>
 					</li>
 					<li class="nav-item">

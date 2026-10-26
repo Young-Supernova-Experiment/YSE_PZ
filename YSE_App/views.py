@@ -706,8 +706,8 @@ def transient_summary(request,status_or_query_name,
     }
     if transient_followup_form.fields["valid_start"].initial:
         context['followup_initial_dates'] = \
-            (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-             transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))
+            (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+             transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'))
     
     if extra_context is not None:
         context.update(extra_context)
@@ -1593,8 +1593,8 @@ def _transient_followup_form_context(request, transient_obj):
     ctx.update(facility_panel_context(request.user, transient_obj))
     if transient_followup_form.fields["valid_start"].initial:
         ctx['followup_initial_dates'] = (
-            transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-            transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'),
+            transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+            transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'),
         )
     return ctx
 
@@ -1970,8 +1970,8 @@ def transient_detail(request, slug):
 
         if not defer_detail and transient_followup_form.fields["valid_start"].initial:
             context['followup_initial_dates'] = \
-                (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-                 transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))           
+                (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+                 transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'))           
         
         # Stored photometry statistics (#268): peak, detections, rise/decay.
         # A transient the backfill has not reached yet gets its row computed
