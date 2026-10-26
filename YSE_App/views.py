@@ -824,11 +824,6 @@ def get_transient_tags(request):
 
     return JsonResponse(return_data)
 
-@login_required
-def dashboard_example(request):
-    return render(request, 'YSE_App/dashboard_example.html')
-
-
 @register.filter
 def get_item(dictionary, key):
     return dictionary.get(key)
