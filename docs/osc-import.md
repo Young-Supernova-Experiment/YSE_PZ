@@ -29,46 +29,76 @@ the YSE fields from them.
 Any field the importer does not know goes into an `extra` JSON column next to where it was
 found, so nothing in an entry is dropped.
 
-## Rules
+## Rules (Ryan, 2026-10-27)
 
-- **Which transient.** The one the entry was imported to before; else a transient whose name is
-  the entry name or an alias (`SN2011fe` also matches `2011fe`), or has one as an alternate name;
-  else one within `--match-radius` (2 arcsec); else a new transient named like TNS (`SN2011fe`
-  becomes `2011fe`, `ASASSN-13av` stays), with status `--status` (default `Ignore`, as the TNS
-  import uses for old objects) and observation group `OSC`. An entry with no match and no position
-  is reported and skipped.
-- **Existing transients.** Only empty fields are filled (discovery date only at day precision;
-  classification only when it matches a `TransientClass` name, `Ia` -> `SN Ia`). The redshift
-  follows the redshift precedence list (docs/redshift-precedence.md) with source `OSC`, which ranks
-  as another catalogue: it replaces a blank-source or TNS value, never NED, DESI, our own or an
-  override. Redshift, classification and host-link changes are in the change log (service
-  `osc-import`).
-- **Peak.** The visual-band peak (`maxvisual*`) when the OSC has one; `maxabsmag` is the brightest
-  point in any band, often UV.
-- **Photometry.** A magnitude and its error go to `mag` / `mag_err`. Upper limits keep their
-  magnitude but no `mag_err` (the light curve counts magnitude plus error as a detection; the
-  error is kept in the info row). Optical flux densities or count rates with a zero point fill
-  `flux` / `flux_err` / `flux_zero_point`, so the light curve draws those limits. X-ray, radio and
-  luminosity points have no magnitude: their values are in the info row and their band is named
-  by energy or frequency (`0.5-8 keV`, `8.5 GHz`). `[start, stop]` times use the midpoint.
-  `includeshost` sets the NOT_DIFFERENCED quality bit.
-- **Spectra.** `deredshifted`, `dereddened`, `Uncalibrated` fluxes and `includeshost` set the
-  matching quality bits; `vacuumwavelengths` sets the wavelength medium. A spectrum with no time
-  gets the discovery (else peak) date, flagged `time_missing`. Non-numeric pixels are dropped.
-- **Instruments.** Matched to a YSE instrument by name (case-insensitive, on the named telescope
-  if that helps); otherwise the `Unknown` instrument, with the band created there by name. The
-  OSC's telescope and instrument strings are in the info rows.
-- **Access.** OSC data are published: photometry sets and spectra get the Public group and the
-  `OSC` observation group. The new tables are not yet in the SQL Explorer row rules, so Explorer
-  shows them to staff only.
-- **Re-import.** Importing an entry again deletes what its last import wrote (photometry sets,
-  spectra, quantities, model fits) and writes it anew. Transient fields filled earlier stay.
-- **Historical import.** No automatic TNS publishing, minor-planet screen or annotation runs for
-  transients created by the import; spectra are saved without the new-observation signals
-  (favourite notices, follow-up success, program links); photometry statistics are recomputed
-  once per transient.
-- Dates before year 1000 (SN 185, SN 386) cannot be stored in MySQL `DATETIME`; they stay in the
-  quantities only.
+TNS is the authority for names, coordinates and spectroscopic classifications, unless a value was
+changed by hand. An entry is imported in steps:
+
+1. **Find the YSE_PZ transient**: the one the entry was imported to before; else one whose name
+   is the entry name, an alias or its TNS-style form (`SN2011fe` -> `2011fe`), or that carries one
+   as an alternate name; else one within `--match-radius` (2 arcsec).
+2. **It exists**: its coordinates, classification, redshift, host and other fields do not change.
+   Only data are added (and the OSC names as alternate names, for tracking).
+3. **No duplicates** (`catalog_import/matching.py`, #888). Each OSC point is compared with the
+   transient's points by origin: the same filter (`r'` = `r`, `W1` = `UVW1`), times within
+   `--phot-tolerance` (0.02 d) and the same instrument. Spectra: times within `--spec-tolerance`
+   (0.5 d), the same instrument, and wavelength ranges overlapping by half the shorter one. Values
+   may differ (another reduction). When the OSC gives no instrument YSE knows, the match is
+   *weak*, and a weak photometry match also needs magnitudes within 0.5 mag. Then:
+   - match, OSC source not refereed: YSE_PZ's copy is kept, the OSC copy is not imported (it is kept
+     in the `CatalogDataMatch` row);
+   - match, OSC source refereed (the bibcode's journal is a refereed one, `CatalogSource.refereed`):
+     the OSC copy is imported and YSE_PZ's copy is flagged REJECTED, so it is drawn as flagged and
+     left out of statistics and fits. `--revert` or a re-import restores it;
+   - weak match from a refereed paper: both kept, marked `review`.
+4. **No transient**: a new one with name, position, discovery date, class, redshift, MW E(B-V) and
+   peak from the OSC; status `--status` (default `Ignore`), observation group `OSC`.
+5. **TNS check** (#889) of each new transient, by `manage.py osc_tns_check` or the `osc.tns_check`
+   job queued after an `--apply` run. It looks the object up by its IAU-style names, then for
+   discoveries from 2013 on by a 3-arcsec cone search (a single hit only). If found, the transient
+   takes the TNS name (the old name becomes an alternate; if another transient already has it,
+   nothing changes and the entry is marked `conflict`), the TNS position and `TNS_spec_class`, and
+   the TNS class as `best_spec_class`. Each field changes only while it still has the value the
+   import gave it. Requests are throttled to one per `OSC_TNS_REQUEST_INTERVAL_SECONDS` (10 s);
+   rate limits re-queue the job. `CatalogEntry.tns_status` records the outcome.
+
+**Host** (#893). The distance comes from the OSC luminosity distance, else cz/H0 (H0 = 70):
+- beyond 20 Mpc the OSC host is never linked; Prost/Blast decide (a Prost match is queued for new
+  transients when `PROST_HOST_MATCH_ENABLED`);
+- at 20 Mpc or closer a new transient gets the OSC host (an existing host within 3 arcsec, else a
+  new one); for an existing transient a host more than 10 arcsec from the OSC's (or with another
+  name) is flagged `discrepant` in `CatalogEntry.host_check`, never changed.
+
+**Instruments** (#894). `catalog_import/osc_instruments.json` maps OSC telescope/instrument strings
+(`p48`, `PTF48`, `1m0-08`, `Lick 3m - KAST`, ...) to YSE telescopes and instruments, with date
+ranges where one string means different cameras (P48: CFH12k before MJD 58194, ZTF-Cam after).
+`manage.py catalog_instruments --load --apply --user <USERNAME>` creates what is missing (new
+telescopes get latitude, longitude and elevation 0, as the TNS import does; fill them in by hand
+where they matter) and the alias rows; `--census <OSC_DIR>` lists the strings in the catalogue by
+frequency with what each resolves to, to extend the file. Unmapped strings go to `Unknown`.
+
+**Other rules.**
+- Peak: the visual-band peak (`maxvisual*`) when there is one.
+- Photometry: limits keep their magnitude but no `mag_err` (kept in the info row); optical flux
+  densities or count rates with a zero point fill `flux` / `flux_err` / `flux_zero_point`; X-ray,
+  radio and luminosity values are in the info row with bands named by energy or frequency;
+  `includeshost` sets NOT_DIFFERENCED.
+- Spectra are stored as arrays (`TransientSpectrumArrays`, #492), not one row per pixel.
+  `deredshifted`, `dereddened`, `Uncalibrated` fluxes and `includeshost` set quality bits; a
+  spectrum with no time gets the discovery (else peak) date, flagged `time_missing`.
+- Models (#892): one `CatalogModelFit` per fit with its outputs (per-parameter median and
+  16th/84th percentiles, and the model light curve as median and 1-sigma range per band and time).
+  The realizations (MCMC chains) are not stored.
+- Access: OSC data are published (Public group, `OSC` observation group).
+- Historical import: no automatic TNS publishing, minor-planet screen or annotation runs; no
+  new-observation signals for spectra; photometry statistics recomputed once per transient.
+- Dates before year 1000 stay in the quantities only (MySQL `DATETIME`).
+
+**Failures** (#895). With `--apply`, each entry's last download, parse and ingest outcome is in
+`CatalogImportAttempt` (stage, status, attempts, error). Downloads are retried with backoff
+(honouring `Retry-After`); each entry is one transaction, and a failed entry does not stop the run.
+`--retry-failed` runs every failed entry again (re-downloading if needed); the run ends with the
+failures by stage.
 
 ## Running it
 
@@ -102,13 +132,23 @@ python3 manage.py import_osc <OSC_DIR>/sne-* --quiet --report osc-dry-run.jsonl
 python3 manage.py import_osc <OSC_DIR>/sne-* --apply --user <USERNAME> --quiet --report osc-import.jsonl
 ```
 
-Each entry is one transaction; a failed entry is reported (and in `--report`) and the run goes on.
-Other options: `--limit N`, `--no-spectra`, `--no-models`, `--match-radius`, `--status`.
+Then:
+
+```bash
+python3 manage.py import_osc --retry-failed --apply --user <USERNAME>   # until nothing fails
+python3 manage.py osc_tns_check --max 20                                  # dry run (queries TNS)
+python3 manage.py osc_tns_check --queue                                   # or let the job runner do it
+python3 manage.py import_osc --revert SN2011fe --apply                    # undo one entry
+```
+
+Other options: `--limit N`, `--no-spectra`, `--no-models`, `--no-tns`, `--match-radius`,
+`--phot-tolerance`, `--spec-tolerance`, `--status`. Run `catalog_instruments --load --apply` before
+the first import so instruments resolve.
 
 ## Size
 
-From a sample of the catalogue: SN 2011fe alone has 3,483 photometry points, 158 spectra and
-380,000 spectrum pixels; SN 2013dy has 2.9 million pixels; SN 2017egm has 3 MOSFiT fits with 300
-realizations and 49,923 model points. Spectrum pixels (one `TransientSpecData` row each) are by far
-the largest part of a full import: expect on the order of 10^8 rows. Plan disk space and run the
-full import off-peak; `--no-spectra` imports everything else first.
+From a sample of the catalogue: SN 2011fe has 3,483 photometry points and 158 spectra
+(380,000 pixels); SN 2013dy has 2.9 million pixels; SN 2017egm has 3 MOSFiT fits whose 300
+realizations and 49,923 model points become 4,858 summary points. Stored as arrays, a spectrum
+is one row, so the full import adds tens of thousands of spectrum rows rather than about 10^8
+pixel rows.

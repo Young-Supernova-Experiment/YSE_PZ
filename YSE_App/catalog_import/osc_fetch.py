@@ -19,8 +19,11 @@ asked for.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
@@ -36,6 +39,10 @@ TREE_URL = 'https://api.github.com/repos/{org}/{repo}/git/trees/{branch}'
 RAW_URL = 'https://raw.githubusercontent.com/{org}/{repo}/{branch}/{path}'
 USER_AGENT = 'YSE_PZ-osc-import'
 TIMEOUT = 120
+RETRIES = 4            # attempts per request after the first
+BACKOFF_SECONDS = 5.0  # doubled after each failure, unless the server says Retry-After
+
+logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r'<[^>]*>')
 
@@ -63,13 +70,38 @@ def entry_key(filename: str) -> str:
     return _HTML_TAG_RE.sub('', base.replace('<_a>', '</a>')).strip()
 
 
-def _get(url: str, token: Optional[str] = None) -> bytes:
+class FetchError(Exception):
+    """A download failed after its retries."""
+
+
+def _get(url: str, token: Optional[str] = None, *, retries: int = RETRIES, sleep=time.sleep) -> bytes:
+    """GET with retries: network errors, 429 and 5xx are retried with backoff (Retry-After if given)."""
     headers = {'User-Agent': USER_AGENT}
     if token:
         headers['Authorization'] = 'token %s' % token
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:  # noqa: S310 (fixed https hosts)
-        return response.read()
+    delay = BACKOFF_SECONDS
+    for attempt in range(retries + 1):
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=TIMEOUT) as response:  # noqa: S310 (fixed https hosts)
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (403, 429) and exc.code < 500:
+                raise FetchError('%s: HTTP %s' % (url, exc.code)) from exc
+            wait = exc.headers.get('Retry-After') if exc.headers else None
+            error = 'HTTP %s' % exc.code
+        except (urllib.error.URLError, OSError) as exc:
+            wait, error = None, str(exc)
+        if attempt == retries:
+            raise FetchError('%s: %s (after %d attempts)' % (url, error, retries + 1))
+        try:
+            pause = float(wait) if wait else delay
+        except ValueError:
+            pause = delay
+        logger.warning('%s: %s; retrying in %.0f s', url, error, pause)
+        sleep(min(pause, 600.0))
+        delay *= 2
+    raise FetchError(url)  # not reached
 
 
 def build_index(repositories: Sequence[str] = DATA_REPOSITORIES, token: Optional[str] = None,
@@ -110,27 +142,34 @@ def lookup(index: Dict[str, Tuple[str, str]], name: str) -> Optional[Tuple[str, 
     return None
 
 
+def download(repo: str, path: str, dest_dir: str, fetch=_get) -> str:
+    """One entry file from GitHub into ``dest_dir/<repo>/`` (kept if already there); its local path."""
+    local = os.path.join(dest_dir, repo, re.sub(r'[^A-Za-z0-9._+-]', '_', os.path.basename(path)))
+    if not os.path.exists(local):
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        url = RAW_URL.format(org=GITHUB_ORG, repo=repo, branch=BRANCH, path=urllib.parse.quote(path))
+        data = fetch(url)
+        with open(local + '.part', 'wb') as handle:
+            handle.write(data)
+        os.replace(local + '.part', local)
+    return local
+
+
 def fetch_entries(names: Iterable[str], dest_dir: str, index: Dict[str, Tuple[str, str]],
-                  fetch=_get) -> Tuple[List[str], List[str]]:
-    """Download the named entries into ``dest_dir``; returns (local paths, names not found)."""
+                  fetch=_get) -> Tuple[List[str], List[str], Dict[str, str]]:
+    """Download the named entries; returns (local paths, names not found, {name: download error})."""
     os.makedirs(dest_dir, exist_ok=True)
-    paths, missing = [], []
+    paths, missing, failed = [], [], {}
     for name in names:
         hit = lookup(index, name)
         if hit is None:
             missing.append(name)
             continue
-        repo, path = hit
-        local = os.path.join(dest_dir, repo, re.sub(r'[^A-Za-z0-9._+-]', '_', os.path.basename(path)))
-        if not os.path.exists(local):
-            os.makedirs(os.path.dirname(local), exist_ok=True)
-            url = RAW_URL.format(org=GITHUB_ORG, repo=repo, branch=BRANCH, path=urllib.parse.quote(path))
-            data = fetch(url)
-            with open(local + '.part', 'wb') as handle:
-                handle.write(data)
-            os.replace(local + '.part', local)
-        paths.append(local)
-    return paths, missing
+        try:
+            paths.append(download(hit[0], hit[1], dest_dir, fetch))
+        except (FetchError, OSError) as exc:
+            failed[name] = '%s/%s: %s' % (hit[0], hit[1], exc)
+    return paths, missing, failed
 
 
 def origin_of(path: str) -> str:

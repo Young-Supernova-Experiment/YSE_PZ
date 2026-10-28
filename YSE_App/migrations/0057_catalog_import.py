@@ -1,4 +1,4 @@
-"""Tables for data imported from external catalogues, first the Open Supernova Catalog.
+"""Tables for data imported from external catalogues, first the Open Supernova Catalog (#887-#889, #892-#895).
 
 New tables only (see YSE_App/models/catalog_models.py): no existing table or column changes,
 so it is safe on the shared database. Nothing is imported by the migration; that is
@@ -47,11 +47,15 @@ def _json(name):
     return (name, YSE_App.models.fields.JSONTextField(blank=True, null=True))
 
 
+TNS_STATUSES = ('pending', 'updated', 'not_found', 'conflict', 'skipped', 'error')
+DECISIONS = ('kept_existing', 'superseded_existing', 'review')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('YSE_App', '0055_mentorship_owner_status'),
+        ('YSE_App', '0056_spectrum_arrays'),
     ]
 
     operations = [
@@ -68,6 +72,7 @@ class Migration(migrations.Migration):
                 _text('acknowledgment'),
                 _bool('secondary'),
                 _bool('private'),
+                _bool('refereed'),
                 _json('extra'),
             ] + _audit('catalogsource'),
         ),
@@ -81,6 +86,14 @@ class Migration(migrations.Migration):
                 _char('origin', 512),
                 _char('origin_version', 64),
                 _json('extra'),
+                ('created_transient', models.BooleanField(default=False)),
+                _json('import_values'),
+                ('tns_status', models.CharField(blank=True, choices=[(s, s) for s in TNS_STATUSES], db_index=True,
+                                                max_length=16, null=True)),
+                _char('tns_name', 64),
+                ('tns_checked', models.DateTimeField(blank=True, null=True)),
+                _text('tns_note'),
+                _json('host_check'),
                 ('transient', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
                                                 related_name='catalog_entries', to='YSE_App.transient')),
             ] + _audit('catalogentry'),
@@ -123,25 +136,14 @@ class Migration(migrations.Migration):
                 _json('convergence'),
                 _json('score'),
                 _json('setup'),
+                ('n_realizations', models.PositiveIntegerField(blank=True, null=True)),
+                _json('parameter_summary'),
+                _json('light_curve'),
                 _json('extra'),
                 ('entry', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
                                             related_name='model_fits', to='YSE_App.catalogentry')),
                 ('sources', models.ManyToManyField(blank=True, related_name='model_fits', to='YSE_App.CatalogSource')),
             ] + _audit('catalogmodelfit'),
-        ),
-        migrations.CreateModel(
-            name='CatalogModelRealization',
-            fields=[
-                _id(),
-                _char('alias', 16),
-                _json('score'),
-                _float('weight'),
-                _json('parameters'),
-                _json('photometry'),
-                _json('extra'),
-                ('model_fit', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
-                                                related_name='realizations', to='YSE_App.catalogmodelfit')),
-            ] + _audit('catalogmodelrealization'),
         ),
         migrations.CreateModel(
             name='TransientCatalogQuantity',
@@ -242,5 +244,66 @@ class Migration(migrations.Migration):
                                                   related_name='catalog_info', to='YSE_App.transientspectrum')),
                 ('sources', models.ManyToManyField(blank=True, related_name='spectra', to='YSE_App.CatalogSource')),
             ] + _audit('transientspectrumcataloginfo'),
+        ),
+        migrations.CreateModel(
+            name='CatalogDataMatch',
+            fields=[
+                _id(),
+                ('decision', models.CharField(choices=[(d, d) for d in DECISIONS], max_length=24)),
+                ('weak', models.BooleanField(default=False)),
+                _float('time_difference'),
+                ('previous_quality_mask', models.PositiveBigIntegerField(blank=True, null=True)),
+                _json('catalog_record'),
+                ('created_date', models.DateTimeField(auto_now_add=True)),
+                ('catalog_phot_data', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE,
+                                                        related_name='+', to='YSE_App.transientphotdata')),
+                ('catalog_spectrum', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE,
+                                                       related_name='+', to='YSE_App.transientspectrum')),
+                ('entry', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='matches',
+                                            to='YSE_App.catalogentry')),
+                ('existing_phot_data', models.ForeignKey(blank=True, null=True,
+                                                         on_delete=django.db.models.deletion.CASCADE,
+                                                         related_name='catalog_matches', to='YSE_App.transientphotdata')),
+                ('existing_spectrum', models.ForeignKey(blank=True, null=True,
+                                                        on_delete=django.db.models.deletion.CASCADE,
+                                                        related_name='catalog_matches', to='YSE_App.transientspectrum')),
+            ],
+        ),
+        migrations.CreateModel(
+            name='CatalogImportAttempt',
+            fields=[
+                _id(),
+                ('catalog', models.CharField(max_length=32)),
+                ('entry_key', models.CharField(max_length=128)),
+                _char('origin', 512),
+                ('stage', models.CharField(choices=[('download', 'download'), ('parse', 'parse'), ('ingest', 'ingest')],
+                                           max_length=16)),
+                ('status', models.CharField(choices=[('ok', 'ok'), ('failed', 'failed')], db_index=True, max_length=8)),
+                ('attempts', models.PositiveIntegerField(default=0)),
+                _text('error'),
+                ('first_attempt', models.DateTimeField(auto_now_add=True)),
+                ('last_attempt', models.DateTimeField(auto_now=True)),
+            ],
+        ),
+        migrations.AddConstraint(
+            model_name='catalogimportattempt',
+            constraint=models.UniqueConstraint(fields=('catalog', 'entry_key'), name='yse_catalog_attempt_unique'),
+        ),
+        migrations.CreateModel(
+            name='CatalogInstrumentAlias',
+            fields=[
+                _id(),
+                ('catalog', models.CharField(default='OSC', max_length=32)),
+                ('telescope', models.CharField(blank=True, default='', max_length=128)),
+                ('instrument', models.CharField(blank=True, default='', max_length=128)),
+                _float('mjd_min'),
+                _float('mjd_max'),
+                ('yse_instrument', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
+                                                     related_name='catalog_aliases', to='YSE_App.instrument')),
+            ] + _audit('cataloginstrumentalias'),
+            options={
+                'indexes': [models.Index(fields=['catalog', 'telescope', 'instrument'],
+                                         name='yse_catalog_inst_alias_idx')],
+            },
         ),
     ]

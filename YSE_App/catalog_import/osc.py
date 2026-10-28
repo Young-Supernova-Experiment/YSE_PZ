@@ -45,7 +45,20 @@ QUANTITY_TEXT_FIELDS = ('u_value', 'u_e_value', 'description', 'realization')
 QUANTITY_BOOL_FIELDS = ('derived', 'upperlimit', 'lowerlimit')
 QUANTITY_TEXT_LENGTHS = {'u_value': 64, 'u_e_value': 64, 'realization': 16}
 
-SOURCE_FIELDS = ('name', 'bibcode', 'doi', 'arxivid', 'url', 'reference', 'acknowledgment', 'secondary', 'private')
+SOURCE_FIELDS = ('name', 'bibcode', 'doi', 'arxivid', 'url', 'reference', 'acknowledgment', 'secondary', 'private',
+                 'refereed')
+
+# Journals (ADS bibstems) whose papers are refereed. Anything else (ATel, CBET, IAUC, TNS reports,
+# arXiv, conference abstracts, catalogues, theses, ...) counts as not refereed.
+REFEREED_BIBSTEMS = frozenset('''
+    ApJ ApJL ApJS AJ MNRAS A&A A&AS PASP PASJ PASA Natur NatAs Sci AN AcA ARA&A Ap&SS AstL ARep AZh SvA SvAL
+    RMxAA NewA JCAP PhRvD PhRvL ChJAA RAA JApA BaltA MmSAI ApL Obs JRASC AJS PZ IBVS JAVSO NatPh PNAS
+'''.split())
+
+# Above this distance a Prost/Blast host supersedes the catalogue's (#893).
+HOST_DISTANCE_LIMIT_MPC = 20.0
+SPEED_OF_LIGHT_KMS = 299792.458
+HUBBLE_CONSTANT = 70.0
 
 # Photometry fields that go to TransientPhotDataCatalogInfo columns of the same name.
 PHOT_INFO_FLOAT_FIELDS = (
@@ -97,7 +110,8 @@ SPEC_INFO_FIELDS = (SPEC_INFO_FLOAT_FIELDS + SPEC_INFO_TEXT_FIELDS + SPEC_INFO_B
 MODEL_FIELDS = ('alias', 'code', 'name', 'version', 'date', 'description', 'steps')
 MODEL_TEXT_LENGTHS = {'alias': 16, 'code': 128, 'name': 256, 'version': 64, 'date': 32, 'steps': 32}
 MODEL_JSON_FIELDS = ('convergence', 'score', 'setup')
-REALIZATION_FIELDS = ('alias', 'score', 'weight', 'parameters')
+# Outputs the parser computes (no chains): see _parse_model and _finish_model.
+MODEL_OUTPUT_FIELDS = ('n_realizations', 'parameter_summary', 'light_curve')
 
 # Wavelength units -> factor to Angstrom.
 WAVELENGTH_TO_ANGSTROM = {
@@ -167,6 +181,13 @@ def to_text(value, max_length: Optional[int] = None) -> Optional[str]:
     if max_length and len(text) > max_length:
         text = text[:max_length]
     return text
+
+
+def is_refereed(bibcode: Optional[str]) -> Optional[bool]:
+    """From the journal of an ADS bibcode (``2011ApJ...737..103S`` -> ApJ); None without a bibcode."""
+    if not bibcode or len(bibcode) < 9:
+        return None
+    return bibcode[4:9].strip('.') in REFEREED_BIBSTEMS
 
 
 def clean_name(value) -> Optional[str]:
@@ -289,6 +310,7 @@ def _parse_source(raw: dict) -> dict:
     out['reference'] = to_text(raw.get('reference'), 512)
     out['url'] = to_text(raw.get('url'), 1024)
     out['bibcode'] = to_text(raw.get('bibcode'), 32)
+    out['refereed'] = is_refereed(out['bibcode'])
     out['doi'] = to_text(raw.get('doi'), 255)
     out['arxivid'] = to_text(raw.get('arxivid'), 64)
     extra = {k: v for k, v in raw.items() if k not in SOURCE_FIELDS and k != 'alias'}
@@ -505,27 +527,76 @@ def _parse_spectrum(raw: dict, index: int, fallback_mjd: Optional[float], warnin
     }
 
 
+def percentile(sorted_values: List[float], q: float) -> float:
+    """Linear-interpolated percentile (0-100) of an already sorted, non-empty list."""
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos = (len(sorted_values) - 1) * q / 100.0
+    lo = int(math.floor(pos))
+    hi = min(lo + 1, len(sorted_values) - 1)
+    return sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * (pos - lo)
+
+
+def _summary(values: List[float]) -> dict:
+    values = sorted(values)
+    return {'median': percentile(values, 50), 'p16': percentile(values, 16), 'p84': percentile(values, 84),
+            'n': len(values)}
+
+
 def _parse_model(raw: dict) -> dict:
+    """A model fit with its outputs summarised over the realizations; the realizations (chains) are not kept.
+
+    ``parameter_summary``: per parameter, the median and 16th/84th percentiles over realizations
+    (unweighted). The model light curve is added by :func:`_finish_model` from the model photometry.
+    """
     out = {field: to_text(raw.get(field), MODEL_TEXT_LENGTHS.get(field)) for field in MODEL_FIELDS}
     for field in MODEL_JSON_FIELDS:
         out[field] = raw.get(field)
     out['source_aliases'] = source_aliases(raw.get('source'))
-    out['realizations'] = OrderedDict()
-    for real in raw.get('realizations') or []:
-        if not isinstance(real, dict):
-            continue
-        alias = to_text(real.get('alias'), 16) or str(len(out['realizations']) + 1)
-        out['realizations'][alias] = {
-            'alias': alias,
-            'score': real.get('score'),
-            'weight': to_float(real.get('weight')),
-            'parameters': real.get('parameters'),
-            'photometry': [],
-            'extra': {k: v for k, v in real.items() if k not in REALIZATION_FIELDS} or None,
-        }
+    realizations = [r for r in raw.get('realizations') or [] if isinstance(r, dict)]
+    out['n_realizations'] = len(realizations) or None
+    values: Dict[str, List[float]] = OrderedDict()
+    latex: Dict[str, str] = {}
+    for real in realizations:
+        for name, par in (real.get('parameters') or {}).items():
+            value = to_float(par.get('value') if isinstance(par, dict) else par)
+            if value is not None:
+                values.setdefault(name, []).append(value)
+            if isinstance(par, dict) and par.get('latex') and name not in latex:
+                latex[name] = par['latex']
+    out['parameter_summary'] = OrderedDict(
+        (name, dict(_summary(vals), **({'latex': latex[name]} if name in latex else {})))
+        for name, vals in values.items()) or None
+    out['_curves'] = OrderedDict()
     known = set(MODEL_FIELDS + MODEL_JSON_FIELDS) | {'source', 'realizations'}
     out['extra'] = {k: v for k, v in raw.items() if k not in known} or None
     return out
+
+
+def _add_model_point(model: dict, raw: dict) -> bool:
+    """Collect one model photometry row for the light-curve summary; False if it has no magnitude or time."""
+    mjd = _time_fields(raw)[0]
+    mag = to_float(raw.get('magnitude'))
+    if mjd is None or mag is None:
+        return False
+    key = tuple(to_text(raw.get(f)) for f in ('band', 'telescope', 'instrument', 'system'))
+    model['_curves'].setdefault(key, OrderedDict()).setdefault(round(mjd, 4), []).append(mag)
+    return True
+
+
+def _finish_model(model: dict) -> None:
+    """Model light curves: per band (and telescope / instrument / system) and time, the median and
+    16th/84th percentile magnitude over realizations."""
+    curves = []
+    for (band, telescope, instrument, system), by_time in model.pop('_curves').items():
+        times = sorted(by_time)
+        rows = [_summary(by_time[t]) for t in times]
+        curve = {'band': band, 'time': times}
+        curve.update({k: v for k, v in (('telescope', telescope), ('instrument', instrument), ('system', system)) if v})
+        for field in ('median', 'p16', 'p84', 'n'):
+            curve[field] = [r[field] for r in rows]
+        curves.append(curve)
+    model['light_curve'] = curves or None
 
 
 def _best(quantities: List[dict], prefer_kinds: Iterable[Optional[str]] = (), skip_kinds: Iterable[str] = ()) -> Optional[dict]:
@@ -571,6 +642,23 @@ def _transient_fields(name: str, quantities: Dict[str, List[dict]], warnings: Li
     out['redshift'] = z['value_float'] if z else None
     out['redshift_err'] = z['e_value'] if z else None
     out['redshift_kind'] = z['kind'] if z else None
+
+    # Distance for the host rule: the luminosity distance (Mpc), else cz/H0.
+    lumdist = _best(quantities.get('lumdist', []), prefer_kinds=(None, 'host'))
+    if lumdist and lumdist['value_float'] is not None and (lumdist['u_value'] or 'Mpc').lower() == 'mpc':
+        out['distance_mpc'], out['distance_basis'] = lumdist['value_float'], 'lumdist'
+    elif out['redshift'] is not None and out['redshift'] > 0:
+        out['distance_mpc'] = out['redshift'] * SPEED_OF_LIGHT_KMS / HUBBLE_CONSTANT
+        out['distance_basis'] = 'redshift'
+    else:
+        out['distance_mpc'], out['distance_basis'] = None, None
+
+    # IAU-style names (TNS names) among the name and aliases, for the TNS check.
+    iau = []
+    for candidate in [name] + aliases:
+        if _IAU_NAME_RE.match(candidate.strip()) and yse_name(candidate) not in iau:
+            iau.append(yse_name(candidate))
+    out['iau_names'] = iau
 
     ebv = _best(quantities.get('ebv', []))
     out['mw_ebv'] = ebv['value_float'] if ebv else None
@@ -641,15 +729,8 @@ def parse_entry(name: str, entry: dict, origin: Optional[str] = None) -> dict:
             if model is None:
                 warnings.append('photometry cites unknown model %r; kept with the observations' % model_alias)
             else:
-                real_alias = to_text(raw.get('realization'), 16) or '1'
-                realization = model['realizations'].get(real_alias)
-                if realization is None:
-                    realization = model['realizations'][real_alias] = {
-                        'alias': real_alias, 'score': None, 'weight': None, 'parameters': None,
-                        'photometry': [], 'extra': None}
-                realization['photometry'].append(
-                    {k: v for k, v in raw.items() if k not in ('model', 'realization', 'source')})
-                model_points += 1
+                if _add_model_point(model, raw):
+                    model_points += 1
                 continue
         point = _parse_phot_point(raw, warnings)
         if point is None:
@@ -664,6 +745,8 @@ def parse_entry(name: str, entry: dict, origin: Optional[str] = None) -> dict:
                 'source_aliases': point['source_aliases'], 'points': []}
         phot_set['points'].append(point)
 
+    for model in models.values():
+        _finish_model(model)
     fields = _transient_fields(name, quantities, warnings)
     fallback_mjd = None
     for candidate in (fields['disc_date'], fields['abs_mag_peak_date']):
@@ -728,7 +811,8 @@ def plan_counts(plan: dict) -> dict:
         'spectra': len(plan['spectra']),
         'spectrum_pixels': sum(len(s['pixels']) for s in plan['spectra']),
         'model_fits': len(plan['models']),
-        'model_realizations': sum(len(m['realizations']) for m in plan['models']),
+        'model_realizations': sum(m['n_realizations'] or 0 for m in plan['models']),
+        'model_curve_points': sum(len(c['time']) for m in plan['models'] for c in (m['light_curve'] or [])),
         'model_points': plan['model_points'],
         'unmapped_top_level_keys': sorted((plan['extra'] or {}).keys()),
     }
@@ -752,8 +836,9 @@ def describe_plan(plan: dict, max_warnings: int = 10) -> str:
         '  sources: %d   quantities: %d over %d keys' % (c['sources'], c['quantities'], len(c['quantity_keys'])),
         '  photometry: %d points in %d sets %s' % (c['photometry_points'], c['photometry_sets'],
                                                   dict(sorted(c['photometry_by_kind'].items()))),
-        '  spectra: %d (%d pixels)   models: %d fits, %d realizations, %d model points' % (
-            c['spectra'], c['spectrum_pixels'], c['model_fits'], c['model_realizations'], c['model_points']),
+        '  spectra: %d (%d pixels)   models: %d fits over %d realizations; %d model points -> %d summary points' % (
+            c['spectra'], c['spectrum_pixels'], c['model_fits'], c['model_realizations'], c['model_points'],
+            c['model_curve_points']),
     ]
     if c['unmapped_top_level_keys']:
         lines.append('  unmapped top-level keys (kept in CatalogEntry.extra): %s' % ', '.join(c['unmapped_top_level_keys']))

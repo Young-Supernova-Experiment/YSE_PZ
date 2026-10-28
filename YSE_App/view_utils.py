@@ -368,7 +368,7 @@ def _transient_phot_cache_token(transient_id):
 
 
 def _transient_spectrum_cache_token(transient_id):
-    from django.db.models import Count, Max
+    from django.db.models import Count, Max, Sum
 
     spec_agg = TransientSpectrum.objects.filter(
         transient_id=transient_id,
@@ -376,9 +376,15 @@ def _transient_spectrum_cache_token(transient_id):
     data_agg = TransientSpecData.objects.filter(
         spectrum__transient_id=transient_id,
     ).aggregate(latest=Max('modified_date'), n=Count('id'))
+    # Spectra stored as arrays (#891): writing, replacing or deleting an arrays row changes the token too.
+    arr_agg = TransientSpectrumArrays.objects.filter(
+        spectrum__transient_id=transient_id,
+    ).aggregate(latest=Max('modified_date'), n=Count('spectrum_id'), px=Sum('n_pixels'))
     spec_latest = spec_agg['latest'].isoformat() if spec_agg['latest'] else 'none'
     data_latest = data_agg['latest'].isoformat() if data_agg['latest'] else 'none'
-    return f"s{spec_agg['n']}:{spec_latest}:d{data_agg['n']}:{data_latest}"
+    arr_latest = arr_agg['latest'].isoformat() if arr_agg['latest'] else 'none'
+    return (f"s{spec_agg['n']}:{spec_latest}:d{data_agg['n']}:{data_latest}"
+            f":a{arr_agg['n']}:{arr_agg['px'] or 0}:{arr_latest}")
 
 
 def _cached_plot_http_response(cache_key, html):
@@ -2046,33 +2052,20 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
 
 
 def _spec_points_by_spectrum(spectrum_ids):
-    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra, in one query.
+    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra.
 
-    Spectra are stored one TransientSpecData row per pixel, so building a model
-    instance per pixel dominated plot time for long spectra (#479). This reads
-    plain ``(spectrum_id, wavelength, flux)`` tuples, in the same (pk) order as
-    the old ``transientspecdata_set`` prefetch, straight into numpy.
+    Reads through ``common.spectrum_arrays.arrays_for`` (#891): one arrays row per
+    spectrum when present, else the per-pixel TransientSpecData rows in one
+    ``values_list`` query (#479), never one model instance per pixel. Pixels come
+    back sorted by wavelength (rows: by wavelength, then pk); spectra without
+    pixels are absent from the dict.
     """
-    spectrum_ids = list(spectrum_ids)
-    if not spectrum_ids:
-        return {}
-    rows = np.array(
-        list(
-            TransientSpecData.objects.filter(spectrum_id__in=spectrum_ids)
-            .order_by('spectrum_id', 'id')
-            .values_list('spectrum_id', 'wavelength', 'flux')
-        ),
-        dtype=float,
-    )
-    if rows.size == 0:
-        return {}
-    ids = rows[:, 0].astype(np.int64)
-    # Rows are ordered by spectrum_id, so each spectrum is one contiguous run.
-    starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]])
-    ends = np.r_[starts[1:], ids.size]
+    from .common import spectrum_arrays
+
     return {
-        int(ids[a]): (rows[a:b, 1], rows[a:b, 2])
-        for a, b in zip(starts, ends)
+        sid: (wave, flux)
+        for sid, (wave, flux, _err) in spectrum_arrays.arrays_for(spectrum_ids, with_errors=False).items()
+        if wave.size
     }
 
 

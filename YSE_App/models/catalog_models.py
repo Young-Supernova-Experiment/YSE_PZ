@@ -19,6 +19,7 @@ from django.db import models
 
 from YSE_App.models.base import BaseModel
 from YSE_App.models.fields import JSONTextField
+from YSE_App.models.instrument_models import Instrument
 from YSE_App.models.phot_models import TransientPhotData, TransientPhotometry
 from YSE_App.models.spectra_models import TransientSpectrum
 from YSE_App.models.transient_models import Transient
@@ -41,6 +42,9 @@ class CatalogSource(BaseModel):
     # Second-hand: the source collected the data from another one (an aggregator).
     secondary = models.BooleanField(null=True, blank=True)
     private = models.BooleanField(null=True, blank=True)
+    # A refereed, published paper (from the bibcode's journal; editable). Data from refereed papers
+    # supersede matching YSE data on import (#888).
+    refereed = models.BooleanField(null=True, blank=True)
     extra = JSONTextField(null=True)
 
     def __str__(self):
@@ -60,6 +64,20 @@ class CatalogEntry(BaseModel):
     sources = models.ManyToManyField(CatalogSource, through='CatalogEntrySource', blank=True)
     # Top-level keys of the entry that have no mapping.
     extra = JSONTextField(null=True)
+
+    # The import created the transient, with these values (name, ra, dec, class, ...); the TNS
+    # check (#889) changes a field only while it still has the imported value.
+    created_transient = models.BooleanField(default=False)
+    import_values = JSONTextField(null=True)
+    TNS_PENDING, TNS_UPDATED, TNS_NOT_FOUND, TNS_CONFLICT, TNS_SKIPPED, TNS_ERROR = (
+        'pending', 'updated', 'not_found', 'conflict', 'skipped', 'error')
+    TNS_STATUS_CHOICES = [(s, s) for s in (TNS_PENDING, TNS_UPDATED, TNS_NOT_FOUND, TNS_CONFLICT, TNS_SKIPPED, TNS_ERROR)]
+    tns_status = models.CharField(max_length=16, choices=TNS_STATUS_CHOICES, null=True, blank=True, db_index=True)
+    tns_name = models.CharField(max_length=64, null=True, blank=True)
+    tns_checked = models.DateTimeField(null=True, blank=True)
+    tns_note = models.TextField(null=True, blank=True)
+    # Host comparison (#893): {"status": ..., "distance_mpc": ..., ...}; see the importer.
+    host_check = JSONTextField(null=True)
 
     class Meta:
         constraints = [
@@ -84,7 +102,13 @@ class CatalogEntrySource(models.Model):
 
 
 class CatalogModelFit(BaseModel):
-    """A model fit to the entry's data (OSC ``models``, e.g. MOSFiT)."""
+    """A model fit to the entry's data (OSC ``models``, e.g. MOSFiT): its outputs, not its chains (#892).
+
+    ``parameter_summary``: ``{name: {"median", "p16", "p84", "n", "latex"}}`` over the realizations.
+    ``light_curve``: ``[{"band", "telescope", "instrument", "system", "time": [...], "median": [...],
+    "p16": [...], "p84": [...], "n": [...]}]``, magnitudes over the realizations at each time.
+    The realizations themselves are not stored.
+    """
 
     entry = models.ForeignKey(CatalogEntry, on_delete=models.CASCADE, related_name='model_fits')
     alias = models.CharField(max_length=16, null=True, blank=True)
@@ -97,27 +121,14 @@ class CatalogModelFit(BaseModel):
     convergence = JSONTextField(null=True)
     score = JSONTextField(null=True)
     setup = JSONTextField(null=True)
+    n_realizations = models.PositiveIntegerField(null=True, blank=True)
+    parameter_summary = JSONTextField(null=True)
+    light_curve = JSONTextField(null=True)
     sources = models.ManyToManyField(CatalogSource, blank=True, related_name='model_fits')
     extra = JSONTextField(null=True)
 
     def __str__(self):
         return '%s %s' % (self.code or 'model', self.name or self.alias)
-
-
-class CatalogModelRealization(BaseModel):
-    """One realization of a model fit: its parameters and the model light curve it predicts.
-
-    Model photometry is kept here as a list of points (OSC photometry rows with ``model`` and
-    ``realization`` set), not in ``TransientPhotData``, so it never mixes with observations.
-    """
-
-    model_fit = models.ForeignKey(CatalogModelFit, on_delete=models.CASCADE, related_name='realizations')
-    alias = models.CharField(max_length=16, null=True, blank=True)
-    score = JSONTextField(null=True)
-    weight = models.FloatField(null=True, blank=True)
-    parameters = JSONTextField(null=True)
-    photometry = JSONTextField(null=True)
-    extra = JSONTextField(null=True)
 
 
 class TransientCatalogQuantity(BaseModel):
@@ -309,3 +320,80 @@ class TransientSpectrumCatalogInfo(BaseModel):
     realization = models.CharField(max_length=16, null=True, blank=True)
 
     extra = JSONTextField(null=True)
+
+
+class CatalogDataMatch(models.Model):
+    """A catalogue observation that matched one already in YSE_PZ, and what the import did (#888).
+
+    Matched on time, instrument and filter (photometry) or time, instrument and wavelength range
+    (spectra); ``weak`` when the catalogue gave no instrument YSE knows. Decisions:
+
+    * ``kept_existing``: the catalogue copy was not imported (``catalog_record`` holds it);
+    * ``superseded_existing``: the catalogue copy comes from a refereed paper; it was imported and
+      the existing point or spectrum was flagged REJECTED (``previous_quality_mask`` restores it);
+    * ``review``: imported next to the existing one, for a person to decide (weak match from a
+      refereed paper).
+    """
+
+    KEPT_EXISTING, SUPERSEDED_EXISTING, REVIEW = 'kept_existing', 'superseded_existing', 'review'
+    DECISION_CHOICES = [(d, d) for d in (KEPT_EXISTING, SUPERSEDED_EXISTING, REVIEW)]
+
+    entry = models.ForeignKey(CatalogEntry, on_delete=models.CASCADE, related_name='matches')
+    existing_phot_data = models.ForeignKey(TransientPhotData, null=True, blank=True, on_delete=models.CASCADE,
+                                           related_name='catalog_matches')
+    existing_spectrum = models.ForeignKey(TransientSpectrum, null=True, blank=True, on_delete=models.CASCADE,
+                                          related_name='catalog_matches')
+    catalog_phot_data = models.ForeignKey(TransientPhotData, null=True, blank=True, on_delete=models.CASCADE,
+                                          related_name='+')
+    catalog_spectrum = models.ForeignKey(TransientSpectrum, null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name='+')
+    decision = models.CharField(max_length=24, choices=DECISION_CHOICES)
+    weak = models.BooleanField(default=False)
+    time_difference = models.FloatField(null=True, blank=True)
+    previous_quality_mask = models.PositiveBigIntegerField(null=True, blank=True)
+    catalog_record = JSONTextField(null=True)
+    created_date = models.DateTimeField(auto_now_add=True)
+
+
+class CatalogImportAttempt(models.Model):
+    """The last download, parse and ingest outcome of one catalogue entry, for logging and retries (#895)."""
+
+    STAGE_DOWNLOAD, STAGE_PARSE, STAGE_INGEST = 'download', 'parse', 'ingest'
+    STAGE_CHOICES = [(s, s) for s in (STAGE_DOWNLOAD, STAGE_PARSE, STAGE_INGEST)]
+    OK, FAILED = 'ok', 'failed'
+
+    catalog = models.CharField(max_length=32)
+    entry_key = models.CharField(max_length=128)
+    # Where to get it again: "<repository>/<path>" or a local path.
+    origin = models.CharField(max_length=512, null=True, blank=True)
+    stage = models.CharField(max_length=16, choices=STAGE_CHOICES)
+    status = models.CharField(max_length=8, choices=[(OK, OK), (FAILED, FAILED)], db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+    error = models.TextField(null=True, blank=True)
+    first_attempt = models.DateTimeField(auto_now_add=True)
+    last_attempt = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=('catalog', 'entry_key'), name='yse_catalog_attempt_unique'),
+        ]
+
+
+class CatalogInstrumentAlias(BaseModel):
+    """A catalogue telescope / instrument string and the YSE instrument it means (#894).
+
+    Loaded from ``catalog_import/osc_instruments.json`` by ``manage.py catalog_instruments``; may be
+    edited by hand. ``telescope`` / ``instrument`` are the strings as written in the catalogue
+    (blank matches a missing value); ``mjd_min`` / ``mjd_max`` limit it in time (e.g. P48 with
+    CFH12k for PTF, then ZTF-Cam).
+    """
+
+    catalog = models.CharField(max_length=32, default='OSC')
+    telescope = models.CharField(max_length=128, blank=True, default='')
+    instrument = models.CharField(max_length=128, blank=True, default='')
+    mjd_min = models.FloatField(null=True, blank=True)
+    mjd_max = models.FloatField(null=True, blank=True)
+    yse_instrument = models.ForeignKey(Instrument, on_delete=models.CASCADE, related_name='catalog_aliases')
+
+    class Meta:
+        indexes = [models.Index(fields=['catalog', 'telescope', 'instrument'], name='yse_catalog_inst_alias_idx')]

@@ -1174,10 +1174,15 @@ def add_transient_spec_util(specdict,transient,user):
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
+        # pixels stored as an arrays row (#891) count as existing data too
+        from YSE_App.common import spectrum_arrays
+        has_arrays = TransientSpectrumArrays.objects.filter(spectrum=transientspec).exists()
         # loop through new, comp against existing
-        if len(existingspec) and specdict['clobber']:
+        if (len(existingspec) or has_arrays) and specdict['clobber']:
             for e in existingspec: e.delete()
-        elif len(existingspec):
+            # the new pixels are written as rows: a stale arrays row must not win over them
+            spectrum_arrays.discard([transientspec.id])
+        elif len(existingspec) or has_arrays:
             return_dict = {"message":"spectrum exists.  Not clobbering"}
             return JsonResponse(return_dict)
 
@@ -1448,10 +1453,15 @@ def add_transient_spec(request):
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
+        # pixels stored as an arrays row (#891) count as existing data too
+        from YSE_App.common import spectrum_arrays
+        has_arrays = TransientSpectrumArrays.objects.filter(spectrum=transientspec).exists()
         # loop through new, comp against existing
-        if len(existingspec) and hd['clobber']:
+        if (len(existingspec) or has_arrays) and hd['clobber']:
             for e in existingspec: e.delete()
-        elif len(existingspec):
+            # the new pixels are written as rows: a stale arrays row must not win over them
+            spectrum_arrays.discard([transientspec.id])
+        elif len(existingspec) or has_arrays:
             return_dict = {"message":"spectrum exists.  Not clobbering"}
             return JsonResponse(return_dict)
 
