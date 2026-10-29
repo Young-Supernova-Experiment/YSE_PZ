@@ -477,7 +477,9 @@ class RemoveFollowupNoticeForm(ModelForm):
 
 class SpectrumUploadForm(ModelForm):
     filename = forms.FileField()
-    obs_date = forms.DateTimeField(input_formats=['%Y-%m-%dT%H:%M'])
+    # Browsers send datetime-local values with or without seconds (#898).
+    obs_date = forms.DateTimeField(input_formats=['%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f',
+                                                  '%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S'])
     obs_group = forms.ModelChoiceField(
         ObservationGroup.objects.filter(Q(name='SSS') | Q(name='Foundation') |
                                         Q(name='TESS') | Q(name='YSE') |
@@ -486,10 +488,9 @@ class SpectrumUploadForm(ModelForm):
     data_quality = forms.ModelChoiceField(
         DataQuality.objects.filter(Q(name='Quicklook')),required=False)
 
-    qs = [(i['name'], i['name']) for i in Group.objects.all().values('name').distinct().order_by('name')]
-    permissions = forms.MultipleChoiceField(
-            choices=qs,
-            required=False)
+    # Choices are read per form (in __init__), not once at import, so groups created after the
+    # server started are valid (#898).
+    permissions = forms.MultipleChoiceField(choices=(), required=False)
     # PIs of the spectrum (#446); names only are shown.
     pis = forms.ModelMultipleChoiceField(
         PrincipalInvestigator.objects.order_by('name'), required=False, label='PI(s)')
@@ -513,11 +514,16 @@ class SpectrumUploadForm(ModelForm):
         'HIRES','GMOS','Goodman','KAST','WiFeS','WFCCD','DIS','Binospec','SpeX','UVES',
         'GNIRS','FLAMINGOS-2','DOLORES']
     instrument = forms.ModelChoiceField(Instrument.objects.filter(Q(name__in=spec_instruments)))
-    #import pdb; pdb.set_trace()
+
     class Meta:
         model = TransientSpectrum
         fields = ('transient','ra',
                   'dec','spec_phase')#,'obs_group','instrument')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['permissions'].choices = [
+            (name, name) for name in Group.objects.order_by('name').values_list('name', flat=True).distinct()]
 
 class AutomatedSpectrumRequest(ModelForm):
 
