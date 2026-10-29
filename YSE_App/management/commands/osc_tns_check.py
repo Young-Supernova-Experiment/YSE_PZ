@@ -22,7 +22,7 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true', help='Write the TNS name, position and class.')
         parser.add_argument('--max', type=int, default=20, help='At most this many entries (default 20).')
         parser.add_argument('--interval', type=float, default=None,
-                            help='Seconds between TNS requests (default OSC_TNS_REQUEST_INTERVAL_SECONDS, 10).')
+                            help='Seconds between TNS requests (default OSC_TNS_REQUEST_INTERVAL_SECONDS, 60).')
         parser.add_argument('--queue', action='store_true', help='Queue the background sweep job and exit.')
 
     def handle(self, *args, **opts):

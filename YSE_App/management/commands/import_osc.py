@@ -67,7 +67,6 @@ class Command(BaseCommand):
         parser.add_argument('--spec-tolerance', type=float, default=matching.SPEC_TIME_TOLERANCE,
                             help='Days within which a spectrum matches an existing one (default %(default)s).')
         parser.add_argument('--no-spectra', action='store_true', help='Skip spectra.')
-        parser.add_argument('--no-models', action='store_true', help='Skip model fits.')
         parser.add_argument('--no-tns', action='store_true',
                             help='Do not mark new transients for the TNS check or queue it.')
         parser.add_argument('--limit', type=int, default=None, help='Stop after this many entries.')
@@ -100,8 +99,7 @@ class Command(BaseCommand):
             if user is None:
                 raise CommandError('--apply needs --user <existing username>.')
             writer = Writer(user, new_status=opts['status'], match_radius=opts['match_radius'],
-                            with_spectra=not opts['no_spectra'], with_models=not opts['no_models'],
-                            tns_check=not opts['no_tns'], phot_tolerance=opts['phot_tolerance'],
+                            with_spectra=not opts['no_spectra'], tns_check=not opts['no_tns'], phot_tolerance=opts['phot_tolerance'],
                             spec_tolerance=opts['spec_tolerance'])
 
         report = open(opts['report'], 'a') if opts['report'] else None
@@ -186,9 +184,9 @@ class Command(BaseCommand):
         self.counts['created'] += int(result['created'])
         self._attempt(key, origin, 'ingest', None)
         line['result'] = result
-        self.stdout.write('  %s %s: %d quantities; photometry %s; spectra %s; %d model fits; host %s%s' % (
+        self.stdout.write('  %s %s: %d quantities; photometry %s; spectra %s; host %s%s' % (
             'created' if result['created'] else 'added data to', result['transient'], result['quantities'],
-            _decisions(result['photometry']), _decisions(result['spectra']), result['model_fits'], result['host'],
+            _decisions(result['photometry']), _decisions(result['spectra']), result['host'],
             '' if result['created'] else ' (matched by %s)' % result['matched_by']))
         return line
 

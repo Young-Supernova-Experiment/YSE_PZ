@@ -35,7 +35,6 @@ from YSE_App.models.catalog_models import (
     CatalogEntrySource,
     CatalogImportAttempt,
     CatalogInstrumentAlias,
-    CatalogModelFit,
     CatalogSource,
     TransientCatalogQuantity,
     TransientPhotDataCatalogInfo,
@@ -81,6 +80,7 @@ ENTRY = {
     'hostra': [{'value': '10:00:01.00', 'u_value': 'hours', 'source': '1'}],
     'hostdec': [{'value': '-30:30:05.0', 'u_value': 'degrees', 'source': '1'}],
     'errors': [{'value': '2099ApJ...1..1A', 'kind': 'bibcode', 'extra': 'dec'}],
+    'velocity': [{'value': '5000', 'u_value': 'km/s', 'source': '3', 'model': '1'}],
     'futurekey': 'an unmapped top-level value',
     'photometry': [
         {'time': '88000.5', 'u_time': 'MJD', 'band': 'B', 'magnitude': '15.20', 'e_magnitude': '0.03',
@@ -182,15 +182,12 @@ class OSCParserTests(SimpleTestCase):
         radio = [p for p in points if osc.point_kind(p) == 'radio'][0]
         self.assertEqual(radio['band'], '8.5 GHz')
 
-    def test_model_outputs_not_chains(self):
-        self.assertEqual(self.plan['model_points'], 2)
-        model = self.plan['models'][0]
-        self.assertNotIn('realizations', model)
-        self.assertEqual(model['n_realizations'], 2)
-        self.assertEqual(model['parameter_summary']['texplosion']['median'], -5.0)
-        curve = model['light_curve'][0]
-        self.assertEqual((curve['band'], curve['time'], curve['median'], curve['n']),
-                         ('g', [88000.0, 88001.0], [15.5, 15.4], [1, 1]))
+    def test_model_data_are_skipped(self):
+        # Not imported yet (Ryan, 2026-10-28): only counted.
+        self.assertEqual(self.plan['model_rows'], {'fits': 1, 'photometry': 2, 'quantities': 1})
+        self.assertNotIn('velocity', {q['key'] for q in self.plan['quantities']})
+        self.assertNotIn('models', self.plan)
+        self.assertNotIn('models', self.plan['extra'] or {})
 
     def test_refereed_distance_and_tns_names(self):
         refereed = {s['alias']: s['refereed'] for s in self.plan['sources']}
@@ -240,8 +237,6 @@ class OSCParserTests(SimpleTestCase):
         self.assertLessEqual(set(osc.QUANTITY_FLOAT_FIELDS + osc.QUANTITY_TEXT_FIELDS + osc.QUANTITY_BOOL_FIELDS),
                              names(TransientCatalogQuantity))
         self.assertLessEqual(set(osc.SOURCE_FIELDS), names(CatalogSource))
-        self.assertLessEqual(set(osc.MODEL_FIELDS + osc.MODEL_JSON_FIELDS + osc.MODEL_OUTPUT_FIELDS),
-                             names(CatalogModelFit))
 
 
 class MatchingTests(SimpleTestCase):
@@ -368,17 +363,20 @@ class OSCWriterTests(TestCase):
         self.assertTrue(first.quality_mask & int(SpecFlag.WAVELENGTH_MEDIUM_UNKNOWN))
         self.assertEqual(list(first.groups.values_list('name', flat=True)), [PUBLIC_COLLABORATION_GROUP_NAME])
 
-        # Model outputs, not chains (#892).
-        fit = CatalogModelFit.objects.get(entry=entry_row)
-        self.assertEqual((fit.code, fit.n_realizations), ('MOSFiT', 2))
-        self.assertEqual(fit.parameter_summary['texplosion']['median'], -5.0)
-        self.assertEqual(fit.light_curve[0]['band'], 'g')
+        # No model data (#892, not yet).
+        self.assertFalse(TransientCatalogQuantity.objects.filter(transient=t, key='velocity').exists())
+        self.assertEqual(result['model_rows_skipped'], {'fits': 1, 'photometry': 2, 'quantities': 1})
 
     def test_close_object_gets_the_osc_host(self):
         self.apply(entry(lumdist=[{'value': '15.0', 'u_value': 'Mpc', 'source': '1'}]))
         t = Transient.objects.get(name='2099zz')
         self.assertEqual(t.host.name, 'NGC 99999')
         self.assertEqual(CatalogEntry.objects.get().host_check['status'], 'link_osc_host')
+
+    def test_no_listed_distance_counts_as_far(self):
+        self.apply(entry(redshift=[]))
+        self.assertIsNone(Transient.objects.get(name='2099zz').host)
+        self.assertEqual(CatalogEntry.objects.get().host_check['status'], 'prost_blast_precedence')
 
     def test_existing_transient_only_gains_data(self):
         existing = create_minimal_transient(self.user, name='2099zz', ra=150.001, dec=-30.5, status_name='Watch')

@@ -53,6 +53,6 @@ from YSE_App.models.night_plan_models import NightPlan, PlannedBlock
 from YSE_App.models.observed_block_models import ObservedBlock, OutcomeReason
 from YSE_App.models.change_log_models import ValueChange  # noqa: F401
 from YSE_App.models.catalog_models import (  # noqa: F401
-    CatalogDataMatch, CatalogEntry, CatalogEntrySource, CatalogImportAttempt, CatalogInstrumentAlias, CatalogModelFit,
+    CatalogDataMatch, CatalogEntry, CatalogEntrySource, CatalogImportAttempt, CatalogInstrumentAlias,
     CatalogSource, TransientCatalogQuantity, TransientPhotDataCatalogInfo, TransientPhotometryCatalogInfo,
     TransientSpectrumCatalogInfo)

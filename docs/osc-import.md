@@ -24,7 +24,7 @@ the YSE fields from them.
 | `host`, `hostra`, `hostdec`, `hostredshift` | `Host`, linked when the transient has none |
 | `photometry` (observations) | `TransientPhotometry` + `TransientPhotData`, one set per telescope, instrument, observatory, survey and source list; every OSC field our point table has no column for is in `TransientPhotDataCatalogInfo` (one row per point); the set's entry and sources in `TransientPhotometryCatalogInfo` |
 | `spectra` | `TransientSpectrum` + `TransientSpecData` (wavelengths in Angstrom); OSC fields with no column in `TransientSpectrumCatalogInfo` |
-| `models` (MOSFiT fits) | `CatalogModelFit`; each realization's parameters and model light curve (photometry rows with `model`) in `CatalogModelRealization` |
+| `models` (MOSFiT fits) and rows citing a model | not imported yet (#892); counted in the report |
 
 Any field the importer does not know goes into an `extra` JSON column next to where it was
 found, so nothing in an entry is dropped.
@@ -59,11 +59,13 @@ changed by hand. An entry is imported in steps:
    takes the TNS name (the old name becomes an alternate; if another transient already has it,
    nothing changes and the entry is marked `conflict`), the TNS position and `TNS_spec_class`, and
    the TNS class as `best_spec_class`. Each field changes only while it still has the value the
-   import gave it. Requests are throttled to one per `OSC_TNS_REQUEST_INTERVAL_SECONDS` (10 s);
-   rate limits re-queue the job. `CatalogEntry.tns_status` records the outcome.
+   import gave it. Requests are throttled to one a minute (`OSC_TNS_REQUEST_INTERVAL_SECONDS`,
+   60), at most `OSC_TNS_MAX_PER_RUN` (20) entries per job run; rate limits re-queue the job.
+   `CatalogEntry.tns_status` records the outcome. TNS coordinates for transients YSE_PZ already
+   had are left for a later clean-up.
 
 **Host** (#893). The distance comes from the OSC luminosity distance, else cz/H0 (H0 = 70):
-- beyond 20 Mpc the OSC host is never linked; Prost/Blast decide (a Prost match is queued for new
+- beyond 20 Mpc, or with no listed distance, the OSC host is never linked; Prost/Blast decide (a Prost match is queued for new
   transients when `PROST_HOST_MATCH_ENABLED`);
 - at 20 Mpc or closer a new transient gets the OSC host (an existing host within 3 arcsec, else a
   new one); for an existing transient a host more than 10 arcsec from the OSC's (or with another
@@ -86,9 +88,9 @@ frequency with what each resolves to, to extend the file. Unmapped strings go to
 - Spectra are stored as arrays (`TransientSpectrumArrays`, #492), not one row per pixel.
   `deredshifted`, `dereddened`, `Uncalibrated` fluxes and `includeshost` set quality bits; a
   spectrum with no time gets the discovery (else peak) date, flagged `time_missing`.
-- Models (#892): one `CatalogModelFit` per fit with its outputs (per-parameter median and
-  16th/84th percentiles, and the model light curve as median and 1-sigma range per band and time).
-  The realizations (MCMC chains) are not stored.
+- Model data (#892) are not imported yet (Ryan, 2026-10-28; how to store several models and
+  code versions is still open): the `models` list and every photometry row, spectrum and quantity
+  that cites a model are skipped and only counted in the report.
 - Access: OSC data are published (Public group, `OSC` observation group).
 - Historical import: no automatic TNS publishing, minor-planet screen or annotation runs; no
   new-observation signals for spectra; photometry statistics recomputed once per transient.
@@ -141,14 +143,14 @@ python3 manage.py osc_tns_check --queue                                   # or l
 python3 manage.py import_osc --revert SN2011fe --apply                    # undo one entry
 ```
 
-Other options: `--limit N`, `--no-spectra`, `--no-models`, `--no-tns`, `--match-radius`,
+Other options: `--limit N`, `--no-spectra`, `--no-tns`, `--match-radius`,
 `--phot-tolerance`, `--spec-tolerance`, `--status`. Run `catalog_instruments --load --apply` before
 the first import so instruments resolve.
 
 ## Size
 
 From a sample of the catalogue: SN 2011fe has 3,483 photometry points and 158 spectra
-(380,000 pixels); SN 2013dy has 2.9 million pixels; SN 2017egm has 3 MOSFiT fits whose 300
-realizations and 49,923 model points become 4,858 summary points. Stored as arrays, a spectrum
+(380,000 pixels); SN 2013dy has 2.9 million pixels; SN 2017egm has 3 MOSFiT fits with 49,923
+model points (not imported). Stored as arrays, a spectrum
 is one row, so the full import adds tens of thousands of spectrum rows rather than about 10^8
 pixel rows.

@@ -1,4 +1,4 @@
-"""Tables for data imported from external catalogues, first the Open Supernova Catalog (#887-#889, #892-#895).
+"""Tables for data imported from external catalogues, first the Open Supernova Catalog (#887-#889, #893-#895; model data are not imported yet, #892).
 
 New tables only (see YSE_App/models/catalog_models.py): no existing table or column changes,
 so it is safe on the shared database. Nothing is imported by the migration; that is
@@ -123,29 +123,6 @@ class Migration(migrations.Migration):
             constraint=models.UniqueConstraint(fields=('entry', 'alias'), name='yse_catalog_entry_source_alias'),
         ),
         migrations.CreateModel(
-            name='CatalogModelFit',
-            fields=[
-                _id(),
-                _char('alias', 16),
-                _char('code', 128),
-                _char('name', 256),
-                _char('version', 64),
-                _char('date', 32),
-                _text('description'),
-                _char('steps', 32),
-                _json('convergence'),
-                _json('score'),
-                _json('setup'),
-                ('n_realizations', models.PositiveIntegerField(blank=True, null=True)),
-                _json('parameter_summary'),
-                _json('light_curve'),
-                _json('extra'),
-                ('entry', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
-                                            related_name='model_fits', to='YSE_App.catalogentry')),
-                ('sources', models.ManyToManyField(blank=True, related_name='model_fits', to='YSE_App.CatalogSource')),
-            ] + _audit('catalogmodelfit'),
-        ),
-        migrations.CreateModel(
             name='TransientCatalogQuantity',
             fields=[
                 _id(),
@@ -164,12 +141,9 @@ class Migration(migrations.Migration):
                 _float('probability'),
                 _text('description'),
                 _json('correlations'),
-                _char('realization', 16),
                 _json('extra'),
                 ('entry', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
                                             related_name='quantities', to='YSE_App.catalogentry')),
-                ('model_fit', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE,
-                                                related_name='quantities', to='YSE_App.catalogmodelfit')),
                 ('transient', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
                                                 related_name='catalog_quantities', to='YSE_App.transient')),
                 ('sources', models.ManyToManyField(blank=True, related_name='quantities', to='YSE_App.CatalogSource')),
@@ -234,12 +208,9 @@ class Migration(migrations.Migration):
                 _bool('deredshifted'), _bool('dereddened'), _bool('vacuumwavelengths'), _bool('host'),
                 _bool('includeshost'),
                 _json('exclude'),
-                _char('realization', 16),
                 _json('extra'),
                 ('entry', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
                                             related_name='spectra', to='YSE_App.catalogentry')),
-                ('model_fit', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL,
-                                                related_name='+', to='YSE_App.catalogmodelfit')),
                 ('spectrum', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE,
                                                   related_name='catalog_info', to='YSE_App.transientspectrum')),
                 ('sources', models.ManyToManyField(blank=True, related_name='spectra', to='YSE_App.CatalogSource')),

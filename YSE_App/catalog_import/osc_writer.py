@@ -15,13 +15,13 @@ Write an OSC import plan (``osc.parse_entry``) to the database, by Ryan's rules 
 5. **TNS** (#889): a new transient waits (``tns_status`` pending) for the throttled TNS check
    (``osc_tns``), which takes the TNS name, position and class.
 
-Host (#893): beyond 20 Mpc the OSC host is never linked (Prost/Blast decide; Prost is queued when
+Host (#893): beyond 20 Mpc, or with no listed distance, the OSC host is never linked (Prost/Blast decide; Prost is queued when
 enabled); at 20 Mpc or closer a new transient gets the OSC host, and for an existing transient a
 different host is only flagged (``CatalogEntry.host_check``).
 
 Re-importing an entry undoes and deletes what its last import wrote, then writes it anew.
 Photometry and spectra get the ``OSC`` observation group and the Public group (OSC data are
-published). Spectra are stored as arrays (#492). Model fits keep their outputs, not chains (#892).
+published). Spectra are stored as arrays (#492). Model data are not imported yet (#892).
 
 Import is historical: automatic TNS publishing, the minor-planet screen and annotation runs are off
 for transients created here, rows are written with ``bulk_create`` or raw saves (no per-row
@@ -63,7 +63,6 @@ from YSE_App.models.catalog_models import (
     CatalogDataMatch,
     CatalogEntry,
     CatalogEntrySource,
-    CatalogModelFit,
     CatalogSource,
     TransientCatalogQuantity,
     TransientPhotDataCatalogInfo,
@@ -213,9 +212,8 @@ def host_check(plan: dict, transient: Optional[Transient], created: bool) -> dic
     if not (h['name'] or h['ra'] is not None):
         return dict(out, status='no_osc_host')
     d = t.get('distance_mpc')
-    if d is None:
-        return dict(out, status='distance_unknown')
-    if d > osc.HOST_DISTANCE_LIMIT_MPC:
+    if d is None or d > osc.HOST_DISTANCE_LIMIT_MPC:
+        # No listed distance counts as beyond 20 Mpc (Ryan, 2026-10-28).
         return dict(out, status='prost_blast_precedence')
     if created:
         return dict(out, status='link_osc_host' if h['ra'] is not None else 'osc_host_has_no_position')
@@ -292,7 +290,7 @@ class Writer:
     """Applies plans for one user; caches the lookups shared by every entry."""
 
     def __init__(self, user, *, new_status: str = 'Ignore', match_radius: float = DEFAULT_MATCH_RADIUS_ARCSEC,
-                 with_spectra: bool = True, with_models: bool = True, tns_check: bool = True,
+                 with_spectra: bool = True, tns_check: bool = True,
                  phot_tolerance: float = matching.PHOT_TIME_TOLERANCE,
                  spec_tolerance: float = matching.SPEC_TIME_TOLERANCE):
         self.user = user
@@ -300,7 +298,6 @@ class Writer:
         self.new_status_name = new_status
         self.match_radius = match_radius
         self.with_spectra = with_spectra
-        self.with_models = with_models
         self.tns_check = tns_check
         self.phot_tolerance = phot_tolerance
         self.spec_tolerance = spec_tolerance
@@ -441,14 +438,13 @@ class Writer:
         self._add_alternate_names(transient, plan)
         if created:
             self._new_transient_host(transient, plan, check)
-        fits = self._write_models(entry, plan, by_alias) if self.with_models else {}
-        n_quantities = self._write_quantities(entry, transient, plan, by_alias, fits)
+        n_quantities = self._write_quantities(entry, transient, plan, by_alias)
         phot = self._write_photometry(entry, transient, plan, by_alias)
-        spec = self._write_spectra(entry, transient, plan, by_alias, fits) if self.with_spectra else {}
+        spec = self._write_spectra(entry, transient, plan, by_alias) if self.with_spectra else {}
         photstat.schedule_recompute(transient.id)
         return {
             'transient': transient.name, 'created': created, 'matched_by': how, 'entry_id': entry.id,
-            'quantities': n_quantities, 'photometry': phot, 'spectra': spec, 'model_fits': len(fits),
+            'quantities': n_quantities, 'photometry': phot, 'spectra': spec, 'model_rows_skipped': plan['model_rows'],
             'host': check['status'],
         }
 
@@ -482,7 +478,7 @@ class Writer:
 
     def _new_transient_host(self, transient: Transient, plan: dict, check: dict) -> None:
         """#893: link the OSC host within 20 Mpc; beyond, leave it to Prost (queued when enabled)."""
-        if check['status'] == 'prost_blast_precedence' or check['status'] == 'distance_unknown':
+        if check['status'] == 'prost_blast_precedence':
             try:
                 from YSE_App.services import prost_hosts
 
@@ -517,25 +513,13 @@ class Writer:
         names = ', '.join(dict.fromkeys(s.bibcode or s.reference or s.name for s in sources))
         return ('OSC: ' + names)[:MAX_REFERENCE_LENGTH] if names else 'OSC'
 
-    def _write_models(self, entry, plan, by_alias) -> Dict[str, CatalogModelFit]:
-        fits = {}
-        for m in plan['models']:
-            fit = CatalogModelFit.objects.create(
-                entry=entry, **{f: (m.get(f) or None) for f in osc.MODEL_FIELDS},
-                **{f: m.get(f) for f in osc.MODEL_JSON_FIELDS + osc.MODEL_OUTPUT_FIELDS},
-                extra=m.get('extra'), **self.audit)
-            fit.sources.set(self._sources_for(m['source_aliases'], by_alias))
-            fits[m['alias'] or str(len(fits) + 1)] = fit
-        return fits
-
-    def _write_quantities(self, entry, transient, plan, by_alias, fits) -> int:
+    def _write_quantities(self, entry, transient, plan, by_alias) -> int:
         through = TransientCatalogQuantity.sources.through
         links = []
         for q in plan['quantities']:
             row = TransientCatalogQuantity.objects.create(
                 entry=entry, transient=transient, key=q['key'][:32], value=q['value'], value_float=q['value_float'],
-                kind=q['kind'], correlations=q['correlations'], model_fit=fits.get(q['model_alias']),
-                extra=q['extra'],
+                kind=q['kind'], correlations=q['correlations'], extra=q['extra'],
                 **{f: q[f] for f in osc.QUANTITY_FLOAT_FIELDS + osc.QUANTITY_TEXT_FIELDS + osc.QUANTITY_BOOL_FIELDS},
                 **self.audit)
             links.extend(through(transientcatalogquantity_id=row.id, catalogsource_id=s.id)
@@ -609,7 +593,7 @@ class Writer:
         CatalogDataMatch.objects.bulk_create(matches, batch_size=BULK_BATCH)
         return dict(counts)
 
-    def _write_spectra(self, entry, transient, plan, by_alias, fits) -> dict:
+    def _write_spectra(self, entry, transient, plan, by_alias) -> dict:
         from collections import Counter
 
         decisions = self.planner.spectrum_decisions(plan, transient)
@@ -641,8 +625,7 @@ class Writer:
             spectrum.save_base(raw=True)
             spectrum.groups.add(self.public_group())
             info = TransientSpectrumCatalogInfo.objects.create(
-                spectrum=spectrum, entry=entry, model_fit=fits.get(s['model_alias']),
-                **{f: s['info'].get(f) for f in osc.SPEC_INFO_FIELDS}, **self.audit)
+                spectrum=spectrum, entry=entry, **{f: s['info'].get(f) for f in osc.SPEC_INFO_FIELDS}, **self.audit)
             info.sources.set(sources)
             spectrum_arrays.save(spectrum, [p[0] for p in s['pixels']], [p[1] for p in s['pixels']],
                                  [p[2] for p in s['pixels']])

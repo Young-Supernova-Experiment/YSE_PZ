@@ -101,36 +101,6 @@ class CatalogEntrySource(models.Model):
         ]
 
 
-class CatalogModelFit(BaseModel):
-    """A model fit to the entry's data (OSC ``models``, e.g. MOSFiT): its outputs, not its chains (#892).
-
-    ``parameter_summary``: ``{name: {"median", "p16", "p84", "n", "latex"}}`` over the realizations.
-    ``light_curve``: ``[{"band", "telescope", "instrument", "system", "time": [...], "median": [...],
-    "p16": [...], "p84": [...], "n": [...]}]``, magnitudes over the realizations at each time.
-    The realizations themselves are not stored.
-    """
-
-    entry = models.ForeignKey(CatalogEntry, on_delete=models.CASCADE, related_name='model_fits')
-    alias = models.CharField(max_length=16, null=True, blank=True)
-    code = models.CharField(max_length=128, null=True, blank=True)
-    name = models.CharField(max_length=256, null=True, blank=True)
-    version = models.CharField(max_length=64, null=True, blank=True)
-    date = models.CharField(max_length=32, null=True, blank=True)
-    description = models.TextField(null=True, blank=True)
-    steps = models.CharField(max_length=32, null=True, blank=True)
-    convergence = JSONTextField(null=True)
-    score = JSONTextField(null=True)
-    setup = JSONTextField(null=True)
-    n_realizations = models.PositiveIntegerField(null=True, blank=True)
-    parameter_summary = JSONTextField(null=True)
-    light_curve = JSONTextField(null=True)
-    sources = models.ManyToManyField(CatalogSource, blank=True, related_name='model_fits')
-    extra = JSONTextField(null=True)
-
-    def __str__(self):
-        return '%s %s' % (self.code or 'model', self.name or self.alias)
-
-
 class TransientCatalogQuantity(BaseModel):
     """One sourced value of a catalogue quantity (OSC ``redshift``, ``claimedtype``, ``host``, ...).
 
@@ -155,8 +125,6 @@ class TransientCatalogQuantity(BaseModel):
     probability = models.FloatField(null=True, blank=True)
     description = models.TextField(null=True, blank=True)
     correlations = JSONTextField(null=True)
-    model_fit = models.ForeignKey(CatalogModelFit, null=True, blank=True, on_delete=models.CASCADE, related_name='quantities')
-    realization = models.CharField(max_length=16, null=True, blank=True)
     sources = models.ManyToManyField(CatalogSource, blank=True, related_name='quantities')
     extra = JSONTextField(null=True)
 
@@ -316,8 +284,6 @@ class TransientSpectrumCatalogInfo(BaseModel):
     includeshost = models.BooleanField(null=True, blank=True)
     # Wavelength ranges (Angstrom) the catalogue suggests leaving out: {"above": .., "below": .., "range": [..]}.
     exclude = JSONTextField(null=True)
-    model_fit = models.ForeignKey(CatalogModelFit, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
-    realization = models.CharField(max_length=16, null=True, blank=True)
 
     extra = JSONTextField(null=True)
 

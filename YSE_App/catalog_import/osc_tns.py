@@ -16,8 +16,8 @@ the TNS coordinates, ``TNS_spec_class`` and, when TNS has a class we know, ``bes
 field is changed only while it still holds the value the import gave it, so edits made by hand in
 between are kept. Not found: ``not_found``, the OSC values stay.
 
-Requests are throttled hard (``OSC_TNS_REQUEST_INTERVAL_SECONDS``, default 10 s; TNS blocks clients
-that query too often). The sweep job ``osc.tns_check`` handles ``OSC_TNS_MAX_PER_RUN`` (50) entries
+Requests are throttled hard: one a minute (``OSC_TNS_REQUEST_INTERVAL_SECONDS``, default 60; Ryan,
+2026-10-28; TNS blocks clients that query too often). The sweep job ``osc.tns_check`` handles ``OSC_TNS_MAX_PER_RUN`` (20) entries
 per run and re-queues itself after a rate limit; ``manage.py osc_tns_check`` runs the same by hand.
 """
 
@@ -45,7 +45,7 @@ def _setting(name, default):
 
 
 def request_interval() -> float:
-    return float(_setting('OSC_TNS_REQUEST_INTERVAL_SECONDS', 10.0))
+    return float(_setting('OSC_TNS_REQUEST_INTERVAL_SECONDS', 60.0))
 
 
 def pending_entries(limit: Optional[int] = None):
@@ -196,7 +196,7 @@ def queue_sweep(created_by=None):
 def sweep_job(payload, job=None):
     from YSE_App.sharing import tns
 
-    limit = int(_setting('OSC_TNS_MAX_PER_RUN', 50))
+    limit = int(_setting('OSC_TNS_MAX_PER_RUN', 20))
     try:
         counts = run(limit, dry_run=False)
     except tns.TNSRateLimited as exc:

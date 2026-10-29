@@ -12,7 +12,8 @@ Conventions:
 * Numbers are kept as the strings the OSC gives (``value``) and also parsed (``value_float``).
 * Times are MJD. ``u_time`` other than MJD (JD) is converted; a ``[start, stop]`` time becomes
   its midpoint, with both ends kept.
-* Model photometry (rows with ``model``) goes with its model fit, not with the observations.
+* Model data are not imported yet (Ryan, 2026-10-28): the ``models`` list and every photometry row,
+  spectrum and quantity that cites a model are skipped and only counted (``plan['model_rows']``).
 
 Run a dry run on local files without Django::
 
@@ -41,9 +42,9 @@ STRUCTURE_KEYS = ('schema', 'name', 'sources', 'photometry', 'spectra', 'models'
 
 # Fields of a quantity (``astrocats.catalog.quantity.QUANTITY``) with their own column.
 QUANTITY_FLOAT_FIELDS = ('e_value', 'e_lower_value', 'e_upper_value', 'probability')
-QUANTITY_TEXT_FIELDS = ('u_value', 'u_e_value', 'description', 'realization')
+QUANTITY_TEXT_FIELDS = ('u_value', 'u_e_value', 'description')
 QUANTITY_BOOL_FIELDS = ('derived', 'upperlimit', 'lowerlimit')
-QUANTITY_TEXT_LENGTHS = {'u_value': 64, 'u_e_value': 64, 'realization': 16}
+QUANTITY_TEXT_LENGTHS = {'u_value': 64, 'u_e_value': 64}
 
 SOURCE_FIELDS = ('name', 'bibcode', 'doi', 'arxivid', 'url', 'reference', 'acknowledgment', 'secondary', 'private',
                  'refereed')
@@ -95,23 +96,17 @@ PHOT_INFO_FIELDS = (PHOT_INFO_FLOAT_FIELDS + PHOT_INFO_TEXT_FIELDS + PHOT_INFO_B
 SPEC_INFO_FLOAT_FIELDS = ('e_time', 'e_lower_time', 'e_upper_time', 'airmass', 'snr')
 SPEC_INFO_TEXT_FIELDS = (
     'u_wavelengths', 'u_fluxes', 'u_errors', 'telescope', 'instrument', 'observatory', 'survey',
-    'observer', 'reducer', 'reduction', 'filename', 'realization',
+    'observer', 'reducer', 'reduction', 'filename',
 )
 SPEC_INFO_TEXT_LENGTHS = dict(
     [(f, 64) for f in ('u_wavelengths', 'u_fluxes', 'u_errors')]
     + [(f, 128) for f in ('telescope', 'instrument', 'observatory', 'survey', 'reduction')]
-    + [('filename', 512), ('realization', 16)])
+    + [('filename', 512)])
 SPEC_INFO_BOOL_FIELDS = ('deredshifted', 'dereddened', 'vacuumwavelengths', 'host', 'includeshost')
 SPEC_SPECIAL_FIELDS = ('time', 'u_time', 'data', 'wavelengths', 'fluxes', 'errors', 'redshift', 'source',
-                       'model', 'exclude')
+                       'exclude')
 SPEC_INFO_FIELDS = (SPEC_INFO_FLOAT_FIELDS + SPEC_INFO_TEXT_FIELDS + SPEC_INFO_BOOL_FIELDS
                     + ('time_missing', 'time_start', 'time_end', 'u_time', 'exclude', 'extra'))
-
-MODEL_FIELDS = ('alias', 'code', 'name', 'version', 'date', 'description', 'steps')
-MODEL_TEXT_LENGTHS = {'alias': 16, 'code': 128, 'name': 256, 'version': 64, 'date': 32, 'steps': 32}
-MODEL_JSON_FIELDS = ('convergence', 'score', 'setup')
-# Outputs the parser computes (no chains): see _parse_model and _finish_model.
-MODEL_OUTPUT_FIELDS = ('n_realizations', 'parameter_summary', 'light_curve')
 
 # Wavelength units -> factor to Angstrom.
 WAVELENGTH_TO_ANGSTROM = {
@@ -329,7 +324,6 @@ def _parse_quantity(key: str, raw: Any) -> dict:
         'kind': to_text(raw.get('kind'), 128),
         'correlations': raw.get('correlations', raw.get('correlation')),
         'source_aliases': source_aliases(raw.get('source')),
-        'model_alias': to_text(raw.get('model')),
     }
     for field in QUANTITY_FLOAT_FIELDS:
         out[field] = to_float(raw.get(field))
@@ -338,7 +332,7 @@ def _parse_quantity(key: str, raw: Any) -> dict:
     for field in QUANTITY_BOOL_FIELDS:
         out[field] = to_bool(raw.get(field))
     known = set(QUANTITY_FLOAT_FIELDS + QUANTITY_TEXT_FIELDS + QUANTITY_BOOL_FIELDS) | {
-        'value', 'kind', 'correlations', 'correlation', 'source', 'model'}
+        'value', 'kind', 'correlations', 'correlation', 'source'}
     extra = {k: v for k, v in raw.items() if k not in known}
     out['extra'] = extra or None
     return out
@@ -521,82 +515,9 @@ def _parse_spectrum(raw: dict, index: int, fallback_mjd: Optional[float], warnin
         'telescope': info['telescope'],
         'instrument': info['instrument'],
         'source_aliases': source_aliases(raw.get('source')),
-        'model_alias': to_text(raw.get('model')),
         'info': info,
         'pixels': pixels,
     }
-
-
-def percentile(sorted_values: List[float], q: float) -> float:
-    """Linear-interpolated percentile (0-100) of an already sorted, non-empty list."""
-    if len(sorted_values) == 1:
-        return sorted_values[0]
-    pos = (len(sorted_values) - 1) * q / 100.0
-    lo = int(math.floor(pos))
-    hi = min(lo + 1, len(sorted_values) - 1)
-    return sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * (pos - lo)
-
-
-def _summary(values: List[float]) -> dict:
-    values = sorted(values)
-    return {'median': percentile(values, 50), 'p16': percentile(values, 16), 'p84': percentile(values, 84),
-            'n': len(values)}
-
-
-def _parse_model(raw: dict) -> dict:
-    """A model fit with its outputs summarised over the realizations; the realizations (chains) are not kept.
-
-    ``parameter_summary``: per parameter, the median and 16th/84th percentiles over realizations
-    (unweighted). The model light curve is added by :func:`_finish_model` from the model photometry.
-    """
-    out = {field: to_text(raw.get(field), MODEL_TEXT_LENGTHS.get(field)) for field in MODEL_FIELDS}
-    for field in MODEL_JSON_FIELDS:
-        out[field] = raw.get(field)
-    out['source_aliases'] = source_aliases(raw.get('source'))
-    realizations = [r for r in raw.get('realizations') or [] if isinstance(r, dict)]
-    out['n_realizations'] = len(realizations) or None
-    values: Dict[str, List[float]] = OrderedDict()
-    latex: Dict[str, str] = {}
-    for real in realizations:
-        for name, par in (real.get('parameters') or {}).items():
-            value = to_float(par.get('value') if isinstance(par, dict) else par)
-            if value is not None:
-                values.setdefault(name, []).append(value)
-            if isinstance(par, dict) and par.get('latex') and name not in latex:
-                latex[name] = par['latex']
-    out['parameter_summary'] = OrderedDict(
-        (name, dict(_summary(vals), **({'latex': latex[name]} if name in latex else {})))
-        for name, vals in values.items()) or None
-    out['_curves'] = OrderedDict()
-    known = set(MODEL_FIELDS + MODEL_JSON_FIELDS) | {'source', 'realizations'}
-    out['extra'] = {k: v for k, v in raw.items() if k not in known} or None
-    return out
-
-
-def _add_model_point(model: dict, raw: dict) -> bool:
-    """Collect one model photometry row for the light-curve summary; False if it has no magnitude or time."""
-    mjd = _time_fields(raw)[0]
-    mag = to_float(raw.get('magnitude'))
-    if mjd is None or mag is None:
-        return False
-    key = tuple(to_text(raw.get(f)) for f in ('band', 'telescope', 'instrument', 'system'))
-    model['_curves'].setdefault(key, OrderedDict()).setdefault(round(mjd, 4), []).append(mag)
-    return True
-
-
-def _finish_model(model: dict) -> None:
-    """Model light curves: per band (and telescope / instrument / system) and time, the median and
-    16th/84th percentile magnitude over realizations."""
-    curves = []
-    for (band, telescope, instrument, system), by_time in model.pop('_curves').items():
-        times = sorted(by_time)
-        rows = [_summary(by_time[t]) for t in times]
-        curve = {'band': band, 'time': times}
-        curve.update({k: v for k, v in (('telescope', telescope), ('instrument', instrument), ('system', system)) if v})
-        for field in ('median', 'p16', 'p84', 'n'):
-            curve[field] = [r[field] for r in rows]
-        curves.append(curve)
-    model['light_curve'] = curves or None
 
 
 def _best(quantities: List[dict], prefer_kinds: Iterable[Optional[str]] = (), skip_kinds: Iterable[str] = ()) -> Optional[dict]:
@@ -702,36 +623,32 @@ def parse_entry(name: str, entry: dict, origin: Optional[str] = None) -> dict:
             sources.append(_parse_source(raw))
     known_aliases = {s['alias'] for s in sources}
 
+    # Model data are not imported yet: rows citing a model are only counted.
+    model_rows = Counter(fits=len([m for m in entry.get('models') or [] if isinstance(m, dict)]))
+
+    def is_model_row(raw) -> bool:
+        return isinstance(raw, dict) and raw.get('model') not in (None, '')
+
     quantities: Dict[str, List[dict]] = OrderedDict()
     extra: Dict[str, Any] = {}
     for key, value in entry.items():
         if key in STRUCTURE_KEYS:
             continue
         if isinstance(value, list):
-            quantities[key] = [_parse_quantity(key, item) for item in value]
+            kept = [item for item in value if not is_model_row(item)]
+            model_rows['quantities'] += len(value) - len(kept)
+            if kept:
+                quantities[key] = [_parse_quantity(key, item) for item in kept]
         else:
             extra[key] = value
 
-    models = OrderedDict()
-    for raw in entry.get('models') or []:
-        if isinstance(raw, dict):
-            model = _parse_model(raw)
-            models[model['alias'] or str(len(models) + 1)] = model
-
     phot_sets: Dict[tuple, dict] = OrderedDict()
-    model_points = 0
     for raw in entry.get('photometry') or []:
         if not isinstance(raw, dict):
             continue
-        model_alias = to_text(raw.get('model'))
-        if model_alias is not None:
-            model = models.get(model_alias)
-            if model is None:
-                warnings.append('photometry cites unknown model %r; kept with the observations' % model_alias)
-            else:
-                if _add_model_point(model, raw):
-                    model_points += 1
-                continue
+        if is_model_row(raw):
+            model_rows['photometry'] += 1
+            continue
         point = _parse_phot_point(raw, warnings)
         if point is None:
             continue
@@ -745,8 +662,6 @@ def parse_entry(name: str, entry: dict, origin: Optional[str] = None) -> dict:
                 'source_aliases': point['source_aliases'], 'points': []}
         phot_set['points'].append(point)
 
-    for model in models.values():
-        _finish_model(model)
     fields = _transient_fields(name, quantities, warnings)
     fallback_mjd = None
     for candidate in (fields['disc_date'], fields['abs_mag_peak_date']):
@@ -755,7 +670,9 @@ def parse_entry(name: str, entry: dict, origin: Optional[str] = None) -> dict:
             break
     spectra = []
     for index, raw in enumerate(entry.get('spectra') or []):
-        if isinstance(raw, dict):
+        if is_model_row(raw):
+            model_rows['spectra'] += 1
+        elif isinstance(raw, dict):
             spectrum = _parse_spectrum(raw, index, fallback_mjd, warnings)
             if spectrum is not None:
                 spectra.append(spectrum)
@@ -782,8 +699,7 @@ def parse_entry(name: str, entry: dict, origin: Optional[str] = None) -> dict:
         'quantities': [q for qs in quantities.values() for q in qs],
         'photometry_sets': list(phot_sets.values()),
         'spectra': spectra,
-        'models': list(models.values()),
-        'model_points': model_points,
+        'model_rows': dict((k, v) for k, v in model_rows.items() if v),
         'extra': extra or None,
         'warnings': warnings,
     }
@@ -810,10 +726,7 @@ def plan_counts(plan: dict) -> dict:
         'photometry_by_kind': dict(kinds),
         'spectra': len(plan['spectra']),
         'spectrum_pixels': sum(len(s['pixels']) for s in plan['spectra']),
-        'model_fits': len(plan['models']),
-        'model_realizations': sum(m['n_realizations'] or 0 for m in plan['models']),
-        'model_curve_points': sum(len(c['time']) for m in plan['models'] for c in (m['light_curve'] or [])),
-        'model_points': plan['model_points'],
+        'model_rows_skipped': plan['model_rows'],
         'unmapped_top_level_keys': sorted((plan['extra'] or {}).keys()),
     }
 
@@ -836,9 +749,9 @@ def describe_plan(plan: dict, max_warnings: int = 10) -> str:
         '  sources: %d   quantities: %d over %d keys' % (c['sources'], c['quantities'], len(c['quantity_keys'])),
         '  photometry: %d points in %d sets %s' % (c['photometry_points'], c['photometry_sets'],
                                                   dict(sorted(c['photometry_by_kind'].items()))),
-        '  spectra: %d (%d pixels)   models: %d fits over %d realizations; %d model points -> %d summary points' % (
-            c['spectra'], c['spectrum_pixels'], c['model_fits'], c['model_realizations'], c['model_points'],
-            c['model_curve_points']),
+        '  spectra: %d (%d pixels)   model data skipped: %s' % (
+            c['spectra'], c['spectrum_pixels'],
+            ', '.join('%d %s' % (v, k) for k, v in sorted(c['model_rows_skipped'].items())) or 'none'),
     ]
     if c['unmapped_top_level_keys']:
         lines.append('  unmapped top-level keys (kept in CatalogEntry.extra): %s' % ', '.join(c['unmapped_top_level_keys']))
