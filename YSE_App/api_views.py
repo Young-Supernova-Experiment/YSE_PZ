@@ -437,10 +437,23 @@ class TransientSpectrumFilterSet(_TransientDataFilterSet):
         return queryset.filter(**{self.spec_phase_path + '__lte': value})
 
 
-class TransientSpecDataFilterSet(TransientSpectrumFilterSet):
+class _SpectrumIdFilterMixin(django_filters.FilterSet):
+    """``?spectrum=<id>``: the pixels of one spectrum (#492). Works on pixel rows and on arrays rows
+    (both have a ``spectrum`` field), so array-stored spectra filter the same way."""
+    spectrum = django_filters.NumberFilter(method='filter_spectrum')
+
+    def filter_spectrum(self, queryset, name, value):
+        return queryset.filter(spectrum_id=value)
+
+
+class TransientSpecDataFilterSet(_SpectrumIdFilterMixin, TransientSpectrumFilterSet):
     transient_path = 'spectrum__transient'
     date_path = 'spectrum__obs_date'
     spec_phase_path = 'spectrum__spec_phase'
+
+
+class HostSpecDataFilterSet(_SpectrumIdFilterMixin):
+    pass
 
 
 class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
@@ -594,7 +607,59 @@ class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         allowed_spec = SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
         return allowed_spec.prefetch_related('groups', 'data_quality')
 
-class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class _ArrayPixelsMixin:
+    """List / retrieve per-pixel records of spectra stored only as arrays too (#891, #492): see
+    ``YSE_App.services.spectrum_pixel_api`` for what a synthesized record holds. Only spectra the
+    user may see (``authorized_spectra``) are read; their pixels are read-only."""
+    pixel_host = False
+
+    def _pixel_models(self):
+        if self.pixel_host:
+            return HostSpecData, HostSpectrum, HostSpectrumArrays
+        return TransientSpecData, TransientSpectrum, TransientSpectrumArrays
+
+    def authorized_spectra(self):
+        if self.pixel_host:
+            return SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
+        return SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        from YSE_App.services import spectrum_pixel_api
+
+        rows_model, spec_model, arrays_model = self._pixel_models()
+        rows = self.filter_queryset(self.get_queryset()).order_by('id')
+        arrays = spectrum_pixel_api.array_only_spectra(arrays_model, rows_model, self.authorized_spectra())
+        if self.filterset_class is not None:
+            arrays = self.filterset_class(request.query_params, queryset=arrays, request=request).qs
+        pixels = spectrum_pixel_api.PixelList(rows, arrays, rows_model=rows_model, spec_model=spec_model,
+                                              arrays_model=arrays_model, host=self.pixel_host)
+        page = self.paginate_queryset(pixels)
+        if page is not None:
+            return self.get_paginated_response(self.get_serializer(page, many=True).data)
+        return Response(self.get_serializer(list(pixels), many=True).data)
+
+    def get_object(self):
+        from rest_framework.exceptions import MethodNotAllowed
+        from YSE_App.services import spectrum_pixel_api
+
+        lookup = self.kwargs.get(self.lookup_url_kwarg or self.lookup_field)
+        if spectrum_pixel_api.decode_pseudo_pixel_id(lookup) is None:
+            return super().get_object()
+        if request_method_is_unsafe(self.request):
+            raise MethodNotAllowed(self.request.method, detail='Pixels of a spectrum stored as arrays are read-only.')
+        rows_model, spec_model, arrays_model = self._pixel_models()
+        obj = spectrum_pixel_api.pseudo_pixel(rows_model, spec_model, arrays_model, self.authorized_spectra(),
+                                              lookup, host=self.pixel_host)
+        if obj is None:
+            raise Http404
+        return obj
+
+
+def request_method_is_unsafe(request):
+    return request.method not in permissions.SAFE_METHODS
+
+
+class TransientSpecDataViewSet(_ArrayPixelsMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpecDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
     filter_backends = (DjangoFilterBackend,)
@@ -604,9 +669,12 @@ class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         allowed_spec_data = SpectraService.GetAuthorizedTransientSpecData_ByUser(self.request.user)
         return allowed_spec_data
 
-class HostSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class HostSpecDataViewSet(_ArrayPixelsMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpecDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = HostSpecDataFilterSet
+    pixel_host = True
 
     def get_queryset(self):
         allowed_spec_data = SpectraService.GetAuthorizedHostSpecData_ByUser(self.request.user)

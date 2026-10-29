@@ -142,7 +142,9 @@ class ResyncObjectTests(TnsResyncTestBase):
         spectrum = TransientSpectrum.objects.get(transient=self.transient)
         self.assertEqual(set(spectrum.groups.values_list("name", flat=True)), {PUBLIC_COLLABORATION_GROUP_NAME})
         self.assertEqual(spectrum.reference, "TNS SN 2026rsa (report 9)")
-        self.assertEqual(spectrum.transientspecdata_set.count(), 3)  # the NaN row is dropped
+        # stored as arrays (#492); the NaN pixel is dropped
+        from YSE_App.common import spectrum_arrays
+        self.assertEqual(spectrum_arrays.pixel_counts([spectrum.id]), {spectrum.id: 3})
 
         # a second run with the same TNS reply changes nothing and downloads nothing
         again = FakeTNS({"2026rsa": self._second_reply()}, files={})
