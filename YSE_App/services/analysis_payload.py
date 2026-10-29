@@ -155,14 +155,16 @@ def photometry_rows(user, transient) -> List[Dict]:
 
 
 def spectra_rows(user, transient, *, include_data: bool = True) -> List[Dict]:
+    from YSE_App.common import spectrum_arrays
     from YSE_App.data import SpectraService
-    from YSE_App.models import TransientSpecData
 
-    spectra = (
+    spectra = list(
         SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient.pk, includeBadData=True)
         .select_related("instrument", "obs_group")
         .order_by("obs_date")
     )
+    # arrays row or per-pixel rows (#891), sorted by wavelength; only the authorized spectra
+    pixels = spectrum_arrays.arrays_for([s.pk for s in spectra]) if include_data else {}
     out = []
     for spec in spectra:
         entry = {
@@ -176,16 +178,13 @@ def spectra_rows(user, transient, *, include_data: bool = True) -> List[Dict]:
             "flux": [],
             "flux_err": None,
         }
-        if include_data:
-            points = list(
-                TransientSpecData.objects.filter(spectrum=spec)
-                .order_by("wavelength")
-                .values_list("wavelength", "flux", "flux_err")[:MAX_SPECTRUM_POINTS]
-            )
-            entry["n_points"] = len(points)
-            entry["wavelength"] = [_finite(w) for w, _f, _e in points]
-            entry["flux"] = [_finite(f) for _w, f, _e in points]
-            errs = [_finite(e) for _w, _f, e in points]
+        if include_data and spec.pk in pixels:
+            wave, flux, err = pixels[spec.pk]
+            wave, flux = wave[:MAX_SPECTRUM_POINTS], flux[:MAX_SPECTRUM_POINTS]
+            entry["n_points"] = int(wave.size)
+            entry["wavelength"] = [_finite(w) for w in wave]
+            entry["flux"] = [_finite(f) for f in flux]
+            errs = [_finite(e) for e in err[:MAX_SPECTRUM_POINTS]] if err is not None else []
             entry["flux_err"] = errs if any(e is not None for e in errs) else None
         out.append(entry)
     return out

@@ -400,14 +400,19 @@ def build_at_report(service: SharingService, transient: Transient, *, coauthors:
 
 
 def spectrum_ascii(spectrum: TransientSpectrum) -> Optional[bytes]:
-    """The spectrum as two/three-column ASCII: from the SpecData rows, else the data file on disk."""
-    rows = list(TransientSpecData.objects.filter(spectrum=spectrum).order_by("wavelength")
-                .values_list("wavelength", "flux", "flux_err"))
-    if rows:
+    """The spectrum as two/three-column ASCII: from its stored pixels (arrays row or SpecData rows,
+    #891), else the data file on disk."""
+    from YSE_App.common import spectrum_arrays
+
+    pixels = spectrum_arrays.arrays_for([spectrum.pk]).get(spectrum.pk)
+    if pixels is not None and pixels[0].size:
+        wave, flux, errs = pixels
         buf = io.StringIO()
         buf.write("# wavelength flux flux_err\n")
-        for wl, flux, err in rows:
-            buf.write("%.4f %.6e%s\n" % (wl, flux, "" if err is None else " %.6e" % err))
+        for i in range(wave.size):
+            err = errs[i] if errs is not None else None
+            buf.write("%.4f %.6e%s\n" % (wave[i], flux[i],
+                                          "" if err is None or not math.isfinite(err) else " %.6e" % err))
         return buf.getvalue().encode()
     path = spectrum.spec_data_file or ""
     if path and os.path.exists(path):

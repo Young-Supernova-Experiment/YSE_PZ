@@ -19,6 +19,7 @@ from django.db import connection,connections
 from django.shortcuts import redirect
 from django.db.models import Count, Prefetch, Value, Max, Min
 import zipfile
+import numpy as np
 from io import BytesIO
 from YSE_App.yse_utils.yse_pa import yse_pa
 from django.utils.decorators import method_decorator
@@ -1699,14 +1700,10 @@ def transient_detail_spectra_tab_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
     # PIs (#446) are shown by name on the table: one prefetch query.
     spectra = list(_authorized_transient_spectra(request, transient_id).prefetch_related('pis'))
-    # The plot needs TransientSpecData points, not just a TransientSpectrum
-    # row; show the count so a spectrum without points is visibly unplottable.
-    point_counts = dict(
-        TransientSpecData.objects.filter(spectrum_id__in=[s.id for s in spectra])
-        .values_list('spectrum_id')
-        .annotate(n=Count('id'))
-        .values_list('spectrum_id', 'n')
-    )
+    # The plot needs pixels (arrays row or TransientSpecData rows, #891), not just a
+    # TransientSpectrum row; show the count so a spectrum without points is visibly unplottable.
+    from YSE_App.common import spectrum_arrays
+    point_counts = spectrum_arrays.pixel_counts([s.id for s in spectra])
     for spectrum in spectra:
         spectrum.n_points = point_counts.get(spectrum.id, 0)
     from YSE_App.collaboration_views import data_access_context
@@ -2157,6 +2154,33 @@ def transient_edit(request, transient_id=None):
     return render(request, 'YSE_App/transient_edit.html', {'form': form})
 
 
+def _finite_or_none(value):
+    value = float(value)
+    return value if np.isfinite(value) else None
+
+
+def _array_pixels_as_specdata(spectrum_id, arrays):
+    """An arrays-stored spectrum (#891) as the per-pixel dicts ``serializers.serialize`` gives for
+    TransientSpecData rows (``model`` / ``pk`` / ``fields``), so ``download_data`` consumers read both
+    alike. There is no row, so ``pk`` is None and the audit fields are absent."""
+    wave, flux, err = arrays
+    out = []
+    for i in range(wave.size):
+        out.append({
+            'model': 'YSE_App.transientspecdata',
+            'pk': None,
+            'fields': {
+                'spectrum': spectrum_id,
+                'wavelength': float(wave[i]),
+                'flux': float(flux[i]),
+                'wavelength_err': None,
+                'flux_err': _finite_or_none(err[i]) if err is not None else None,
+                'pixel_mask': 0,
+            },
+        })
+    return out
+
+
 from wsgiref.util import FileWrapper
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2195,7 +2219,16 @@ def download_data(request, slug):
     if len(authorized_spectra):
         data[transient[0].name]['spectra'] = json.loads(serializers.serialize("json", authorized_spectra, use_natural_foreign_keys=True))
 
+        # Spectra stored as arrays (#891) have no pixel rows: their 'data' list has the same
+        # per-pixel shape as serialized TransientSpecData rows, with pk None and the pixel fields only.
+        from YSE_App.common import spectrum_arrays
+        array_ids = set(TransientSpectrumArrays.objects.filter(
+            spectrum_id__in=[s.id for s in authorized_spectra]).values_list('spectrum_id', flat=True))
+        stored_arrays = spectrum_arrays.arrays_for(array_ids)
         for s,sd in zip(authorized_spectra,range(len(data[transient[0].name]['spectra']))):
+            if s.id in stored_arrays:
+                data[transient[0].name]['spectra'][sd]['data'] = _array_pixels_as_specdata(s.id, stored_arrays[s.id])
+                continue
             specdata = SpectraService.GetAuthorizedTransientSpecData_BySpectrum(user, s.id, includeBadData=True)
             if specdata:
                 data[transient[0].name]['spectra'][sd]['data'] = \
@@ -2558,6 +2591,10 @@ def download_spectra(request, slug):
         selected_ids = [int(i) for i in request.GET['ids'].split(',') if i.strip().isdigit()]
         authorized_spectra = authorized_spectra.filter(id__in=selected_ids)
     if len(authorized_spectra):
+        # Pixels from arrays rows or TransientSpecData rows (#891), only for the authorized spectra.
+        from YSE_App.common import spectrum_arrays
+        authorized_spectra = list(authorized_spectra)
+        pixels = spectrum_arrays.arrays_for([s.id for s in authorized_spectra])
 
         for s in authorized_spectra:
             content = ""
@@ -2566,17 +2603,19 @@ def download_spectra(request, slug):
             #import pdb; pdb.set_trace()
             content += spectrum_header_comment_lines(s)
             
-            specdata = SpectraService.GetAuthorizedTransientSpecData_BySpectrum(user, s.id, includeBadData=True)
-            if specdata:
+            if s.id in pixels:
+                wave, flux, err = pixels[s.id]
                 content += "\n"
                 content += "wavelength,flux,fluxerr\n"
                 linefmt =  "%.3f,%8.5e,%8.5e\n"
 
-                for sd in specdata.order_by('wavelength'):
-                    if sd.flux_err:
-                        content += linefmt%(sd.wavelength,sd.flux,sd.flux_err)
+                for i in range(wave.size):
+                    # no (or zero / NaN) error -> -99, as before
+                    e = err[i] if err is not None else np.nan
+                    if np.isfinite(e) and e:
+                        content += linefmt%(wave[i],flux[i],e)
                     else:
-                        content += linefmt%(sd.wavelength,sd.flux,-99)
+                        content += linefmt%(wave[i],flux[i],-99)
 
                 archive.writestr('%s-%s-%s.csv'%(transient.name,s.instrument.name,s.obs_date.isoformat().split('T')[0]),content)
 
@@ -2637,43 +2676,21 @@ def upload_spectrum(request):
             if form.cleaned_data.get('pis'):
                 tspec.pis.set(form.cleaned_data['pis'])
             
-            existingspec = TransientSpecData.objects.filter(spectrum=tspec)
-            if len(existingspec):
-                existingspec.delete()
-
-
-            td = []
+            pixels = []
             for line in request.FILES['filename']:
                 line = line.decode('utf-8').replace('\n','')
                 if line.startswith('#'): continue
-                if len(line.split()) == 3:
-                    wavelength,flux,flux_err = line.split()
-                    wavelength,flux,flux_err = float(wavelength),float(flux),float(flux_err)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,flux_err=flux_err,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split()) == 2:
-                    wavelength,flux = line.split()
-                    wavelength,flux = float(wavelength),float(flux)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split(',')) == 3:
-                    wavelength,flux,flux_err = line.split(',')
-                    wavelength,flux,flux_err = float(wavelength),float(flux),float(flux_err)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,flux_err=flux_err,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split(',')) == 2:
-                    wavelength,flux = line.split(',')
-                    wavelength,flux = float(wavelength),float(flux)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,
-                        created_by=request.user,modified_by=request.user)]
+                if len(line.split()) in (2, 3):
+                    values = line.split()
+                elif len(line.split(',')) in (2, 3):
+                    values = line.split(',')
                 else:
                     raise RuntimeError('bad input')
+                pixels.append(tuple(float(v) for v in values))
 
-            TransientSpecData.objects.bulk_create(td)
+            # replaces any old pixels; stored as arrays (#492)
+            from YSE_App.common import spectrum_arrays
+            spectrum_arrays.write_pixels(tspec, pixels, user=request.user)
                 
             return redirect('transient_detail', slug=transient.slug) #HttpResponseRedirect(reverse_lazy('transient_detail',transient.slug))
     else:

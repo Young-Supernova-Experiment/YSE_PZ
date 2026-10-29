@@ -958,6 +958,21 @@ REDSHIFT_CATALOG_CRON_ENABLED: True
 ```
 Or set `YSE_REDSHIFT_CATALOG_CRON=1` for the cron. Then restart. The job runner must be running (the `run_jobs` crontab line). Each hour one `redshifts.sweep` job checks up to `REDSHIFT_CATALOG_MAX_PER_RUN` (100) hosts, starting with those never checked, then those last checked more than `REDSHIFT_CATALOG_RECHECK_DAYS` (90) ago. While the sweep is enabled, a new host association from an upload also queues one `redshifts.host_lookup` job. **Check:** `/yse_test/jobs/` lists `redshifts.sweep` jobs as `done`, with a summary of what changed.
 
+<a id="spectrum-arrays"></a>
+### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
+
+**What changes on deploy.** Migration `0056_spectrum_arrays` adds `YSE_App_transientspectrumarrays` and `YSE_App_hostspectrumarrays` (new tables only). New uploads on yse\_experimental store pixels as arrays. Existing spectra keep their pixel rows and display as before.
+
+**Test conversion (yse\_experimental, `YSE_test`), only when Ryan asks:**
+
+```bash
+cd <CHECKOUT> && <PYTHON> manage.py convert_spectra_to_arrays --transient --max 200            # dry run
+<PYTHON> manage.py convert_spectra_to_arrays --transient --max 200 --apply
+```
+**Expected:** a count of spectra to convert, then `converted N` with no verification failures. **Check:** open a few converted transients on `/yse_experimental/`: the spectra plot, the spectra tab point counts and "Download spectra" look as before. **Never** add `--delete-rows` on `YSE_test` until this change is on `develop` (yse\_test still reads pixel rows).
+
+**Rollback:** `SPECTRUM_PIXEL_STORAGE: rows` in `[site_settings]` makes uploads write pixel rows again; reading needs no change.
+
 <a id="tns-resync"></a>
 
 ### TNS re-sync and backfill (2026-10-18, #438) one crontab line to remove; backfill and the hourly sweep optional (off by default)
@@ -3609,6 +3624,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-28 v107, **migration applied by the deploy; a test conversion on yse\_experimental when Ryan asks** (no new package). Spectra stored as arrays ([#492](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/492), [#891](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/891)): migration `0056_spectrum_arrays` creates two new tables (safe on the shared database). Uploads now write arrays; every reader reads both storages. **Until this reaches `develop`, never run `convert_spectra_to_arrays --delete-rows` on `YSE_test`** (yse\_test reads pixel rows only), and spectra uploaded on yse\_experimental show only there. Test steps in the section [Spectra stored as arrays](#spectrum-arrays); see docs/spectrum-arrays.md.
 * 2026-10-22 v106, **nothing to run** (the deploy applies the migrations). Advisor and advisee relationships, one copy per side, confirmed by the other person (Ryan): migrations `0054_mentorship_kinds` (choices only) and `0055_mentorship_owner_status` (three nullable or defaulted columns on `YSE_App_mentorship`; MySQL keeps `DEFAULT 'confirmed'` on `status` so older code can still insert; existing relations between two users get a confirmed copy on the other side). New notification kind `mentorship` in "Interests and data access". See docs/researcher-profile.md.
 * 2026-10-22 v105, **nothing new to run.** Develop backported into experimental (develop-direct PRs [#783](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/783): no astropy IERS downloads in the app, and [#785](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/785): the broker search radius accepts any value). Develop's v39 is v104 here. Experimental already had the downloads off in `views.py` / `view_utils.py` (#466); the setting now lives once, in `YSE_App/apps.py`, next to the Explorer scope hook. The IERS refresh cron is plain Python and is unaffected.
 * 2026-10-22 v104 (develop v39), **nothing to run** beyond the deploy (no migration, no package). Observing-night pages timed out (504) on production after #143: the deploy moved astropy from 5.0 to 5.2.2, and twilight times for a recent night made astropy download its IERS (Earth-rotation) table inside the request. `views.py` and `view_utils.py` even set `auto_download = True`. The app now turns those downloads off at startup (`YSE_App/apps.py`) and nothing turns them back on; UT1 refinement is milliseconds, irrelevant for twilight and airmass. Check: an observing night that was never opened loads in a few seconds.

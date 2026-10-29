@@ -150,7 +150,10 @@ class DeployChecklistFlowTests(TestCase):
         new_spec = TransientSpectrum.objects.filter(
             transient=self.transient, instrument=self.kast
         ).get()
-        self.assertEqual(TransientSpecData.objects.filter(spectrum=new_spec).count(), 3)
+        # stored as arrays (#492); count pixels in either storage
+        from YSE_App.common import spectrum_arrays
+        self.assertEqual(spectrum_arrays.pixel_counts([new_spec.id]), {new_spec.id: 3})
+        self.assertFalse(TransientSpecData.objects.filter(spectrum=new_spec).exists())
 
     def test_download_spectra_returns_zip_of_csv(self):
         response = self.client.get(reverse("download_spectra", kwargs={"slug": self.transient.slug}))
@@ -200,7 +203,10 @@ class DeployChecklistFlowTests(TestCase):
         spec = TransientSpectrum.objects.filter(
             transient=self.transient, spectrum_notes="ci upload"
         ).get()
-        self.assertEqual(TransientSpecData.objects.filter(spectrum=spec).count(), 2)
+        from YSE_App.common import spectrum_arrays
+        self.assertEqual(spectrum_arrays.pixel_counts([spec.id]), {spec.id: 2})
+        wave, flux, err = spectrum_arrays.arrays_for([spec.id])[spec.id]
+        self.assertEqual((list(wave), list(flux), list(err)), ([5000.0, 5010.0], [1.0, 1.1], [0.1, 0.1]))
 
     # --------------------------------------------------------------- photometry
 

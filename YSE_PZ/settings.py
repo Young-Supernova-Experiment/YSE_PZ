@@ -675,6 +675,10 @@ EXPLORER_QUERY_MAX_EXECUTION_MS = int(
 # extra table or view names (for example a view of derived values).
 PAGE_QUERY_TABLE_POLICY = _str_setting(
     'YSE_PAGE_QUERY_TABLE_POLICY', 'site_settings', 'PAGE_QUERY_TABLE_POLICY', 'enforce').strip().lower()
+# Spectrum pixels (#492): new uploads are stored as arrays; 'rows' writes per-pixel rows again
+# (rollback switch). Reading handles both. See docs/spectrum-arrays.md.
+SPECTRUM_PIXEL_STORAGE = _str_setting(
+    'YSE_SPECTRUM_PIXEL_STORAGE', 'site_settings', 'SPECTRUM_PIXEL_STORAGE', 'arrays').strip().lower()
 PAGE_QUERY_EXTRA_ALLOWED_TABLES = _str_setting(
     'YSE_PAGE_QUERY_EXTRA_ALLOWED_TABLES', 'site_settings', 'PAGE_QUERY_EXTRA_ALLOWED_TABLES', '')
 
