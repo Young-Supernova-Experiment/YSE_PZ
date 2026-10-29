@@ -370,21 +370,21 @@ def _transient_phot_cache_token(transient_id):
 def _transient_spectrum_cache_token(transient_id):
     from django.db.models import Count, Max, Sum
 
+    # Spectra stored as arrays (#492): writing, replacing or deleting an arrays row changes the token
+    # too. The arrays row is one-to-one with its spectrum, so joining it in costs no extra query and
+    # does not multiply the counts.
     spec_agg = TransientSpectrum.objects.filter(
         transient_id=transient_id,
-    ).aggregate(latest=Max('modified_date'), n=Count('id'))
+    ).aggregate(latest=Max('modified_date'), n=Count('id'), arr_latest=Max('arrays__modified_date'),
+                arr_n=Count('arrays__spectrum_id'), arr_px=Sum('arrays__n_pixels'))
     data_agg = TransientSpecData.objects.filter(
         spectrum__transient_id=transient_id,
     ).aggregate(latest=Max('modified_date'), n=Count('id'))
-    # Spectra stored as arrays (#891): writing, replacing or deleting an arrays row changes the token too.
-    arr_agg = TransientSpectrumArrays.objects.filter(
-        spectrum__transient_id=transient_id,
-    ).aggregate(latest=Max('modified_date'), n=Count('spectrum_id'), px=Sum('n_pixels'))
     spec_latest = spec_agg['latest'].isoformat() if spec_agg['latest'] else 'none'
     data_latest = data_agg['latest'].isoformat() if data_agg['latest'] else 'none'
-    arr_latest = arr_agg['latest'].isoformat() if arr_agg['latest'] else 'none'
+    arr_latest = spec_agg['arr_latest'].isoformat() if spec_agg['arr_latest'] else 'none'
     return (f"s{spec_agg['n']}:{spec_latest}:d{data_agg['n']}:{data_latest}"
-            f":a{arr_agg['n']}:{arr_agg['px'] or 0}:{arr_latest}")
+            f":a{spec_agg['arr_n']}:{spec_agg['arr_px'] or 0}:{arr_latest}")
 
 
 def _cached_plot_http_response(cache_key, html):

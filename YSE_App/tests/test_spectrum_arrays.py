@@ -28,6 +28,11 @@ from YSE_App.tests.fixtures_minimal import (
 READER = "spectrum_arrays_user"
 
 
+def _pid(record):
+    """A pixel record's id: the serializers are hyperlinked, so it is the last part of ``url``."""
+    return int(record["url"].rstrip("/").rsplit("/", 1)[-1])
+
+
 def _rows(user, spectrum, n, *, err=True, start=4000.0, model=TransientSpecData):
     model.objects.bulk_create([
         model(spectrum=spectrum, wavelength=start + 10.0 * i, flux=1.0 + 0.1 * i,
@@ -271,8 +276,8 @@ class ApiPixelTests(TestCase):
         self.assertEqual([p["wavelength"] for p in got], [4100.0, 4200.0, 4300.0])
         self.assertEqual([p["flux"] for p in got], [1.0, 2.0, 3.0])
         self.assertEqual([p["flux_err"] for p in got], [None, 0.2, 0.3])
-        self.assertTrue(all(p["id"] < 0 for p in got))
-        self.assertEqual(len({p["id"] for p in got}), 3)
+        self.assertTrue(all(_pid(p) < 0 for p in got))
+        self.assertEqual(len({_pid(p) for p in got}), 3)
         self.assertTrue(got[0]["spectrum"].rstrip("/").endswith("/%d" % self.array_spec.id))
         self.assertEqual(got[0]["pixel_mask"], 0)
         self.assertIsNone(got[0]["wavelength_err"])
@@ -286,12 +291,12 @@ class ApiPixelTests(TestCase):
         for offset in range(0, 7, 2):
             pages += _results(self.client.get("/api/transientspecdata/",
                                               {"transient": self.transient.id, "limit": 2, "offset": offset}))
-        self.assertEqual([p["id"] for p in pages], [p["id"] for p in full["results"]])
-        self.assertEqual(len({p["id"] for p in pages}), 7)
+        self.assertEqual([_pid(p) for p in pages], [_pid(p) for p in full["results"]])
+        self.assertEqual(len({_pid(p) for p in pages}), 7)
         # the converted spectrum with rows is listed once, from its rows (real ids)
         both = [p for p in pages if p["wavelength"] >= 6000.0]
         self.assertEqual(len(both), 2)
-        self.assertTrue(all(p["id"] > 0 for p in both))
+        self.assertTrue(all(_pid(p) > 0 for p in both))
         self.assertFalse(any(5000.0 <= p["wavelength"] < 5200.0 for p in pages))
 
     def test_retrieve_pseudo_id(self):
@@ -316,7 +321,7 @@ class ApiPixelTests(TestCase):
     def test_host_pixels(self):
         got = _results(self.client.get("/api/hostspecdata/", {"spectrum": self.host_spec.id}))
         self.assertEqual([p["wavelength"] for p in got], [7000.0, 7100.0])
-        self.assertTrue(all(p["id"] < 0 for p in got))
+        self.assertTrue(all(_pid(p) < 0 for p in got))
 
 
 class WritePixelsTests(TestCase):
