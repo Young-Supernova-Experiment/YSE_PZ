@@ -196,6 +196,13 @@ class DeployChecklistFlowTests(TestCase):
         self.assertEqual(spectrum_arrays.pixel_counts([spec.id]), {spec.id: 2})
         self.assertIn(group, spec.groups.all())
 
+    def test_upload_spectrum_rejects_an_unknown_group(self):
+        n_before = TransientSpectrum.objects.count()
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", permissions=["no-such-group-898"]), follow=True)
+        self.assertContains(response, "Spectrum not uploaded. Permissions: Select a valid choice.")
+        self.assertEqual(TransientSpectrum.objects.count(), n_before)
+
     def test_upload_spectrum_page_on_its_own(self):
         response = self.client.get(reverse("upload_spectrum"))
         self.assertContains(response, "Spectra are uploaded from the transient")

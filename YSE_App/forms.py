@@ -475,6 +475,15 @@ class RemoveFollowupNoticeForm(ModelForm):
             'id']
 
 
+class _GroupNamesField(forms.MultipleChoiceField):
+    """Collaboration group names. The choices shown are those read when the server process started,
+    so drawing the form costs no query; a submitted name missing from them is looked up, so a group
+    created since (or a list drawn by another server process) is still valid (#898)."""
+
+    def valid_value(self, value):
+        return super().valid_value(value) or Group.objects.filter(name=value).exists()
+
+
 class SpectrumUploadForm(ModelForm):
     filename = forms.FileField()
     # Browsers send datetime-local values with or without seconds (#898).
@@ -488,9 +497,8 @@ class SpectrumUploadForm(ModelForm):
     data_quality = forms.ModelChoiceField(
         DataQuality.objects.filter(Q(name='Quicklook')),required=False)
 
-    # Choices are read per form (in __init__), not once at import, so groups created after the
-    # server started are valid (#898).
-    permissions = forms.MultipleChoiceField(choices=(), required=False)
+    qs = [(i['name'], i['name']) for i in Group.objects.all().values('name').distinct().order_by('name')]
+    permissions = _GroupNamesField(choices=qs, required=False)
     # PIs of the spectrum (#446); names only are shown.
     pis = forms.ModelMultipleChoiceField(
         PrincipalInvestigator.objects.order_by('name'), required=False, label='PI(s)')
@@ -519,11 +527,6 @@ class SpectrumUploadForm(ModelForm):
         model = TransientSpectrum
         fields = ('transient','ra',
                   'dec','spec_phase')#,'obs_group','instrument')
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['permissions'].choices = [
-            (name, name) for name in Group.objects.order_by('name').values_list('name', flat=True).distinct()]
 
 class AutomatedSpectrumRequest(ModelForm):
 
