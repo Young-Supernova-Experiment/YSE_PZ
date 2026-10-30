@@ -188,6 +188,9 @@ Facts that shape it:
 
 ### Step 1: offline, no database
 
+On Ziggy, David runs it step by step from docs/ziggy-runbook.md, section "Open Supernova Catalog,
+step 1" (O1-O7).
+
 - Clone the six repositories once (see "Running it"). Every later step reads these files; nothing
   is downloaded again.
 - Offline dry run of everything: `import_osc <OSC_DIR>/sne-* --offline --quiet --report offline.jsonl`,

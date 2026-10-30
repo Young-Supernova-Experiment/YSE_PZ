@@ -958,6 +958,65 @@ REDSHIFT_CATALOG_CRON_ENABLED: True
 ```
 Or set `YSE_REDSHIFT_CATALOG_CRON=1` for the cron. Then restart. The job runner must be running (the `run_jobs` crontab line). Each hour one `redshifts.sweep` job checks up to `REDSHIFT_CATALOG_MAX_PER_RUN` (100) hosts, starting with those never checked, then those last checked more than `REDSHIFT_CATALOG_RECHECK_DAYS` (90) ago. While the sweep is enabled, a new host association from an upload also queues one `redshifts.host_lookup` job. **Check:** `/yse_test/jobs/` lists `redshifts.sweep` jobs as `done`, with a summary of what changed.
 
+<a id="osc-step1"></a>
+### Open Supernova Catalog, step 1: download and offline dry run (2026-10-30, #887, #905, #906): when Ryan asks; writes nothing to any database
+
+**What this is.** The first step of the OSC import plan (docs/osc-import.md, "Plan for the full import"). It downloads the OSC data once (about 13 GB of git data, 55,500 files) and the TNS public-objects file, and runs two dry runs. **Nothing is written to any database.** These commands need #896 deployed on yse\_experimental, so they use that checkout. Its Python is `/data/yse_pz/YSE_PZ_experimental/venv/bin/python`, called `<EXP_PYTHON>` below. `<OSC_DIR>` is a new directory of your choice on a disk with at least 50 GB free, e.g. `/data/osc`.
+
+**O1. Disk space.**
+```bash
+df -h /data
+```
+**Expected:** at least 50G in the `Avail` column for the disk holding `<OSC_DIR>`. **If not:** pick another disk for `<OSC_DIR>` and tell Ryan.
+
+**O2. Download the OSC data** (30-90 minutes; it keeps running if the session drops):
+```bash
+mkdir -p <OSC_DIR>/reports && cd <OSC_DIR>
+nohup sh -c 'for r in sne-pre-1990 sne-1990-1999 sne-2000-2004 sne-2005-2009 sne-2010-2014 sne-2015-2019; do git clone --depth 1 https://github.com/astrocatalogs/$r.git; done' > reports/clone.log 2>&1 &
+```
+**Check, when `jobs` (or `pgrep -f "git clone"`) shows nothing running:**
+```bash
+for r in <OSC_DIR>/sne-*; do echo "$r $(ls $r | grep -c json)"; done
+```
+**Expected (about):**
+
+| repository | files |
+| --- | --- |
+| `sne-pre-1990` | 5229 |
+| `sne-1990-1999` | 2358 |
+| `sne-2000-2004` | 1925 |
+| `sne-2005-2009` | 7997 |
+| `sne-2010-2014` | 10321 |
+| `sne-2015-2019` | 27658 |
+
+**If not:** send Ryan `<OSC_DIR>/reports/clone.log`.
+
+**O3. TNS public-objects file** (one request to TNS, with the bot credentials the TNS crons use):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py osc_tns_check --download-tns-file <OSC_DIR>/tns_public_objects.csv.zip
+```
+**Expected:** `saved <OSC_DIR>/tns_public_objects.csv.zip; N objects`, where N is in the hundreds of thousands. Keep this file; production uses the same one. **If it fails:** send Ryan the error. The TNS bot credentials may need to be named; nothing else depends on this step.
+
+**O4. Offline dry run of every entry** (no database access; 1-3 hours):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && nohup <EXP_PYTHON> manage.py import_osc <OSC_DIR>/sne-* --offline --quiet --report <OSC_DIR>/reports/offline.jsonl > <OSC_DIR>/reports/offline.log 2>&1 &
+```
+**Expected, when it finishes:** the last line of `<OSC_DIR>/reports/offline.log` reads `Dry run: 55xxx entries, 0 written (0 new transients), N failed, ... s`. N may be a few dozen (unreadable files are expected and are what this step is for).
+
+**O5. Summary of the dry run:**
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py osc_report_summary <OSC_DIR>/reports/offline.jsonl --review-dir <OSC_DIR>/reports/offline-review > <OSC_DIR>/reports/offline-summary.txt
+```
+**Expected:** `offline-summary.txt` starts with `entries: 55xxx`. `offline-review/` holds four CSV files.
+
+**O6. Instrument census** (reads the database only to name known instruments; writes nothing):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py catalog_instruments --census <OSC_DIR>/sne-* --top 300 > <OSC_DIR>/reports/instrument-census.txt
+```
+**Expected:** the first line names the database (`Using database YSE_test on ...`), then up to 300 lines of `count kind telescope instrument -> target`.
+
+**O7. Send Ryan** `offline-summary.txt`, `instrument-census.txt` and `offline-review/failures.csv` from `<OSC_DIR>/reports/`. They hold only public catalogue data. Keep `<OSC_DIR>`: every later step reads it.
+
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
 
@@ -3624,6 +3683,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-30 v110, **when Ryan asks: OSC step 1, download and offline dry run, O1-O7** (writes nothing to any database). See the section [Open Supernova Catalog, step 1](#osc-step1). Needs #896 deployed on yse\_experimental.
 * 2026-10-29 v109, **nothing required** (the deploy applies the migration; no new package). Open Supernova Catalog import, schema and commands only ([#887](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/887)): migration `0057_catalog_import` creates new tables only (safe on the shared `YSE_test` database). **Do not run `import_osc`, `catalog_instruments` or `osc_tns_check` with `--apply` on any stack until Ryan asks**; the import plan is in docs/osc-import.md.
 * 2026-10-29 v108, **nothing to run** (no migration, no package). Spectrum upload from the transient page ([#898](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/898)): a failed upload returns to the transient page with the reason instead of a bare `/upload_spectrum/` page; the file is checked before anything is written; Permissions choices include groups created after the server started; times with seconds are accepted.
 * 2026-10-28 v107, **migration applied by the deploy; a test conversion on yse\_experimental when Ryan asks** (no new package). Spectra stored as arrays ([#492](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/492), [#891](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/891)): migration `0056_spectrum_arrays` creates two new tables (safe on the shared database). Uploads now write arrays; every reader reads both storages. **Until this reaches `develop`, never run `convert_spectra_to_arrays --delete-rows` on `YSE_test`** (yse\_test reads pixel rows only), and spectra uploaded on yse\_experimental show only there. Test steps in the section [Spectra stored as arrays](#spectrum-arrays); see docs/spectrum-arrays.md.
