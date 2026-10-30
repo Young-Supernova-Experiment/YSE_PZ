@@ -152,6 +152,7 @@ class EncryptionTests(TestCase):
             self.assertNotIn(plain, rows[name].ciphertext)
             self.assertEqual(rows[name].key_fingerprint, kp["fingerprint"])
             self.assertEqual(research_crypto.decrypt_value(rows[name].ciphertext, name, kp["private"]), plain)
+        self.user.refresh_from_db()  # the view saved the given and family names on the account
         self.assertEqual(rp.missing_fields(self.user, key_available=True), [])
         # The view, the admin and the history show only "(encrypted, set on <date>)".
         with with_key():
@@ -200,6 +201,7 @@ class EncryptionTests(TestCase):
             BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0], phd_year="2010", gender="man"))
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(EncryptedProfileValue.objects.exists())
+        self.user.refresh_from_db()  # the view saved the given and family names on the account
         self.assertEqual(rp.missing_fields(self.user), [])
         self.assertIsNotNone(ResearcherProfile.objects.get(user=self.user).profile_completed_at)
         self.assertContains(self.client.get(reverse("researcher_profile")), "not available yet")

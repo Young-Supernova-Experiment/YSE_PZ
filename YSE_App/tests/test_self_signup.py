@@ -84,7 +84,9 @@ class SignupDisabledTests(CacheClearMixin, TestCase):
         self.assertEqual(self.client.get(reverse("signup")).status_code, 404)
         self.assertEqual(signup_post(self.client).status_code, 404)
         self.assertFalse(User.objects.filter(username="ss_newcomer").exists())
-        self.assertEqual(self.client.get(reverse("signup_verify_email", args=["x" * 40])).status_code, 404)
+        # The emailed confirmation link works with signup off (every account needs a confirmed
+        # address); a bad token is its own 400.
+        self.assertEqual(self.client.get(reverse("signup_verify_email", args=["x" * 40])).status_code, 400)
         page = self.client.get(reverse("auth_login"))
         self.assertNotContains(page, 'id="yse-signup-link"')
         self.assertContains(page, reverse("password_reset"))
@@ -173,6 +175,7 @@ class SignupTests(CacheClearMixin, TestCase):
         self.assertFalse(User.objects.filter(username="ss_c").exists())
         # Another client address is counted separately.
         resp = self.client.post(reverse("signup"), {
+            "first_name": "Synthetic", "last_name": "Dee",
             "username": "ss_d", "email": "d@example.com", "password1": STRONG_PASSWORD,
             "password2": STRONG_PASSWORD, "form_ts": _old_ts()}, REMOTE_ADDR="192.0.2.77")
         self.assertEqual(resp.status_code, 302)
