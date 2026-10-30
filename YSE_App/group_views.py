@@ -72,7 +72,8 @@ def _member_page(request, group):
     owners = {u.pk for u in group_svc.owners_of(group)}
     deputies = {u.pk for u in group_svc.deputies_of(group)}
     query = (request.GET.get("q") or "").strip()[:100]
-    qs = group.user_set.filter(is_active=True).select_related("researcher_profile").order_by("username")
+    qs = (group.user_set.filter(is_active=True).select_related("researcher_profile")
+          .order_by("last_name", "first_name", "username"))
     if query:
         qs = qs.filter(Q(username__icontains=query) | Q(first_name__icontains=query)
                        | Q(last_name__icontains=query) | Q(researcher_profile__full_name__icontains=query))
@@ -109,13 +110,7 @@ def _require_manager(request, group):
 
 def _onboarding_redirect(request):
     """POSTs pass the gate, so views that change membership check it themselves."""
-    if onboarding.gate_enabled():
-        step = onboarding.pending_step(request)
-        if step == "agreement":
-            return onboarding.redirect_with_next("agreement", request)
-        if step == "profile":
-            return onboarding.redirect_with_next("researcher_profile_edit", request)
-    return None
+    return onboarding.step_redirect(request)
 
 
 @login_required
@@ -346,12 +341,9 @@ def group_invite_accept(request):
     """Confirm and join (gated: the agreement and profile come first for a new user)."""
     # The gate redirects GETs; POSTs pass it, so check here too: a new user must accept the
     # agreement and complete the profile before they can join (and see the team's data).
-    if onboarding.gate_enabled():
-        step = onboarding.pending_step(request)
-        if step == "agreement":
-            return onboarding.redirect_with_next("agreement", request)
-        if step == "profile":
-            return onboarding.redirect_with_next("researcher_profile_edit", request)
+    pending = onboarding.step_redirect(request)
+    if pending is not None:
+        return pending
     token_hash = request.session.get(INVITE_SESSION_KEY)
     invitation = group_svc.find_invitation(token_hash, hashed=True) if token_hash else None
     if request.method == "POST":

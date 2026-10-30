@@ -12,7 +12,9 @@ Gate exemptions: ``signup`` and ``signup_verify_email`` are in
 no login-required middleware, the marker below only sets the attribute), so the backport
 keeps them reachable signed out.
 
-The signup pages return 404 while ``SELF_SIGNUP_ENABLED`` is off. Membership requests are
+The signup page returns 404 while ``SELF_SIGNUP_ENABLED`` is off. The email confirmation
+pages (``/settings/email/`` and the emailed link) work for every account, because the
+onboarding gate requires a confirmed address from everyone (``ONBOARDING_EMAIL_REQUIRED``). Membership requests are
 separate: they follow ``GROUP_REQUESTS_ENABLED`` (on by default) and each team's
 ``accepts_requests`` switch; owners and deputies decide them.
 """
@@ -25,6 +27,7 @@ from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError, transaction
 from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_POST
@@ -106,7 +109,8 @@ def signup(request):
             if verify:
                 sent = signup_svc.register_email_send(user) and signup_svc.send_verification_email(request, user, email)
                 if sent:
-                    messages.info(request, "Welcome! We sent a link to your email address: open it to confirm the address.")
+                    messages.info(request, "Welcome! We sent a link to your email address: open it and confirm the address "
+                                           "to continue.")
                 else:
                     messages.warning(request, "Welcome! We could not send the confirmation email; you can resend it from "
                                               "your settings page.")
@@ -127,7 +131,6 @@ def signup(request):
 @csrf_protect
 def signup_verify_email(request, token):
     """The emailed link. GET shows a Confirm button (mail scanners prefetch GETs); POST stores the address."""
-    _require_signup_enabled()
     found = signup_svc.read_token(token)
     if found is None:
         return _no_store(render(request, "YSE_App/signup_verify.html", {"problem": "invalid"}, status=400))
@@ -143,10 +146,15 @@ def signup_verify_email(request, token):
 
 
 @login_required
+@onboarding_exempt
 @never_cache
 def account_email(request):
-    """Send (or re-send) a confirmation link for an address the signed-in user enters."""
-    _require_signup_enabled()
+    """Send (or re-send) a confirmation link for an address the signed-in user enters.
+
+    Also the gate's first step for an account with no address (``?next=`` is kept so the
+    page can offer to continue once the address is confirmed).
+    """
+    next_url = request.POST.get("next") or request.GET.get("next") or ""
     if request.method == "POST":
         form = EmailConfirmForm(request.POST)
         if form.is_valid():
@@ -154,16 +162,19 @@ def account_email(request):
             if not signup_svc.verification_enabled():
                 if signup_svc.confirm_email(request.user, email):
                     messages.success(request, "Email address saved.")
+                    if next_url:
+                        return redirect(onboarding.safe_next(request, next_url))
                 else:
                     messages.error(request, "That address is already used by another account.")
-                return redirect("account_email")
+                return _email_page_redirect(next_url)
             if not signup_svc.register_email_send(request.user):
                 messages.error(request, "Too many confirmation emails this hour; please try again later.")
             elif signup_svc.send_verification_email(request, request.user, email):
-                messages.info(request, "We sent a confirmation link to that address.")
+                messages.info(request, "We sent a confirmation link to that address. Open it, confirm, then come "
+                                       "back here and continue.")
             else:
                 messages.error(request, "The confirmation email could not be sent; please try again later.")
-            return redirect("account_email")
+            return _email_page_redirect(next_url)
     elif request.method in ("GET", "HEAD"):
         form = EmailConfirmForm()
     else:
@@ -171,18 +182,21 @@ def account_email(request):
     return render(request, "YSE_App/account_email.html", {
         "form": form, "has_email": bool(request.user.email),
         "verification": signup_svc.verification_enabled(),
+        "required": onboarding.gate_enabled() and onboarding.email_required() and not request.user.email,
+        "next_url": next_url,
+        "continue_url": onboarding.safe_next(request, next_url) if request.user.email and next_url else "",
     })
+
+
+def _email_page_redirect(next_url):
+    from urllib.parse import urlencode
+    url = reverse("account_email")
+    return redirect("%s?%s" % (url, urlencode({"next": next_url})) if next_url else url)
 
 
 def _onboarding_redirect(request):
     """POSTs pass the gate; a user who has not onboarded must not open or decide requests."""
-    if onboarding.gate_enabled():
-        step = onboarding.pending_step(request)
-        if step == "agreement":
-            return onboarding.redirect_with_next("agreement", request)
-        if step == "profile":
-            return onboarding.redirect_with_next("researcher_profile_edit", request)
-    return None
+    return onboarding.step_redirect(request)
 
 
 @login_required

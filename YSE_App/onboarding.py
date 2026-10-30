@@ -3,8 +3,11 @@
 ``OnboardingGateMiddleware`` (after AuthenticationMiddleware and
 MessageMiddleware) redirects **authenticated browser requests for HTML pages**:
 
-1. no acceptance of the current ``UserAgreement`` -> ``/agreement/?next=...``;
-2. researcher profile missing or incomplete -> ``/profile/edit/?next=...``.
+1. no email address on the account -> ``/settings/email/?next=...`` (a confirmation
+   link is sent there; ``ONBOARDING_EMAIL_REQUIRED = False`` skips this step);
+2. no acceptance of the current ``UserAgreement`` -> ``/agreement/?next=...``;
+3. researcher profile missing or incomplete (including the given and family names on
+   the account) -> ``/profile/edit/?next=...``.
 
 It never touches requests that crons, scripts, brokers and integrations make:
 
@@ -62,7 +65,7 @@ EXEMPT_URL_NAMES = frozenset({
     "password_change", "password_change_done",
     "password_reset", "password_reset_done", "password_reset_confirm", "password_reset_complete",
     # self-service signup and its emailed confirmation link (#448)
-    "signup", "signup_verify_email",
+    "signup", "signup_verify_email", "account_email",
     # the onboarding pages themselves and the acknowledgements page they link to
     "agreement", "research_consent", "researcher_profile", "researcher_profile_edit", "researcher_advisor_suggest",
     "researcher_student_add", "researcher_student_update", "researcher_profile_confirm",
@@ -135,18 +138,43 @@ def redirect_with_next(url_name, request):
     return HttpResponseRedirect("%s?%s" % (reverse(url_name), urlencode({"next": request.get_full_path()})))
 
 
+STEP_URL_NAMES = {"email": "account_email", "agreement": "agreement", "profile": "researcher_profile_edit"}
+
+
+def email_required() -> bool:
+    return bool(getattr(settings, "ONBOARDING_EMAIL_REQUIRED", True))
+
+
+def step_redirect(request):
+    """Redirect to the user's next onboarding step (``?next=`` this page), or None when done.
+
+    For views that act on POST (the middleware only gates page views). None as well
+    when the gate is off.
+    """
+    if not gate_enabled():
+        return None
+    step = pending_step(request)
+    return redirect_with_next(STEP_URL_NAMES[step], request) if step else None
+
+
 def pending_step(request):
-    """``"agreement"``, ``"profile"`` or ``None`` for an authenticated user."""
+    """``"email"``, ``"agreement"``, ``"profile"`` or ``None`` for an authenticated user."""
     return pending_step_for(request.user)
 
 
 def pending_step_for(user):
     """``pending_step`` for a user object (no request needed)."""
     from YSE_App.services.researcher_profile import is_complete
+    if email_required() and not (getattr(user, "email", "") or "").strip():
+        return "email"
     agreement_id = current_agreement_id()
     if agreement_id and not has_accepted(user, agreement_id):
         return "agreement"
     if not is_complete(user):
+        # Names on the account can often be taken from the profile's full name.
+        from YSE_App.services.researcher_profile import fill_account_names
+        if fill_account_names(user) and is_complete(user):
+            return None
         return "profile"
     return None
 
@@ -223,10 +251,8 @@ class OnboardingGateMiddleware:
         if session is not None and session.get(SESSION_KEY) == token:
             return _consent_reminder(request)
         step = pending_step(request)
-        if step == "agreement":
-            return redirect_with_next("agreement", request)
-        if step == "profile":
-            return redirect_with_next("researcher_profile_edit", request)
+        if step:
+            return redirect_with_next(STEP_URL_NAMES[step], request)
         if session is not None:
             session[SESSION_KEY] = token
         return _consent_reminder(request)

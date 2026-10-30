@@ -24,7 +24,7 @@ from YSE_App.tests.test_self_signup import GATE_ON, SIGNUP_ON, VALID_ORCID, sign
 
 held_migration = importlib.import_module("YSE_App.migrations.0058_membership_request_held")
 
-PROFILE_POST = {"full_name": "Synthetic Newcomer", "institution": "Example University", "department": "Physics",
+PROFILE_POST = {"first_name": "Synthetic", "last_name": "Person", "full_name": "Synthetic Newcomer", "institution": "Example University", "department": "Physics",
                 "career_level": "tenured", "orcid": VALID_ORCID}
 
 
