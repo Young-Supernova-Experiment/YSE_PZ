@@ -288,6 +288,10 @@ class HeldSignupRequestTests(CacheClearMixin, TestCase):
         self.owner = make_user("gm_held_owner")
         self.team = group_svc.create_team(self.owner, "gm-held-team")
 
+    def _agree(self):
+        self.client.post(reverse("agreement"), {"agree": "on"})
+        self.client.post(reverse("research_consent"), {"action": "decline"})
+
     def _signup(self):
         signup_post(self.client, teams=[self.team.pk])
         user = User.objects.get(username="ss_newcomer")
@@ -302,7 +306,7 @@ class HeldSignupRequestTests(CacheClearMixin, TestCase):
             membership.decide(self.owner, req, approve=True)
         self.assertFalse(user.groups.filter(pk=self.team.pk).exists())
 
-        self.client.post(reverse("agreement"), {"agree": "on"})
+        self._agree()
         with self.captureOnCommitCallbacks(execute=True):
             self.client.post(reverse("researcher_profile_edit"), PROFILE_POST)
         req.refresh_from_db()
@@ -314,7 +318,7 @@ class HeldSignupRequestTests(CacheClearMixin, TestCase):
 
     def test_team_list_releases_once(self):
         user, req = self._signup()
-        self.client.post(reverse("agreement"), {"agree": "on"})
+        self._agree()
         self.client.post(reverse("researcher_profile_edit"), PROFILE_POST)  # on_commit not run in TestCase
         self.client.get(reverse("team_list"))
         self.client.get(reverse("team_list"))
