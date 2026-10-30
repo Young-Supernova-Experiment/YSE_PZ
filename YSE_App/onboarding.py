@@ -171,6 +171,10 @@ def pending_step_for(user):
     if agreement_id and not has_accepted(user, agreement_id):
         return "agreement"
     if not is_complete(user):
+        # Names on the account can often be taken from the profile's full name.
+        from YSE_App.services.researcher_profile import fill_account_names
+        if fill_account_names(user) and is_complete(user):
+            return None
         return "profile"
     return None
 

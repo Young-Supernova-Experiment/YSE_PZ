@@ -195,3 +195,89 @@ class MemberSortTests(TestCase):
         self.client.force_login(owner)
         rows = self.client.get(reverse("team_detail", args=[team.pk])).context["members"].rows
         self.assertEqual([r["user"].username for r in rows], ["ne_b", "ne_c", "ne_a", "ne_sort_owner"])
+
+
+# ---------------------------------------------------------------------------
+# filling account names from the profile's full name
+
+
+class SplitFullNameTests(TestCase):
+    def test_unambiguous_names_split(self):
+        from YSE_App.common.names import split_full_name
+        cases = {
+            "Ada Lovelace": ("Ada", "Lovelace"),
+            "  Ada   Lovelace ": ("Ada", "Lovelace"),
+            "Ada B. Lovelace": ("Ada B.", "Lovelace"),
+            "A. Byron Lovelace": ("A. Byron", "Lovelace"),
+            "Ada B Lovelace": ("Ada B", "Lovelace"),
+            "Mary-Jane O'Neil": ("Mary-Jane", "O'Neil"),
+            "Zoë Müller": ("Zoë", "Müller"),
+        }
+        for name, expected in cases.items():
+            self.assertEqual(split_full_name(name), expected, name)
+
+    def test_everything_else_is_left_to_the_person(self):
+        from YSE_App.common.names import split_full_name
+        for name in ("", "Mononym", "A. Lovelace", "Ada L.", "Ada Byron Lovelace", "A. B. Lovelace",
+                     "Ada Lovelace Jr.", "Lovelace, Ada", "Ada van Lovelace Byron", "Ada B. L.",
+                     "Ada (Byron) Lovelace", "Ada Lovelace 2", "Ada King Byron Lovelace"):
+            self.assertIsNone(split_full_name(name), name)
+
+
+@override_settings(**GATE)
+class FillAccountNamesTests(GateBase):
+    def make(self, username, full_name, **names):
+        user = User.objects.create_user(username, password="x", email="%s@example.com" % username, **names)
+        self.accept_agreement(user)
+        ResearcherProfile.objects.create(user=user, full_name=full_name, institution="Example University")
+        return user
+
+    def test_gate_fills_unambiguous_names_without_asking(self):
+        user = self.make("ne_fill", "Synthetic Q. Person")
+        self.client.force_login(user)
+        self.assertEqual(self.page(reverse("team_list")).status_code, 200)
+        user.refresh_from_db()
+        self.assertEqual((user.first_name, user.last_name), ("Synthetic Q.", "Person"))
+
+    def test_ambiguous_names_still_go_to_the_profile(self):
+        user = self.make("ne_ambiguous", "Synthetic van der Person")
+        self.client.force_login(user)
+        resp = self.page(reverse("team_list"))
+        self.assertEqual(urlsplit(resp["Location"]).path, reverse("researcher_profile_edit"))
+        user.refresh_from_db()
+        self.assertEqual((user.first_name, user.last_name), ("", ""))
+
+    def test_existing_names_are_never_overwritten(self):
+        user = self.make("ne_partial", "Synthetic Person", first_name="Given")
+        self.assertFalse(rp.fill_account_names(user))
+        user.refresh_from_db()
+        self.assertEqual((user.first_name, user.last_name), ("Given", ""))
+
+    def test_migration_fills_only_unambiguous_empty_accounts(self):
+        import importlib
+
+        from django.apps import apps as django_apps
+        migration = importlib.import_module("YSE_App.migrations.0060_fill_account_names")
+        a = self.make("ne_mig_a", "Synthetic Person")
+        b = self.make("ne_mig_b", "S. Q. Person")
+        c = self.make("ne_mig_c", "Synthetic Person", first_name="Kept", last_name="Names")
+        migration.fill(django_apps, None)
+        migration.fill(django_apps, None)  # idempotent
+        for user in (a, b, c):
+            user.refresh_from_db()
+        self.assertEqual((a.first_name, a.last_name), ("Synthetic", "Person"))
+        self.assertEqual((b.first_name, b.last_name), ("", ""))
+        self.assertEqual((c.first_name, c.last_name), ("Kept", "Names"))
+
+    def test_command_reports_counts_only(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+        self.make("ne_cmd_a", "Synthetic Person")
+        self.make("ne_cmd_b", "Mononym")
+        out = StringIO()
+        call_command("fill_account_names", "--dry-run", stdout=out)
+        self.assertEqual(out.getvalue().strip(), "account names: would fill 1; 1 left for their owners to enter")
+        self.assertEqual(User.objects.get(username="ne_cmd_a").last_name, "")
+        call_command("fill_account_names", stdout=StringIO())
+        self.assertEqual(User.objects.get(username="ne_cmd_a").last_name, "Person")

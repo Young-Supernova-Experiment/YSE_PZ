@@ -187,6 +187,27 @@ def is_complete(user: User) -> bool:
     return not missing_fields(user)
 
 
+def fill_account_names(user: User, profile: Optional[ResearcherProfile] = None) -> bool:
+    """Fill the account's empty given and family names from an unambiguous profile full name.
+
+    Only when both are empty; see ``YSE_App.common.names.split_full_name`` for what counts
+    as unambiguous. Returns True when the names were filled.
+    """
+    from YSE_App.common.names import split_full_name
+    if (user.first_name or "").strip() or (user.last_name or "").strip():
+        return False
+    if profile is None:
+        profile = get_profile(user)
+    parts = split_full_name(profile.full_name if profile is not None else "")
+    if parts is None:
+        return False
+    updated = User.objects.filter(pk=user.pk, first_name="", last_name="").update(
+        first_name=parts[0][:150], last_name=parts[1][:150])
+    if updated:
+        user.first_name, user.last_name = parts[0][:150], parts[1][:150]
+    return bool(updated)
+
+
 def _plain_value(profile: ResearcherProfile, name: str) -> str:
     if name == "observing_experience":
         if not profile.pk:
