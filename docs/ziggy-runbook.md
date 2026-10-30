@@ -839,7 +839,18 @@ SELF_SIGNUP_CLIENT_IP_HEADER:
 [groups]
 REQUEST_PURGE_DAYS: 90
 REQUESTS_PER_USER_PER_DAY: 10
+# team creation by any onboarded user (on by default; 0 turns a limit off)
+CREATE_ENABLED: True
+CREATE_MAX_OWNED: 5
+CREATES_PER_USER_PER_DAY: 2
+CREATES_PER_HOUR: 20
+# owners adding existing users by username or email
+ADDS_PER_OWNER_PER_DAY: 50
+# teams a new user may tick on the signup form
+SIGNUP_MAX_REQUESTS: 5
 ```
+
+Step B also deletes requests made on the signup form whose user never finished onboarding (still held after 90 days).
 
 Production: Step A only when Ryan decides, after the `develop -> master` merge (`<PROD_PYTHON>`, `/data/yse_pz/YSE_PZ`).
 
@@ -3684,6 +3695,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 ## 6 · Changelog
 
 * 2026-10-30 v110, **when Ryan asks: OSC step 1, download and offline dry run, O1-O7** (writes nothing to any database). See the section [Open Supernova Catalog, step 1](#osc-step1). Needs #896 deployed on yse\_experimental.
+* 2026-10-29 v110, **nothing required** (the deploy applies the migration; no new package). Team manager: any onboarded user can create a team from `/teams/` (throttled), owners can add an existing user by username or email, members can leave a team, and the signup form offers optional team requests that reach the owners once the new user has finished onboarding. Migration `0058_membership_request_held` adds one nullable column (safe on the shared `YSE_test` database). Optional `[groups]` limits in the section [Self-service signup](#self-signup); `CREATE_ENABLED: False` turns team creation off.
 * 2026-10-29 v109, **nothing required** (the deploy applies the migration; no new package). Open Supernova Catalog import, schema and commands only ([#887](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/887)): migration `0057_catalog_import` creates new tables only (safe on the shared `YSE_test` database). **Do not run `import_osc`, `catalog_instruments` or `osc_tns_check` with `--apply` on any stack until Ryan asks**; the import plan is in docs/osc-import.md.
 * 2026-10-29 v108, **nothing to run** (no migration, no package). Spectrum upload from the transient page ([#898](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/898)): a failed upload returns to the transient page with the reason instead of a bare `/upload_spectrum/` page; the file is checked before anything is written; Permissions choices include groups created after the server started; times with seconds are accepted.
 * 2026-10-28 v107, **migration applied by the deploy; a test conversion on yse\_experimental when Ryan asks** (no new package). Spectra stored as arrays ([#492](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/492), [#891](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/891)): migration `0056_spectrum_arrays` creates two new tables (safe on the shared database). Uploads now write arrays; every reader reads both storages. **Until this reaches `develop`, never run `convert_spectra_to_arrays --delete-rows` on `YSE_test`** (yse\_test reads pixel rows only), and spectra uploaded on yse\_experimental show only there. Test steps in the section [Spectra stored as arrays](#spectrum-arrays); see docs/spectrum-arrays.md.

@@ -9,7 +9,9 @@
   default: single-use) and can be revoked. No email address is stored.
 * ``GroupInvitationUse``: who used an invitation and when (one row per user).
 * ``GroupMembershipRequest``: a signed-in user asks to join a team (#448); the team's owners
-  (or staff) approve or deny it. System groups cannot be requested.
+  (or staff) approve or deny it. System groups cannot be requested. Requests made on the
+  signup form are ``held`` until the new user has finished onboarding (agreement and
+  profile): owners are told, and can approve, only once it is released.
 * ``UserPreference``: groups a user hides from pickers, default audiences for comments and
   follow-up requests, and the default for the comment "Public" box.
 
@@ -159,6 +161,11 @@ class GroupMembershipRequest(models.Model):
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     decided_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     decided_at = models.DateTimeField(null=True, blank=True)
+    # Nullable so INSERTs from code without the column (develop, shared DB) still work;
+    # NULL and False both mean "not held".
+    held = models.BooleanField(
+        null=True, blank=True, default=None,
+        help_text="Made on the signup form; owners see it once the user has finished onboarding.")
 
     class Meta:
         ordering = ("-created_at", "-id")

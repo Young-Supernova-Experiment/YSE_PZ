@@ -1,4 +1,4 @@
-"""Forms for the team pages and the user settings page (#445, #440)."""
+"""Forms for the team pages and the user settings page (#445, #440), team creation and direct adds."""
 
 from __future__ import annotations
 
@@ -83,3 +83,21 @@ class UserPreferenceForm(forms.ModelForm):
         self.fields["hidden_groups"].queryset = qs.exclude(id__in=group_svc.public_group_ids(user))
         if self.instance is not None and self.instance.comment_default_public is not None:
             self.initial["comment_default_public"] = bool(self.instance.comment_default_public)
+
+
+class TeamCreateForm(forms.Form):
+    name = forms.CharField(
+        max_length=group_svc.TEAM_NAME_MAX, label="Team name",
+        widget=forms.TextInput(attrs={"class": "form-control", "maxlength": group_svc.TEAM_NAME_MAX}),
+    )
+    description = forms.CharField(
+        required=False, max_length=2000, label="Description (optional)",
+        widget=forms.Textarea(attrs={"rows": 2, "class": "form-control"}),
+    )
+
+
+class MemberAddForm(forms.Form):
+    identifier = forms.CharField(
+        max_length=254, label="Username or email address",
+        widget=forms.TextInput(attrs={"class": "form-control form-control-sm", "autocomplete": "off"}),
+    )

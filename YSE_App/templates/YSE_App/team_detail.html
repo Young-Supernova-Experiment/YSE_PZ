@@ -121,9 +121,21 @@
 				{% endfor %}
 				</tbody>
 			</table>
+			<form method="post" action="{% url 'team_member_add' group.pk %}" class="form-inline mb-2" id="yse-team-member-add">{% csrf_token %}
+				<label class="mr-2" for="{{ member_add_form.identifier.id_for_label }}">Add a member: {{ member_add_form.identifier.label|lower }}</label> {{ member_add_form.identifier }}
+				<button type="submit" class="btn btn-sm btn-primary ml-2">Add</button>
+			</form>
+			<p class="text-muted small">Enter the exact username or email address of someone who already has an account. They are added at once and notified. People without an account need an invitation link.</p>
 			<p class="text-muted small mb-0">Removing a member takes away the access this team gives them; their own comments and requests stay. Owners are changed by staff in the admin.</p>
 		</div>
 	</div>
+	{% endif %}
+
+	{% if is_member and not is_owner %}
+	<form method="post" action="{% url 'team_leave' group.pk %}" id="yse-team-leave">{% csrf_token %}
+		<button type="submit" class="btn btn-sm btn-outline-danger">Leave this team</button>
+		<small class="text-muted ml-2">You lose the access this team gives you; an owner can add you back.</small>
+	</form>
 	{% endif %}
 </section>
 {% endblock %}

@@ -137,13 +137,23 @@ def redirect_with_next(url_name, request):
 
 def pending_step(request):
     """``"agreement"``, ``"profile"`` or ``None`` for an authenticated user."""
+    return pending_step_for(request.user)
+
+
+def pending_step_for(user):
+    """``pending_step`` for a user object (no request needed)."""
     from YSE_App.services.researcher_profile import is_complete
     agreement_id = current_agreement_id()
-    if agreement_id and not has_accepted(request.user, agreement_id):
+    if agreement_id and not has_accepted(user, agreement_id):
         return "agreement"
-    if not is_complete(request.user):
+    if not is_complete(user):
         return "profile"
     return None
+
+
+def is_onboarded(user) -> bool:
+    """True when the gate is off or ``user`` has nothing left to do."""
+    return not gate_enabled() or pending_step_for(user) is None
 
 
 def _is_page_request(request) -> bool:

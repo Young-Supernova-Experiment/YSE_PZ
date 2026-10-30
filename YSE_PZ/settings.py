@@ -1576,6 +1576,17 @@ GROUP_INVITE_DEFAULT_DAYS = config.getint('groups', 'INVITE_DEFAULT_DAYS', fallb
 GROUP_INVITE_MAX_DAYS = config.getint('groups', 'INVITE_MAX_DAYS', fallback=60) if config.has_section('groups') else 60
 GROUP_INVITE_MAX_USES_LIMIT = config.getint('groups', 'INVITE_MAX_USES_LIMIT', fallback=50) if config.has_section('groups') else 50
 GROUP_INVITE_PURGE_DAYS = config.getint('groups', 'INVITE_PURGE_DAYS', fallback=90) if config.has_section('groups') else 90
+# Team creation by any onboarded user, and owners adding existing users directly.
+# Throttles: active teams a user owns, creations per user per day, creations site-wide
+# per hour, direct adds per owner per day. Staff skip the per-user creation limits.
+# 0 turns a limit off; [groups] CREATE_ENABLED = False turns creation off.
+GROUP_CREATE_ENABLED = config.getboolean('groups', 'CREATE_ENABLED', fallback=True) if config.has_section('groups') else True
+GROUP_CREATE_MAX_OWNED = config.getint('groups', 'CREATE_MAX_OWNED', fallback=5) if config.has_section('groups') else 5
+GROUP_CREATES_PER_USER_PER_DAY = config.getint('groups', 'CREATES_PER_USER_PER_DAY', fallback=2) if config.has_section('groups') else 2
+GROUP_CREATES_PER_HOUR = config.getint('groups', 'CREATES_PER_HOUR', fallback=20) if config.has_section('groups') else 20
+GROUP_ADDS_PER_OWNER_PER_DAY = config.getint('groups', 'ADDS_PER_OWNER_PER_DAY', fallback=50) if config.has_section('groups') else 50
+# Teams chosen on the signup form (held until onboarding is done): at most this many.
+GROUP_SIGNUP_MAX_REQUESTS = config.getint('groups', 'SIGNUP_MAX_REQUESTS', fallback=5) if config.has_section('groups') else 5
 
 # Research PUBLIC key for the encrypted profile fields. env YSE_RESEARCH_PUBLIC_KEY
 # (PEM text or a path) or [research] public_key_path. The private key is never

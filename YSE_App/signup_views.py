@@ -3,7 +3,8 @@
 Flow: ``/signup/`` creates an active account and signs the person in; the onboarding gate
 (#630) then sends them through the User Agreement and the researcher profile, after which
 they land on ``/teams/``, where they can ask to join teams. The team's owners approve or
-deny on the team page.
+deny on the team page. Teams ticked on the signup form (optional) become requests at once,
+held until onboarding is done (``membership.release_held``).
 
 Gate exemptions: ``signup`` and ``signup_verify_email`` are in
 ``onboarding.EXEMPT_URL_NAMES`` and decorated ``onboarding_exempt``. They are also marked
@@ -94,6 +95,13 @@ def signup(request):
                 return render(request, "YSE_App/signup.html", {"form": form})
             signup_svc.register_account_created()
             login(request, user, backend=SIGNUP_BACKEND)
+            chosen = form.cleaned_data.get("teams") or []
+            if chosen:
+                made = membership.create_signup_requests(user, chosen, form.cleaned_data.get("team_message") or "")
+                if made and not membership.release_held(user):
+                    messages.info(request, "Your requests to join %s go to the team owners once you have "
+                                           "accepted the User Agreement and completed your profile."
+                                  % ", ".join(r.group.name for r in made))
             if verify:
                 sent = signup_svc.register_email_send(user) and signup_svc.send_verification_email(request, user, email)
                 if sent:
