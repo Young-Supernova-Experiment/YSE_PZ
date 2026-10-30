@@ -1174,28 +1174,18 @@ def add_transient_spec_util(specdict,transient,user):
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
-        # pixels stored as an arrays row (#891) count as existing data too
+        # pixels stored as an arrays row (#492) count as existing data too
         from YSE_App.common import spectrum_arrays
         has_arrays = TransientSpectrumArrays.objects.filter(spectrum=transientspec).exists()
         # loop through new, comp against existing
-        if (len(existingspec) or has_arrays) and specdict['clobber']:
-            for e in existingspec: e.delete()
-            # the new pixels are written as rows: a stale arrays row must not win over them
-            spectrum_arrays.discard([transientspec.id])
-        elif len(existingspec) or has_arrays:
+        if (len(existingspec) or has_arrays) and not specdict['clobber']:
             return_dict = {"message":"spectrum exists.  Not clobbering"}
             return JsonResponse(return_dict)
 
+        # replaces any old pixels; stored as arrays (#492)
         specdata = spectrum['specdata']
-        specdata_entries = []
-        for k in specdata.keys():
-            s = specdata[k]
-
-            specdata_single = TransientSpecData(spectrum=transientspec,wavelength=s['wavelength'],
-                                                flux=s['flux'],flux_err=s['flux_err'],
-                                                created_by_id=user.id,modified_by_id=user.id)
-            specdata_entries += [specdata_single]
-        TransientSpecData.objects.bulk_create(specdata_entries)
+        spectrum_arrays.write_pixels(
+            transientspec, [(s['wavelength'], s['flux'], s.get('flux_err')) for s in specdata.values()], user=user)
 
     return_dict = {"message":"successfully added spec data"}
     if skipped_groups:
@@ -1453,25 +1443,18 @@ def add_transient_spec(request):
 
         # add the spec data
         existingspec = TransientSpecData.objects.filter(spectrum=transientspec)
-        # pixels stored as an arrays row (#891) count as existing data too
+        # pixels stored as an arrays row (#492) count as existing data too
         from YSE_App.common import spectrum_arrays
         has_arrays = TransientSpectrumArrays.objects.filter(spectrum=transientspec).exists()
         # loop through new, comp against existing
-        if (len(existingspec) or has_arrays) and hd['clobber']:
-            for e in existingspec: e.delete()
-            # the new pixels are written as rows: a stale arrays row must not win over them
-            spectrum_arrays.discard([transientspec.id])
-        elif len(existingspec) or has_arrays:
+        if (len(existingspec) or has_arrays) and not hd['clobber']:
             return_dict = {"message":"spectrum exists.  Not clobbering"}
             return JsonResponse(return_dict)
 
-        for k in spec_data.keys():
-            if k == 'header' or k == 'transient': continue
-            s = spec_data[k]
-
-            TransientSpecData.objects.create(spectrum=transientspec,wavelength=s['wavelength'],
-                                             flux=s['flux'],flux_err=s['flux_err'],
-                                             created_by_id=user.id,modified_by_id=user.id)
+        # replaces any old pixels; stored as arrays (#492)
+        spectrum_arrays.write_pixels(
+            transientspec, [(s['wavelength'], s['flux'], s.get('flux_err'))
+                            for k, s in spec_data.items() if k not in ('header', 'transient')], user=user)
 
         return_dict = {"message":"success"}
         if skipped:

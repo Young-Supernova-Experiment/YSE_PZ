@@ -2624,19 +2624,65 @@ def download_spectra(request, slug):
     response['Content-Disposition'] = 'attachment; filename=%s_spectra.zip'%transient.name
     return response
 
+def _parse_spectrum_file(uploaded):
+    """``[(wavelength, flux[, flux_err]), ...]`` from an uploaded ASCII spectrum (#898).
+
+    Columns are separated by whitespace or commas; ``#`` lines and blank lines are skipped. Raises
+    ValueError naming the first bad line, before anything is written.
+    """
+    pixels = []
+    for number, raw in enumerate(uploaded, start=1):
+        line = raw.decode('utf-8', errors='replace').strip() if isinstance(raw, bytes) else str(raw).strip()
+        if not line or line.startswith('#'):
+            continue
+        values = [v for v in (line.split(',') if ',' in line else line.split())]
+        values = [v.strip() for v in values if v.strip()]
+        if len(values) not in (2, 3):
+            raise ValueError('line %d has %d columns; expected wavelength, flux and optionally its error'
+                             % (number, len(values)))
+        try:
+            pixels.append(tuple(float(v) for v in values))
+        except ValueError:
+            raise ValueError('line %d is not numbers: %s' % (number, line[:80]))
+    if not pixels:
+        raise ValueError('the file has no data lines')
+    return pixels
+
+
+def _upload_form_errors(form) -> str:
+    parts = []
+    for name, errors in form.errors.items():
+        field = form.fields.get(name)
+        label = (field.label if field is not None and field.label else name.replace('_', ' ')).capitalize()
+        parts.append('%s: %s' % (label, ' '.join(str(e) for e in errors)))
+    return '; '.join(parts)
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def upload_spectrum(request):
+    """The spectrum upload form of the transient page (summary tab).
+
+    A failed upload goes back to the transient's page with the reason (#898); nothing is written
+    unless the form and the file are both good.
+    """
+    from django.contrib import messages
 
     if request.method == 'POST':
         form = SpectrumUploadForm(request.POST, request.FILES)
+        transient_id = str(request.POST.get('transient') or '')
+        back = Transient.objects.filter(pk=int(transient_id)).first() if transient_id.isdigit() else None
         if form.is_valid():
-            #form.save()
+            try:
+                pixels = _parse_spectrum_file(request.FILES['filename'])
+            except ValueError as exc:
+                form.add_error('filename', str(exc))
+        if form.is_valid():
             transient = Transient.objects.filter(id=form.data['transient'])[0]
             tspec = TransientSpectrum.objects.filter(transient=transient).\
                 filter(instrument=form.data['instrument']).\
                 filter(obs_group=form.data['obs_group']).\
-                filter(obs_date=form.data['obs_date'])
+                filter(obs_date=form.cleaned_data['obs_date'])
 
             # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
             from YSE_App.common.authz import upload_denial
@@ -2646,7 +2692,7 @@ def upload_spectrum(request):
                 return HttpResponseForbidden(denial)
 
             specdict = {'transient':transient,'ra':form.data['ra'],
-                        'dec':form.data['dec'],'obs_date':form.data['obs_date'],
+                        'dec':form.data['dec'],'obs_date':form.cleaned_data['obs_date'],
                         'obs_group':ObservationGroup.objects.filter(id=form.data['obs_group'])[0],
                         'instrument':Instrument.objects.filter(id=form.data['instrument'])[0],
                         'created_by':request.user,'modified_by':request.user}
@@ -2657,7 +2703,7 @@ def upload_spectrum(request):
             #    specdict['data_quality'] = DataQuality.objects.get(pk=form.data['data_quality'])
             if not len(tspec):
                 tspec = TransientSpectrum.objects.create(**specdict)
-                if form.data['data_quality']:
+                if form.data.get('data_quality'):
                     tspec.data_quality.add(DataQuality.objects.get(pk=form.data['data_quality']))
             else:
                 tspec.update(**specdict)
@@ -2667,7 +2713,7 @@ def upload_spectrum(request):
             from YSE_App.data_utils import apply_upload_reference
             apply_upload_reference(tspec, form.cleaned_data.get('reference'))
 
-            if 'permissions' in form.data.keys() and form.data['permissions']:
+            if form.cleaned_data.get('permissions'):
                 for p in form.cleaned_data['permissions']:
                     tspec.groups.add(Group.objects.filter(name=p)[0])
                 tspec.save()
@@ -2675,54 +2721,17 @@ def upload_spectrum(request):
             # PIs (#446): an upload that names PIs sets them; one that names none keeps any already set.
             if form.cleaned_data.get('pis'):
                 tspec.pis.set(form.cleaned_data['pis'])
-            
-            existingspec = TransientSpecData.objects.filter(spectrum=tspec)
-            if len(existingspec):
-                existingspec.delete()
-            # The new pixels are written as rows: drop any arrays row so it cannot win over them (#891).
+
+            # replaces any old pixels; stored as arrays (#492)
             from YSE_App.common import spectrum_arrays
-            spectrum_arrays.discard([tspec.id])
-
-
-            td = []
-            for line in request.FILES['filename']:
-                line = line.decode('utf-8').replace('\n','')
-                if line.startswith('#'): continue
-                if len(line.split()) == 3:
-                    wavelength,flux,flux_err = line.split()
-                    wavelength,flux,flux_err = float(wavelength),float(flux),float(flux_err)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,flux_err=flux_err,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split()) == 2:
-                    wavelength,flux = line.split()
-                    wavelength,flux = float(wavelength),float(flux)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split(',')) == 3:
-                    wavelength,flux,flux_err = line.split(',')
-                    wavelength,flux,flux_err = float(wavelength),float(flux),float(flux_err)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,flux_err=flux_err,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split(',')) == 2:
-                    wavelength,flux = line.split(',')
-                    wavelength,flux = float(wavelength),float(flux)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,
-                        created_by=request.user,modified_by=request.user)]
-                else:
-                    raise RuntimeError('bad input')
-
-            TransientSpecData.objects.bulk_create(td)
-                
-            return redirect('transient_detail', slug=transient.slug) #HttpResponseRedirect(reverse_lazy('transient_detail',transient.slug))
-    else:
-        form = SpectrumUploadForm()
-    return render(request, 'YSE_App/form_snippets/spectrum_upload_form.html', {
-        'form': form
-    })
+            n = spectrum_arrays.write_pixels(tspec, pixels, user=request.user)
+            messages.success(request, 'Spectrum uploaded (%d pixels).' % n)
+            return redirect('transient_detail', slug=transient.slug)
+        if back is not None:
+            messages.error(request, 'Spectrum not uploaded. %s' % _upload_form_errors(form))
+            return redirect('transient_detail', slug=back.slug)
+        return render(request, 'YSE_App/spectrum_upload_page.html', {'errors': _upload_form_errors(form)}, status=400)
+    return render(request, 'YSE_App/spectrum_upload_page.html', {'errors': ''})
 
 @csrf_exempt
 @login_or_basic_auth_required

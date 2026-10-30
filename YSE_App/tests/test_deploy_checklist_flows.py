@@ -121,9 +121,10 @@ class DeployChecklistFlowTests(TestCase):
     # ------------------------------------------------------------------ spectra
 
     def test_upload_spectrum_form_renders(self):
-        response = self.client.get(reverse("upload_spectrum"))
+        # The form lives on the transient page (#898); /upload_spectrum/ itself points there.
+        response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "filename")
+        self.assertContains(response, 'name="filename"')
 
     def test_upload_spectrum_form_creates_spectrum_and_points(self):
         n_before = TransientSpectrum.objects.filter(transient=self.transient).count()
@@ -150,7 +151,62 @@ class DeployChecklistFlowTests(TestCase):
         new_spec = TransientSpectrum.objects.filter(
             transient=self.transient, instrument=self.kast
         ).get()
-        self.assertEqual(TransientSpecData.objects.filter(spectrum=new_spec).count(), 3)
+        # stored as arrays (#492); count pixels in either storage
+        from YSE_App.common import spectrum_arrays
+        self.assertEqual(spectrum_arrays.pixel_counts([new_spec.id]), {new_spec.id: 3})
+        self.assertFalse(TransientSpecData.objects.filter(spectrum=new_spec).exists())
+
+    def _upload_payload(self, body, **changes):
+        payload = {
+            "transient": self.transient.id, "ra": self.transient.ra, "dec": self.transient.dec,
+            "spec_phase": "", "obs_date": "2026-09-03T04:05", "obs_group": self.ucsc_group.id,
+            "instrument": self.kast.id, "data_quality": "",
+            "filename": SimpleUploadedFile("spec.txt", body),
+        }
+        payload.update(changes)
+        return payload
+
+    def test_upload_spectrum_failure_returns_to_the_transient_with_the_reason(self):
+        # #898: an invalid upload used to land on a bare /upload_spectrum/ page that could not upload.
+        n_before = TransientSpectrum.objects.count()
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", instrument=""), follow=True)
+        self.assertEqual(response.redirect_chain[-1][0].rstrip("/").rsplit("/", 1)[-1], self.transient.slug)
+        self.assertContains(response, "Spectrum not uploaded. Instrument: This field is required.")
+        self.assertEqual(TransientSpectrum.objects.count(), n_before)
+
+    def test_upload_spectrum_bad_line_writes_nothing(self):
+        n_before = TransientSpectrum.objects.count()
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n4010 abc\n"), follow=True)
+        self.assertContains(response, "line 2 is not numbers")
+        self.assertEqual(TransientSpectrum.objects.count(), n_before)
+
+    def test_upload_spectrum_accepts_seconds_blank_lines_commas_and_new_groups(self):
+        from django.contrib.auth.models import Group
+        from YSE_App.common import spectrum_arrays
+
+        group = Group.objects.create(name="created-after-start-898")
+        self.user.groups.add(group)
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"# w, f, e\n\n4000, 1.0, 0.1\r\n4010,1.1,0.1\n\n", obs_date="2026-09-03T04:05:06",
+            permissions=[group.name]), follow=True)
+        self.assertContains(response, "Spectrum uploaded (2 pixels).")
+        spec = TransientSpectrum.objects.get(transient=self.transient, obs_date__second=6)
+        self.assertEqual(spectrum_arrays.pixel_counts([spec.id]), {spec.id: 2})
+        self.assertIn(group, spec.groups.all())
+
+    def test_upload_spectrum_rejects_an_unknown_group(self):
+        n_before = TransientSpectrum.objects.count()
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", permissions=["no-such-group-898"]), follow=True)
+        self.assertContains(response, "Spectrum not uploaded. Permissions: Select a valid choice.")
+        self.assertEqual(TransientSpectrum.objects.count(), n_before)
+
+    def test_upload_spectrum_page_on_its_own(self):
+        response = self.client.get(reverse("upload_spectrum"))
+        self.assertContains(response, "Spectra are uploaded from the transient")
+        self.assertNotContains(response, 'name="filename"')
 
     def test_download_spectra_returns_zip_of_csv(self):
         response = self.client.get(reverse("download_spectra", kwargs={"slug": self.transient.slug}))
@@ -200,7 +256,10 @@ class DeployChecklistFlowTests(TestCase):
         spec = TransientSpectrum.objects.filter(
             transient=self.transient, spectrum_notes="ci upload"
         ).get()
-        self.assertEqual(TransientSpecData.objects.filter(spectrum=spec).count(), 2)
+        from YSE_App.common import spectrum_arrays
+        self.assertEqual(spectrum_arrays.pixel_counts([spec.id]), {spec.id: 2})
+        wave, flux, err = spectrum_arrays.arrays_for([spec.id])[spec.id]
+        self.assertEqual((list(wave), list(flux), list(err)), ([5000.0, 5010.0], [1.0, 1.1], [0.1, 0.1]))
 
     # --------------------------------------------------------------- photometry
 

@@ -1,13 +1,14 @@
 """
-Spectrum pixels as arrays (#891): the one way to write and read a spectrum's wavelength, flux and error.
+Spectrum pixels as arrays (#492, #891): the one way to write and read a spectrum's wavelength, flux and error.
 
 A spectrum's pixels are stored either as one ``TransientSpectrumArrays`` / ``HostSpectrumArrays`` row
 (compressed float64 arrays) or, for spectra written before #891, as per-pixel ``TransientSpecData`` /
 ``HostSpecData`` rows. :func:`arrays_for` reads both, so callers need not know which.
 
 Design (#891, #492): every reader of pixels goes through :func:`arrays_for` / :func:`pixel_counts`
-(dual read; an arrays row wins). A writer that rewrites a spectrum's pixel rows calls :func:`discard`
-so a stale arrays row never wins. The REST pixel lists (``/api/transientspecdata/``,
+(dual read; an arrays row wins). Every writer of a spectrum's pixels goes through
+:func:`write_pixels`, which replaces whatever the spectrum had and writes an arrays row, or per-pixel
+rows while the setting ``SPECTRUM_PIXEL_STORAGE`` is ``rows`` (the rollback switch). The REST pixel lists (``/api/transientspecdata/``,
 ``/api/hostspecdata/``) stay per-pixel: ``services.spectrum_pixel_api`` synthesizes records with
 negative pseudo ids for spectra stored only as arrays, and lists a spectrum that has both from its
 rows (real ids; ``convert_spectra_to_arrays`` verifies both hold the same pixels). Backfill:
@@ -130,3 +131,39 @@ def has_pixels(spectrum_id: int, *, host: bool = False) -> bool:
     arrays_model, rows_model = _models(host)
     return (arrays_model.objects.filter(spectrum_id=spectrum_id).exists()
             or rows_model.objects.filter(spectrum_id=spectrum_id).exists())
+
+
+def storage() -> str:
+    """``arrays`` (default) or ``rows``: how :func:`write_pixels` stores new pixels."""
+    from django.conf import settings
+
+    value = str(getattr(settings, 'SPECTRUM_PIXEL_STORAGE', 'arrays') or 'arrays').strip().lower()
+    return 'rows' if value == 'rows' else 'arrays'
+
+
+def write_pixels(spectrum, pixels: Iterable[Sequence], *, user=None, host: bool = False) -> int:
+    """Replace a saved spectrum's pixels with ``pixels`` (``(wavelength, flux[, flux_err])`` each).
+
+    Deletes its old pixel rows and arrays row first. Returns the number of pixels written (pixels
+    with a non-finite wavelength or flux are dropped from arrays, as before they were rejected by
+    MySQL). Writes nothing for an empty list.
+    """
+    arrays_model, rows_model = _models(host)
+    rows_model.objects.filter(spectrum=spectrum).delete()
+    discard([spectrum.pk], host=host)
+    pixels = [tuple(p) for p in pixels]
+    if not pixels:
+        return 0
+    errors = [p[2] if len(p) > 2 else None for p in pixels]
+    if storage() == 'rows':
+        audit = {'created_by': user, 'modified_by': user} if user is not None else {}
+        rows_model.objects.bulk_create([
+            rows_model(spectrum=spectrum, wavelength=p[0], flux=p[1], flux_err=e, **audit)
+            for p, e in zip(pixels, errors)], batch_size=2000)
+        return len(pixels)
+    try:
+        row = save(spectrum, [p[0] for p in pixels], [p[1] for p in pixels],
+                   errors if any(e is not None for e in errors) else None, host=host)
+    except ValueError:
+        return 0
+    return row.n_pixels

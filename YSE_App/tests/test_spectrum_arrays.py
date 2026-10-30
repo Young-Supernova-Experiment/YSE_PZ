@@ -1,4 +1,4 @@
-"""Spectra stored as arrays instead of one row per pixel (#891): the helper, the readers that go
+"""Spectra stored as arrays instead of one row per pixel (#492, #891): the helper, the writer, the readers that go
 through it, and the ``convert_spectra_to_arrays`` command. Synthetic data only; no external services."""
 
 import io
@@ -26,6 +26,11 @@ from YSE_App.tests.fixtures_minimal import (
 )
 
 READER = "spectrum_arrays_user"
+
+
+def _pid(record):
+    """A pixel record's id: the serializers are hyperlinked, so it is the last part of ``url``."""
+    return int(record["url"].rstrip("/").rsplit("/", 1)[-1])
 
 
 def _rows(user, spectrum, n, *, err=True, start=4000.0, model=TransientSpecData):
@@ -271,8 +276,8 @@ class ApiPixelTests(TestCase):
         self.assertEqual([p["wavelength"] for p in got], [4100.0, 4200.0, 4300.0])
         self.assertEqual([p["flux"] for p in got], [1.0, 2.0, 3.0])
         self.assertEqual([p["flux_err"] for p in got], [None, 0.2, 0.3])
-        self.assertTrue(all(p["id"] < 0 for p in got))
-        self.assertEqual(len({p["id"] for p in got}), 3)
+        self.assertTrue(all(_pid(p) < 0 for p in got))
+        self.assertEqual(len({_pid(p) for p in got}), 3)
         self.assertTrue(got[0]["spectrum"].rstrip("/").endswith("/%d" % self.array_spec.id))
         self.assertEqual(got[0]["pixel_mask"], 0)
         self.assertIsNone(got[0]["wavelength_err"])
@@ -286,12 +291,12 @@ class ApiPixelTests(TestCase):
         for offset in range(0, 7, 2):
             pages += _results(self.client.get("/api/transientspecdata/",
                                               {"transient": self.transient.id, "limit": 2, "offset": offset}))
-        self.assertEqual([p["id"] for p in pages], [p["id"] for p in full["results"]])
-        self.assertEqual(len({p["id"] for p in pages}), 7)
+        self.assertEqual([_pid(p) for p in pages], [_pid(p) for p in full["results"]])
+        self.assertEqual(len({_pid(p) for p in pages}), 7)
         # the converted spectrum with rows is listed once, from its rows (real ids)
         both = [p for p in pages if p["wavelength"] >= 6000.0]
         self.assertEqual(len(both), 2)
-        self.assertTrue(all(p["id"] > 0 for p in both))
+        self.assertTrue(all(_pid(p) > 0 for p in both))
         self.assertFalse(any(5000.0 <= p["wavelength"] < 5200.0 for p in pages))
 
     def test_retrieve_pseudo_id(self):
@@ -316,4 +321,39 @@ class ApiPixelTests(TestCase):
     def test_host_pixels(self):
         got = _results(self.client.get("/api/hostspecdata/", {"spectrum": self.host_spec.id}))
         self.assertEqual([p["wavelength"] for p in got], [7000.0, 7100.0])
-        self.assertTrue(all(p["id"] < 0 for p in got))
+        self.assertTrue(all(_pid(p) < 0 for p in got))
+
+
+class WritePixelsTests(TestCase):
+    """Every upload path writes through ``write_pixels`` (#492)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = create_test_user(READER)
+        cls.transient = create_minimal_transient(cls.user, name="2026wpx")
+        cls.spectrum = attach_synthetic_spectrum(cls.user, cls.transient)
+
+    def test_writes_arrays_and_replaces_old_pixels(self):
+        _rows(self.user, self.spectrum, 4)
+        n = spectrum_arrays.write_pixels(self.spectrum, [(5000.0, 2.0, 0.2), (4990.0, 1.0, None)], user=self.user)
+        self.assertEqual(n, 2)
+        self.assertFalse(TransientSpecData.objects.filter(spectrum=self.spectrum).exists())
+        wave, flux, err = spectrum_arrays.arrays_for([self.spectrum.id])[self.spectrum.id]
+        self.assertEqual((list(wave), list(flux)), ([4990.0, 5000.0], [1.0, 2.0]))
+        self.assertTrue(np.isnan(err[0]))
+        self.assertEqual(err[1], 0.2)
+
+    def test_two_columns_store_no_errors(self):
+        spectrum_arrays.write_pixels(self.spectrum, [(4000.0, 1.0), (4010.0, 1.5)])
+        self.assertIsNone(spectrum_arrays.arrays_for([self.spectrum.id])[self.spectrum.id][2])
+
+    @override_settings(SPECTRUM_PIXEL_STORAGE='rows')
+    def test_rollback_switch_writes_rows(self):
+        spectrum_arrays.save(self.spectrum, [1.0], [1.0])
+        spectrum_arrays.write_pixels(self.spectrum, [(4000.0, 1.0, 0.1), (4010.0, 1.5, 0.1)], user=self.user)
+        self.assertFalse(TransientSpectrumArrays.objects.filter(spectrum=self.spectrum).exists())
+        self.assertEqual(TransientSpecData.objects.filter(spectrum=self.spectrum).count(), 2)
+
+    def test_empty_upload_writes_nothing(self):
+        self.assertEqual(spectrum_arrays.write_pixels(self.spectrum, []), 0)
+        self.assertEqual(spectrum_arrays.pixel_counts([self.spectrum.id]), {})

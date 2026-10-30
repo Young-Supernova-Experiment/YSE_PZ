@@ -475,9 +475,20 @@ class RemoveFollowupNoticeForm(ModelForm):
             'id']
 
 
+class _GroupNamesField(forms.MultipleChoiceField):
+    """Collaboration group names. The choices shown are those read when the server process started,
+    so drawing the form costs no query; a submitted name missing from them is looked up, so a group
+    created since (or a list drawn by another server process) is still valid (#898)."""
+
+    def valid_value(self, value):
+        return super().valid_value(value) or Group.objects.filter(name=value).exists()
+
+
 class SpectrumUploadForm(ModelForm):
     filename = forms.FileField()
-    obs_date = forms.DateTimeField(input_formats=['%Y-%m-%dT%H:%M'])
+    # Browsers send datetime-local values with or without seconds (#898).
+    obs_date = forms.DateTimeField(input_formats=['%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f',
+                                                  '%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S'])
     obs_group = forms.ModelChoiceField(
         ObservationGroup.objects.filter(Q(name='SSS') | Q(name='Foundation') |
                                         Q(name='TESS') | Q(name='YSE') |
@@ -487,9 +498,7 @@ class SpectrumUploadForm(ModelForm):
         DataQuality.objects.filter(Q(name='Quicklook')),required=False)
 
     qs = [(i['name'], i['name']) for i in Group.objects.all().values('name').distinct().order_by('name')]
-    permissions = forms.MultipleChoiceField(
-            choices=qs,
-            required=False)
+    permissions = _GroupNamesField(choices=qs, required=False)
     # PIs of the spectrum (#446); names only are shown.
     pis = forms.ModelMultipleChoiceField(
         PrincipalInvestigator.objects.order_by('name'), required=False, label='PI(s)')
@@ -513,7 +522,7 @@ class SpectrumUploadForm(ModelForm):
         'HIRES','GMOS','Goodman','KAST','WiFeS','WFCCD','DIS','Binospec','SpeX','UVES',
         'GNIRS','FLAMINGOS-2','DOLORES']
     instrument = forms.ModelChoiceField(Instrument.objects.filter(Q(name__in=spec_instruments)))
-    #import pdb; pdb.set_trace()
+
     class Meta:
         model = TransientSpectrum
         fields = ('transient','ra',
