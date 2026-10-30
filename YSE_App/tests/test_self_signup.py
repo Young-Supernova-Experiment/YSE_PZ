@@ -41,7 +41,7 @@ SIGNUP_ON = dict(
     SELF_SIGNUP_ATTEMPTS_PER_IP_PER_HOUR=10, SELF_SIGNUP_ACCOUNTS_PER_HOUR=30,
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
 )
-GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
+GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, ONBOARDING_EMAIL_REQUIRED=False, RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
 
 
 def make_user(username, **extra):
@@ -53,8 +53,8 @@ def _old_ts(seconds=120):
 
 
 def signup_post(client, username="ss_newcomer", email="newcomer@example.com", **extra):
-    data = {"username": username, "email": email, "password1": STRONG_PASSWORD, "password2": STRONG_PASSWORD,
-            "website": "", "form_ts": _old_ts()}
+    data = {"first_name": "Synthetic", "last_name": "Newcomer", "username": username, "email": email,
+            "password1": STRONG_PASSWORD, "password2": STRONG_PASSWORD, "website": "", "form_ts": _old_ts()}
     data.update(extra)
     return client.post(reverse("signup"), data)
 
@@ -393,7 +393,7 @@ class SignupAcceptanceTests(CacheClearMixin, TestCase):
         teams = reverse("team_list")
         self.client.post(reverse("agreement"), {"agree": "on", "next": teams})
         self.client.post(reverse("researcher_profile_edit"), {
-            "full_name": "Synthetic Applicant", "institution": "Example University", "department": "Physics",
+            "first_name": "Synthetic", "last_name": "Person", "full_name": "Synthetic Applicant", "institution": "Example University", "department": "Physics",
             "career_level": "tenured", "orcid": VALID_ORCID, "next": teams,
         })
         self.assertEqual(self.client.get(teams, HTTP_ACCEPT="text/html").status_code, 200)

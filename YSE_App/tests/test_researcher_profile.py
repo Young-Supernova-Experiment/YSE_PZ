@@ -67,6 +67,7 @@ def consent(*users):
 
 
 BASE_POST = {"full_name": "Test Person", "institution": "Example University", "department": "Physics"}
+NAMES = {"first_name": "Synthetic", "last_name": "Person"}  # on the account, posted with the profile
 
 
 class OrcidAndRuleTests(TestCase):
@@ -80,7 +81,7 @@ class OrcidAndRuleTests(TestCase):
         self.assertEqual(rp.normalize_orcid("000000021694233x"), "0000-0002-1694-233X")
 
     def test_required_fields_per_career_level(self):
-        everyone = ["full_name", "institution", "department", "career_level"]
+        everyone = ["first_name", "last_name", "full_name", "institution", "department", "career_level"]
         self.assertEqual(rp.required_fields("undergrad", True), everyone + ["current_advisor"])
         self.assertEqual(rp.required_fields("grad", False), everyone + ["current_advisor"])
         for level in ("postdoc", "scientific_staff", "tenure_track_untenured", "tenured"):
@@ -93,9 +94,15 @@ class OrcidAndRuleTests(TestCase):
         user = User.objects.create_user("rule_user")
         self.assertEqual(rp.missing_fields(user, key_available=False), ["profile"])
         profile = ResearcherProfile.objects.create(user=user, career_level="grad", **BASE_POST)
+        # Given and family names are on the account and required from everyone.
+        self.assertEqual(rp.missing_fields(user, profile, key_available=True), ["first_name", "last_name"])
+        user.first_name, user.last_name = "Synthetic", ""
+        self.assertEqual(rp.missing_fields(user, profile, key_available=True), ["last_name"])
+        user.first_name, user.last_name = "Synthetic", "Person"
         # Without research consent only the essential fields are required (#744).
         self.assertEqual(rp.missing_fields(user, profile, key_available=True), [])
-        self.assertEqual(rp.required_fields("grad", True, research=False), ["full_name", "institution"])
+        self.assertEqual(rp.required_fields("grad", True, research=False),
+                         ["first_name", "last_name", "full_name", "institution"])
         consent(user)
         self.assertEqual(rp.missing_fields(user, profile, key_available=False), ["current_advisor"])
         Mentorship.objects.create(mentee=user, mentor_name="Free Form Advisor", kind=Mentorship.KIND_CURRENT_ADVISOR)
@@ -135,7 +142,7 @@ class EncryptionTests(TestCase):
         kp = test_keypair()
         with with_key():
             resp = self.client.post(reverse("researcher_profile_edit"), dict(
-                BASE_POST, career_level="postdoc", orcid=VALID_ORCIDS[1], phd_year="2015",
+                BASE_POST, **NAMES, career_level="postdoc", orcid=VALID_ORCIDS[1], phd_year="2015",
                 gender="self_describe", gender_self="synthetic description", country="Atlantis"))
             self.assertEqual(resp.status_code, 302, getattr(resp, "context", None) and resp.context["form"].errors)
         rows = {r.field_name: r for r in EncryptedProfileValue.objects.filter(user=self.user)}
@@ -160,12 +167,12 @@ class EncryptionTests(TestCase):
         with with_key():
             for bad in ("1900", "3000"):
                 resp = self.client.post(reverse("researcher_profile_edit"), dict(
-                    BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0], phd_year=bad))
+                    BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0], phd_year=bad))
                 self.assertEqual(resp.status_code, 200)
                 self.assertIn("phd_year", resp.context["form"].errors)
             # Required for postdocs and above when a key is installed.
             resp = self.client.post(reverse("researcher_profile_edit"), dict(
-                BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0]))
+                BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0]))
             self.assertIn("phd_year", resp.context["form"].errors)
         self.assertFalse(EncryptedProfileValue.objects.exists())
         self.assertFalse(ResearcherProfile.objects.filter(user=self.user).exists())
@@ -190,7 +197,7 @@ class EncryptionTests(TestCase):
         self.assertContains(page, "not available yet")
         # A tenured user without a PhD year is complete; posted encrypted values are ignored.
         resp = self.client.post(reverse("researcher_profile_edit"), dict(
-            BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0], phd_year="2010", gender="man"))
+            BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0], phd_year="2010", gender="man"))
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(EncryptedProfileValue.objects.exists())
         self.assertEqual(rp.missing_fields(self.user), [])
@@ -238,7 +245,7 @@ class HistoryTests(TestCase):
         self.client.force_login(self.user)
 
     def post(self, **fields):
-        data = dict(BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0])
+        data = dict(BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0])
         data.update(fields)
         return self.client.post(reverse("researcher_profile_edit"), data)
 
@@ -286,7 +293,7 @@ class MentorshipTests(TestCase):
     def test_student_names_advisor_and_appears_in_my_students(self):
         self.client.force_login(self.student)
         resp = self.client.post(reverse("researcher_profile_edit"), dict(
-            BASE_POST, career_level="grad", advisor_name="Test Person (mentor_user)",
+            BASE_POST, **NAMES, career_level="grad", advisor_name="Test Person (mentor_user)",
             advisor_user_id=str(self.mentor.pk)))
         self.assertEqual(resp.status_code, 302)
         advisor = rp.current_advisor(self.student)
@@ -300,14 +307,14 @@ class MentorshipTests(TestCase):
         # Switching to a free-form advisor ends the student's previous row, not the advisor's copy.
         self.client.force_login(self.student)
         self.client.post(reverse("researcher_profile_edit"), dict(
-            BASE_POST, career_level="grad", advisor_name="Unlisted Advisor", advisor_user_id=""))
+            BASE_POST, **NAMES, career_level="grad", advisor_name="Unlisted Advisor", advisor_user_id=""))
         self.assertEqual(rp.current_advisor(self.student).mentor_name, "Unlisted Advisor")
         self.assertIsNotNone(Mentorship.objects.get(owner=self.student, mentor=self.mentor).end_year)
         self.assertIsNone(Mentorship.objects.get(owner=self.mentor, mentee=self.student).end_year)
 
     def test_student_without_advisor_is_refused(self):
         self.client.force_login(self.student)
-        resp = self.client.post(reverse("researcher_profile_edit"), dict(BASE_POST, career_level="undergrad"))
+        resp = self.client.post(reverse("researcher_profile_edit"), dict(BASE_POST, **NAMES, career_level="undergrad"))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("advisor_name", resp.context["form"].errors)
 
@@ -578,7 +585,7 @@ class UserSuggestEndpointTests(TestCase):
         """JSON endpoint: the onboarding gate must not redirect it (plain or AJAX request)."""
         self._user("gate_target", "Gatetarget", "Person")
         self.client.force_login(self.me)  # no agreement accepted, no profile
-        with override_settings(ONBOARDING_GATE_ENABLED=True, **NO_KEY):
+        with override_settings(ONBOARDING_GATE_ENABLED=True, ONBOARDING_EMAIL_REQUIRED=False, **NO_KEY):
             plain = self.client.get(self.url, {"q": "Gatetarget"})
             ajax = self.client.get(self.url, {"q": "Gatetarget"}, HTTP_X_REQUESTED_WITH="XMLHttpRequest",
                                    HTTP_ACCEPT="application/json")
@@ -619,7 +626,7 @@ class ProfileFormWidgetTests(TestCase):
         chosen = [self.insts[0].pk, self.insts[2].pk]
         with override_settings(**NO_KEY):
             resp = self.client.post(reverse("researcher_profile_edit"), dict(
-                BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0], observing_experience=chosen))
+                BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0], observing_experience=chosen))
         self.assertEqual(resp.status_code, 302)
         saved = ResearcherProfile.objects.get(user=self.user)
         self.assertEqual(sorted(saved.observing_experience.values_list("pk", flat=True)), sorted(chosen))
@@ -633,7 +640,7 @@ class ProfileFormWidgetTests(TestCase):
     def test_unknown_instrument_is_refused(self):
         with override_settings(**NO_KEY):
             resp = self.client.post(reverse("researcher_profile_edit"), dict(
-                BASE_POST, career_level="tenured", orcid=VALID_ORCIDS[0], observing_experience=[999999]))
+                BASE_POST, **NAMES, career_level="tenured", orcid=VALID_ORCIDS[0], observing_experience=[999999]))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("observing_experience", resp.context["form"].errors)
 
@@ -658,10 +665,10 @@ class ProfileFormWidgetTests(TestCase):
         advisor = User.objects.create_user("advisor_form", password="x")
         with override_settings(**NO_KEY):
             self.client.post(reverse("researcher_profile_edit"), dict(
-                BASE_POST, career_level="grad", advisor_name="Picked Name", advisor_user_id=str(advisor.pk)))
+                BASE_POST, **NAMES, career_level="grad", advisor_name="Picked Name", advisor_user_id=str(advisor.pk)))
             self.assertEqual(rp.current_advisor(self.user).mentor, advisor)
             self.client.post(reverse("researcher_profile_edit"), dict(
-                BASE_POST, career_level="grad", advisor_name="Free Text Advisor", advisor_user_id=""))
+                BASE_POST, **NAMES, career_level="grad", advisor_name="Free Text Advisor", advisor_user_id=""))
         self.assertEqual(rp.current_advisor(self.user).mentor_name, "Free Text Advisor")
 
 

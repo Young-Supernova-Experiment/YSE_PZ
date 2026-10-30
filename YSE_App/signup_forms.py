@@ -17,7 +17,17 @@ HONEYPOT_FIELD = "website"
 
 
 class SignupForm(UserCreationForm):
-    """Username, email and password (Django's password validators), plus the spam guard fields."""
+    """Given and family names, username, email and password (Django's password validators),
+    plus the spam guard fields. The names go on the account (first_name / last_name)."""
+
+    first_name = forms.CharField(
+        max_length=150, label="Given name(s)", help_text="First and any middle names, as you write them.",
+        widget=forms.TextInput(attrs={"autocomplete": "given-name", "class": "form-control"}),
+    )
+    last_name = forms.CharField(
+        max_length=150, label="Family name", help_text="Surname(s).",
+        widget=forms.TextInput(attrs={"autocomplete": "family-name", "class": "form-control"}),
+    )
 
     email = forms.EmailField(
         max_length=254, label="Email address",
@@ -41,7 +51,7 @@ class SignupForm(UserCreationForm):
 
     class Meta(UserCreationForm.Meta):
         model = User
-        fields = ("username", "email")
+        fields = ("first_name", "last_name", "username", "email")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -79,6 +89,12 @@ class SignupForm(UserCreationForm):
         if teams is not None and limit > 0 and len(teams) > limit:
             raise forms.ValidationError("Choose at most %d teams; you can ask to join more later." % limit)
         return teams
+
+    def clean_first_name(self):
+        return " ".join((self.cleaned_data.get("first_name") or "").split())
+
+    def clean_last_name(self):
+        return " ".join((self.cleaned_data.get("last_name") or "").split())
 
     def clean_email(self):
         return (self.cleaned_data.get("email") or "").strip()

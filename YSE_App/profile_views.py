@@ -244,6 +244,12 @@ def _save_profile(request, form, before):
     obj.user = user
     obj.save()
     form.save_m2m()
+    names = {name: form.cleaned_data.get(name) or "" for name in rp.ACCOUNT_NAME_FIELDS}
+    changed = [name for name, value in names.items() if getattr(user, name) != value]
+    if changed:
+        for name in changed:
+            setattr(user, name, names[name])
+        user.save(update_fields=changed)
     rp.record_plain_changes(user, before, rp.snapshot(obj), changed_by=user)
     to_set, to_clear = form.encrypted_changes()
     for name in to_clear:

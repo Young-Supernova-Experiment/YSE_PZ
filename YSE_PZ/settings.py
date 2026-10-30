@@ -1561,6 +1561,14 @@ ONBOARDING_GATE_ENABLED = (
     _onboarding_env not in ('0', 'false', 'no', 'off') if _onboarding_env
     else config.getboolean('site_settings', 'ONBOARDING_GATE_ENABLED', fallback=True)
 )
+# Part of the gate: a confirmed email address on the account (sent to /settings/email/
+# first). [site_settings] ONBOARDING_EMAIL_REQUIRED: False (or env
+# YSE_ONBOARDING_EMAIL=0) turns this step off, e.g. while email delivery is broken.
+_onboarding_email_env = os.environ.get('YSE_ONBOARDING_EMAIL', '').strip().lower()
+ONBOARDING_EMAIL_REQUIRED = (
+    _onboarding_email_env not in ('0', 'false', 'no', 'off') if _onboarding_email_env
+    else config.getboolean('site_settings', 'ONBOARDING_EMAIL_REQUIRED', fallback=True)
+)
 # Research teams (#445, #440). System groups are never owned, joined by invitation or
 # managed on /teams/; staff manage their membership in the admin. Groups holding model
 # permissions, and groups ticked "is system" in the admin, count as system too.

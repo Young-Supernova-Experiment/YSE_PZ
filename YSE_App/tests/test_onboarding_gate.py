@@ -20,7 +20,7 @@ from YSE_App.onboarding import OnboardingGateMiddleware
 from YSE_App.services import research_crypto
 
 NO_KEY = dict(RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
-GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, **NO_KEY)
+GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, ONBOARDING_EMAIL_REQUIRED=False, **NO_KEY)
 VALID_ORCID = "0000-0002-1825-0097"  # ORCID's documented example iD (fictitious researcher)
 
 # Ingest, download and query endpoints wrapped in login_or_basic_auth_required on develop.
@@ -47,7 +47,14 @@ def complete_profile(user, **extra):
     fields = dict(full_name="Test Person", institution="Example University", department="Physics",
                   career_level="tenured", orcid=VALID_ORCID)
     fields.update(extra)
+    _name(user)
     return ResearcherProfile.objects.create(user=user, **fields)
+
+
+def _name(user):
+    """Given and family names live on the account (required since the full-name rule)."""
+    user.first_name, user.last_name = "Synthetic", "Person"
+    User.objects.filter(pk=user.pk).update(first_name="Synthetic", last_name="Person")
 
 
 def onboard(user):
@@ -108,7 +115,7 @@ class GateFlowTests(TestCase):
         self.assertTrue(resp["Location"].startswith(reverse("researcher_profile_edit") + "?next="))
 
         resp = self.client.post(reverse("researcher_profile_edit"), {
-            "full_name": "Test Person", "institution": "Example University", "department": "Physics",
+            "first_name": "Synthetic", "last_name": "Person", "full_name": "Test Person", "institution": "Example University", "department": "Physics",
             "career_level": "tenured", "orcid": VALID_ORCID, "next": self.page,
         })
         self.assertRedirects(resp, self.page, fetch_redirect_response=False)
@@ -421,7 +428,7 @@ class GateUnderUrlPrefixTests(TestCase):
                 self.assertContains(page, 'value="%s"' % url)
 
                 resp = self.browse("post", self.prefixed("researcher_profile_edit"), {
-                    "full_name": "Test Person", "institution": "Example University", "department": "Physics",
+                    "first_name": "Synthetic", "last_name": "Person", "full_name": "Test Person", "institution": "Example University", "department": "Physics",
                     "career_level": "tenured", "orcid": VALID_ORCID, "next": url,
                 })
                 self.assertEqual(resp.status_code, 302)

@@ -27,7 +27,7 @@ from YSE_App.services import research_crypto
 logger = logging.getLogger(__name__)
 
 # Bump to re-evaluate every session's cached "onboarding complete" flag after a rule change.
-RULES_VERSION = "2"  # 2: research fields required only with research consent (#744)
+RULES_VERSION = "3"  # 2: research fields only with research consent (#744); 3: given and family names
 
 PHD_YEAR_MIN = 1950
 
@@ -41,6 +41,8 @@ PLAIN_FIELDS = (
 )
 
 FIELD_LABELS = {
+    "first_name": "Given name(s)",
+    "last_name": "Family name",
     "full_name": "Full name",
     "institution": "Institution",
     "department": "Department",
@@ -119,8 +121,12 @@ def encrypted_status(user: User) -> Dict[str, EncryptedProfileValue]:
     return status
 
 
+# Given and family names live on the account (auth.User first_name / last_name), entered
+# separately (never parsed from the full name) so lists can sort by family name.
+ACCOUNT_NAME_FIELDS = ("first_name", "last_name")
+
 # Required from everyone, whatever their research consent (essential data, #744).
-ESSENTIAL_REQUIRED = ("full_name", "institution")
+ESSENTIAL_REQUIRED = ACCOUNT_NAME_FIELDS + ("full_name", "institution")
 
 
 def required_fields(career_level: str, key_available: bool, research: bool = True) -> List[str]:
@@ -131,7 +137,7 @@ def required_fields(career_level: str, key_available: bool, research: bool = Tru
     """
     if not research:
         return list(ESSENTIAL_REQUIRED)
-    required = ["full_name", "institution", "department", "career_level"]
+    required = list(ACCOUNT_NAME_FIELDS) + ["full_name", "institution", "department", "career_level"]
     if career_level == CAREER_OTHER:
         required.append("career_level_other")
     if career_level in ("postdoc", "scientific_staff", "tenure_track_untenured", "tenured"):
@@ -168,6 +174,9 @@ def missing_fields(user: User, profile: Optional[ResearcherProfile] = None,
                 missing.append(name)
         elif name == "orcid":
             if not orcid_checksum_ok(profile.orcid):
+                missing.append(name)
+        elif name in ACCOUNT_NAME_FIELDS:
+            if not (getattr(user, name, "") or "").strip():
                 missing.append(name)
         elif not (getattr(profile, name, "") or "").strip():
             missing.append(name)
