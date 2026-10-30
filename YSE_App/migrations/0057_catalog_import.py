@@ -12,14 +12,14 @@ import django.db.models.deletion
 
 
 def _audit(model_name):
-    """The BaseModel columns."""
+    """The BaseModel columns (related names as declared, see 0053)."""
     return [
         ('created_date', models.DateTimeField(auto_now_add=True)),
         ('modified_date', models.DateTimeField(auto_now=True)),
         ('created_by', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT,
-                                         related_name='%s_created_by' % model_name, to=settings.AUTH_USER_MODEL)),
+                                         related_name='%(class)s_created_by', to=settings.AUTH_USER_MODEL)),
         ('modified_by', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT,
-                                          related_name='%s_modified_by' % model_name, to=settings.AUTH_USER_MODEL)),
+                                          related_name='%(class)s_modified_by', to=settings.AUTH_USER_MODEL)),
     ]
 
 
