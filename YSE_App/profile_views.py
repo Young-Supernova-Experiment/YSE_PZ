@@ -23,6 +23,7 @@ from YSE_App.models.researcher_models import ENCRYPTED_FIELDS, STUDENT_LEVELS
 from YSE_App.profile_forms import (
     AdvisorForm, AgreementForm, ResearchConsentChoiceForm, ResearcherProfileForm, StudentForm, StudentUpdateForm,
 )
+from YSE_App.services import membership
 from YSE_App.services import research_consent as rc
 from YSE_App.services import research_crypto
 from YSE_App.services import researcher_profile as rp
@@ -259,6 +260,8 @@ def _save_profile(request, form, before):
         obj.profile_completed_at = timezone.now()
         obj.profile_confirmed_at = obj.profile_confirmed_at or obj.profile_completed_at
         obj.save(update_fields=["profile_completed_at", "profile_confirmed_at", "updated_at"])
+        # Teams chosen on the signup form now go to their owners.
+        transaction.on_commit(lambda: membership.release_held(user))
     onboarding.clear_session_flag(request)
 
 

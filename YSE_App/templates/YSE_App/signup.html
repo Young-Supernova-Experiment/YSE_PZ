@@ -46,7 +46,14 @@
     {% csrf_token %}
     {{ form.form_ts }}
     {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
-    {% for field in form %}{% if field.name != "website" and field.name != "form_ts" %}
+    {% for field in form %}{% if field.name == "teams" %}
+    <fieldset class="form-group" id="yse-signup-teams">
+      <legend class="col-form-label pt-0">{{ field.label }}</legend>
+      {% for box in field %}<div class="form-check">{{ box.tag }} <label class="form-check-label" for="{{ box.id_for_label }}">{{ box.choice_label }}</label></div>{% endfor %}
+      {% if field.errors %}<div class="text-danger small">{{ field.errors|join:" " }}</div>{% endif %}
+      <small class="form-text text-muted">{{ field.help_text }} Your requests reach the owners once you have accepted the User Agreement and completed your profile.</small>
+    </fieldset>
+    {% elif field.name != "website" and field.name != "form_ts" %}
     <div class="form-group">
       <label for="{{ field.id_for_label }}">{{ field.label }}</label>
       {{ field }}
@@ -58,7 +65,7 @@
       <label for="{{ form.website.id_for_label }}">{{ form.website.label }}</label>
       {{ form.website }}
     </div>
-    <p class="small text-muted">After signing up you accept the User Agreement and complete your researcher profile. You start in the Public group; ask a team's owners to join their team from the Teams page.</p>
+    <p class="small text-muted">After signing up you accept the User Agreement and complete your researcher profile. You start in the Public group; choosing a team is optional, and you can ask to join teams, or create your own, from the Teams page later.</p>
     <button type="submit" class="btn btn-primary btn-block">Create account</button>
   </form>
   <p class="mt-3 mb-0 small">Already have an account? <a href="{% url 'auth_login' %}">Sign in</a></p>

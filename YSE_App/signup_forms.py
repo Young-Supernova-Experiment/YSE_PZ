@@ -6,7 +6,7 @@ import time
 
 from django import forms
 from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.core import signing
 
 from YSE_App.services import membership
@@ -28,6 +28,16 @@ class SignupForm(UserCreationForm):
     website = forms.CharField(required=False, label="Leave this field empty",
                               widget=forms.TextInput(attrs={"autocomplete": "off", "tabindex": "-1"}))
     form_ts = forms.CharField(required=False, widget=forms.HiddenInput)
+    # Optional: requests are opened at once but held until onboarding is done.
+    teams = forms.ModelMultipleChoiceField(
+        queryset=Group.objects.none(), required=False, widget=forms.CheckboxSelectMultiple,
+        label="Teams you would like to join (optional)",
+        help_text="The team owners decide. You can also ask later from My teams.",
+    )
+    team_message = forms.CharField(
+        required=False, max_length=membership.MESSAGE_MAX_LENGTH, label="Note to the team owners (optional)",
+        widget=forms.Textarea(attrs={"rows": 2, "class": "form-control"}),
+    )
 
     class Meta(UserCreationForm.Meta):
         model = User
@@ -40,6 +50,12 @@ class SignupForm(UserCreationForm):
         for name in ("username", "password1", "password2"):
             self.fields[name].widget.attrs.setdefault("class", "form-control")
         self.fields["username"].widget.attrs["autocomplete"] = "username"
+        offered = membership.signup_groups()
+        if offered:
+            self.fields["teams"].queryset = Group.objects.filter(pk__in=[g.pk for g in offered]).order_by("name")
+        else:
+            del self.fields["teams"]
+            del self.fields["team_message"]
 
     def is_spam(self) -> bool:
         """True when the honeypot is filled or the form came back too quickly (or unsigned)."""
@@ -56,6 +72,13 @@ class SignupForm(UserCreationForm):
         if username and User.objects.filter(username__iexact=username).exists():
             raise forms.ValidationError("A user with that username already exists.")
         return username
+
+    def clean_teams(self):
+        teams = self.cleaned_data.get("teams")
+        limit = membership.signup_max_requests()
+        if teams is not None and limit > 0 and len(teams) > limit:
+            raise forms.ValidationError("Choose at most %d teams; you can ask to join more later." % limit)
+        return teams
 
     def clean_email(self):
         return (self.cleaned_data.get("email") or "").strip()

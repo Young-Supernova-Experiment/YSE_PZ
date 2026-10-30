@@ -18,6 +18,9 @@ Invite flow (and why it is safe with the onboarding gate):
 
 Owner actions live here, not on the admin site, so non-staff owners do not need staff
 MFA (#566). System groups are never managed here.
+
+Any onboarded user can create a team (throttled, see ``services/groups.py``); owners can add
+an existing user by exact username or email; members who are not owners can leave.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
-from YSE_App.group_forms import GroupProfileForm, InvitationForm, UserPreferenceForm
+from YSE_App.group_forms import GroupProfileForm, InvitationForm, MemberAddForm, TeamCreateForm, UserPreferenceForm
 from YSE_App.models.group_models import GroupInvitation, UserPreference
 from YSE_App import onboarding
 from YSE_App.onboarding import onboarding_exempt
@@ -81,9 +84,24 @@ def _require_manager(request, group):
         raise PermissionDenied("Only the group's owners and staff can do this.")
 
 
+def _onboarding_redirect(request):
+    """POSTs pass the gate, so views that change membership check it themselves."""
+    if onboarding.gate_enabled():
+        step = onboarding.pending_step(request)
+        if step == "agreement":
+            return onboarding.redirect_with_next("agreement", request)
+        if step == "profile":
+            return onboarding.redirect_with_next("researcher_profile_edit", request)
+    return None
+
+
 @login_required
 @require_GET
 def team_list(request):
+    # Signup-form requests go to the owners once onboarding is done (the gate sends new users here).
+    released = membership.release_held(request.user)
+    if released:
+        messages.info(request, "Your membership requests from signup were sent to the team owners.")
     teams = group_svc.teams_for(request.user)
     owned = set(Group.objects.filter(group_profile__owners=request.user).values_list("id", flat=True))
     member_of = set(request.user.groups.values_list("id", flat=True))
@@ -98,6 +116,10 @@ def team_list(request):
     return render(request, "YSE_App/teams.html", {
         "rows": rows, "requests_open": requests_open, "requestable": requestable, "my_requests": my_requests,
         "request_form": MembershipRequestForm(),
+        "create_enabled": group_svc.create_enabled(),
+        "create_problem": group_svc.create_problem(request.user) if group_svc.create_enabled() else None,
+        "create_form": TeamCreateForm(),
+        "held_requests": list(membership.held_requests(request.user)),
     })
 
 
@@ -123,6 +145,9 @@ def team_detail(request, group_id):
         "profile_form": GroupProfileForm(instance=profile) if manage else None,
         "new_link": new_link,
         "pending_requests": list(membership.pending_for_group(group)) if manage else [],
+        "member_add_form": MemberAddForm() if manage else None,
+        "is_member": request.user.groups.filter(pk=group.pk).exists(),
+        "is_owner": group_svc.is_owner(request.user, group),
     })
     return _no_referrer(response) if new_link else response
 
@@ -190,6 +215,63 @@ def team_member_remove(request, group_id, user_id):
     else:
         messages.success(request, "%s was removed from %s." % (group_svc.display_name(member), group.name))
     return redirect("team_detail", group.pk)
+
+
+@login_required
+@require_POST
+def team_create(request):
+    if not group_svc.create_enabled():
+        raise Http404("Creating teams is not enabled.")
+    pending = _onboarding_redirect(request)
+    if pending is not None:
+        return pending
+    form = TeamCreateForm(request.POST)
+    if not form.is_valid():
+        errors = "; ".join("%s" % e for errs in form.errors.values() for e in errs)
+        messages.error(request, "Team not created: %s" % errors)
+        return redirect("team_list")
+    try:
+        group = group_svc.create_team(request.user, form.cleaned_data["name"], form.cleaned_data.get("description"))
+    except group_svc.TeamError as exc:
+        messages.error(request, "Team not created: %s" % exc)
+        return redirect("team_list")
+    messages.success(request, "Team %s created. You are its owner: add members or send invitation links here."
+                     % group.name)
+    return redirect("team_detail", group.pk)
+
+
+@login_required
+@require_POST
+def team_member_add(request, group_id):
+    group = _visible_team_or_404(request, group_id)
+    _require_manager(request, group)
+    pending = _onboarding_redirect(request)
+    if pending is not None:
+        return pending
+    form = MemberAddForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Enter a username or email address.")
+        return redirect("team_detail", group.pk)
+    try:
+        member = group_svc.add_member(request.user, group, form.cleaned_data["identifier"])
+    except group_svc.TeamError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, "%s is now a member of %s." % (group_svc.display_name(member), group.name))
+    return redirect("team_detail", group.pk)
+
+
+@login_required
+@require_POST
+def team_leave(request, group_id):
+    group = _visible_team_or_404(request, group_id)
+    try:
+        group_svc.leave_team(request.user, group)
+    except group_svc.TeamError as exc:
+        messages.error(request, str(exc))
+        return redirect("team_detail", group.pk)
+    messages.success(request, "You left %s." % group.name)
+    return redirect("team_list")
 
 
 @login_exempt  # signed out: the view's own login redirect keeps Referrer-Policy: no-referrer
