@@ -89,7 +89,7 @@ class SignupDisabledTests(CacheClearMixin, TestCase):
         self.assertNotContains(page, 'id="yse-signup-link"')
         self.assertContains(page, reverse("password_reset"))
 
-    @override_settings(SELF_SIGNUP_ENABLED=False)
+    @override_settings(SELF_SIGNUP_ENABLED=False, GROUP_REQUESTS_ENABLED=False)
     def test_requests_closed_when_off(self):
         team = Group.objects.create(name="ss-closed-team")
         owner = make_user("ss_closed_owner")

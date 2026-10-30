@@ -3,15 +3,16 @@
 A signed-in user asks to join a research team; the team's owners (``GroupProfile.owners``,
 #445) or staff approve or deny the request. Approving adds the user to the group.
 
-Requestable teams are active, non-system groups that have at least one active owner (so
-someone can decide). System groups (Public, api_writers, explorer_users, permission groups)
+Requestable teams are active, non-system groups that accept requests (the owners' switch,
+``GroupProfile.accepts_requests``) and have at least one active owner or deputy (so
+someone can decide); owners and deputies decide. System groups (Public, api_writers, explorer_users, permission groups)
 can never be requested. The invitation flow (YSE_App/services/groups.py) is unchanged.
 
 Owners are told about a new request, and the requester about the decision, through
 ``notify()`` (kind ``team_request``, in the "Interests and data access" preference group:
 in-app, email and Slack by default, per each user's notification preferences).
-Requests are opened only while ``SELF_SIGNUP_ENABLED`` is on; pending ones can still be
-decided or cancelled after it is turned off. Decided and cancelled requests are deleted
+Requests are open while ``GROUP_REQUESTS_ENABLED`` is on (default; independent of
+self-signup); pending ones can still be decided or cancelled after it is turned off. Decided and cancelled requests are deleted
 after ``GROUP_REQUEST_PURGE_DAYS`` (``manage.py purge_group_membership_requests``).
 
 Teams chosen on the signup form (at most ``GROUP_SIGNUP_MAX_REQUESTS``) become requests at
@@ -49,7 +50,7 @@ class MembershipRequestError(Exception):
 
 
 def requests_enabled() -> bool:
-    return bool(getattr(settings, "SELF_SIGNUP_ENABLED", False))
+    return bool(getattr(settings, "GROUP_REQUESTS_ENABLED", True))
 
 
 def purge_days() -> int:
@@ -66,8 +67,9 @@ def signup_max_requests() -> int:
 
 def _requestable_qs():
     return (Group.objects
-            .filter(group_profile__is_active=True, group_profile__is_system=False,
-                    group_profile__owners__is_active=True)
+            .filter(group_profile__is_active=True, group_profile__is_system=False)
+            .exclude(group_profile__accepts_requests=False)
+            .filter(Q(group_profile__owners__is_active=True) | Q(group_profile__deputies__is_active=True))
             .distinct().select_related("group_profile").order_by("name"))
 
 
@@ -82,7 +84,7 @@ def requestable_groups(user: User) -> List[Group]:
 
 def signup_groups() -> List[Group]:
     """Teams offered on the signup form (the same rule, for someone with no account yet)."""
-    if not requests_enabled():
+    if not requests_enabled() or not getattr(settings, "SELF_SIGNUP_ENABLED", False):
         return []
     system = group_svc.system_group_ids()
     return [g for g in _requestable_qs() if g.id not in system]
@@ -163,7 +165,7 @@ def create_request(user: User, group: Group, message: str = "", *, hold: bool = 
 
 def _notify_new_request(req: GroupMembershipRequest) -> None:
     group = req.group
-    _notify(group_svc.owners_of(group),
+    _notify(group_svc.managers_of(group),
             "%s asked to join %s." % (group_svc.display_name(req.user), group.name),
             reverse("team_detail", args=[group.pk]), "Team membership request: %s" % group.name,
             exclude=[req.user])
@@ -212,7 +214,7 @@ def can_decide(actor: User, req: GroupMembershipRequest) -> bool:
 def decide(actor: User, req: GroupMembershipRequest, approve: bool) -> GroupMembershipRequest:
     """Approve (adds the user to the group) or deny a pending request."""
     if not can_decide(actor, req):
-        raise PermissionError("Only the team's owners and staff can decide requests.")
+        raise PermissionError("Only the team's owners, deputies and staff can decide requests.")
     with transaction.atomic():
         locked = GroupMembershipRequest.objects.select_for_update().select_related("group", "user").get(pk=req.pk)
         if not locked.is_pending:

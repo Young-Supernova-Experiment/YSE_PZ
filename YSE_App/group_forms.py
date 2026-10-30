@@ -33,11 +33,23 @@ class InvitationForm(forms.Form):
 
 
 class GroupProfileForm(forms.ModelForm):
+    # Declared here: the model field is nullable, which ModelForm would turn into a 3-way choice.
+    accepts_requests = forms.BooleanField(
+        required=False, label="Accept membership requests",
+        help_text="Signed-in users can ask to join; owners and deputies approve or deny. Off: invitation "
+                  "links and direct adds only.")
+
     class Meta:
         model = GroupProfile
-        fields = ("description", "is_active")
+        fields = ("description", "is_active", "accepts_requests")
         labels = {"is_active": "Active (shown in group pickers)"}
         widgets = {"description": forms.Textarea(attrs={"rows": 3, "class": "form-control"})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NULL (never set) means the team takes requests.
+        if self.instance is not None and self.instance.accepts_requests is None:
+            self.initial["accepts_requests"] = True
 
 
 class _GroupChoices(forms.ModelMultipleChoiceField):

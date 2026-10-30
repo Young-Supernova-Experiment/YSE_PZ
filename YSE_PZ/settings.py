@@ -1362,6 +1362,11 @@ SELF_SIGNUP_MIN_FILL_SECONDS = config.getint('site_settings', 'SELF_SIGNUP_MIN_F
 SELF_SIGNUP_CLIENT_IP_HEADER = config.get('site_settings', 'SELF_SIGNUP_CLIENT_IP_HEADER', fallback='').strip()
 GROUP_REQUEST_PURGE_DAYS = config.getint('groups', 'REQUEST_PURGE_DAYS', fallback=90) if config.has_section('groups') else 90
 GROUP_REQUESTS_PER_USER_PER_DAY = config.getint('groups', 'REQUESTS_PER_USER_PER_DAY', fallback=10) if config.has_section('groups') else 10
+# Membership requests are open site-wide unless [groups] REQUESTS_ENABLED = False (independent
+# of self-signup); each team's owners or deputies can still switch requests off for their team.
+GROUP_REQUESTS_ENABLED = config.getboolean('groups', 'REQUESTS_ENABLED', fallback=True) if config.has_section('groups') else True
+# Members shown per page on a team's page.
+GROUP_MEMBERS_PER_PAGE = config.getint('groups', 'MEMBERS_PER_PAGE', fallback=50) if config.has_section('groups') else 50
 
 # ---------------------------------------------------------------------------
 # Alert brokers (YSE_App.brokers; issues #272, #276). All keys optional, under

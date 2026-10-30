@@ -12,8 +12,9 @@ Gate exemptions: ``signup`` and ``signup_verify_email`` are in
 no login-required middleware, the marker below only sets the attribute), so the backport
 keeps them reachable signed out.
 
-Everything here returns 404 while ``SELF_SIGNUP_ENABLED`` is off, except the owner's
-decide action (pending requests can still be decided) and cancelling one's own request.
+The signup pages return 404 while ``SELF_SIGNUP_ENABLED`` is off. Membership requests are
+separate: they follow ``GROUP_REQUESTS_ENABLED`` (on by default) and each team's
+``accepts_requests`` switch; owners and deputies decide them.
 """
 
 from __future__ import annotations
