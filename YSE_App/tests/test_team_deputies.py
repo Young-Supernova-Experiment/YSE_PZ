@@ -220,8 +220,9 @@ class AcceptRequestsTests(TeamBase):
 class MemberListTests(TeamBase):
     def setUp(self):
         super().setUp()
-        users = User.objects.bulk_create([User(username="td_bulk_%03d" % i) for i in range(117)])
-        self.team.user_set.add(*users)  # 120 members in all
+        User.objects.bulk_create([User(username="td_bulk_%03d" % i) for i in range(117)])
+        # MySQL's bulk_create returns no primary keys: read the rows back.
+        self.team.user_set.add(*User.objects.filter(username__startswith="td_bulk_"))  # 120 members in all
         self.client.force_login(self.owner)
 
     def test_paginated(self):
