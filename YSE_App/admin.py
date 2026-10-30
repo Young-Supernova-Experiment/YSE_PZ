@@ -1203,15 +1203,15 @@ from YSE_App.services import groups as _group_svc  # noqa: E402
 class GroupProfileAdminForm(forms.ModelForm):
 	class Meta:
 		model = GroupProfile
-		fields = ("description", "is_active", "is_system", "owners")
+		fields = ("description", "is_active", "is_system", "accepts_requests", "owners", "deputies")
 
 	def clean(self):
 		cleaned = super().clean()
 		group = getattr(self.instance, "group", None) if self.instance and self.instance.group_id else None
 		group = cleaned.get("group") or group
 		system = bool(cleaned.get("is_system")) or (group is not None and group.name in _group_svc.system_group_names())
-		if system and cleaned.get("owners"):
-			raise forms.ValidationError("System groups cannot have owners (they are not research teams).")
+		if system and (cleaned.get("owners") or cleaned.get("deputies")):
+			raise forms.ValidationError("System groups cannot have owners or deputies (they are not research teams).")
 		return cleaned
 
 
@@ -1221,8 +1221,8 @@ class GroupProfileInline(admin.StackedInline):
 	can_delete = False
 	extra = 0
 	max_num = 1
-	filter_horizontal = ("owners",)
-	fields = ("description", "is_active", "is_system", "owners")
+	filter_horizontal = ("owners", "deputies")
+	fields = ("description", "is_active", "is_system", "accepts_requests", "owners", "deputies")
 
 
 admin.site.unregister(_AuthGroup)
@@ -1270,9 +1270,10 @@ class GroupProfileAdmin(admin.ModelAdmin):
 	list_display = ("group", "is_active", "is_system", "owner_count", "updated_at")
 	list_filter = ("is_active", "is_system")
 	search_fields = ("group__name",)
-	filter_horizontal = ("owners",)
+	filter_horizontal = ("owners", "deputies")
 	readonly_fields = ("group", "created_at", "updated_at")
-	fields = ("group", "description", "is_active", "is_system", "owners", "created_at", "updated_at")
+	fields = ("group", "description", "is_active", "is_system", "accepts_requests", "owners", "deputies",
+	          "created_at", "updated_at")
 
 	def has_add_permission(self, request):
 		return False  # one per group, created automatically; edit it from the group

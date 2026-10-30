@@ -23,7 +23,7 @@
 				<tr>
 					<td><a href="{% url 'team_detail' row.group.pk %}">{{ row.group.name }}</a></td>
 					<td>{{ row.profile.description|default:""|truncatechars:120 }}</td>
-					<td>{% if row.is_owner %}Owner{% elif row.is_member %}Member{% else %}Staff{% endif %}</td>
+					<td>{% if row.is_owner %}Owner{% elif row.is_deputy %}Deputy{% elif row.is_member %}Member{% else %}Staff{% endif %}</td>
 					<td>{% if row.profile and not row.profile.is_active %}<span class="badge badge-secondary">inactive</span>{% else %}active{% endif %}</td>
 				</tr>
 				{% endfor %}

@@ -29,12 +29,18 @@
 					<p class="mb-0"><strong>Owners:</strong>
 						{% for owner in owners %}{{ owner.researcher_profile.full_name|default:owner.get_full_name|default:owner.get_username }}{% if not forloop.last %}, {% endif %}{% empty %}none yet (staff assign owners in the admin){% endfor %}
 					</p>
+					{% if deputies %}<p class="mb-0"><strong>Deputies:</strong>
+						{% for deputy in deputies %}{{ deputy.researcher_profile.full_name|default:deputy.get_full_name|default:deputy.get_username }}{% if not forloop.last %}, {% endif %}{% endfor %}
+					</p>{% endif %}
+					{% if is_deputy %}<p class="small text-muted mb-0">You are a deputy: you can approve requests and manage members.</p>{% endif %}
 					{% if can_manage %}
 					<hr>
 					<form method="post" action="{% url 'team_update' group.pk %}">{% csrf_token %}
 						<div class="form-group">{{ profile_form.description.label_tag }} {{ profile_form.description }}</div>
 						<div class="form-check mb-2">{{ profile_form.is_active }} <label class="form-check-label" for="{{ profile_form.is_active.id_for_label }}">{{ profile_form.is_active.label }}</label>
 							<small class="form-text text-muted">An inactive team is hidden from group pickers and default audiences. Its members, data and who can see that data do not change.</small></div>
+						<div class="form-check mb-2" id="yse-team-accepts-requests">{{ profile_form.accepts_requests }} <label class="form-check-label" for="{{ profile_form.accepts_requests.id_for_label }}">{{ profile_form.accepts_requests.label }}</label>
+							<small class="form-text text-muted">{{ profile_form.accepts_requests.help_text }}{% if not requests_site_enabled %} Membership requests are currently turned off for the whole site.{% endif %}</small></div>
 						<button type="submit" class="btn btn-sm btn-primary">Save</button>
 					</form>
 					{% endif %}
@@ -103,30 +109,48 @@
 	{% endif %}
 
 	{% if can_manage %}
-	<div class="box box-default box-solid">
-		<div class="box-header with-border"><strong>Members</strong> ({{ members|length }})</div>
+	<div class="box box-default box-solid" id="yse-team-members">
+		<div class="box-header with-border"><strong>Members</strong> ({{ members.paginator.count }}{% if member_query %} matching{% endif %})</div>
 		<div class="box-body">
+			<form method="get" class="form-inline mb-2" id="yse-team-member-search">
+				<label class="sr-only" for="yse-member-q">Search members</label>
+				<input type="search" id="yse-member-q" name="q" value="{{ member_query }}" maxlength="100" class="form-control form-control-sm" placeholder="Name or username">
+				<button type="submit" class="btn btn-sm btn-outline-secondary ml-2">Search</button>
+				{% if member_query %}<a class="btn btn-sm btn-link" href="{% url 'team_detail' group.pk %}">Clear</a>{% endif %}
+			</form>
 			<table class="table table-sm">
 				<thead><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr></thead>
 				<tbody>
-				{% for row in members %}
+				{% for row in members.rows %}
 				<tr>
 					<td>{{ row.name }}</td>
 					<td>{{ row.user.get_username }}</td>
-					<td>{% if row.is_owner %}Owner{% else %}Member{% endif %}</td>
-					<td>{% if not row.is_owner %}<form method="post" action="{% url 'team_member_remove' group.pk row.user.pk %}">{% csrf_token %}<button type="submit" class="btn btn-xs btn-outline-danger">Remove</button></form>{% endif %}</td>
+					<td>{% if row.is_owner %}Owner{% elif row.is_deputy %}Deputy{% else %}Member{% endif %}</td>
+					<td class="text-nowrap">{% if not row.is_owner %}
+						{% if can_appoint %}<form method="post" action="{% url 'team_deputy' group.pk row.user.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="page" value="{{ members.number }}"><input type="hidden" name="q" value="{{ member_query }}">{% if row.is_deputy %}<input type="hidden" name="action" value="remove"><button type="submit" class="btn btn-xs btn-outline-secondary">Remove deputy</button>{% else %}<input type="hidden" name="action" value="appoint"><button type="submit" class="btn btn-xs btn-outline-primary">Make deputy</button>{% endif %}</form>{% endif %}
+						{% if can_appoint or not row.is_deputy %}<form method="post" action="{% url 'team_member_remove' group.pk row.user.pk %}" class="d-inline">{% csrf_token %}<input type="hidden" name="page" value="{{ members.number }}"><input type="hidden" name="q" value="{{ member_query }}"><button type="submit" class="btn btn-xs btn-outline-danger">Remove</button></form>{% endif %}
+					{% endif %}</td>
 				</tr>
 				{% empty %}
-				<tr><td colspan="4">No members.</td></tr>
+				<tr><td colspan="4">{% if member_query %}No members match.{% else %}No members.{% endif %}</td></tr>
 				{% endfor %}
 				</tbody>
 			</table>
+			{% if members.paginator.num_pages > 1 %}
+			<nav aria-label="Member pages" id="yse-team-member-pages">
+				<ul class="pagination pagination-sm">
+					{% if members.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ members.previous_page_number }}{% if member_query %}&amp;q={{ member_query|urlencode }}{% endif %}">Previous</a></li>{% endif %}
+					<li class="page-item disabled"><span class="page-link">Page {{ members.number }} of {{ members.paginator.num_pages }}</span></li>
+					{% if members.has_next %}<li class="page-item"><a class="page-link" href="?page={{ members.next_page_number }}{% if member_query %}&amp;q={{ member_query|urlencode }}{% endif %}">Next</a></li>{% endif %}
+				</ul>
+			</nav>
+			{% endif %}
 			<form method="post" action="{% url 'team_member_add' group.pk %}" class="form-inline mb-2" id="yse-team-member-add">{% csrf_token %}
 				<label class="mr-2" for="{{ member_add_form.identifier.id_for_label }}">Add a member: {{ member_add_form.identifier.label|lower }}</label> {{ member_add_form.identifier }}
 				<button type="submit" class="btn btn-sm btn-primary ml-2">Add</button>
 			</form>
 			<p class="text-muted small">Enter the exact username or email address of someone who already has an account. They are added at once and notified. People without an account need an invitation link.</p>
-			<p class="text-muted small mb-0">Removing a member takes away the access this team gives them; their own comments and requests stay. Owners are changed by staff in the admin.</p>
+			<p class="text-muted small mb-0">Removing a member takes away the access this team gives them; their own comments and requests stay. Owners are changed by staff in the admin. Deputies (appointed by owners from the members) approve requests and manage members, but cannot appoint deputies.</p>
 		</div>
 	</div>
 	{% endif %}

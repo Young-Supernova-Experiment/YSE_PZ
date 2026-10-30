@@ -21,14 +21,22 @@ MFA (#566). System groups are never managed here.
 
 Any onboarded user can create a team (throttled, see ``services/groups.py``); owners can add
 an existing user by exact username or email; members who are not owners can leave.
+Owners appoint deputies from the members, who then manage the team with them (approve
+requests, add, invite and remove members, switch requests on or off). The member list is
+paginated (``GROUP_MEMBERS_PER_PAGE``) and searchable by name or username.
 """
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group, User
 from django.contrib.auth.views import redirect_to_login
+from django.core.paginator import Paginator
+from django.db.models import Q
 from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -59,12 +67,27 @@ def _no_referrer(response):
     return response
 
 
-def _member_rows(group):
+def _member_page(request, group):
+    """One page of the team's active members, optionally filtered by ``?q=``."""
     owners = {u.pk for u in group_svc.owners_of(group)}
-    rows = []
-    for user in group.user_set.filter(is_active=True).select_related("researcher_profile").order_by("username"):
-        rows.append({"user": user, "name": group_svc.display_name(user), "is_owner": user.pk in owners})
-    return rows
+    deputies = {u.pk for u in group_svc.deputies_of(group)}
+    query = (request.GET.get("q") or "").strip()[:100]
+    qs = group.user_set.filter(is_active=True).select_related("researcher_profile").order_by("username")
+    if query:
+        qs = qs.filter(Q(username__icontains=query) | Q(first_name__icontains=query)
+                       | Q(last_name__icontains=query) | Q(researcher_profile__full_name__icontains=query))
+    per_page = max(1, int(getattr(settings, "GROUP_MEMBERS_PER_PAGE", 50)))
+    page = Paginator(qs, per_page).get_page(request.GET.get("page"))
+    page.rows = [{"user": user, "name": group_svc.display_name(user), "is_owner": user.pk in owners,
+                  "is_deputy": user.pk in deputies} for user in page.object_list]
+    return page, query
+
+
+def _back_to_team(request, group):
+    """Redirect to the team page, keeping the member list's page and search."""
+    url = reverse("team_detail", args=[group.pk])
+    params = {k: request.POST.get(k) for k in ("page", "q") if request.POST.get(k)}
+    return redirect("%s?%s" % (url, urlencode(params)) if params else url)
 
 
 def _visible_team_or_404(request, group_id):
@@ -105,8 +128,9 @@ def team_list(request):
     teams = group_svc.teams_for(request.user)
     owned = set(Group.objects.filter(group_profile__owners=request.user).values_list("id", flat=True))
     member_of = set(request.user.groups.values_list("id", flat=True))
+    deputy_of = set(Group.objects.filter(group_profile__deputies=request.user).values_list("id", flat=True))
     rows = [{"group": g, "profile": getattr(g, "group_profile", None), "is_owner": g.id in owned,
-             "is_member": g.id in member_of} for g in teams]
+             "is_deputy": g.id in deputy_of and g.id in member_of, "is_member": g.id in member_of} for g in teams]
     # Membership requests (#448): teams the user can ask to join, and their own requests.
     requests_open = membership.requests_enabled()
     my_requests = list(membership.requests_for_user(request.user)[:50])
@@ -134,12 +158,18 @@ def team_detail(request, group_id):
         pending = request.session.pop(NEW_LINK_SESSION_KEY, None)
         if pending and pending.get("group") == group.pk:
             new_link = pending.get("url")
+    members, member_query = _member_page(request, group) if manage else (None, "")
     response = render(request, "YSE_App/team_detail.html", {
         "group": group,
         "profile": profile,
         "owners": group_svc.owners_of(group),
         "can_manage": manage,
-        "members": _member_rows(group) if manage else [],
+        "members": members,
+        "member_query": member_query,
+        "deputies": group_svc.deputies_of(group),
+        "can_appoint": group_svc.can_appoint_deputies(request.user, group),
+        "is_deputy": group_svc.is_deputy(request.user, group),
+        "requests_site_enabled": membership.requests_enabled(),
         "invitations": list(group_svc.invitations_for(group)[:50]) if manage else [],
         "invite_form": InvitationForm() if manage else None,
         "profile_form": GroupProfileForm(instance=profile) if manage else None,
@@ -214,7 +244,33 @@ def team_member_remove(request, group_id, user_id):
         messages.error(request, str(exc))
     else:
         messages.success(request, "%s was removed from %s." % (group_svc.display_name(member), group.name))
-    return redirect("team_detail", group.pk)
+    return _back_to_team(request, group)
+
+
+@login_required
+@require_POST
+def team_deputy(request, group_id, user_id):
+    """Owners (and staff) appoint a member as deputy, or remove them as one."""
+    group = _visible_team_or_404(request, group_id)
+    if not group_svc.can_appoint_deputies(request.user, group):
+        from django.core.exceptions import PermissionDenied
+        raise PermissionDenied("Only the team's owners and staff can appoint deputies.")
+    pending = _onboarding_redirect(request)
+    if pending is not None:
+        return pending
+    action = request.POST.get("action")
+    if action not in ("appoint", "remove"):
+        return HttpResponseBadRequest("action must be appoint or remove")
+    member = get_object_or_404(User, pk=user_id, groups=group)
+    try:
+        group_svc.set_deputy(request.user, group, member, appoint=(action == "appoint"))
+    except group_svc.TeamError as exc:
+        messages.error(request, str(exc))
+    else:
+        name = group_svc.display_name(member)
+        messages.success(request, ("%s is now a deputy of %s." if action == "appoint"
+                                   else "%s is no longer a deputy of %s.") % (name, group.name))
+    return _back_to_team(request, group)
 
 
 @login_required

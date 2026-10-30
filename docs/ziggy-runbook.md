@@ -848,6 +848,10 @@ CREATES_PER_HOUR: 20
 ADDS_PER_OWNER_PER_DAY: 50
 # teams a new user may tick on the signup form
 SIGNUP_MAX_REQUESTS: 5
+# membership requests site-wide (independent of SELF_SIGNUP_ENABLED); each team can switch them off
+REQUESTS_ENABLED: True
+# members per page on a team's page
+MEMBERS_PER_PAGE: 50
 ```
 
 Step B also deletes requests made on the signup form whose user never finished onboarding (still held after 90 days).
@@ -3695,6 +3699,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 ## 6 · Changelog
 
 * 2026-10-30 v110, **when Ryan asks: OSC step 1, download and offline dry run, O1-O7** (writes nothing to any database). See the section [Open Supernova Catalog, step 1](#osc-step1). Needs #896 deployed on yse\_experimental.
+* 2026-10-30 v111, **nothing required** (the deploy applies the migration; no new package). Team deputies and requests: owners appoint deputies from a team's members (deputies approve requests and manage members, but cannot appoint deputies). Membership requests no longer depend on `SELF_SIGNUP_ENABLED`: they are open site-wide (`[groups] REQUESTS_ENABLED`), and each team's owners or deputies can switch them off on the team page. The team page's member list is paginated (`MEMBERS_PER_PAGE`, 50) and searchable. Migration `0059_team_deputies_requests` adds one new table and one nullable column (safe on the shared `YSE_test` database).
 * 2026-10-29 v110, **nothing required** (the deploy applies the migration; no new package). Team manager: any onboarded user can create a team from `/teams/` (throttled), owners can add an existing user by username or email, members can leave a team, and the signup form offers optional team requests that reach the owners once the new user has finished onboarding. Migration `0058_membership_request_held` adds one nullable column (safe on the shared `YSE_test` database). Optional `[groups]` limits in the section [Self-service signup](#self-signup); `CREATE_ENABLED: False` turns team creation off.
 * 2026-10-29 v109, **nothing required** (the deploy applies the migration; no new package). Open Supernova Catalog import, schema and commands only ([#887](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/887)): migration `0057_catalog_import` creates new tables only (safe on the shared `YSE_test` database). **Do not run `import_osc`, `catalog_instruments` or `osc_tns_check` with `--apply` on any stack until Ryan asks**; the import plan is in docs/osc-import.md.
 * 2026-10-29 v108, **nothing to run** (no migration, no package). Spectrum upload from the transient page ([#898](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/898)): a failed upload returns to the transient page with the reason instead of a bare `/upload_spectrum/` page; the file is checked before anything is written; Permissions choices include groups created after the server started; times with seconds are accepted.

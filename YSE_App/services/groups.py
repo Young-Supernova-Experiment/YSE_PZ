@@ -21,6 +21,12 @@ Invitations
     ``create_invitation`` returns the raw token once; only its SHA-256 is stored.
     ``accept_invitation`` locks the invitation row, so the use limit holds under concurrency.
 
+Deputies
+    Owners (and staff) appoint deputies from the team's members. A deputy manages the team
+    like an owner (requests, adding, inviting and removing members, team details) but cannot
+    appoint or remove deputies, or remove another deputy. Leaving or being removed from the
+    team ends deputy status. ``managers_of`` (owners and deputies) receive team notices.
+
 Creating teams and adding members
     Any onboarded user can ``create_team``; they become its owner and first member.
     Throttles (``[groups]`` settings, cache counters): active teams owned per user,
@@ -229,11 +235,25 @@ def is_owner(user: User, group: Group) -> bool:
     return GroupProfile.objects.filter(group=group, owners=user).exists()
 
 
+def is_deputy(user: User, group: Group) -> bool:
+    if not user.is_authenticated:
+        return False
+    # Only while still a member: removal elsewhere (the admin) ends the role too.
+    return GroupProfile.objects.filter(group=group, deputies=user, group__user=user).exists()
+
+
 def can_manage(user: User, group: Group) -> bool:
-    """Owners and staff manage a team; nobody manages a system group here."""
+    """Owners, deputies and staff manage a team; nobody manages a system group here."""
     if not user.is_authenticated or not user.is_active:
         return False
     if is_system_group(group):
+        return False
+    return bool(user.is_staff or user.is_superuser or is_owner(user, group) or is_deputy(user, group))
+
+
+def can_appoint_deputies(user: User, group: Group) -> bool:
+    """Owners and staff (not deputies) appoint and remove deputies."""
+    if not user.is_authenticated or not user.is_active or is_system_group(group):
         return False
     return bool(user.is_staff or user.is_superuser or is_owner(user, group))
 
@@ -245,13 +265,51 @@ def owners_of(group: Group) -> List[User]:
     return list(profile.owners.filter(is_active=True).order_by("username"))
 
 
+def deputies_of(group: Group) -> List[User]:
+    profile = GroupProfile.objects.filter(group=group).first()
+    if profile is None:
+        return []
+    return list(profile.deputies.filter(is_active=True).order_by("username"))
+
+
+def managers_of(group: Group) -> List[User]:
+    """Owners, then deputies (active, no duplicates)."""
+    seen, out = set(), []
+    for user in owners_of(group) + deputies_of(group):
+        if user.pk not in seen:
+            seen.add(user.pk)
+            out.append(user)
+    return out
+
+
+def set_deputy(actor: User, group: Group, member: User, appoint: bool) -> None:
+    """Appoint ``member`` (a member who is not an owner) as a deputy, or remove them as one."""
+    if not can_appoint_deputies(actor, group):
+        raise PermissionError("Only the team's owners and staff can appoint deputies.")
+    profile = profile_for(group)
+    if not appoint:
+        if profile.deputies.filter(pk=member.pk).exists():
+            profile.deputies.remove(member)
+            _notify_user(member, "You are no longer a deputy of %s." % group.name, group)
+        return
+    if is_owner(member, group):
+        raise TeamError("%s is already an owner of %s." % (display_name(member), group.name))
+    if not member.is_active or not member.groups.filter(pk=group.pk).exists():
+        raise TeamError("Only members of %s can be deputies." % group.name)
+    if profile.deputies.filter(pk=member.pk).exists():
+        return
+    profile.deputies.add(member)
+    _notify_user(member, "%s made you a deputy of %s: you can now approve requests and manage its members."
+                 % (display_name(actor), group.name), group)
+
+
 def teams_for(user: User) -> List[Group]:
     """Non-system groups the user belongs to or owns (staff: every non-system group)."""
     system = system_group_ids(user)
     if user.is_staff or user.is_superuser:
         qs = Group.objects.all()
     else:
-        qs = Group.objects.filter(Q(user=user) | Q(group_profile__owners=user))
+        qs = Group.objects.filter(Q(user=user) | Q(group_profile__owners=user) | Q(group_profile__deputies=user))
     return [g for g in qs.distinct().select_related("group_profile").order_by("name") if g.id not in system]
 
 
@@ -260,7 +318,10 @@ def remove_member(actor: User, group: Group, member: User) -> None:
         raise PermissionError("You cannot manage this group.")
     if is_owner(member, group):
         raise InvitationError("Owners are changed by staff in the admin; remove the owner there first.")
+    if is_deputy(member, group) and not can_appoint_deputies(actor, group):
+        raise TeamError("Only owners can remove a deputy.")
     member.groups.remove(group)
+    GroupProfile.deputies.through.objects.filter(groupprofile__group=group, user=member).delete()
     _notify_owners(group, "%s was removed from %s." % (display_name(member), group.name), exclude=[actor])
 
 
@@ -403,6 +464,7 @@ def leave_team(user: User, group: Group) -> None:
     if is_owner(user, group):
         raise TeamError("Owners cannot leave their team; ask staff to change the owners first.")
     user.groups.remove(group)
+    GroupProfile.deputies.through.objects.filter(groupprofile__group=group, user=user).delete()
     forget_preferences(user)
     _notify_owners(group, "%s left %s." % (display_name(user), group.name), exclude=[user])
 
@@ -528,7 +590,8 @@ def display_name(user: User) -> str:
 
 
 def _notify_owners(group: Group, text: str, exclude: Iterable[User] = ()) -> None:
-    owners = owners_of(group)
+    """Tell the team's managers (owners and deputies)."""
+    owners = managers_of(group)
     if not owners:
         return
     try:

@@ -412,7 +412,9 @@ urlpatterns = [
     re_path(r'^teams/new/$', group_views.team_create, name='team_create'),
     re_path(r'^teams/(?P<group_id>[0-9]+)/members/add/$', group_views.team_member_add, name='team_member_add'),
     re_path(r'^teams/(?P<group_id>[0-9]+)/leave/$', group_views.team_leave, name='team_leave'),
-    # Self-service signup and membership requests (#448); 404 unless SELF_SIGNUP_ENABLED
+    re_path(r'^teams/(?P<group_id>[0-9]+)/members/(?P<user_id>[0-9]+)/deputy/$', group_views.team_deputy,
+            name='team_deputy'),
+    # Self-service signup (#448; 404 unless SELF_SIGNUP_ENABLED) and membership requests (GROUP_REQUESTS_ENABLED)
     re_path(r'^signup/$', signup_views.signup, name='signup'),
     re_path(r'^signup/verify/(?P<token>[A-Za-z0-9_=-]{20,512})/$', signup_views.signup_verify_email,
             name='signup_verify_email'),
