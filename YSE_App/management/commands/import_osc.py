@@ -6,21 +6,21 @@ which of its points and spectra duplicate data already in YSE_PZ and what would 
 and what the host rule says. ``--apply`` writes, one transaction per entry. Re-running replaces
 what an earlier import of the same entry wrote.
 
-With ``--apply`` every entry's download, parse and ingest outcome is recorded
+``--apply`` needs ``--database NAME`` naming the configured database (#904). With ``--apply`` every entry's download, parse and ingest outcome is recorded
 (``CatalogImportAttempt``); ``--retry-failed`` runs the failed ones again (downloads are retried
 with backoff on their own). ``--revert NAME`` undoes an entry's import.
 
 Examples::
 
   python3 manage.py import_osc --fetch SN2011fe SN1987A
-  python3 manage.py import_osc --fetch SN2011fe SN1987A --apply --user <USERNAME>
-  python3 manage.py import_osc <OSC_DIR>/sne-* --apply --user <USERNAME> --quiet
-  python3 manage.py import_osc --retry-failed --apply --user <USERNAME>
-  python3 manage.py import_osc --revert SN2011fe --apply
+  python3 manage.py import_osc --fetch SN2011fe SN1987A --apply --user <USERNAME> --database <DB_NAME>
+  python3 manage.py import_osc <OSC_DIR>/sne-* --apply --user <USERNAME> --database <DB_NAME> --quiet
+  python3 manage.py import_osc --retry-failed --apply --user <USERNAME> --database <DB_NAME>
+  python3 manage.py import_osc --revert SN2011fe --apply --database <DB_NAME>
 
 ``--offline`` parses only and touches no database (also: ``python -m YSE_App.catalog_import.osc``).
-New transients wait for the TNS check (``manage.py osc_tns_check``; queued as a job after an
-``--apply`` run unless ``--no-tns``).
+New transients wait for the TNS check (``manage.py osc_tns_check --tns-file``; ``--no-tns`` marks
+them skipped instead).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from YSE_App.catalog_import import matching, osc, osc_fetch
+from YSE_App.catalog_import import guard, matching, osc, osc_fetch
 
 
 class Command(BaseCommand):
@@ -72,12 +72,18 @@ class Command(BaseCommand):
         parser.add_argument('--limit', type=int, default=None, help='Stop after this many entries.')
         parser.add_argument('--report', default='', help='Write a JSON line per entry to this file.')
         parser.add_argument('--quiet', action='store_true', help='One line per entry instead of the full summary.')
+        guard.add_argument(parser)
 
     # ---- main -----------------------------------------------------------------------------
 
     def handle(self, *args, **opts):
+        self.report = None
+        self.counts = Counter()
+        self.failures = Counter()
         if opts['apply'] and opts['offline']:
             raise CommandError('--apply and --offline cannot be used together.')
+        if not opts['offline']:
+            guard.check(opts, opts['apply'], self.stdout)
         if opts['revert']:
             return self._revert(opts)
         self.apply = opts['apply']
@@ -102,9 +108,7 @@ class Command(BaseCommand):
                             with_spectra=not opts['no_spectra'], tns_check=not opts['no_tns'], phot_tolerance=opts['phot_tolerance'],
                             spec_tolerance=opts['spec_tolerance'])
 
-        report = open(opts['report'], 'a') if opts['report'] else None
-        self.counts = Counter()
-        self.failures = Counter()
+        report = self.report = open(opts['report'], 'a') if opts['report'] else None
         started = time.time()
         try:
             for path, key in self._files(sources):
@@ -131,10 +135,8 @@ class Command(BaseCommand):
             if report:
                 report.close()
         if writer is not None and self.counts['created'] and not opts['no_tns']:
-            from YSE_App.catalog_import import osc_tns
-
-            osc_tns.queue_sweep(created_by=writer.user)
-            self.stdout.write('TNS check queued for the new transients (manage.py osc_tns_check runs it by hand).')
+            self.stdout.write('%d new transients wait for the TNS check: manage.py osc_tns_check --tns-file '
+                              '<TNS public objects file> (see docs/osc-import.md).' % self.counts['created'])
         self.stdout.write('%s: %d entries, %d written (%d new transients), %d failed, %.0f s' % (
             'Imported' if writer else 'Dry run', self.counts['entries'], self.counts['written'], self.counts['created'],
             sum(self.failures.values()), time.time() - started))
@@ -214,6 +216,9 @@ class Command(BaseCommand):
         self.failures[stage] += 1
         self.stderr.write('%s: %s failed: %s' % (entry or key, stage, error))
         self._attempt(key, origin, stage, error)
+        if getattr(self, 'report', None) and stage != 'ingest':  # ingest failures are in the entry's line
+            self.report.write(json.dumps({'entry': entry or key, 'origin': origin, 'stage': stage,
+                                          'error': error}) + '\n')
 
     def _failed_sources(self, opts):
         from YSE_App.models import CatalogImportAttempt

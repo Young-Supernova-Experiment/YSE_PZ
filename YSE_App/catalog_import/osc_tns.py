@@ -16,9 +16,16 @@ the TNS coordinates, ``TNS_spec_class`` and, when TNS has a class we know, ``bes
 field is changed only while it still holds the value the import gave it, so edits made by hand in
 between are kept. Not found: ``not_found``, the OSC values stay.
 
-Requests are throttled hard: one a minute (``OSC_TNS_REQUEST_INTERVAL_SECONDS``, default 60; Ryan,
-2026-10-28; TNS blocks clients that query too often). The sweep job ``osc.tns_check`` handles ``OSC_TNS_MAX_PER_RUN`` (20) entries
-per run and re-queues itself after a rate limit; ``manage.py osc_tns_check`` runs the same by hand.
+Two ways to look objects up:
+
+* **The TNS bulk file** (#905, preferred): ``tns_public.PublicObjects``, one download of TNS's daily
+  file of all public objects. Lookups are by TNS name, then by the transient's names and alternate
+  names among the objects' internal (survey) names, then by position; no request per object, and
+  the same file serves the test and the production runs (``osc_tns_check --tns-file``).
+* **The TNS API**, one object at a time, throttled hard: one request a minute
+  (``OSC_TNS_REQUEST_INTERVAL_SECONDS``, default 60; Ryan, 2026-10-28; TNS blocks clients that query
+  too often). The sweep job ``osc.tns_check`` handles ``OSC_TNS_MAX_PER_RUN`` (20) entries per run
+  and re-queues itself after a rate limit.
 """
 
 from __future__ import annotations
@@ -80,6 +87,33 @@ def _lookup(entry, client, throttle) -> tuple:
     return (reply, 'position') if reply and reply.get('objname') else (None, 'cone hit %s not readable' % names[0])
 
 
+def _lookup_bulk(entry, objects) -> tuple:
+    """(TNS object or None, how it was found / why not), from the bulk file (#905)."""
+    from YSE_App.models import AlternateTransientNames
+
+    values = entry.import_values or {}
+    for name in values.get('iau_names') or []:
+        obj = objects.name(name)
+        if obj is not None:
+            return obj, 'name %s' % name
+    t = entry.transient
+    names = [t.name] + list(AlternateTransientNames.objects.filter(transient=t).values_list('name', flat=True))
+    for name in dict.fromkeys(names):
+        hits = {o['objname']: o for o in objects.internal(name)}
+        if len(hits) == 1:
+            return next(iter(hits.values())), 'internal name %s' % name
+        if len(hits) > 1:
+            return None, 'internal name %s is on %d TNS objects: %s' % (name, len(hits), ', '.join(sorted(hits)))
+    year = values.get('disc_year')
+    since = int(_setting('OSC_TNS_CONE_SINCE_YEAR', 2013))
+    if year is None or year < since:
+        return None, 'no TNS name%s' % ('' if year is None else ' (discovered %d, before cone searches)' % year)
+    hits = {o['objname']: o for o in objects.cone(t.ra, t.dec, float(_setting('OSC_TNS_CONE_RADIUS_ARCSEC', 3.0)))}
+    if len(hits) != 1:
+        return None, 'cone search found %d objects%s' % (len(hits), (': ' + ', '.join(sorted(hits))) if hits else '')
+    return next(iter(hits.values())), 'position'
+
+
 def _apply(entry, reply, how, user) -> List[str]:
     """Write the TNS values to the transient; returns what changed."""
     from YSE_App.models import CatalogEntry, TransientClass
@@ -130,7 +164,7 @@ def _apply(entry, reply, how, user) -> List[str]:
     return changes
 
 
-def check_entry(entry, client, throttle, *, user=None, dry_run: bool = True) -> str:
+def check_entry(entry, client, throttle, *, user=None, dry_run: bool = True, objects=None) -> str:
     """Look one pending entry up on TNS and apply what it says (unless ``dry_run``). Returns a report line.
 
     TNS rate limits and transport errors propagate (the caller retries later); other errors mark the
@@ -140,7 +174,7 @@ def check_entry(entry, client, throttle, *, user=None, dry_run: bool = True) -> 
     from YSE_App.sharing import tns
 
     try:
-        reply, how = _lookup(entry, client, throttle)
+        reply, how = _lookup_bulk(entry, objects) if objects is not None else _lookup(entry, client, throttle)
     except (tns.TNSRateLimited, tns.TNSTransportError):
         raise
     except tns.TNSError as exc:
@@ -167,15 +201,19 @@ def check_entry(entry, client, throttle, *, user=None, dry_run: bool = True) -> 
 
 
 def run(limit: Optional[int] = None, *, dry_run: bool = True, client=None, interval: Optional[float] = None,
-        user=None, log=None) -> dict:
-    """Check up to ``limit`` pending entries; stops at a TNS rate limit (re-raised for the job to retry)."""
+        user=None, log=None, objects=None) -> dict:
+    """Check up to ``limit`` pending entries, against the bulk file ``objects`` if given, else the API.
+
+    API mode stops at a TNS rate limit (re-raised for the job to retry).
+    """
     from YSE_App.services import tns_resync
 
-    client = client or tns_resync.default_client()
+    if objects is None:
+        client = client or tns_resync.default_client()
     throttle = tns_resync.Throttle(request_interval() if interval is None else interval)
     counts = {'checked': 0}
     for entry in pending_entries(limit):
-        line = check_entry(entry, client, throttle, user=user, dry_run=dry_run)
+        line = check_entry(entry, client, throttle, user=user, dry_run=dry_run, objects=objects)
         counts['checked'] += 1
         if log:
             log(line)

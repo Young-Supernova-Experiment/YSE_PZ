@@ -11,10 +11,10 @@ import os
 import tempfile
 from io import StringIO
 
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase, TestCase
 
-from YSE_App.catalog_import import instruments, matching, osc, osc_fetch, osc_tns
+from YSE_App.catalog_import import guard, instruments, matching, osc, osc_fetch, osc_tns, report, tns_public
 from YSE_App.catalog_import.osc_writer import EntryNotImported, Writer, preview_entry
 from YSE_App.common import spectrum_arrays
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
@@ -274,6 +274,47 @@ class MatchingTests(SimpleTestCase):
 
 
 
+TNS_CSV = (
+    '"2026-10-29 00:00:00"\n'
+    '"objid","name_prefix","name","ra","declination","redshift","typeid","type","reporting_group",'
+    '"discoverydate","internal_names"\n'
+    '"1","SN","2099aaa","150.0001","-30.5001","0.031","1","SN Ia","ZTF","2099-01-02 12:00:00","EX99abc, ZTF99abc"\n'
+    '"2","AT","2099bbb","10:00:00.00","+05:00:00.0","","","","ATLAS","2099-02-01 00:00:00","ATLAS99x"\n'
+    '"3","SN","1987A","83.8667","-69.2697","","","SN II","","1987-02-24 00:00:00",""\n'
+)
+
+
+def _tns_file(directory, zipped=False):
+    import zipfile
+
+    path = os.path.join(directory, 'tns_public_objects.csv')
+    with open(path, 'w') as handle:
+        handle.write(TNS_CSV)
+    if not zipped:
+        return path
+    with zipfile.ZipFile(path + '.zip', 'w') as archive:
+        archive.write(path, 'tns_public_objects.csv')
+    return path + '.zip'
+
+
+class TNSPublicObjectsTests(SimpleTestCase):
+    """#905: the bulk file of TNS public objects."""
+
+    def test_index(self):
+        tmp = tempfile.mkdtemp()
+        for zipped in (False, True):
+            objects = tns_public.PublicObjects.load(_tns_file(tmp, zipped))
+            self.assertEqual(len(objects), 3)
+            self.assertEqual(objects.name('SN 2099aaa')['objname'], '2099aaa')
+            self.assertEqual(objects.name('1987A')['object_type'], {'name': 'SN II'})
+            self.assertEqual([o['objname'] for o in objects.internal('ztf99abc')], ['2099aaa'])
+            self.assertEqual([o['objname'] for o in objects.cone(150.0, -30.5, 3.0)], ['2099aaa'])
+            self.assertEqual(objects.cone(150.0, -30.5, 0.1), [])
+            sexagesimal = objects.name('2099bbb')
+            self.assertAlmostEqual(sexagesimal['radeg'], 150.0)
+            self.assertAlmostEqual(sexagesimal['decdeg'], 5.0)
+
+
 def _setup_world(test_class, username):
     test_class.user = create_test_user(username)
     ensure_transient_statuses(test_class.user)
@@ -405,7 +446,7 @@ class OSCWriterTests(TestCase):
         self.assertEqual((match.decision, match.weak, match.previous_quality_mask), ('superseded_existing', False, 0))
         self.assertIsNotNone(match.catalog_phot_data)
         # Reverting restores YSE's point.
-        call_command('import_osc', '--revert', NAME, '--apply', stdout=StringIO())
+        call_command('import_osc', '--revert', NAME, '--apply', '--database', guard.database_name(), stdout=StringIO())
         ours.refresh_from_db()
         self.assertEqual(ours.quality_mask, 0)
         self.assertFalse(CatalogEntry.objects.exists())
@@ -527,6 +568,27 @@ class OSCTNSCheckTests(TestCase):
         t = Transient.objects.get(pk=self.transient.pk)
         self.assertEqual((t.name, t.ra), ('2099aaa', 150.002))
 
+    def test_bulk_file_matches_by_internal_name_without_requests(self):
+        objects = tns_public.PublicObjects.load(_tns_file(tempfile.mkdtemp()))
+        counts = osc_tns.run(dry_run=False, objects=objects, user=self.user)
+        self.assertEqual(counts['checked'], 1)
+        t = Transient.objects.get(pk=self.transient.pk)
+        self.assertEqual((t.name, t.ra, t.TNS_spec_class), ('2099aaa', 150.0001, 'SN Ia'))
+        entry_row = CatalogEntry.objects.get()
+        self.assertEqual(entry_row.tns_status, CatalogEntry.TNS_UPDATED)
+        self.assertIn('internal name EX99abc', entry_row.tns_note)
+
+    def test_bulk_file_command(self):
+        path = _tns_file(tempfile.mkdtemp(), zipped=True)
+        out = StringIO()
+        call_command('osc_tns_check', '--tns-file', path, '--max', '0', stdout=out)
+        self.assertIn('TNS file %s: 3 objects' % path, out.getvalue())
+        self.assertIn('would update', out.getvalue())
+        self.assertEqual(CatalogEntry.objects.get().tns_status, CatalogEntry.TNS_PENDING)
+        call_command('osc_tns_check', '--tns-file', path, '--max', '0', '--apply', '--database', guard.database_name(),
+                     stdout=StringIO())
+        self.assertEqual(Transient.objects.get(pk=self.transient.pk).name, '2099aaa')
+
     def test_conflict_and_not_found(self):
         create_minimal_transient(self.user, name='2099aaa', ra=1.0, dec=1.0)
         osc_tns.run(dry_run=False, client=FakeTNS({'2099aaa': self.reply}, cone=['2099aaa']), interval=0, user=self.user)
@@ -568,6 +630,7 @@ class ImportOSCCommandTests(TestCase):
             handle.write('{not json')
         out, err = StringIO(), StringIO()
         call_command('import_osc', self.tmp.name, '--apply', '--user', self.user.username, '--no-tns',
+                     '--database', guard.database_name(),
                      stdout=out, stderr=err)
         self.assertIn('created 2099zz', out.getvalue())
         self.assertIn('failures by stage: parse 1', out.getvalue())
@@ -578,7 +641,75 @@ class ImportOSCCommandTests(TestCase):
         with open(broken, 'w') as handle:
             json.dump({'SN2099yy': entry(alias=[], name='SN2099yy', ra=[{'value': '11:00:00', 'source': '1'}])}, handle)
         call_command('import_osc', '--retry-failed', '--apply', '--user', self.user.username, '--no-tns',
+                     '--database', guard.database_name(),
                      stdout=StringIO(), stderr=StringIO())
         retried = CatalogImportAttempt.objects.get(entry_key='SN2099yy')
         self.assertEqual((retried.status, retried.attempts), ('ok', 2))
         self.assertTrue(CatalogEntry.objects.filter(entry_name='SN2099yy').exists())
+
+
+class DatabaseGuardTests(TestCase):
+    """#904: writing commands name the database first."""
+
+    @classmethod
+    def setUpTestData(cls):
+        _setup_world(cls, 'osc_guard_test')
+
+    def test_apply_needs_the_database_name(self):
+        path = os.path.join(tempfile.mkdtemp(), NAME + '.json')
+        with open(path, 'w') as handle:
+            json.dump({NAME: ENTRY}, handle)
+        for extra in ([], ['--database', 'some_other_db']):
+            with self.assertRaises(CommandError):
+                call_command('import_osc', path, '--apply', '--user', self.user.username, '--no-tns', *extra,
+                             stdout=StringIO())
+        self.assertFalse(CatalogEntry.objects.exists())
+        for command, args in (('catalog_instruments', ['--load', '--apply', '--user', self.user.username]),
+                              ('osc_tns_check', ['--apply'])):
+            with self.assertRaises(CommandError):
+                call_command(command, *args, stdout=StringIO())
+
+    def test_dry_run_names_the_database(self):
+        out = StringIO()
+        call_command('catalog_instruments', '--load', stdout=out)
+        self.assertIn('Using database %s' % guard.database_name(), out.getvalue())
+
+
+class ReportSummaryTests(SimpleTestCase):
+    """#906: a dry-run report summarised for review."""
+
+    def _report(self):
+        plan = osc.parse_entry(NAME, entry())
+        lines = [
+            {'entry': NAME, 'counts': osc.plan_counts(plan), 'warnings': plan['warnings'],
+             'preview': {'action': 'add data to 2099zz (matched by name 2099zz)',
+                         'instruments': {'Nowhere 1m / NoCam': 'Unknown'},
+                         'photometry': {'new': 3, 'kept_existing': 1, 'superseded_existing': 1},
+                         'spectra': {'new': 2}, 'host': {'status': 'discrepant', 'osc_host': 'NGC 99999'}}},
+            {'entry': 'SN2099yy', 'origin': 'x/SN2099yy.json', 'stage': 'parse', 'error': 'unreadable'},
+        ]
+        path = os.path.join(tempfile.mkdtemp(), 'report.jsonl')
+        with open(path, 'w') as handle:
+            handle.write('\n'.join(json.dumps(line) for line in lines) + '\n')
+        return path
+
+    def test_summary_and_review_files(self):
+        lines = list(report.read(self._report()))
+        summary = report.summarise(lines)
+        self.assertEqual(summary['entries'], 1)
+        self.assertEqual(summary['failures_by_stage'], {'parse': 1})
+        self.assertEqual(summary['actions'], {'would add data': 1})
+        self.assertEqual(summary['photometry_decisions']['superseded_existing'], 1)
+        self.assertEqual(summary['host'], {'discrepant': 1})
+        self.assertEqual(summary['unknown_instruments'], {'Nowhere 1m / NoCam': 1})
+        self.assertEqual(summary['warnings']['non-numeric pixels dropped'], 1)
+        out_dir = tempfile.mkdtemp()
+        counts = report.write_review_files(lines, out_dir)
+        self.assertEqual(counts, {'review_duplicates.csv': 1, 'host_discrepancies.csv': 1, 'failures.csv': 1,
+                                  'sample_matches.csv': 1})
+
+    def test_command(self):
+        out = StringIO()
+        call_command('osc_report_summary', self._report(), stdout=out)
+        self.assertIn('entries: 1', out.getvalue())
+        self.assertIn('superseded_existing', out.getvalue())

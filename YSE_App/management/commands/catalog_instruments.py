@@ -7,7 +7,7 @@ Telescopes and instruments of catalogue data (#894).
 each resolves to, most frequent first, so the mapping file can be extended.
 
   python3 manage.py catalog_instruments --load
-  python3 manage.py catalog_instruments --load --apply --user <USERNAME>
+  python3 manage.py catalog_instruments --load --apply --user <USERNAME> --database <DB_NAME>
   python3 manage.py catalog_instruments --census <OSC_DIR>/sne-2010-2014 --top 100
 """
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
-from YSE_App.catalog_import import instruments, osc, osc_fetch
+from YSE_App.catalog_import import guard, instruments, osc, osc_fetch
 
 
 class Command(BaseCommand):
@@ -29,10 +29,12 @@ class Command(BaseCommand):
         parser.add_argument('--user', default='', help='Username recorded as creator (needed with --apply).')
         parser.add_argument('--census', nargs='+', default=[], metavar='PATH', help='OSC entry files or directories.')
         parser.add_argument('--top', type=int, default=200, help='Census: show this many strings.')
+        guard.add_argument(parser)
 
     def handle(self, *args, **opts):
         if not opts['load'] and not opts['census']:
             raise CommandError('Give --load or --census PATH.')
+        guard.check(opts, opts['load'] and opts['apply'], self.stdout)
         if opts['load']:
             user = get_user_model().objects.filter(username=opts['user']).first() if opts['user'] else None
             if opts['apply'] and user is None:
