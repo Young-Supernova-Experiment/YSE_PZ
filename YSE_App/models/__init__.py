@@ -56,3 +56,4 @@ from YSE_App.models.catalog_models import (  # noqa: F401
     CatalogDataMatch, CatalogEntry, CatalogEntrySource, CatalogImportAttempt, CatalogInstrumentAlias,
     CatalogSource, TransientCatalogQuantity, TransientPhotDataCatalogInfo, TransientPhotometryCatalogInfo,
     TransientSpectrumCatalogInfo)
+from YSE_App.models.duplicate_models import DuplicateDataDecision  # noqa: F401
