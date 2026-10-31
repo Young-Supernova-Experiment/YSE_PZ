@@ -14,20 +14,27 @@ When either side has the ``Unknown`` instrument (most OSC photometry names none)
 one. Each existing observation matches at most one catalogue observation (nearest in time first).
 
 :func:`decide` applies Ryan's rule (2026-10-27): YSE_PZ's copy is kept, unless the catalogue copy
-comes from a refereed, published paper. The functions take plain records, so the database clean-up
-of duplicates (#890) can use them too.
+comes from a refereed, published paper.
+
+:func:`duplicate_photometry` / :func:`duplicate_spectra` apply the same tests within one transient's
+own data and group the copies of each observation (#890, ``manage.py clean_duplicate_data``).
 """
 
 from __future__ import annotations
 
 import bisect
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 PHOT_TIME_TOLERANCE = 0.02   # days (about 30 min: start vs mid-exposure, rounding)
 SPEC_TIME_TOLERANCE = 0.5    # days (catalogue spectra are often dated to the day)
 SPEC_MIN_OVERLAP = 0.5
 WEAK_MAG_TOLERANCE = 0.5
+# Within one transient's own data (#890) the times of two copies agree much more closely (a repeat
+# upload, or our report coming back from TNS), while real repeat exposures in one band can be minutes
+# apart (ATLAS quads, ZTF), so the time windows are narrower.
+DUPLICATE_PHOT_TIME_TOLERANCE = 0.001   # days (86 s)
+DUPLICATE_SPEC_TIME_TOLERANCE = 0.05    # days (72 min)
 
 KEPT_EXISTING, SUPERSEDED_EXISTING, REVIEW, NEW = 'kept_existing', 'superseded_existing', 'review', 'new'
 
@@ -104,8 +111,7 @@ def _pairs(new: Sequence[Obs], existing: Sequence[Obs], unknown_id, tolerance, a
     return out
 
 
-def match_photometry(new: Sequence[Obs], existing: Sequence[Obs], unknown_id: Optional[int] = None, *,
-                     tolerance: float = PHOT_TIME_TOLERANCE, weak_mag_tolerance: float = WEAK_MAG_TOLERANCE) -> List[Match]:
+def _photometry_accept(weak_mag_tolerance):
     def accept(n, e, weak):
         if normalize_band(n.band) != normalize_band(e.band):
             return False
@@ -113,12 +119,62 @@ def match_photometry(new: Sequence[Obs], existing: Sequence[Obs], unknown_id: Op
             return False
         return True
 
-    return _pairs(new, existing, unknown_id, tolerance, accept)
+    return accept
+
+
+def _spectra_accept(min_overlap):
+    return lambda n, e, weak: _overlap(n, e) >= min_overlap
+
+
+def match_photometry(new: Sequence[Obs], existing: Sequence[Obs], unknown_id: Optional[int] = None, *,
+                     tolerance: float = PHOT_TIME_TOLERANCE, weak_mag_tolerance: float = WEAK_MAG_TOLERANCE) -> List[Match]:
+    return _pairs(new, existing, unknown_id, tolerance, _photometry_accept(weak_mag_tolerance))
 
 
 def match_spectra(new: Sequence[Obs], existing: Sequence[Obs], unknown_id: Optional[int] = None, *,
                   tolerance: float = SPEC_TIME_TOLERANCE, min_overlap: float = SPEC_MIN_OVERLAP) -> List[Match]:
-    return _pairs(new, existing, unknown_id, tolerance, lambda n, e, weak: _overlap(n, e) >= min_overlap)
+    return _pairs(new, existing, unknown_id, tolerance, _spectra_accept(min_overlap))
+
+
+def _groups(observations: Sequence[Obs], unknown_id, tolerance, accept) -> List[List[Obs]]:
+    """Copies of one observation within one list, in time order; only groups of two or more.
+
+    An observation joins a group only if it matches every member (no chaining of a time series
+    through near neighbours); otherwise the earliest group it fits, else a new one.
+    """
+    def same(a, b):
+        ok, weak = _same_instrument(a, b, unknown_id)
+        return ok and abs(a.mjd - b.mjd) <= tolerance and accept(a, b, weak)
+
+    groups: List[List[Obs]] = []
+    open_groups: List[List[Obs]] = []
+    for o in sorted(observations, key=lambda x: (x.mjd, str(x.key))):
+        open_groups = [g for g in open_groups if o.mjd - g[0].mjd <= tolerance]
+        for g in open_groups:
+            if all(same(o, m) for m in g):
+                g.append(o)
+                break
+        else:
+            g = [o]
+            groups.append(g)
+            open_groups.append(g)
+    return [g for g in groups if len(g) > 1]
+
+
+def duplicate_photometry(observations: Sequence[Obs], unknown_id: Optional[int] = None, *,
+                         tolerance: float = DUPLICATE_PHOT_TIME_TOLERANCE,
+                         weak_mag_tolerance: float = WEAK_MAG_TOLERANCE) -> List[List[Obs]]:
+    """Groups of points within one transient that are copies of one observation (same tests as
+    :func:`match_photometry`)."""
+    return _groups(observations, unknown_id, tolerance, _photometry_accept(weak_mag_tolerance))
+
+
+def duplicate_spectra(observations: Sequence[Obs], unknown_id: Optional[int] = None, *,
+                      tolerance: float = DUPLICATE_SPEC_TIME_TOLERANCE,
+                      min_overlap: float = SPEC_MIN_OVERLAP) -> List[List[Obs]]:
+    """Groups of spectra within one transient that are copies of one observation (same tests as
+    :func:`match_spectra`)."""
+    return _groups(observations, unknown_id, tolerance, _spectra_accept(min_overlap))
 
 
 def decide(match: Optional[Match], refereed: bool) -> str:
@@ -145,23 +201,12 @@ def existing_photometry(transient_id: int, exclude_photometry_ids: Iterable[int]
 
 def existing_spectra(transient_id: int, exclude_ids: Iterable[int] = ()) -> List[Obs]:
     """The transient's spectra as Obs (key = TransientSpectrum id), with wavelength ranges."""
-    from django.db.models import Max, Min
-
-    from YSE_App.models import TransientSpectrum, TransientSpectrumArrays
+    from YSE_App.common.spectrum_arrays import wavelength_ranges
+    from YSE_App.models import TransientSpectrum
 
     spectra = list(TransientSpectrum.objects.filter(transient_id=transient_id).exclude(id__in=list(exclude_ids))
                    .values_list('id', 'obs_date', 'instrument_id'))
-    ids = [s[0] for s in spectra]
-    ranges: Dict[int, tuple] = {
-        sid: (lo, hi) for sid, lo, hi in TransientSpectrumArrays.objects.filter(spectrum_id__in=ids)
-        .values_list('spectrum_id', 'wavelength_min', 'wavelength_max')}
-    rest = [i for i in ids if i not in ranges]
-    if rest:
-        from YSE_App.models import TransientSpecData
-
-        for row in (TransientSpecData.objects.filter(spectrum_id__in=rest).values('spectrum_id')
-                    .annotate(lo=Min('wavelength'), hi=Max('wavelength'))):
-            ranges[row['spectrum_id']] = (row['lo'], row['hi'])
+    ranges = wavelength_ranges(s[0] for s in spectra)
     return [Obs(key=sid, mjd=_mjd(obs_date), instrument_id=inst,
                 wavelength_min=ranges.get(sid, (None, None))[0], wavelength_max=ranges.get(sid, (None, None))[1])
             for sid, obs_date, inst in spectra]
