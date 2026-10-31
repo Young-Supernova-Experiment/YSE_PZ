@@ -43,7 +43,7 @@ from .common.legend_layout import (
     legend_label_width_px,
     requested_plot_width,
 )
-from .common.quality_mask import is_legacy_flagged
+from .common.quality_mask import LEGACY_EXCLUDE, SpecFlag, is_legacy_flagged
 from .common.utilities import date_to_mjd
 from .common.utc_dates import utc_day
 from .services.visibility import group_access_plot_cache_token
@@ -247,6 +247,9 @@ FLAGGED_LEGEND_COLOR = "#7f7f7f"
 FLAGGED_LINE_ALPHA = 0.8
 FLAGGED_MUTED_ALPHA = 0.15
 FLAGGED_SPECTRUM_SUFFIX = " (flagged)"
+# Quicklook spectra (#903) are most uploads: drawn like good ones, solid and in full colour, and
+# named in the legend. Only spectra with another excluding bit are drawn as flagged.
+QUICKLOOK_SPECTRUM_SUFFIX = " (quicklook)"
 
 
 def _draw_bazin_fits(ax, series, today):
@@ -339,6 +342,17 @@ def _phot_flagged(phot_row):
 def _spectrum_flagged(spectrum):
     """Whether a TransientSpectrum is flagged (#84): the "good data" readers' rule."""
     return is_legacy_flagged(getattr(spectrum, 'quality_mask', 0), 'TransientSpectrum')
+
+
+def _spectrum_display(spectrum):
+    """How the spectrum plots draw a TransientSpectrum: ``''`` (good), ``'quicklook'`` or ``'flagged'``.
+
+    Quicklook alone is not drawn as flagged (#903): it is how most spectra are uploaded.
+    """
+    excluded = int(getattr(spectrum, 'quality_mask', 0) or 0) & LEGACY_EXCLUDE['TransientSpectrum']
+    if not excluded:
+        return ''
+    return 'quicklook' if excluded == int(SpecFlag.QUICKLOOK) else 'flagged'
 
 
 def _downsample_phot_rows_for_display(phot_rows, max_points=MAX_LC_DISPLAY_POINTS):
@@ -2078,7 +2092,8 @@ def _spectra_for_plot(dbspectra):
     than a traceback (#343). Each spectrum is resampled to at most
     ``MAX_SPEC_DISPLAY_PIXELS`` points. Points are read with one ``values_list``
     query for all spectra (#479), not one ORM object per pixel. A flagged
-    spectrum (#84) carries ``flagged`` and a " (flagged)" legend label.
+    spectrum (#84) carries ``flagged`` and a " (flagged)" legend label; a Quicklook
+    one only a " (quicklook)" label (#903).
     """
     spectra = []
     n_without_points = 0
@@ -2099,14 +2114,15 @@ def _spectra_for_plot(dbspectra):
         wave_interp = np.linspace(np.min(wave), np.max(wave), n_display)
         flux_interp = np.interp(wave_interp, wave, flux)
 
-        flagged = _spectrum_flagged(spectrum)
+        display = _spectrum_display(spectrum)
         label = f'{spectrum.instrument.name} - {utc_day(spectrum.obs_date)}'
+        suffix = {'flagged': FLAGGED_SPECTRUM_SUFFIX, 'quicklook': QUICKLOOK_SPECTRUM_SUFFIX}.get(display, '')
         spectra.append({
             'wave': wave_interp,
             'flux': flux_interp,
             'mjd': date_to_mjd(spectrum.obs_date.isoformat().split('+')[0]),
-            'label': label + (FLAGGED_SPECTRUM_SUFFIX if flagged else ''),
-            'flagged': flagged,
+            'label': label + suffix,
+            'flagged': display == 'flagged',
         })
     return spectra, n_without_points
 
