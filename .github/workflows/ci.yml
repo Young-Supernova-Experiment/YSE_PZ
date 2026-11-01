@@ -31,6 +31,18 @@ jobs:
             --exclude YSE_App/static,YSE_App/migrations,docker/web_image_history,YSE_App/util,YSE_App/common/getGWevents.py \
             .
 
+      - name: Shared-database migration check (its unit tests)
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+
+      # develop's code runs on the YSE_test database that experimental's migrations
+      # change (#934). Fail on migrations develop does not have that its code cannot
+      # live with (dropped/renamed columns, NOT NULL columns without a MySQL DEFAULT,
+      # data rewrites, ...). A reviewed operation can carry `# shared-db-safe: <reason>`.
+      - name: Migrations are safe for develop's code on the shared database
+        run: |
+          git fetch --no-tags --depth=1 origin +refs/heads/develop:refs/remotes/origin/develop
+          python3 scripts/ci/check_shared_db_migrations.py --base origin/develop
+
   docker-test:
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -54,6 +54,25 @@ this once:
 Until the check is marked required, the guard is advisory: the job shows red on
 the PR but the Merge button still works.
 
+## Migrations and the shared YSE_test database
+
+`/yse_test/` runs develop's code on the `YSE_test` database, and every experimental
+deploy applies experimental's migrations to it. develop can stay several migrations
+behind for weeks, so two checks guard that combination:
+
+- **`lint` (blocking, every PR):** `scripts/ci/check_shared_db_migrations.py --base origin/develop`
+  parses each migration that develop does not have. It fails on dropped or renamed
+  columns and tables, NOT NULL columns added to existing tables without a MySQL DEFAULT
+  (#395, 0030), `AlterField`s that narrow a column or make it NOT NULL, unique constraints
+  on existing tables, and `RunPython`/`RunSQL`. After review, an operation can be allowed
+  with a comment directly above it: `# shared-db-safe: <reason>`.
+- **`Shared schema` (non-blocking, PRs into experimental that touch migrations or
+  models):** builds the test database with the PR head's migrations and runs develop's
+  test suite on it. Failures show as a warning and in the job summary.
+
+Neither check catches foreign keys from experimental-only tables that block develop's
+deletes once rows exist (#941).
+
 ## Dependencies
 
 `requirements.txt` is the web/app runtime (Apache/mod_wsgi and the django_cron
