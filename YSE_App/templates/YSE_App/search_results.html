@@ -93,6 +93,7 @@
         <button type="button" class="btn btn-outline-secondary btn-sm mr-2" id="search-copy-link" title="Copy this search's URL">Copy link</button>
         <a class="btn btn-outline-secondary btn-sm mr-2" href="{{ api_url }}" id="search-api-link" title="The same search on the REST API">API</a>
         <button type="button" class="btn btn-outline-primary btn-sm" id="search-save-open" data-toggle="modal" data-target="#search-save-modal" title="Save this search as an SQL query, optionally on your personal dashboard"><i class="fa fa-save" aria-hidden="true"></i> Save as SQL query</button>
+        {% if selection_save %}<button type="button" class="btn btn-outline-primary btn-sm ml-2" id="selection-save-open" data-toggle="modal" data-target="#selection-save-modal" title="Keep these filters as a Selection you can reopen and share (preview)"><i class="fa fa-bookmark" aria-hidden="true"></i> Save as Selection</button>{% endif %}
       </div>
     </form>
 
@@ -105,6 +106,9 @@
     </div>
     {% elif save_error %}
     <div class="alert alert-danger mt-2 py-2" role="alert" id="search-save-error">{{ save_error }}</div>
+    {% endif %}
+    {% if selection_save.error %}
+    <div class="alert alert-danger mt-2 py-2" role="alert" id="selection-save-error">{{ selection_save.error }}</div>
     {% endif %}
 
     {% if active_chips %}
@@ -197,6 +201,48 @@
     </form>
   </div>
 </div>
+{% if selection_save %}{# "Save as Selection" (#841), UI preview only #}
+<div class="modal fade" id="selection-save-modal" tabindex="-1" role="dialog" aria-labelledby="selection-save-modal-title" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <form class="modal-content" id="selection-save-form" action="{% url 'selection_save' %}" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="params" value="{{ bulk_params }}">
+      <div class="modal-header">
+        <h5 class="modal-title" id="selection-save-modal-title">Save as Selection</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">A Selection keeps these filters, not today's rows: each time it is opened it lists what matches then, showing only the data each viewer may see. Find it under <a href="{% url 'selection_list' %}">My Selections</a>.</p>
+        <div class="form-group">
+          <label for="selection-save-name">Name</label>
+          <input type="text" class="form-control" id="selection-save-name" name="name" maxlength="200" required value="{{ selection_save.name }}">
+        </div>
+        <div class="form-group">
+          <label for="selection-save-visibility">Shared with</label>
+          <select class="form-control" id="selection-save-visibility" name="visibility">
+            <option value="me">Only me</option>
+            {% if selection_save.teams %}<option value="team">My team</option>{% endif %}
+            <option value="all">All YSE</option>
+          </select>
+        </div>
+        {% if selection_save.teams %}
+        <div class="form-group" id="selection-save-team-group" hidden>
+          <label for="selection-save-team">Team</label>
+          <select class="form-control" id="selection-save-team" name="team" disabled>
+            {% for team in selection_save.teams %}<option value="{{ team.pk }}">{{ team.name }}</option>{% endfor %}
+          </select>
+          <small class="form-text text-muted">Everyone on the team can open, rename and re-share it.</small>
+        </div>
+        {% endif %}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="selection-save-submit"><i class="fa fa-bookmark" aria-hidden="true"></i> Save Selection</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -210,6 +256,12 @@ $(function() {
     } else {
       window.prompt('Copy this link', url);
     }
+  });
+
+  $('#selection-save-visibility').on('change', function() {
+    var team = $(this).val() === 'team';
+    $('#selection-save-team-group').prop('hidden', !team);
+    $('#selection-save-team').prop('disabled', !team);
   });
 
   $('#search-bulk-action').on('change', function() {

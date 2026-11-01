@@ -2919,7 +2919,22 @@ class SearchResultsView(TemplateView):
         # Backwards-compatible name used by older templates/tests.
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         context['obs_tonight'] = self._obs_tonight_context(filterset, context['result_count'])
+        context['selection_save'] = self._selection_save_context(filterset)
         return context
+
+    def _selection_save_context(self, filterset):
+        """"Save as Selection" (#841) for preview users: teams to share with, name suggestion, last error."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+        from YSE_App.services.search_queries import default_search_title
+        from YSE_App.services.selections import team_choices
+
+        if not ui_preview_enabled(self.request):
+            return None
+        return {
+            'teams': team_choices(self.request.user),
+            'name': default_search_title(filterset) if filterset.is_valid() else '',
+            'error': self.request.GET.get('selection_error') or None,
+        }
 
     def _obs_tonight_context(self, filterset, result_count):
         """"Observable tonight" (#854) for preview users: only on a filtered search of at most MAX_OBJECTS."""
@@ -3014,7 +3029,7 @@ def save_search(request):
 SEARCH_BULK_MAX_ROWS = 5000
 SEARCH_BULK_PHOTOMETRY_MAX_ROWS = 300
 SEARCH_EXPORT_MAX_ROWS = 50000
-_SEARCH_STATE_KEYS = ('page', 'saved_query', 'saved_user_query', 'save_error', 'bulk_result')
+_SEARCH_STATE_KEYS = ('page', 'saved_query', 'saved_user_query', 'save_error', 'bulk_result', 'selection_error')
 
 
 def _csv_safe(value):

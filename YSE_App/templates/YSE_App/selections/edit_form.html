@@ -1,0 +1,20 @@
+{% comment %}Rename / re-share a Selection (#841). Context: selection, teams, visibility_choices, next ('list' or 'detail').{% endcomment %}
+<form class="form-inline yse-selection-edit-form" action="{% url 'selection_edit' selection.slug %}" method="post">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <label class="mr-1" for="selection-name-{{ selection.slug }}">Name</label>
+  <input type="text" class="form-control form-control-sm mr-2" id="selection-name-{{ selection.slug }}" name="name"
+         maxlength="200" required value="{{ selection.name }}">
+  <label class="mr-1" for="selection-visibility-{{ selection.slug }}">Shared with</label>
+  <select class="form-control form-control-sm mr-2 yse-selection-visibility" id="selection-visibility-{{ selection.slug }}" name="visibility">
+    {% for value, label in visibility_choices %}<option value="{{ value }}"{% if value == selection.visibility %} selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+  <span class="yse-selection-team">
+    <label class="mr-1" for="selection-team-{{ selection.slug }}">Team</label>
+    <select class="form-control form-control-sm mr-2" id="selection-team-{{ selection.slug }}" name="team">
+      <option value="">{% if selection.team %}{{ selection.team.name }} (keep){% else %}No team{% endif %}</option>
+      {% for team in teams %}{% if team.pk != selection.team_id %}<option value="{{ team.pk }}">{{ team.name }}</option>{% endif %}{% endfor %}
+    </select>
+  </span>
+  <button type="submit" class="btn btn-primary btn-sm">Save</button>
+</form>
