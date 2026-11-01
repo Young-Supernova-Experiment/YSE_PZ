@@ -1871,8 +1871,8 @@ def transient_detail(request, slug):
             too_resource_form = followup_form_ctx['too_resource_form']
             automated_spectrum_form = followup_form_ctx['automated_spectrum_form']
 
-        spectrum_upload_form = SpectrumUploadForm()
-        
+        spectrum_upload_form, spectrum_upload_retry = _spectrum_upload_form_for(request, transient_obj)
+
         # Status update properties (one query for all statuses)
         all_transient_statuses = list(TransientStatus.objects.all())
         status_by_name = {s.name: s for s in all_transient_statuses}
@@ -1992,6 +1992,7 @@ def transient_detail(request, slug):
             'gw_images': gwimages,
             'has_gw_candidate_tag': has_gw_candidate_tag,
             'spectrum_upload_form':spectrum_upload_form,
+            'spectrum_upload_retry': spectrum_upload_retry,
             'diff_images': diff_images_qs,
             'classical_resource_form':classical_resource_form,
             'too_resource_form':too_resource_form,
@@ -2658,6 +2659,36 @@ def _upload_form_errors(form) -> str:
     return '; '.join(parts)
 
 
+# After a failed upload the entered values (all but the file) come back on the transient page (#902).
+_UPLOAD_RETRY_KEY = 'spectrum_upload_retry'
+_UPLOAD_RETRY_FIELDS = ('instrument', 'obs_group', 'obs_date', 'spec_phase', 'data_quality', 'reference')
+_UPLOAD_RETRY_LISTS = ('permissions', 'pis')
+
+
+def _remember_failed_upload(request, transient_id):
+    """Keep the submitted values in the session for the next view of that transient's page.
+
+    Only for browser sessions: scripts posting with HTTP basic auth get no session row.
+    """
+    if 'HTTP_AUTHORIZATION' in request.META or not request.user.is_authenticated:
+        return
+    values = {name: str(request.POST.get(name) or '')[:512] for name in _UPLOAD_RETRY_FIELDS}
+    for name in _UPLOAD_RETRY_LISTS:
+        values[name] = [str(v)[:512] for v in request.POST.getlist(name)[:200]]
+    # datetime-local only shows YYYY-MM-DDTHH:MM[:SS]; the form also accepts a space separator.
+    values['obs_date'] = values['obs_date'].strip().replace(' ', 'T', 1)
+    request.session[_UPLOAD_RETRY_KEY] = {'transient': transient_id, 'values': values}
+
+
+def _spectrum_upload_form_for(request, transient):
+    """``(form, retried)``: the upload form, filled in again after a failed upload of this transient."""
+    retry = request.session.pop(_UPLOAD_RETRY_KEY, None) if hasattr(request, 'session') else None
+    if isinstance(retry, dict) and retry.get('transient') == transient.id:
+        values = {k: v for k, v in (retry.get('values') or {}).items() if v not in ('', [], None)}
+        return SpectrumUploadForm(initial=values), True
+    return SpectrumUploadForm(), False
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def upload_spectrum(request):
@@ -2728,6 +2759,7 @@ def upload_spectrum(request):
             messages.success(request, 'Spectrum uploaded (%d pixels).' % n)
             return redirect('transient_detail', slug=transient.slug)
         if back is not None:
+            _remember_failed_upload(request, back.id)
             messages.error(request, 'Spectrum not uploaded. %s' % _upload_form_errors(form))
             return redirect('transient_detail', slug=back.slug)
         return render(request, 'YSE_App/spectrum_upload_page.html', {'errors': _upload_form_errors(form)}, status=400)
