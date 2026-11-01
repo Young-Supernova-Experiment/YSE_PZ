@@ -18,6 +18,9 @@ URL is the whole state of a search, so it can be pasted into Slack.
   page number all live in the query string. "Copy link" copies the URL; "API" opens the same search on
   `/api/transients/`.
 * Multi-selects repeat the parameter: `?status=New&status=Watch`, `?tags=young&tags=old`.
+* Tags: `tags` = any of the tags, `tags_all` = all of them. With the UI preview switch on, the
+  "View Transient By Tag" page (`/transient_tags/`, #866) is a labelled multi-select with type-ahead
+  instead of drag and drop, and links to the same search here, so that page can be retired later.
   Booleans take `true` / `false`. Dates take `YYYY-MM-DD` or ISO 8601 (`2026-09-01T12:00:00Z`);
   a bare date is midnight UTC, so `disc_date_before=2026-09-01` is "before the start of Sept 1".
 
