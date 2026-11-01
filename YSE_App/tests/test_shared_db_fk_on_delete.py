@@ -73,6 +73,21 @@ def _sql(statement, params):
         cursor.execute(statement, params)
 
 
+def _delete_known_children(parent_table, parent_id):
+    """Delete the rows of older tables that reference ``parent_table`` row ``parent_id``.
+
+    This is what develop's Django cascade does before it deletes the parent; the tables
+    created by 0056-0061 are left for MySQL's ON DELETE.
+    """
+    new = {table for table, _, _, _ in fk_migration.FOREIGN_KEYS}
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE "
+                       "WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = %s", [parent_table])
+        children = [row for row in cursor.fetchall() if row[0] not in new]
+        for table, column in children:
+            cursor.execute(f"DELETE FROM `{table}` WHERE `{column}` = %s", [parent_id])
+
+
 class ListMatchesModelsTests(SimpleTestCase):
     def test_every_cascade_and_set_null_key_of_the_new_tables_is_listed(self):
         tables = _new_tables()
@@ -169,8 +184,8 @@ class RawDeleteTests(TestCase):
     def test_user_delete_removes_deputy_rows(self):
         group, profile, deputy = self._team_with_deputy("fk-team-user")
         through = GroupProfile.deputies.through
-        # What develop's Django deletes first (it knows these), then the user itself.
-        _sql("DELETE FROM auth_user_groups WHERE user_id = %s", [deputy.id])
+        # What develop's Django deletes first (it knows these tables), then the user itself.
+        _delete_known_children("auth_user", deputy.id)
         _sql("DELETE FROM auth_user WHERE id = %s", [deputy.id])
 
         self.assertFalse(User.objects.filter(pk=deputy.pk).exists())
@@ -181,7 +196,7 @@ class RawDeleteTests(TestCase):
         group, profile, deputy = self._team_with_deputy("fk-team-group")
         through = GroupProfile.deputies.through
         # develop's Group cascade: its GroupProfile row, then the group.
-        _sql("DELETE FROM auth_user_groups WHERE group_id = %s", [group.id])
+        _delete_known_children("auth_group", group.id)
         _sql("DELETE FROM YSE_App_groupprofile WHERE id = %s", [profile.id])
         _sql("DELETE FROM auth_group WHERE id = %s", [group.id])
 
