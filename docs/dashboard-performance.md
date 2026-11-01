@@ -151,6 +151,15 @@ Finally turn the warmer on in that stack's `settings.ini` (`DASHBOARD_CACHE_WARM
 check the `CronJobLog` rows of
 `YSE_App.Dashboard_Cache_Warm.WarmDashboardQueries` (or the `dashboard warm:` log lines) for per-query timings.
 
+## Tabbed main dashboard (UI preview, #859)
+
+Users with the UI preview switch on get the main dashboard as tabs (`YSE_App/dashboard_preview.py`). The page shell
+runs one `SELECT status_id, COUNT(DISTINCT id) ... GROUP BY status_id` for all seven tab counts (the shared filter and
+the listing rule applied; it reads the `(status, disc_date)` index), not a count per tab. Only the open tab's table is
+fetched; the others load when first opened, so a visit costs one table instead of seven. The optional columns are
+rendered hidden in the same page query (no extra query when shown). `YSE_App/tests/test_dashboard_tabs.py` checks the
+count is one query and that neither the shell nor a tab grows with the number of rows.
+
 ## Next step: a per-transient photometry summary table
 
 Every one of these queries, and the dashboard's own `recent_mag` / `recent_magdate` annotations, rebuilds a per-transient

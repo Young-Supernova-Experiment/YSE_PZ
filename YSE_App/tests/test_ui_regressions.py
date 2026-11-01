@@ -36,20 +36,21 @@ class FilterDisplayTests(TestCase):
         self.assertEqual(normalize_filter_name('R-Cousins'), 'r')
 
     def test_r_family_shares_swope_red(self):
-        swope_r = band_display_color('r', '#DC143C')
+        swope_r = band_display_color('r', '#DC143C')  # the database value does not win
         ztf_r = band_display_color('r-ZTF', None)
         wft_r = band_display_color('r-WFT', None)
         self.assertEqual(swope_r, ztf_r)
         self.assertEqual(swope_r, wft_r)
-        self.assertEqual(swope_r, '#DC143C')
+        self.assertEqual(swope_r, '#d44e46')
 
     def test_telescope_symbol_groups_ztf(self):
         self.assertEqual(telescope_display_symbol('ZTF-Cam'), 'diamond')
         self.assertEqual(telescope_display_symbol('Unknown'), 'triangle')
 
-    def test_g_atlas_cyan_maps_to_green(self):
+    def test_atlas_cyan_keeps_the_g_label_but_has_its_own_colour(self):
+        # #860: the legend still reads "ATLAS g"; the colour is c, not g
         self.assertEqual(normalize_filter_name('cyan-ATLAS'), 'g')
-        self.assertEqual(band_display_color('cyan-ATLAS', None), '#008000')
+        self.assertEqual(band_display_color('cyan-ATLAS', None), '#2890a1')
 
     def test_display_filter_label_shortens_instrument_suffix(self):
         self.assertEqual(display_filter_label('r-ZTF'), 'r')

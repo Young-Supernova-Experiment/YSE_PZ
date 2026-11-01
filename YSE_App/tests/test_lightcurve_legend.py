@@ -543,8 +543,8 @@ class LightcurveLegendRenderTests(TestCase):
         callbacks = [ref for ref in refs.values() if ref["type"] == "CustomJS"]
         self.assertGreaterEqual(len(callbacks), 16)
         followers = sum(len(cb["attributes"]["args"]["followers"]) for cb in callbacks)
-        # every series links its error bars; each also has one upper limit
-        self.assertEqual(followers, 16 * 2)
+        # every series links its error bars; each also has one upper limit and its stem (#860)
+        self.assertEqual(followers, 16 * 3)
         for cb in callbacks:
             self.assertIn("r.visible = cb_obj.visible", cb["attributes"]["code"])
         # markers are Scatter glyphs in bokeh 2.4 (one renderer, several glyph
