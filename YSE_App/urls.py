@@ -23,6 +23,7 @@ from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
+from YSE_App.common import ui_preview as ui_preview_views
 from YSE_App import signup_views
 from YSE_App import access_views
 from YSE_App import (
@@ -399,6 +400,8 @@ urlpatterns = [
             name='researcher_mentorship_decide'),
     # Research teams, invitation links (#445) and user settings (#440)
     re_path(r'^settings/$', group_views.user_settings, name='user_settings'),
+    # Per-user UI preview switch for the Tier 2 layouts (#947)
+    re_path(r'^ui-preview/$', ui_preview_views.ui_preview_switch, name='ui_preview_switch'),
     re_path(r'^teams/$', group_views.team_list, name='team_list'),
     re_path(r'^teams/join/$', group_views.group_invite_accept, name='group_invite_accept'),
     re_path(r'^teams/join/(?P<token>[A-Za-z0-9_-]{20,128})/$', group_views.group_invite_link,
