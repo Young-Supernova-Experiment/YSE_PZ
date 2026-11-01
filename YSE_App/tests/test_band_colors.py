@@ -220,7 +220,7 @@ class PlotColourTests(TestCase):
             ])
         for view in ('spectrumplot', 'spectrumplot_summary'):
             with self.subTest(view=view):
-                colours = {
-                    g['line_color']['value'].lower() for g, _src in _glyphs(self._doc(view, transient), 'Step')
-                }
+                # bokeh serialises a colour as a plain string or as {"value": ...}
+                specs = [g['line_color'] for g, _src in _glyphs(self._doc(view, transient), 'Step')]
+                colours = {(s['value'] if isinstance(s, dict) else s).lower() for s in specs}
                 self.assertEqual(colours, {c.lower() for c in SPECTRUM_COLORS[:2]})
