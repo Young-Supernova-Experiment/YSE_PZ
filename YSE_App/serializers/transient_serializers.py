@@ -1,18 +1,19 @@
 from rest_framework import serializers
 from YSE_App.models import *
+from .related_fields import IdHyperlinkedRelatedField, VisibleSpectrumOutputField
 from django.contrib.auth.models import User
 
 class TransientSerializer(serializers.HyperlinkedModelSerializer):
     status = serializers.HyperlinkedRelatedField(queryset=TransientStatus.objects.all(), view_name='transientstatus-detail')
     obs_group = serializers.HyperlinkedRelatedField(queryset=ObservationGroup.objects.all(), view_name='observationgroup-detail')
 
-    non_detect_band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
-    best_spec_class = serializers.HyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    photo_class = serializers.HyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    context_class = serializers.HyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
-    best_spectrum = serializers.HyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
-    host = serializers.HyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
-    abs_mag_peak_band = serializers.HyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
+    non_detect_band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
+    best_spec_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
+    photo_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
+    context_class = IdHyperlinkedRelatedField(queryset=TransientClass.objects.all(), allow_null=True, required=False, view_name='transientclass-detail', lookup_field="id")
+    best_spectrum = VisibleSpectrumOutputField(dataset_kind='spectrum', queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
+    host = IdHyperlinkedRelatedField(queryset=Host.objects.all(), allow_null=True, required=False, view_name='host-detail', lookup_field="id")
+    abs_mag_peak_band = IdHyperlinkedRelatedField(queryset=PhotometricBand.objects.all(), allow_null=True, required=False, view_name='photometricband-detail', lookup_field="id")
     antares_classification = serializers.HyperlinkedRelatedField(queryset=AntaresClassification.objects.all(), allow_null=True, required=False, view_name='antaresclassification-detail')
     internal_survey = serializers.HyperlinkedRelatedField(queryset=InternalSurvey.objects.all(), allow_null=True, required=False, view_name='internalsurvey-detail')
     tags = serializers.HyperlinkedRelatedField(queryset=TransientTag.objects.all(), many=True, view_name='transienttag-detail')
@@ -48,7 +49,10 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         return transient
 
     def update(self, instance, validated_data):
+        from YSE_App.services import change_log
 
+        redshift_before = change_log.redshift_state(instance)
+        edit_before = change_log.edit_state(instance)
         instance.status = validated_data.get('status', instance.status)
         instance.obs_group = validated_data.get('obs_group', instance.obs_group)
         instance.non_detect_band = validated_data.get('non_detect_band', instance.non_detect_band)
@@ -70,6 +74,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         instance.redshift = validated_data.get('redshift', instance.redshift)
         instance.redshift_err = validated_data.get('redshift_err', instance.redshift_err)
         instance.redshift_source = validated_data.get('redshift_source', instance.redshift_source)
+        # a redshift set by hand with the override wins over every catalogue (#436, #437)
+        instance.redshift_override = validated_data.get('redshift_override', instance.redshift_override)
         instance.non_detect_date = validated_data.get('non_detect_date', instance.non_detect_date)
         instance.non_detect_limit = validated_data.get('non_detect_limit', instance.non_detect_limit)
 
@@ -101,8 +107,18 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
                         instance.tags.add(tag_result.first())
 
         instance.save()
+        # redshift or override edited by hand through the API: one change-log entry (#737)
+        change_log.record_redshift_edit(instance, redshift_before, actor=_request_user(self),
+                                        service=change_log.SERVICE_API)
+        change_log.record_edit(instance, edit_before, actor=_request_user(self))
 
         return instance
+
+
+def _request_user(serializer):
+    request = serializer.context.get('request') if hasattr(serializer, 'context') else None
+    user = getattr(request, 'user', None)
+    return user if getattr(user, 'is_authenticated', False) else None
 
 
 class AlternateTransientNamesSerializer(serializers.HyperlinkedModelSerializer):

@@ -1,0 +1,298 @@
+/*
+ * SQL Explorer inside the YSE-PZ shell (#450).
+ *
+ * django-sql-explorer 2.3's templates use Bootstrap 3 classes (panel,
+ * btn-default, glyphicon, hidden, caret, form-horizontal ...). The shell runs
+ * Bootstrap 4.6 / AdminLTE 3.2, so this sheet maps those classes onto the
+ * shell and the YSE-PZ theme tokens (yse-theme.css) in both themes. Everything
+ * is scoped to .yse-explorer, the wrapper set by templates/explorer/base.html
+ * (and the <body> of the bare schema pane).
+ */
+
+.yse-explorer {
+  color: var(--yse-color-text);
+  font-family: var(--yse-font-sans);
+}
+
+/* --- Sub-navigation (Explorer's own navbar links) --- */
+.yse-explorer-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yse-space-sm) var(--yse-space-lg);
+  padding: var(--yse-space-sm) var(--yse-space-md);
+  margin: var(--yse-space-sm) 0 var(--yse-space-md);
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+}
+
+.yse-explorer-brand {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--yse-color-text) !important;
+}
+
+.yse-explorer-navlinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yse-space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.yse-explorer-navlinks > li > a {
+  display: block;
+  padding: 3px 10px;
+  border-radius: 6px;
+  color: var(--yse-link);
+}
+
+.yse-explorer-navlinks > li > a:hover {
+  background: rgba(59, 130, 246, 0.12);
+  text-decoration: none;
+}
+
+.yse-explorer-navlinks > li.active > a {
+  background: var(--yse-color-accent);
+  color: #fff !important;
+}
+
+.yse-explorer-dashlink {
+  margin-left: auto;
+}
+
+.yse-explorer-footer {
+  margin-top: var(--yse-space-lg);
+}
+
+/* --- Bootstrap 3 utilities missing from Bootstrap 4 --- */
+.yse-explorer .hidden {
+  display: none !important;
+}
+
+.yse-explorer:not(.yse-explorer-bare) .caret {
+  display: none;
+}
+
+.yse-explorer .pull-right {
+  float: right;
+}
+
+/* --- Panels -> cards --- */
+.yse-explorer .panel {
+  background: var(--yse-card-bg);
+  border: 1px solid var(--yse-border);
+  border-radius: 8px;
+  margin-bottom: var(--yse-space-md);
+  box-shadow: none;
+  color: var(--yse-color-text);
+}
+
+.yse-explorer .panel-heading {
+  padding: var(--yse-space-sm) var(--yse-space-md);
+  border-bottom: 1px solid var(--yse-border);
+  background: transparent !important;
+  color: var(--yse-color-text) !important;
+  border-color: var(--yse-border) !important;
+}
+
+.yse-explorer .panel-title {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--yse-color-text);
+}
+
+.yse-explorer .panel-body,
+.yse-explorer .panel-footer {
+  padding: var(--yse-space-sm) var(--yse-space-md);
+}
+
+.yse-explorer .panel-footer {
+  border-top: 1px solid var(--yse-border);
+  background: transparent;
+}
+
+/* --- Horizontal forms (label column + field column) --- */
+.yse-explorer .form-horizontal .form-group {
+  display: flex;
+  flex-wrap: wrap;
+  margin-left: -7.5px;
+  margin-right: -7.5px;
+}
+
+@media (min-width: 576px) {
+  .yse-explorer .form-horizontal .control-label {
+    text-align: right;
+    padding-top: 6px;
+  }
+}
+
+.yse-explorer .form-inline .form-group {
+  margin-bottom: var(--yse-space-xs);
+}
+
+.yse-explorer .list-search,
+.yse-explorer input.search,
+.yse-explorer .rows-input {
+  background: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border: 1px solid var(--yse-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+/* --- Dropdowns built from <li><input class="btn btn-link"> --- */
+.yse-explorer .dropdown-menu > li {
+  list-style: none;
+}
+
+.yse-explorer .dropdown-menu > li > input,
+.yse-explorer .dropdown-menu > li > a {
+  color: var(--yse-color-text);
+  text-align: left;
+  width: 100%;
+}
+
+.yse-explorer .dropdown-menu > li > input:hover,
+.yse-explorer .dropdown-menu > li > a:hover {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: var(--yse-color-text);
+}
+
+/* --- Glyphicons -> Font Awesome 4 (loaded by the shell) --- */
+.yse-explorer:not(.yse-explorer-bare) .glyphicon {
+  display: inline-block;
+  font: normal normal normal 14px/1 FontAwesome;
+  font-size: inherit;
+  text-rendering: auto;
+  -webkit-font-smoothing: antialiased;
+  cursor: pointer;
+}
+
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-download::before { content: "\f019"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-education::before { content: "\f19d"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-envelope::before { content: "\f0e0"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-link::before { content: "\f0c1"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-new-window::before { content: "\f08e"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-resize-full::before { content: "\f065"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-resize-small::before { content: "\f066"; }
+.yse-explorer:not(.yse-explorer-bare) .glyphicon-trash::before { content: "\f1f8"; }
+
+/* --- Results table, row counter, sticky header --- */
+.yse-explorer .data-headers,
+.yse-explorer .floatThead-container,
+.yse-explorer .floatThead-container thead {
+  background: var(--yse-card-bg) !important;
+}
+
+.yse-explorer .counter {
+  background-color: rgba(148, 163, 184, 0.12);
+}
+
+.yse-explorer .overflow-wrapper {
+  border-top: 1px solid var(--yse-border);
+}
+
+.yse-explorer .table {
+  font-size: var(--yse-table-font-size);
+}
+
+.yse-explorer .table td,
+.yse-explorer .table th {
+  border-color: var(--yse-border);
+}
+
+.yse-explorer .nav-tabs {
+  border-bottom-color: var(--yse-border);
+  margin-top: var(--yse-space-md);
+}
+
+.yse-explorer .tab-content {
+  background: transparent !important;
+}
+
+.yse-explorer #sql_toggle {
+  color: var(--yse-color-cyan);
+}
+
+/* --- Pivot table (pivottable.js) --- */
+.yse-explorer .pvtUi {
+  color: var(--yse-color-text);
+}
+
+.yse-explorer .pvtAxisContainer,
+.yse-explorer .pvtVals,
+.yse-explorer table.pvtTable thead tr th,
+.yse-explorer table.pvtTable tbody tr th {
+  background-color: rgba(148, 163, 184, 0.12);
+  border-color: var(--yse-border);
+  color: var(--yse-color-text);
+}
+
+.yse-explorer table.pvtTable tbody tr td,
+.yse-explorer .pvtFilterBox,
+.yse-explorer .pvtUi select {
+  background-color: var(--yse-card-bg);
+  border-color: var(--yse-border);
+  color: var(--yse-color-text);
+}
+
+.yse-explorer .pvtAxisContainer li span.pvtAttr {
+  background: var(--yse-card-bg);
+  border-color: var(--yse-border-hover);
+  color: var(--yse-color-text);
+}
+
+/* --- CodeMirror editor --- */
+.yse-explorer .CodeMirror {
+  background: var(--yse-card-bg);
+  color: var(--yse-color-text);
+  border-radius: 0 0 8px 8px;
+}
+
+.yse-explorer .CodeMirror-gutters {
+  background: transparent;
+  border-right: 1px solid var(--yse-border);
+}
+
+.yse-explorer .CodeMirror-linenumber {
+  color: var(--yse-color-muted);
+}
+
+.yse-explorer .CodeMirror-cursor {
+  border-left-color: var(--yse-color-text);
+}
+
+html[data-yse-theme="dark"] .yse-explorer .CodeMirror-selected,
+html[data-yse-theme="dark"] .yse-explorer .CodeMirror-focused .CodeMirror-selected {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+html[data-yse-theme="dark"] .yse-explorer .cm-keyword { color: #c4b5fd; }
+html[data-yse-theme="dark"] .yse-explorer .cm-string { color: #fca5a5; }
+html[data-yse-theme="dark"] .yse-explorer .cm-number { color: #86efac; }
+html[data-yse-theme="dark"] .yse-explorer .cm-comment { color: var(--yse-color-muted); }
+html[data-yse-theme="dark"] .yse-explorer .cm-variable-2,
+html[data-yse-theme="dark"] .yse-explorer .cm-builtin { color: #93c5fd; }
+html[data-yse-theme="dark"] .yse-explorer .cm-atom,
+html[data-yse-theme="dark"] .yse-explorer .cm-operator { color: #67e8f9; }
+
+/* --- Bare schema pane (iframe; Explorer's Bootstrap 3 + theme colours) --- */
+body.yse-explorer-bare {
+  background: var(--yse-card-bg) !important;
+  padding: var(--yse-space-xs);
+}
+
+body.yse-explorer-bare .table,
+body.yse-explorer-bare .table td,
+body.yse-explorer-bare .table th,
+body.yse-explorer-bare code {
+  background: transparent;
+  color: var(--yse-color-text);
+}
+
+body.yse-explorer-bare .text-muted {
+  color: var(--yse-color-muted) !important;
+}

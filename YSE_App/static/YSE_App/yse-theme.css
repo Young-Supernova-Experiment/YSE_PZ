@@ -39,6 +39,8 @@ html[data-yse-theme="dark"] {
   --yse-color-muted: #94a3b8;
   --yse-header-bg: rgb(12, 16, 32);
   --yse-sidebar-bg: #0b0f1c;
+  --yse-sidebar-text: #c2c7d0;
+  --yse-sidebar-hover-bg: rgba(255, 255, 255, 0.08);
   --yse-link: #93c5fd;
 }
 
@@ -51,7 +53,9 @@ html[data-yse-theme="light"] {
   --yse-color-text: #0f172a;
   --yse-color-muted: #475569;
   --yse-header-bg: #ffffff;
-  --yse-sidebar-bg: #111827;
+  --yse-sidebar-bg: #ffffff;
+  --yse-sidebar-text: #1e293b;
+  --yse-sidebar-hover-bg: rgba(15, 23, 42, 0.06);
   --yse-link: #1d4ed8;
 }
 
@@ -137,6 +141,24 @@ body.yse-theme .yse-theme-toggle {
 body.yse-theme .yse-sidebar,
 body.yse-theme .main-sidebar {
   background-color: var(--yse-sidebar-bg);
+}
+
+/* Sidebar text follows the theme (light mode used to keep the dark sidebar). */
+body.yse-theme .main-sidebar .brand-link,
+body.yse-theme .main-sidebar .brand-text,
+body.yse-theme .main-sidebar .nav-sidebar .nav-link,
+body.yse-theme .main-sidebar .nav-sidebar .nav-link p,
+body.yse-theme .main-sidebar .nav-sidebar .nav-icon {
+  color: var(--yse-sidebar-text);
+}
+
+body.yse-theme .main-sidebar .nav-sidebar .nav-link:hover {
+  background-color: var(--yse-sidebar-hover-bg);
+  color: var(--yse-sidebar-text);
+}
+
+html[data-yse-theme="light"] body.yse-theme .main-sidebar {
+  border-right: 1px solid var(--yse-border);
 }
 
 body.yse-theme .brand-link {

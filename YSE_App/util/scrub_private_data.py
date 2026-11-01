@@ -7,6 +7,7 @@ import requests
 import astropy.table as at
 from collections import OrderedDict
 import json
+import os
 import dateutil.parser
 import numpy as np
 import pytz
@@ -249,7 +250,7 @@ def main(doSpec=False):
     User.objects.filter(~Q(username='admin')).delete()
         
     u = User.objects.get(username='admin')
-    u.set_password('changeme')
+    u.set_password(os.environ['SCRUB_ADMIN_PASSWORD'])  # required in the environment; never commit it
     u.firstname = 'admin'
     u.email = ''
     u.save()

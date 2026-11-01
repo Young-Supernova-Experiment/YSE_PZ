@@ -63,3 +63,24 @@ class PruneNotifications(CronJobBase):
             result["notifications_read"], result["notifications_unread"], result["jobs"])
         logger.info("notification prune cron: %s", summary)
         return summary
+
+
+class ExpireFollowupRequests(CronJobBase):
+    """Daily (#673): classical follow-up requests whose window has ended without good data
+    become Failed (``services.observations.expire_requests``). A no-op unless
+    ``ASTROSCHEDULER_EXPIRE_AFTER`` is set; only requests ending on or after that date count."""
+
+    schedule = Schedule(run_every_mins=1440)
+    code = 'YSE_App.Job_Queue.ExpireFollowupRequests'
+
+    def do(self):
+        from YSE_App.services.observations import expire_requests
+
+        result = expire_requests(apply=True)
+        if result["since"] is None:
+            logger.info("follow-up expiry cron: off (ASTROSCHEDULER_EXPIRE_AFTER is not set)")
+            return "disabled"
+        summary = "%d failed, %d successful, %d waiting for a judgement" % (
+            len(result["failed"]), len(result["successful"]), len(result["pending"]))
+        logger.info("follow-up expiry cron: %s", summary)
+        return summary

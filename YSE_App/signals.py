@@ -29,7 +29,7 @@ from YSE_App.feeds.jobs import enqueue_screen
 from YSE_App.services import annotations as annotations_svc
 # ... and the AI summariser runner + summaries.refresh_stale job (#296).
 import YSE_App.services.summaries  # noqa: E402,F401
-from YSE_App.models.phot_models import TransientPhotData
+from YSE_App.models.phot_models import HostPhotData, TransientPhotData, TransientPhotometry
 from YSE_App.services import photstat
 # Favorite-transient activity (#323): comments, audited transient changes, spectra, follow-ups.
 from auditlog.models import LogEntry
@@ -37,7 +37,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models.signals import pre_save
 from YSE_App.models.followup_models import TransientFollowup
 from YSE_App.models.log_models import Log
-from YSE_App.models.spectra_models import TransientSpectrum
+from YSE_App.models.spectra_models import HostSpectrum, TransientSpectrum
+from YSE_App.common import quality_mask_sync
 from YSE_App.services import favorites
 
 User = get_user_model()
@@ -95,6 +96,57 @@ def _photdata_transient_id(instance):
     return getattr(photometry, 'transient_id', None)
 
 
+# ---- quality_mask follows the DataQuality ManyToMany (#81) ------------------
+# Every add / remove / clear on a data_quality relation recomputes the
+# DataQuality-managed bits of the rows involved (quality_mask.merge_data_quality).
+# These receivers are connected before the PhotStat one below, so a PhotStat
+# recompute triggered by the same change already sees the new mask.
+# Writes that bypass m2m_changed (bulk_create of through rows) set the mask
+# themselves (data_utils._write_photdata_points); `backfill_quality_mask`
+# finds anything that slipped through.
+
+
+def _sync_quality_mask(model, instance, action, reverse, pk_set):
+    if reverse:
+        # DataQuality.<model>_set.add/remove/clear(...): many rows at once; clear()
+        # reports no pk_set, so remember the affected rows before it runs.
+        memo = '_quality_mask_%s_pks' % model._meta.model_name
+        if action == 'pre_clear':
+            setattr(instance, memo, list(
+                getattr(instance, '%s_set' % model._meta.model_name).values_list('pk', flat=True)
+            ))
+            return
+        if action == 'post_clear':
+            pks = getattr(instance, memo, [])
+            setattr(instance, memo, [])
+        elif action in ('post_add', 'post_remove'):
+            pks = pk_set or ()
+        else:
+            return
+        quality_mask_sync.recompute(model, pks)
+        return
+    if action not in ('post_add', 'post_remove', 'post_clear') or instance.pk is None:
+        return
+    new = quality_mask_sync.recompute(model, [instance.pk]).get(instance.pk)
+    if new is not None:
+        # Keep the in-memory row current, so a later instance.save() writes the new mask.
+        instance.quality_mask = new
+
+
+def _connect_quality_mask_sync(model):
+    def receiver_fn(sender, instance, action, reverse, **kwargs):
+        _sync_quality_mask(model, instance, action, reverse, kwargs.get('pk_set'))
+
+    m2m_changed.connect(
+        receiver_fn, sender=model.data_quality.through, weak=False,
+        dispatch_uid='yse_quality_mask_dq_%s' % model._meta.model_name,
+    )
+
+
+for _model in (TransientPhotData, HostPhotData, TransientSpectrum, HostSpectrum):
+    _connect_quality_mask_sync(_model)
+
+
 @receiver(post_save, sender=TransientPhotData, dispatch_uid="yse_photstat_photdata_saved")
 def refresh_photstat_on_photdata_save(sender, instance, **kwargs):
     if kwargs.get('raw'):
@@ -138,6 +190,52 @@ def refresh_photstat_on_quality_flag(sender, instance, action, reverse, **kwargs
     if action not in ('post_add', 'post_remove', 'post_clear'):
         return
     photstat.schedule_recompute(_photdata_transient_id(instance), photometry_id=instance.photometry_id)
+
+
+@receiver(m2m_changed, sender=TransientPhotometry.groups.through, dispatch_uid="yse_photstat_scope_groups_changed")
+def refresh_photstat_scopes_on_group_change(sender, instance, action, reverse, **kwargs):
+    """A photometry set's collaboration groups decide which visibility scopes count it (#607)."""
+    if action not in ('post_add', 'post_remove', 'post_clear'):
+        return
+    if reverse:
+        # Group.transientphotometry_set.add/remove/clear(...): many sets at once.
+        if action == 'post_clear':
+            return  # pk_set unknown; ``backfill_photstat_scopes`` repairs a cleared group
+        with photstat.deferred_updates():
+            for pk in list(kwargs.get('pk_set') or ()):
+                photstat.schedule_recompute(photometry_id=pk)
+        return
+    photstat.schedule_recompute(instance.transient_id, photometry_id=instance.pk)
+
+
+@receiver(pre_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moving")
+def remember_photometry_transient(sender, instance, raw=False, update_fields=None, **kwargs):
+    """Note the old transient when a photometry set is moved to another one (#269).
+
+    ``QUB_data.CheckDuplicates`` (and an API update) re-point a
+    ``TransientPhotometry`` at another transient; no point is saved, so the
+    point signals above never run. One pk lookup per update of an existing row.
+    """
+    instance._photstat_old_transient_id = None
+    if raw or instance.pk is None:
+        return
+    if update_fields is not None and not {'transient', 'transient_id'} & set(update_fields):
+        return
+    old = TransientPhotometry.objects.filter(pk=instance.pk).values_list('transient_id', flat=True).first()
+    if old is not None and old != instance.transient_id:
+        instance._photstat_old_transient_id = old
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_photstat_photometry_moved")
+def refresh_photstat_on_photometry_move(sender, instance, created, raw=False, **kwargs):
+    """Both transients' stat rows follow a moved photometry set (#269)."""
+    old = getattr(instance, '_photstat_old_transient_id', None)
+    if raw or created or old is None:
+        return
+    instance._photstat_old_transient_id = None
+    # The old transient may be deleted right after (duplicate clean-up): update, never create.
+    photstat.schedule_recompute(old, create=False)
+    photstat.schedule_recompute(instance.transient_id)
 
 
 # ---- favorite-transient activity (#323) ------------------------------------
@@ -189,6 +287,16 @@ def favorite_activity_on_followup(sender, instance, created, **kwargs):
                       old_status=getattr(instance, '_favorite_old_status', ''))
 
 
+@receiver(post_save, sender=TransientFollowup, dispatch_uid="yse_followup_status_notice")
+def notify_on_followup_status_change(sender, instance, created, **kwargs):
+    """``followup_status`` notices to the requesters (#69); uses the old status noted above."""
+    if created or kwargs.get('raw'):
+        return
+    from YSE_App.services.followup_notices import notify_status_changed_safely
+
+    notify_status_changed_safely(instance, getattr(instance, '_favorite_old_status', ''))
+
+
 # ---- group profiles (#445, #440) -------------------------------------------
 # Every new auth Group gets a GroupProfile (active, no owners); system groups by
 # name (settings.YSE_SYSTEM_GROUP_NAMES) are marked is_system.
@@ -203,6 +311,190 @@ def create_group_profile(sender, instance, created, **kwargs):
     from YSE_App.services.groups import profile_for
 
     profile_for(instance)
+
+
+# ---- AstroScheduler execution feedback (#674) -------------------------------
+# New data prove the observation: the matching data-taken observation becomes a success and
+# its classical request Successful. Never fails the upload (errors are only logged).
+
+def _data_uploaded(instance, obs_date):
+    import logging
+
+    from YSE_App.services.observations import data_uploaded
+
+    try:
+        data_uploaded(instance.transient_id, instance.followup_id, obs_date,
+                      getattr(instance, "created_by", None))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("observation success from uploaded data failed")
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_observation_success_spectrum")
+def observation_success_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get('raw'):
+        _data_uploaded(instance, instance.obs_date)
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_observation_success_photometry")
+def observation_success_on_photometry(sender, instance, created, **kwargs):
+    # A photometry set has no date of its own: only an upload naming its request counts.
+    if created and not kwargs.get('raw') and instance.followup_id:
+        _data_uploaded(instance, None)
+
+
+# ---- Access history for read-time rules (#648, PR 1b) ------------------------
+# Dated group membership and the time each group was added to a dataset's own
+# groups, recorded whether or not DATA_ACCESS_GRANTS_ENABLED is on
+# (services.access_history). A failure is logged and never blocks the change.
+
+def _record_access_history(fn, *args):
+    import logging
+
+    from django.db import transaction
+
+    try:
+        with transaction.atomic():  # a savepoint: a failure never breaks the caller's transaction
+            fn(*args)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("access history not recorded")
+
+
+@receiver(m2m_changed, sender=get_user_model().groups.through, dispatch_uid="yse_access_history_membership")
+def record_group_membership(sender, instance, action, reverse, **kwargs):
+    from YSE_App.services import access_history, access_rules
+
+    _record_access_history(access_history.record_membership_change, instance, action, reverse,
+                           kwargs.get("pk_set"))
+    if action in ("post_add", "post_remove", "post_clear") and access_rules.enabled():
+        # Which group rules apply to a user, and which groups they left, changed (#648, PR 2).
+        _record_access_history(access_rules.bump_version)
+
+
+@receiver(m2m_changed, sender=TransientPhotometry.groups.through, dispatch_uid="yse_access_history_phot_groups")
+def record_photometry_group_share(sender, instance, action, reverse, **kwargs):
+    from YSE_App.services import access_history
+
+    _record_access_history(access_history.record_dataset_share_change, TransientPhotometry, instance, action,
+                           reverse, kwargs.get("pk_set"))
+
+
+@receiver(m2m_changed, sender=TransientSpectrum.groups.through, dispatch_uid="yse_access_history_spec_groups")
+def record_spectrum_group_share(sender, instance, action, reverse, **kwargs):
+    from YSE_App.services import access_history
+
+    _record_access_history(access_history.record_dataset_share_change, TransientSpectrum, instance, action,
+                           reverse, kwargs.get("pk_set"))
+
+
+# ---- Per-point access rules (#648, PR 2) ---------------------------------------
+# Any rule or standing grant written outside an action (the admin, a shell) bumps
+# the rules version, so cached rule summaries and plots are rebuilt; actions bump
+# once themselves (access_actions.signals_quiet). New points and spectra of a
+# program get the program's standing grants at ingest.
+
+from YSE_App.models.data_access_grant_models import DataAccessRule, StandingAccessGrant  # noqa: E402
+
+
+@receiver(post_save, sender=DataAccessRule, dispatch_uid="yse_access_rule_saved")
+def access_rule_saved(sender, instance, **kwargs):
+    from YSE_App.services import access_actions, access_rules, photstat
+
+    if access_actions.signals_quiet() or kwargs.get("raw"):
+        return
+    access_rules.bump_version()
+    if instance.grantee_group_id and instance.transient_phot_data_id and access_rules.enabled():
+        photstat.invalidate_scopes([(instance.transient_id, instance.grantee_group_id)])
+
+
+@receiver(post_delete, sender=DataAccessRule, dispatch_uid="yse_access_rule_deleted")
+def access_rule_deleted(sender, instance, **kwargs):
+    # Version only: a point's deletion recomputes its transient's PhotStat scopes already, and a staff
+    # removal (access_actions.delete_rule, the admin) invalidates the scopes itself.
+    from YSE_App.services import access_actions, access_rules
+
+    if not access_actions.signals_quiet():
+        _record_access_history(access_rules.bump_version)
+
+
+@receiver(post_save, sender=StandingAccessGrant, dispatch_uid="yse_standing_grant_saved")
+def standing_grant_saved(sender, instance, **kwargs):
+    from YSE_App.services import access_rules
+
+    if not kwargs.get("raw"):
+        access_rules.bump_version()
+
+
+def _apply_standing_grants(fn, instance):
+    import logging
+
+    from django.db import transaction
+
+    try:
+        with transaction.atomic():
+            fn(instance)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("standing access grants not applied")
+
+
+@receiver(post_save, sender=TransientPhotData, dispatch_uid="yse_standing_grants_point")
+def standing_grants_on_point(sender, instance, created, **kwargs):
+    if not created or kwargs.get("raw"):
+        return
+    photometry = instance._state.fields_cache.get("photometry")
+    if photometry is not None and not photometry.allocation_id and not instance.allocation_id:
+        return  # the usual case: no program link, no query
+    from YSE_App.services import access_actions
+
+    _apply_standing_grants(access_actions.on_point_created, instance)
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_standing_grants_spectrum")
+def standing_grants_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get("raw") and instance.allocation_id:
+        from YSE_App.services import access_actions
+
+        _apply_standing_grants(access_actions.apply_standing_grants_to_spectrum, instance)
+
+
+# ---- Program links at ingest (#648, PR 3) -------------------------------------
+# A new photometry set or spectrum with no program gets the one allocation its follow-up
+# (or a matching AstroScheduler observation) points to; nothing when none or several
+# (services.program_links). No query without a follow-up unless the planner is on.
+
+def _link_new_dataset(instance):
+    import logging
+
+    from django.db import transaction
+
+    from YSE_App.services import program_links
+
+    try:
+        with transaction.atomic():
+            program_links.link_at_ingest(instance)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("program link at ingest failed")
+
+
+def _program_link_possible(instance) -> bool:
+    if instance.allocation_id:
+        return False
+    if instance.followup_id:
+        return True
+    from YSE_App.services.night_planner import enabled
+
+    return isinstance(instance, TransientSpectrum) and instance.obs_date is not None and enabled()
+
+
+@receiver(post_save, sender=TransientPhotometry, dispatch_uid="yse_program_link_photometry")
+def program_link_on_photometry(sender, instance, created, **kwargs):
+    if created and not kwargs.get("raw") and _program_link_possible(instance):
+        _link_new_dataset(instance)
+
+
+@receiver(post_save, sender=TransientSpectrum, dispatch_uid="yse_program_link_spectrum")
+def program_link_on_spectrum(sender, instance, created, **kwargs):
+    if created and not kwargs.get("raw") and _program_link_possible(instance):
+        _link_new_dataset(instance)
 
 
 # Research consent reminders (#744): count logins and flag a due reminder for the gate.

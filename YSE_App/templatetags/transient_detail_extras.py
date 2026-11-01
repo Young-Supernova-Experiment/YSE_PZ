@@ -18,7 +18,8 @@ register = template.Library()
 
 @register.filter(name='tags_list')
 def tags_list(tags):
-	return tags.all().values_list('name',flat=True)
+	# Iterate .all() so a prefetch_related('tags') is used instead of a query per call.
+	return [t.name for t in tags.all()]
 
 @register.filter(name='DL')
 def DL(redshift):
@@ -34,17 +35,27 @@ def galcoords(coordstring):
 	sc = SkyCoord('%s %s'%(coordstring[0],coordstring[1]),frame="fk5",unit=(u.hourangle,u.deg))
 	return '%.7f  %.7f'%(sc.galactic.l.value,sc.galactic.b.value)
 
-@register.filter(name='galcoordsl')
-def galcoordsl(coordstring):
-
+def _galactic_from_coordstring(coordstring):
 	sc = SkyCoord('%s %s'%(coordstring[0],coordstring[1]),frame="fk5",unit=(u.hourangle,u.deg))
-	return '%.7f'%sc.galactic.l.value
+	return sc.galactic.l.value, sc.galactic.b.value
+
+def _galactic_lb(value):
+	"""(l, b) for a Transient (stored gal_l/gal_b columns, #286) or a legacy
+	(ra, dec) sexagesimal pair; the sexagesimal parse is only the fallback
+	for rows whose columns are still NULL."""
+	if hasattr(value, 'gal_l'):
+		if value.gal_l is not None and value.gal_b is not None:
+			return value.gal_l, value.gal_b
+		return _galactic_from_coordstring(value.CoordString())
+	return _galactic_from_coordstring(value)
+
+@register.filter(name='galcoordsl')
+def galcoordsl(value):
+	return '%.7f'%_galactic_lb(value)[0]
 
 @register.filter(name='galcoordsb')
-def galcoordsb(coordstring):
-
-	sc = SkyCoord('%s %s'%(coordstring[0],coordstring[1]),frame="fk5",unit=(u.hourangle,u.deg))
-	return '%.7f'%sc.galactic.b.value
+def galcoordsb(value):
+	return '%.7f'%_galactic_lb(value)[1]
 
 
 @register.filter(name='format_mag')

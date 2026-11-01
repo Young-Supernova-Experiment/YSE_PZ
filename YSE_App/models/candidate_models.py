@@ -218,6 +218,8 @@ class Candidate(models.Model):
             models.Index(fields=["status", "last_seen"], name="yse_candidate_status_seen_idx"),
             models.Index(fields=["ra"], name="yse_candidate_ra_idx"),
             models.Index(fields=["dec"], name="yse_candidate_dec_idx"),
+            # Cone-search boxes, dec first (#477).
+            models.Index(fields=["dec", "ra"], name="yse_candidate_dec_ra_idx"),
         ]
 
     def __str__(self):

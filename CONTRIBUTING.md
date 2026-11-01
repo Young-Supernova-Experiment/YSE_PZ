@@ -9,10 +9,16 @@ longer part of the workflow; do not open pull requests against them.
 | Branch | Deployed to | Gets code from |
 | --- | --- | --- |
 | `experimental` | ziggy `/yse_experimental/` (automatic, Deploy Stack workflow) | feature/fix branches, by PR |
-| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR, or a `develop-direct/*` branch merged by Ryan (then develop is merged back into experimental at once) |
+| `develop` | ziggy `/yse_test/` (automatic) | **only** `experimental`, by a promotion PR (plus Dependabot PRs, below), or a `develop-direct/*` branch merged by Ryan (then develop is merged back into experimental at once) |
 | `master` | production (deployed by hand) | **only** `develop`, by the release PR |
 
 Details, the promotion guard, and dependency notes: [docs/branching.md](docs/branching.md).
+
+**Dependabot** PRs target `develop` and are merged there after CI (deploying to
+`/yse_test/`). Right after such a merge, merge `develop` back into `experimental`, the
+same as the hotfix backport rule in step 7. Dependabot reads its config only from
+`master`, so this applies once #143 merges; GitHub "security updates" PRs always target
+`master`, whatever the config says.
 
 ## Workflow
 
@@ -67,12 +73,15 @@ cp YSE_PZ/public_settings.ini YSE_PZ/settings.ini
 cp docker/public.env docker/.env
 ```
 
+`docker/public.env` sets `YSE_IS_DEBUG=1`, which turns DEBUG on for local docker; the
+template `settings.ini` itself defaults to `IS_DEBUG: False`.
+
 Edit `docker/.env` so paths are **absolute** (required for Docker Desktop on macOS):
 
 - `VOL` — repo root
 - `VOL_DB` — e.g. `…/YSE_PZ/database`
 - `STATIC_VOL` — e.g. `…/YSE_PZ/YSE_PZ/static`
-- `VOL_GHOST` — e.g. `…/YSE_PZ/ghost_logs`
+- `VOL_GHOST` — e.g. `…/YSE_PZ/ghost_logs` (Prost's scratch directory, `ghost_path`; the name is left over from GHOST)
 
 Then from the repo root:
 

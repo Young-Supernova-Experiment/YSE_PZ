@@ -64,8 +64,20 @@ def active_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
 
 # --- the stored SALT fit --------------------------------------------------------------------
 
-def stored_salt_fit(transient) -> Optional[ExternalServiceRun]:
-    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit."""
+def stored_salt_fit(transient, user=None) -> Optional[ExternalServiceRun]:
+    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit.
+
+    With ``user``: ``None`` when some of the transient's photometry is hidden
+    from that user (#607). The stored fit was made from the photometry its
+    requester could see, so a viewer who may not see all of it is not shown
+    values fitted to points they cannot see.
+    """
+    if user is not None:
+        from YSE_App.services.visibility import transients_with_hidden_photometry
+
+        transient_id = getattr(transient, 'pk', transient)
+        if transients_with_hidden_photometry(user, [transient_id]):
+            return None
     return latest_successful_run(transient, SNCOSMO_RUNNER)
 
 
@@ -167,7 +179,7 @@ def salt_fit_context(transient, user) -> Dict:
     """Context of ``transient_detail/salt_fit_status.html``."""
     service = _service_entry(user, SNCOSMO_RUNNER)
     latest = latest_run(transient, SNCOSMO_RUNNER)
-    success = stored_salt_fit(transient)
+    success = stored_salt_fit(transient, user=user)
     active = latest if (latest is not None and not latest.is_finished) else None
     entry = _run_entry(success)
     if entry is not None:

@@ -83,6 +83,12 @@ The local path to the mysql files, e.g.: "local proj path/docker_mysql/8.0"
 
 The root database password
 
+* :code:`YSE_DATABASE_PASSWORD` and :code:`YSE_EXPLORER_PASSWORD`
+
+Passwords for the application and read-only Explorer database users created on
+first start. Choose your own; they are read by the web container from the
+environment, so they do not need to be put in settings.ini.
+
 * :code:`STATIC_VOL`
 
 The path YSE_PZ app's static directory
@@ -117,11 +123,13 @@ An example of a minimum working .env file would be
 
     VOL= ../
     VOL_DB=../database/
-    DB_PWD=password
+    DB_PWD=<choose a root password>
+    YSE_DATABASE_PASSWORD=<choose a password>
+    YSE_EXPLORER_PASSWORD=<choose a password>
     STATIC_VOL=../YSE_PZ/static/
     LOCAL_DB_PORT=53306
     LOCAL_HTTP_PORT=80
-    DJANGO_SUPERUSER_PASSWORD = password123
+    DJANGO_SUPERUSER_PASSWORD = <choose a password>
     DJANGO_SUPERUSER_USERNAME = admin123
     DJANGO_SUPERUSER_EMAIL = test@gamil.com
 

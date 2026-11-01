@@ -23,6 +23,7 @@ def login_or_basic_auth_required(view):
 				user = auth.authenticate(username=username, password=password)
 				if user is not None and user.is_active:
 					# Correct password, and the user is marked "active"
+					request.user = user
 					return view(request, *args, **kwargs)
 				else:
 					return HttpResponseForbidden('Incorrect user credentials.')
@@ -38,6 +39,7 @@ def login_or_basic_auth_required(view):
 				user = auth.authenticate(username=username, password=password)
 				if user is not None and user.is_active:
 					# Correct password, and the user is marked "active"
+					request.request.user = user
 					return view(request, *args, **kwargs)
 				else:
 					return HttpResponseForbidden('Incorrect user credentials.')
@@ -53,6 +55,9 @@ def login_or_basic_auth_required(view):
 			else:
 				return HttpResponseForbidden('Incorrect user credentials')
 	_decorator.onboarding_exempt = True
+	# functools.wraps replaces __qualname__, so LoginRequiredMiddleware (#496)
+	# recognises these views by this marker (YSE_App/login_required.py).
+	_decorator.login_or_basic_auth = True
 	return _decorator
 
 

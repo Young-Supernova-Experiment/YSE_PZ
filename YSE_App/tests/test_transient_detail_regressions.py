@@ -11,7 +11,7 @@ import os
 from unittest import mock
 
 from django.conf import settings
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from YSE_App.models import TransientSpecData
@@ -125,6 +125,8 @@ class TransientDetailRegressionTests(TestCase):
             self.assertIn(f'class="specPlotChange" spec_plot-id="{spec.id}"', html)
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['summary_tab_regression_user'])
 class TransientSummaryTabRegressionTests(TestCase):
     """transient_summary_individual.html had the same li.active/a.active pair (#171).
 

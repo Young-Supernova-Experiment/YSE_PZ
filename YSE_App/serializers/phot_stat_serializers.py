@@ -28,7 +28,10 @@ class TransientPhotStatSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = TransientPhotStat
-        exclude = ('per_band_json', 'phot_hash')
+        # The Bazin columns (#271) stay internal: derived values are not exposed
+        # beyond what PhotStat already shows until #607 scopes them per viewer.
+        exclude = ('per_band_json', 'phot_hash', 'extrapolated_mag', 'extrapolated_band',
+                   'extrapolated_mjd', 'extrapolated_at')
         read_only_fields = [f.name for f in TransientPhotStat._meta.fields]
         extra_kwargs = {
             'url': {'view_name': 'transientphotstat-detail'},

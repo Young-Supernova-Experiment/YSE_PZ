@@ -29,14 +29,24 @@ def _slack_service_user() -> User:
 @csrf_exempt
 @require_POST
 def slack_events(request):
-    signing_secret = getattr(settings, "SLACK_SIGNING_SECRET", "") or ""
-    if signing_secret:
-        sig = request.headers.get("X-Slack-Signature", "")
-        ts = request.headers.get("X-Slack-Request-Timestamp", "")
-        if not verify_slack_signature(signing_secret, ts, request.body, sig):
-            return HttpResponse(status=403)
+    # Every request must carry a valid Slack signature. With Slack disabled, or
+    # with no signing secret configured, the endpoint accepts nothing.
+    if not getattr(settings, "SLACK_ENABLED", False):
+        return HttpResponse(status=403)
+    signing_secret = (getattr(settings, "SLACK_SIGNING_SECRET", "") or "").strip()
+    if not signing_secret:
+        return HttpResponse(status=403)
+    sig = request.headers.get("X-Slack-Signature", "")
+    ts = request.headers.get("X-Slack-Request-Timestamp", "")
+    if not verify_slack_signature(signing_secret, ts, request.body, sig):
+        return HttpResponse(status=403)
 
-    payload: Dict[str, Any] = json.loads(request.body.decode("utf-8"))
+    try:
+        payload: Dict[str, Any] = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return HttpResponse(status=400)
+    if not isinstance(payload, dict):
+        return HttpResponse(status=400)
 
     if payload.get("type") == "url_verification":
         return JsonResponse({"challenge": payload.get("challenge", "")})

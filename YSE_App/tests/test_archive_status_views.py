@@ -55,6 +55,19 @@ class ArchiveStatusTimeoutTests(SimpleTestCase):
     def test_result_is_returned_when_the_lookup_is_fast(self):
         self.assertEqual(view_utils._archive_status_with_timeout(lambda: 7, timeout_seconds=2), 7)
 
+    def test_abandoned_lookups_cannot_accumulate_threads(self):
+        """#467: a flood of slow lookups runs on the one bounded pool, not a thread each."""
+        import threading
+
+        release = threading.Event()
+        self.addCleanup(release.set)
+        before = {t.ident for t in threading.enumerate()}
+        for _ in range(view_utils.ARCHIVE_STATUS_MAX_WORKERS * 3):
+            self.assertIsNone(view_utils._archive_status_with_timeout(release.wait, timeout_seconds=0.01))
+        new_threads = [t for t in threading.enumerate() if t.ident not in before]
+        self.assertLessEqual(len(new_threads), view_utils.ARCHIVE_STATUS_MAX_WORKERS)
+        self.assertIs(view_utils._archive_status_pool(), view_utils._archive_status_pool())
+
 
 class HstStatusViewTests(TestCase):
     @classmethod

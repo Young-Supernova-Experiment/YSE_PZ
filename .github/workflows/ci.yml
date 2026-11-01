@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master, develop, experimental]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -47,23 +50,57 @@ jobs:
       - name: Write docker compose environment
         working-directory: docker
         run: |
+          # throwaway per-run test credentials; nothing here is a real secret
+          DB_PWD="$(openssl rand -hex 16)"
           printf '%s\n' \
             "VOL=${{ github.workspace }}" \
             "VOL_DB=${{ github.workspace }}/database" \
             "VOL_GHOST=${{ github.workspace }}/ghost_logs" \
             "STATIC_VOL=${{ github.workspace }}/YSE_PZ/static" \
-            "DB_PWD=password" \
+            "DB_PWD=$DB_PWD" \
+            "YSE_DATABASE_PASSWORD=$(openssl rand -hex 16)" \
+            "YSE_EXPLORER_PASSWORD=$(openssl rand -hex 16)" \
             "LOCAL_DB_PORT=53306" \
             "LOCAL_HTTP_PORT=8080" \
             "DJANGO_SUPERUSER_USERNAME=ci_admin" \
-            "DJANGO_SUPERUSER_PASSWORD=ci_password" \
+            "DJANGO_SUPERUSER_PASSWORD=$(openssl rand -hex 16)" \
             "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
+            "YSE_IS_DEBUG=1" \
+            "YSE_LOGIN_LOCKOUT=1" \
             > .env
+          echo "::add-mask::$DB_PWD"
+          echo "DB_PWD=$DB_PWD" >> "$GITHUB_ENV"
           grep -q '^VOL=' .env
           ! grep -q '^[[:space:]]' .env
           # compose env_file lists .env.secrets (gitignored locally); CI needs an empty stub
           cp .env.secrets.example .env.secrets
           grep -q '^TNS_API_KEY=' .env.secrets
+
+      # The GHCR image bakes in Django 4.0 and older add-ons. Build a local image on
+      # top of it with the requirements.txt pins (asgiref, Django 4.2, every Django
+      # add-on, the #539 security pins, two-factor, AstroScheduler, sqlglot; gunicorn
+      # from requirements.web.lock) under the same tag, so compose starts it and every
+      # check below runs on what the stacks install. Installing into the running
+      # container instead raced gunicorn's worker boots against half-installed
+      # packages (exit 137). Drop this once the image is rebuilt on these pins.
+      - name: Build the CI web image with the requirements pins
+        working-directory: docker
+        run: |
+          IMAGE=ghcr.io/young-supernova-experiment/yse_pz:latest
+          CTX="$RUNNER_TEMP/ci-image"
+          mkdir -p "$CTX"
+          PINS="$CTX/pins.txt"
+          : > "$PINS"
+          for p in asgiref Django Pillow cryptography urllib3 certifi sqlparse lxml Jinja2 MarkupSafe tornado Werkzeug segno sqlglot; do
+            grep -i -m1 "^$p==" ../requirements.txt >> "$PINS" || { echo "::error::no $p pin in requirements.txt"; exit 1; }
+          done
+          grep -E '^(django-[A-Za-z0-9-]+|djangorestframework)==' ../requirements.txt >> "$PINS"
+          grep -m1 '^gunicorn==' requirements.web.lock >> "$PINS"
+          grep -m1 '^astroscheduler ' ../requirements.txt >> "$PINS"
+          cat "$PINS"
+          printf 'FROM %s\nCOPY pins.txt /tmp/ci-pins.txt\nRUN pip3 install --quiet --no-deps -r /tmp/ci-pins.txt\n' "$IMAGE" > "$CTX/Dockerfile"
+          docker pull --quiet "$IMAGE"
+          docker build --quiet -t "$IMAGE" "$CTX"
 
       - name: Start database and web services
         working-directory: docker
@@ -73,23 +110,11 @@ jobs:
             exit 1
           }
 
-      # The pulled GHCR image bakes in Django 4.0, but production runs the 3.2 LTS
-      # line (requirements.txt: Django>=3.2,<4.0; docker/requirements.web.dev pins
-      # 3.2.25). Install the same pin into the running container and restart it so
-      # every check below runs on the Django that Ziggy runs. Drop this step once
-      # the image is rebuilt on docker/requirements.web.dev or #133 lands.
-      - name: Pin Django 3.2 in the web container
-        working-directory: docker
-        run: |
-          docker exec ysepz_web_container pip3 install --quiet "Django==3.2.25"
-          docker compose restart web
-          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("3.2.") else 1)'
-
       - name: Wait for MySQL
         working-directory: docker
         run: |
           for i in $(seq 1 60); do
-            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -ppassword --silent; then
+            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -p"$DB_PWD" --silent; then
               echo "MySQL ready after attempt $i"
               exit 0
             fi
@@ -100,6 +125,26 @@ jobs:
           docker compose ps || true
           docker compose logs --tail=200 yse_db || true
           exit 1
+
+      - name: Check the web container
+        working-directory: docker
+        run: |
+          # axes' own tables in the CI database (the runbook's `migrate axes` step); the
+          # login page needs them. MySQL answers its own ping before it accepts TCP from
+          # the web container, so retry.
+          for i in $(seq 1 30); do
+            docker exec ysepz_web_container python3 manage.py migrate axes --noinput && break
+            [ "$i" = 30 ] && exit 1
+            sleep 3
+          done
+          docker exec ysepz_web_container python3 -c 'import django, sys; v = django.get_version(); print("Django", v); sys.exit(0 if v.startswith("4.2.") else 1)'
+
+      - name: Web container logs (on failure)
+        if: failure()
+        working-directory: docker
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail=300 web || true
 
       - name: Wait for Gunicorn
         working-directory: docker
@@ -124,6 +169,21 @@ jobs:
 
       - name: Run tests
         run: docker exec ysepz_web_container python3 manage.py test YSE_App.tests --verbosity=2
+
+      # Models and migrations agree on this Django (a missing migration would make
+      # the deploy's migrate step and the models disagree on the stacks). Runs even
+      # when tests fail; -v 3 prints the migration it would write.
+      - name: No missing YSE_App migrations
+        if: always()
+        run: docker exec ysepz_web_container python3 manage.py makemigrations YSE_App --check --dry-run -v 3
+
+      # The suite above runs with two-factor sign-in off (the default). Its flow
+      # tests need django-otp's tables in the test database, so run that module
+      # again with the flag on (YSE_App/tests/test_staff_mfa.py).
+      - name: Staff two-factor sign-in tests (flag on)
+        run: |
+          docker exec -e YSE_STAFF_MFA_REQUIRED=1 ysepz_web_container python3 manage.py check
+          docker exec -e YSE_STAFF_MFA_REQUIRED=1 ysepz_web_container python3 manage.py test YSE_App.tests.test_staff_mfa --verbosity=2
 
       - name: Page load regression and benchmark plots
         run: |

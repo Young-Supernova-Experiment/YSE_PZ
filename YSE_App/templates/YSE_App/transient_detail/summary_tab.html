@@ -63,14 +63,17 @@
                                             <div class="form-group">
                                                 <strong>Redshift</strong>
                                                 <p class="text-muted">
-                                                    {% if transient.redshift %}
-                                                        {{ transient.redshift }}
-                                                            {% if transient.redshift_err %}
-                                                                +/- {{ transient.redshift_err }}
+                                                    {% with bz=transient.best_z %}
+                                                    {% if bz.value is not None %}
+                                                        {{ bz.value }}
+                                                            {% if bz.error %}
+                                                                +/- {{ bz.error }}
                                                             {% endif %}
+                                                            <small>({{ bz.source|default:"source unknown" }}{% if bz.override %}, override{% endif %}{% if bz.origin != "transient" %}, from host{% endif %})</small>
                                                     {% else %}
                                                         Unknown
                                                     {% endif %}
+                                                    {% endwith %}
                                                 </p>
                                             </div>
                                         </div>
@@ -103,7 +106,7 @@
                                             <div class="form-group">
                                                 <strong>Galactic <i>l/b</i></strong>
                                                 <p class="text-muted">
-                                                    {{ transient.CoordString|galcoordsl }}&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.CoordString|galcoordsb }}
+                                                    {{ transient|galcoordsl }}&nbsp;&nbsp;&nbsp;&nbsp;{{ transient|galcoordsb }}
                                                 </p>
                                                 <br>
                                             </div>
@@ -200,21 +203,17 @@
                                         <div class="col-4">
                                             <div class="form-group">
                                                 <strong>Best Distance</strong>
-                                                    {% if transient.redshift %}
-                                                        <p class="text-muted">Lum. Dist. = {{ transient.redshift|DL }} Mpc</p>
-                                                        <p class="text-muted">&mu; = {{ transient.redshift|distmod }}</p>
-                                                    {% elif transient.host.redshift %}
-                                                        <p class="text-muted">Lum. Dist. = {{ transient.host.redshift|DL }} Mpc</p>
-                                                        <p class="text-muted">&mu; = {{ transient.host.redshift|distmod }}</p>
-                                                    {% elif transient.host.photo_z %}
-                                                        <p class="text-muted">Lum. Dist. = {{ transient.host.photo_z|DL }} Mpc</p>
-                                                        <p class="text-muted">&mu; = {{ transient.host.photo_z|distmod }}</p>
+                                                    {% with bz=transient.best_z %}
+                                                    {% if bz.value is not None %}
+                                                        <p class="text-muted">Lum. Dist. = {{ bz.value|DL }} Mpc</p>
+                                                        <p class="text-muted">&mu; = {{ bz.value|distmod }}</p>
                                                     {% elif transient.host.photo_z_internal %}
                                                         <p class="text-muted">Lum. Dist. = {{ transient.host.photo_z_internal|DL }} Mpc</p>
                                                         <p class="text-muted">&mu; = {{ transient.host.photo_z_internal|distmod }}</p>
                                                     {% else %}
                                                         <p class="text-muted">Unknown</p>
                                                     {% endif %}
+                                                    {% endwith %}
                                             </div>
                                         </div>
                                         <div class="col-12">
@@ -322,6 +321,11 @@
                                             <button style="margin-bottom:5px;" type="button" class="ztfrequest">
                                                 Request ZTF Forced Phot</span>
                                             </button>
+                                            <button style="margin-bottom:5px;" type="button" class="desirequest" id="desirequest"
+                                                    title="{% if transient.host_id %}Check DESI for the host redshift{% else %}Look for a DESI host galaxy near this object{% endif %}">
+                                                Request DESI Lookup
+                                            </button>
+                                            <span id="desi_status" class="text-muted" style="margin-left:6px;" aria-live="polite"></span>
                                             </div>
                                             {% include "YSE_App/transient_detail/data_access_hint.html" with hidden_rows=hidden_rows hint_compact=True %}
                                             {# Stored SALT3 fit + Refit (#315); loaded by yseFitStatus in transient_detail.html #}
@@ -381,6 +385,9 @@
 
                                                             {% if transient.host.redshift_err %}
                                                                 +/- {{ transient.host.redshift_err }}
+                                                            {% endif %}
+                                                            {% if transient.host.redshift_source or transient.host.redshift_override %}
+                                                                <small>({{ transient.host.redshift_source|default:"source unknown" }}{% if transient.host.redshift_override %}, override{% endif %})</small>
                                                             {% endif %}
                                                         {% endif %}
                                                     {% else %}

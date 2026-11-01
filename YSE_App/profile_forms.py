@@ -1,4 +1,4 @@
-"""Forms for the researcher profile, "My students" and the user agreement (#627, #628, #630)."""
+"""Forms for the researcher profile, "My advisees", "My advisors" and the user agreement (#627, #628, #630)."""
 
 from __future__ import annotations
 
@@ -231,9 +231,9 @@ class ResearcherProfileForm(forms.ModelForm):
 
 
 class StudentForm(forms.Form):
-    """Add a student to "My students" (a YSE-PZ user or a free-form name)."""
+    """Add an advisee to "My advisees" (a YSE-PZ user or a free-form name)."""
 
-    student_name = forms.CharField(max_length=200, required=False, label="Student")
+    student_name = forms.CharField(max_length=200, required=False, label="Advisee")
     student_user_id = forms.CharField(required=False, widget=forms.HiddenInput)
     kind = forms.ChoiceField(choices=Mentorship.KIND_CHOICES, initial=Mentorship.KIND_CURRENT_ADVISOR)
     start_year = forms.IntegerField(required=False)
@@ -259,11 +259,51 @@ class StudentForm(forms.Form):
         data = super().clean()
         student = active_user_or_none(data.get("student_user_id"))
         if student is not None and self.mentor is not None and student.pk == self.mentor.pk:
-            self.add_error("student_name", "You cannot add yourself as a student.")
+            self.add_error("student_name", "You cannot add yourself as an advisee.")
             student = None
         data["student_user"] = student
         if student is None and not (data.get("student_name") or "").strip():
-            self.add_error("student_name", "Choose a user or type the student's name.")
+            self.add_error("student_name", "Choose a user or type the advisee's name.")
+        start, end = data.get("start_year"), data.get("end_year")
+        if start and end and end < start:
+            self.add_error("end_year", "The end year is before the start year.")
+        return data
+
+
+class AdvisorForm(forms.Form):
+    """Add an advisor or supervisor to "My advisors" (a YSE-PZ user or a free-form name)."""
+
+    advisor_name = forms.CharField(max_length=200, required=False, label="Advisor")
+    advisor_user_id = forms.CharField(required=False, widget=forms.HiddenInput)
+    kind = forms.ChoiceField(choices=Mentorship.KIND_CHOICES, initial=Mentorship.KIND_POSTDOC_ADVISOR)
+    start_year = forms.IntegerField(required=False)
+    end_year = forms.IntegerField(required=False)
+
+    def __init__(self, *args, mentee=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mentee = mentee
+
+    def _check_year(self, name):
+        value = self.cleaned_data.get(name)
+        if value is not None and not 1950 <= value <= timezone.now().year + 10:
+            raise forms.ValidationError("Enter a year between 1950 and %d." % (timezone.now().year + 10))
+        return value
+
+    def clean_start_year(self):
+        return self._check_year("start_year")
+
+    def clean_end_year(self):
+        return self._check_year("end_year")
+
+    def clean(self):
+        data = super().clean()
+        advisor = active_user_or_none(data.get("advisor_user_id"))
+        if advisor is not None and self.mentee is not None and advisor.pk == self.mentee.pk:
+            self.add_error("advisor_name", "You cannot add yourself as your advisor.")
+            advisor = None
+        data["advisor_user"] = advisor
+        if advisor is None and not (data.get("advisor_name") or "").strip():
+            self.add_error("advisor_name", "Choose a user or type the advisor's name.")
         start, end = data.get("start_year"), data.get("end_year")
         if start and end and end < start:
             self.add_error("end_year", "The end year is before the start year.")
@@ -271,11 +311,40 @@ class StudentForm(forms.Form):
 
 
 class StudentUpdateForm(forms.Form):
+    """Edit one "My advisees" or "My advisors" row in place: kind and years, or remove it.
+
+    Only the fields present in the POST change, so a form that sends just ``end_year``
+    keeps the kind and start year.
+    """
+
+    kind = forms.ChoiceField(choices=Mentorship.KIND_CHOICES, required=False)
+    start_year = forms.IntegerField(required=False)
     end_year = forms.IntegerField(required=False)
     remove = forms.BooleanField(required=False)
 
-    def clean_end_year(self):
-        value = self.cleaned_data.get("end_year")
+    def _check_year(self, name):
+        value = self.cleaned_data.get(name)
         if value is not None and not 1950 <= value <= timezone.now().year + 10:
             raise forms.ValidationError("Enter a valid year.")
         return value
+
+    def clean_start_year(self):
+        return self._check_year("start_year")
+
+    def clean_end_year(self):
+        return self._check_year("end_year")
+
+    def apply(self, row) -> list:
+        """Copy the posted fields onto ``row``; return the changed field names."""
+        changed = []
+        for name in ("kind", "start_year", "end_year"):
+            if name not in self.data:
+                continue
+            value = self.cleaned_data.get(name)
+            if name == "kind" and not value:
+                continue
+            if getattr(row, name) != value:
+                setattr(row, name, value)
+                changed.append(name)
+        return changed
+

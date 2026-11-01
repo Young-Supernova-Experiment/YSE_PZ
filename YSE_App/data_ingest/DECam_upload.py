@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 import requests
+from YSE_App.common.casjobs_credentials import configure_casjobs_env
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 from django_cron import CronJobBase, Schedule
 from django.conf import settings as djangoSettings
 from email.mime.multipart import MIMEMultipart
@@ -54,8 +57,7 @@ def get_ps_score(RA, DEC):
     # get the WSID and password if not already defined
     # get your WSID by going to https://mastweb.stsci.edu/ps1casjobs/changedetails.aspx after you login to Casjobs.
 
-    os.environ['CASJOBS_WSID'] = str(1862226089)
-    os.environ['CASJOBS_PW'] = 'tr4nsientsP!z'
+    configure_casjobs_env()  # credentials from settings.ini [casjobs] / env; raises if missing
     query = """select top 1 p.ps_score
     from pointsource_magnitudes_view as p
     inner join fGetNearbyObjEq(%.5f, %.5f, 0.05) nb on p.objid=nb.objid
@@ -164,8 +166,6 @@ class DECam(CronJobBase):
                               help='email password, if post=True (default=%default)')
             parser.add_argument('--dburl', default=config.get('main','dburl'), type=str,
                               help='URL to POST transients to a database (default=%default)')
-            parser.add_argument('--ghost_path', default=config.get('main','ghost_path'), type=str,
-                              help='GHOST data directory (default=%default)')
             parser.add_argument('--ztfurl', default=config.get('ztf','ztfurl'), type=str,
                               help='ZTF URL (default=%default)')
             parser.add_argument('--STATIC', default=config.get('site_settings','STATIC'), type=str,
@@ -187,32 +187,16 @@ class DECam(CronJobBase):
 
         return(parser)
 
-    def getGHOSTData(self,sc,ghost_host):
-        hostdict = {}; hostcoords = ''
-        hostdict = {'name':ghost_host['objName'].to_numpy()[0],'ra':ghost_host['raMean'].to_numpy()[0],
-                    'dec':ghost_host['decMean'].to_numpy()[0]}
-
-        hostcoords = f"ra={hostdict['ra']:.7f}, dec={hostdict['dec']:.7f}\n"
-        if 'photo_z' in ghost_host.keys():
-            hostdict['photo_z_internal'] = ghost_host['photo_z'].to_numpy()[0]
-        if 'NED_redshift' in ghost_host.keys() and ghost_host['NED_redshift'].to_numpy()[0] == ghost_host['NED_redshift'].to_numpy()[0]:
-            hostdict['redshift'] = ghost_host['NED_redshift'].to_numpy()[0]
-
-        if 'photo_z_internal' in hostdict.keys():
-            if hostdict['photo_z_internal'] != hostdict['photo_z_internal']:
-                hostdict['photo_z_internal'] = None
-
-        return hostdict,hostcoords
     
     def main(self):
         # get all the DECam links
-        good_transient_data = requests.get(_google_doc_url).text
+        good_transient_data = ingest_http.get(_google_doc_url).text
         urls = re.findall(_google_doc_regex,good_transient_data)
 
         # let's grab the most recent phot. data for each transient
         # if the DECam data on the sniff pages doesn't have more recent
         # data, hopefully we can assume things are up to date
-        tr = requests.get(f"{self.options.dburl.replace('/api','')}query_api/DECAT_transients_mags/",
+        tr = ingest_http.get(f"{self.options.dburl.replace('/api','')}query_api/DECAT_transients_mags/",
                           auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword))
         etdata = tr.json()['transients']
         etdict = {}; ra = []; dec = []; dict_names = np.array([])
@@ -224,11 +208,7 @@ class DECam(CronJobBase):
         scexisting = SkyCoord(ra,dec,unit=u.deg)
             
         # prelims
-        # astro_ghost fetches the VO registry on import; keep it out of module import
-        from astro_ghost.ghostHelperFunctions import getGHOST, getTransientHosts
         transientdict = {}
-        if not os.path.exists(f'{self.options.ghost_path}/database/GHOST.csv'):
-            getGHOST(real=True, verbose=True, installpath=self.options.ghost_path)
 
 
         count = 0
@@ -238,7 +218,7 @@ class DECam(CronJobBase):
             print(count)
             url_single = f"https://stsci{str2}{str3}"
             candid_toupload = str3.split('#')[-1]
-            r = requests.get(url_single)
+            r = ingest_http.get(url_single)
 
             soup = BeautifulSoup(r.text)
             tables = soup.find_all("table", attrs={"cols":"6","border":"1"})
@@ -278,16 +258,16 @@ class DECam(CronJobBase):
 
                 lcurlbase = '/'.join(url_single.split('/')[:-1])
                 lcurldatebase = '/'.join(url_single.split('/')[:-2])
-                rdatetext = requests.get(lcurldatebase).text
+                rdatetext = ingest_http.get(lcurldatebase).text
                 rdate = rdatetext.split('Last updated :')[-1].split('\n')[0]
                 date_updated = dateutil.parser.parse(rdate)
                 if (nowdate-date_updated).days > self.options.max_decam_days: continue
 
 
                 # get the lightcurve file
-                lcr = requests.get(f"{lcurlbase}/{field}_cand{candid}.difflc.txt")
+                lcr = ingest_http.get(f"{lcurlbase}/{field}_cand{candid}.difflc.txt")
                 if lcr.status_code != 200:
-                    lcr = requests.get(f"{lcurlbase}/{field}_cand{candid}.forced.difflc.txt")
+                    lcr = ingest_http.get(f"{lcurlbase}/{field}_cand{candid}.forced.difflc.txt")
                 lcdata = at.Table.read(lcr.text,format='ascii')
 
                 # is the most recent photometry greater than what exists on YSE-PZ?
@@ -309,23 +289,6 @@ class DECam(CronJobBase):
                     except:
                         ps_prob = None
 
-                    # run GHOST
-                    try:
-                        from astro_ghost.photoz_helper import calc_photoz
-                        ghost_hosts = getTransientHosts(
-                            ['tmp'+candid],[SkyCoord(ra,dec,unit=(u.hour,u.deg))], verbose=True, starcut='gentle', ascentMatch=False,
-                            GHOSTpath=self.options.ghost_path)
-                        ghost_hosts = calc_photoz(ghost_hosts)
-                    except:
-                        ghost_hosts = None
-
-                    if ghost_hosts is not None:
-                        ghost_host = ghost_hosts[ghost_hosts['TransientName'] == candid]
-                        if not len(ghost_host): ghost_host = None
-                    else:
-                        ghost_host = None
-                else: ghost_host = None
-
                 # get photometry
                 tdict = {'name':tname,
                          'ra':sc[0].ra.deg,
@@ -337,11 +300,6 @@ class DECam(CronJobBase):
                 if not transient_exists:
                     tdict['point_source_probability'] = ps_prob
                     tdict['mw_ebv'] = mw_ebv
-
-                if ghost_host is not None:
-                    hostdict,hostcoords = self.getGHOSTData(sc,ghost_host)
-                    tdict['host'] = hostdict
-                    tdict['candidate_hosts'] = hostcoords
 
 
                 PhotUploadAll = {"mjdmatchmin":0.01,
@@ -395,7 +353,7 @@ class DECam(CronJobBase):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
                               auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
                               timeout=60)
             try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])

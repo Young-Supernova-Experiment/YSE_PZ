@@ -1,0 +1,68 @@
+{% extends explorer_parent_template|default:"YSE_App/base.html" %}
+{% load i18n static %}
+{% comment %}
+SQL Explorer inside the YSE-PZ site shell (#450).
+
+Overrides django-sql-explorer 2.3's own explorer/base.html (found first because
+YSE_App precedes 'explorer' in INSTALLED_APPS). Explorer's page templates fill
+the sql_explorer_* blocks below; they are mapped onto YSE_App/base.html's
+styles/content/scripts blocks. Explorer's Bootstrap 3 CSS/JS and its second
+jQuery are not loaded: the shell's Bootstrap 4.6 / AdminLTE 3.2 / jQuery are,
+and YSE_App/explorer-theme.css + YSE_App/explorer-shell.js adapt Explorer's
+Bootstrap 3 markup. The schema pane (an iframe) renders on the bare
+explorer/yse_bare.html instead; see YSE_App/explorer_shell.py.
+
+Upgrade note (#584, #601): these block names are Explorer 2.3's. Re-check them
+against the new release's explorer/base.html when django-sql-explorer is upgraded.
+{% endcomment %}
+
+{% block styles %}
+	<link rel="stylesheet" href="{% static 'explorer/css/codemirror.min.css' %}">
+	<link rel="stylesheet" href="{% static 'explorer/css/pivot.min.css' %}">
+	<link rel="stylesheet" href="{% static 'explorer/css/explorer.css' %}">
+	<link rel="stylesheet" href="{% static 'YSE_App/explorer-theme.css' %}?v=450-1">
+{% endblock %}
+
+{% block content %}
+<div class="yse-explorer" id="yse-explorer">
+	{% block sql_explorer_content_takeover %}
+		{% block sql_explorer_navbar %}
+			<nav class="yse-explorer-subnav" aria-label="{% trans 'SQL Explorer' %}">
+				<a class="yse-explorer-brand" href="{% url 'explorer_index' %}"><i class="fa fa-database" aria-hidden="true"></i> {% trans "SQL Explorer" %}</a>
+				<ul class="yse-explorer-navlinks">
+					{% block sql_explorer_navlinks %}{% endblock %}
+				</ul>
+				<a class="yse-explorer-dashlink" href="{% url 'personaldashboard' %}" title="Saved queries are added to a personal dashboard with &quot;Add Dashboard Query&quot;">
+					<i class="fa fa-id-card" aria-hidden="true"></i> My dashboard
+				</a>
+			</nav>
+		{% endblock %}
+		<div class="container-fluid starter-template">
+			{% block sql_explorer_content %}{% endblock %}
+		</div>
+	{% endblock %}
+	{% block sql_explorer_footer %}
+		<p class="text-muted text-center yse-explorer-footer">
+			<small>Powered by <a href="https://www.github.com/groveco/django-sql-explorer/" target="_blank" rel="noopener noreferrer">django-sql-explorer</a> from Grove Collaborative.</small>
+		</p>
+	{% endblock %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+	<script>
+		queryId = "{% firstof query.id 'new' %}";
+		csrfCookieName = "{% firstof csrf_cookie_name 'csrftoken' %}";
+	</script>
+	<script src="{% static 'explorer/js/jquery.cookie.min.js' %}"></script>
+	<script src="{% static 'explorer/js/explorer.js' %}"></script>
+	<script src="{% static 'explorer/js/underscore-min.js' %}"></script>
+	<script src="{% static 'explorer/js/list.min.js' %}"></script>
+	<script src="{% static 'explorer/js/codemirror.min.js' %}"></script>
+	<script src="{% static 'explorer/js/sql.min.js' %}"></script>
+	<script src="{% static 'explorer/js/comment.min.js' %}"></script>
+	<script src="{% static 'explorer/js/jquery.floatThead.min.js' %}"></script>
+	<script src="{% static 'explorer/js/pivot.min.js' %}"></script>
+	<script src="{% static 'YSE_App/explorer-shell.js' %}?v=450-1"></script>
+	{% block sql_explorer_scripts %}{% endblock %}
+{% endblock %}

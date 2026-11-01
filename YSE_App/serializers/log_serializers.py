@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from YSE_App.models import *
+from .related_fields import VisibleDatasetRelatedField
 from django.contrib.auth.models import User
 
 class LogSerializer(serializers.HyperlinkedModelSerializer):
@@ -10,10 +11,10 @@ class LogSerializer(serializers.HyperlinkedModelSerializer):
 	transient_image = serializers.HyperlinkedRelatedField(queryset=TransientImage.objects.all(), allow_null=True, required=False, view_name='transientimage-detail')
 	host_image = serializers.HyperlinkedRelatedField(queryset=HostImage.objects.all(), allow_null=True, required=False, view_name='hostimage-detail')
 	
-	transient_spectrum = serializers.HyperlinkedRelatedField(queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
+	transient_spectrum = VisibleDatasetRelatedField(dataset_kind='spectrum', queryset=TransientSpectrum.objects.all(), allow_null=True, required=False, view_name='transientspectrum-detail', lookup_field="id")
 	host_spectrum = serializers.HyperlinkedRelatedField(queryset=HostSpectrum.objects.all(), allow_null=True, required=False, view_name='hostspectrum-detail', lookup_field="id")
 	
-	transient_photometry = serializers.HyperlinkedRelatedField(queryset=TransientPhotometry.objects.all(), allow_null=True, required=False, view_name='transientphotometry-detail', lookup_field="id")
+	transient_photometry = VisibleDatasetRelatedField(dataset_kind='photometry', queryset=TransientPhotometry.objects.all(), allow_null=True, required=False, view_name='transientphotometry-detail', lookup_field="id")
 	host_photometry = serializers.HyperlinkedRelatedField(queryset=HostPhotometry.objects.all(), allow_null=True, required=False, view_name='hostphotometry-detail', lookup_field="id")
 	
 	transient_web_resource = serializers.HyperlinkedRelatedField(queryset=TransientWebResource.objects.all(), allow_null=True, required=False, view_name='transientwebresource-detail')

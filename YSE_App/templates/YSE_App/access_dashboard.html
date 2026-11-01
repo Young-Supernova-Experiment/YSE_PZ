@@ -1,0 +1,175 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Data access dashboard</h1>
+	<p class="text-muted small mb-0">The programs and data you lead, who can see them, and automatic publishing. {{ forward_help }} {{ backward_help }}</p>
+</section>
+
+<section class="content">
+	{% if messages %}
+	<div class="row"><div class="col-12">
+		{% for message in messages %}<div class="alert alert-{{ message.tags|default:'info' }} yse-access-message">{{ message }}</div>{% endfor %}
+	</div></div>
+	{% endif %}
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Your programs</strong> <a class="small ml-2" href="{% url 'access_programs' %}">all program pages</a></div>
+				<div class="box-body">
+					{% if allocations %}
+					<ul class="mb-2" id="yse-dashboard-programs">
+						{% for a in allocations %}<li><a href="{% url 'access_program' a.id %}">{{ a.name }}</a>{% if a.proposal_id %} <span class="text-muted small">{{ a.proposal_id }}</span>{% endif %}</li>{% endfor %}
+					</ul>
+					{% if grants %}
+					<table class="table table-sm mb-0" id="yse-dashboard-grants">
+						<thead><tr><th>Program</th><th>Effect</th><th>Grantee</th><th>Data</th><th>Stop</th></tr></thead>
+						<tbody>
+						{% for g in grants %}
+							<tr data-grant-id="{{ g.id }}">
+								<td>{{ g.allocation.name }}</td>
+								<td>{{ g.get_effect_display }}</td>
+								<td>{% if g.grantee_group %}group {{ g.grantee_group.name }}{% else %}{{ g.grantee_user.username }}{% endif %}</td>
+								<td>{% if g.night_start %}night of {{ g.night_start|date:"Y-m-d H:i" }} UTC{% else %}all of the program's data{% endif %}</td>
+								<td>
+									<form method="post" class="form-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="stop">
+										<input type="hidden" name="grant_id" value="{{ g.id }}">
+										{% include "YSE_App/access_direction.html" with id="yse-stop" n1=g.id n2=0 %}
+										<button type="submit" class="btn btn-sm btn-outline-secondary">Stop</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">No standing access on your programs.</p>
+					{% endif %}
+					{% else %}
+					<p class="text-muted small mb-0">You are not the PI or a program deputy of any program.</p>
+					{% endif %}
+				</div>
+			</div>
+
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Accepted access requests</strong> <span class="text-muted small">sharing you can revoke</span></div>
+				<div class="box-body">
+					{% if accepted_requests %}
+					<table class="table table-sm mb-0" id="yse-dashboard-requests">
+						<thead><tr><th>#</th><th>Object</th><th>Data</th><th>Requester &rarr; group</th><th>Revoke</th></tr></thead>
+						<tbody>
+						{% for r in accepted_requests %}
+							<tr data-request-id="{{ r.id }}">
+								<td>{{ r.id }}</td>
+								<td>{{ r.transient.name }}</td>
+								<td><small>{{ r.kind_label }}, {{ r.owner_group.name }}, {{ r.granted_count }} shared</small></td>
+								<td>{{ r.requester.username }} &rarr; {{ r.target_group.name }}</td>
+								<td>
+									<form method="post" action="{% url 'data_access_revoke' r.id %}" class="form-inline">
+										{% csrf_token %}
+										<input type="hidden" name="next" value="{% url 'access_dashboard' %}">
+										{% include "YSE_App/access_direction.html" with id="yse-revoke-req" n1=r.id n2=0 %}
+										<button type="submit" class="btn btn-sm btn-outline-danger">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">No accepted access requests to revoke.</p>
+					{% endif %}
+				</div>
+			</div>
+
+			<div class="box box-default box-solid">
+				<div class="box-header with-border"><strong>Your data</strong> <span class="text-muted small">restricted datasets you lead (newest first)</span></div>
+				<div class="box-body">
+					{% if datasets %}
+					<table class="table table-sm mb-0" id="yse-dashboard-datasets">
+						<thead><tr><th>Object</th><th>Dataset</th><th>Groups</th><th>Rules</th><th>Automatic publishing</th></tr></thead>
+						<tbody>
+						{% for row in datasets %}
+							<tr data-kind="{{ row.kind }}" data-dataset-id="{{ row.dataset.id }}">
+								<td><a href="{% url 'access_transient_rules' row.transient.id %}">{{ row.transient.name }}</a></td>
+								<td><small>{{ row.kind }}: {{ row.dataset.instrument.name }}{% if row.kind == 'spectrum' %}, {{ row.dataset.obs_date|date:"Y-m-d" }}{% endif %}</small></td>
+								<td>
+									{% for g in row.groups %}
+									<form method="post" class="form-inline mb-1">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="remove_group">
+										<input type="hidden" name="kind" value="{{ row.kind }}">
+										<input type="hidden" name="dataset_id" value="{{ row.dataset.id }}">
+										<input type="hidden" name="group_id" value="{{ g.id }}">
+										<span class="mr-1">{{ g.name }}</span>
+										{% include "YSE_App/access_direction.html" with id="yse-group" n1=row.dataset.id n2=g.id %}
+										<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+									</form>
+									{% endfor %}
+								</td>
+								<td>
+									{% for r in row.grantees %}
+									<div class="mb-1">
+										<small>{{ r.grantee }}: {% if r.allow %}{{ r.allow }} allowed{% endif %}{% if r.allow and r.deny %}, {% endif %}{% if r.deny %}{{ r.deny }} restricted{% endif %}</small>
+										{% if r.allow %}
+										<form method="post" class="form-inline d-inline">
+											{% csrf_token %}
+											<input type="hidden" name="action" value="remove_allow">
+											<input type="hidden" name="kind" value="{{ row.kind }}">
+											<input type="hidden" name="dataset_id" value="{{ row.dataset.id }}">
+											{% if r.grantee_group_id %}<input type="hidden" name="grantee_group_id" value="{{ r.grantee_group_id }}">{% else %}<input type="hidden" name="grantee_username" value="{{ r.grantee_username }}">{% endif %}
+											{% include "YSE_App/access_direction.html" with id="yse-allow-"|add:row.kind n1=row.dataset.id n2=forloop.counter %}
+											<button type="submit" class="btn btn-sm btn-outline-secondary">Turn off</button>
+										</form>
+										{% endif %}
+										{% if r.deny %}
+										<form method="post" class="d-inline">
+											{% csrf_token %}
+											<input type="hidden" name="action" value="lift">
+											<input type="hidden" name="kind" value="{{ row.kind }}">
+											<input type="hidden" name="dataset_id" value="{{ row.dataset.id }}">
+											{% if r.grantee_group_id %}<input type="hidden" name="grantee_group_id" value="{{ r.grantee_group_id }}">{% else %}<input type="hidden" name="grantee_username" value="{{ r.grantee_username }}">{% endif %}
+											<button type="submit" class="btn btn-sm btn-outline-primary">Lift restriction</button>
+										</form>
+										{% endif %}
+									</div>
+									{% empty %}<small class="text-muted">none</small>
+									{% endfor %}
+								</td>
+								<td>
+									{% if row.can_opt_in %}
+									<form method="post" class="d-inline">
+										{% csrf_token %}
+										<input type="hidden" name="action" value="autopublish">
+										<input type="hidden" name="kind" value="{{ row.kind }}">
+										<input type="hidden" name="dataset_id" value="{{ row.dataset.id }}">
+										<input type="hidden" name="enabled" value="{% if row.opted_in %}0{% else %}1{% endif %}">
+										<button type="submit" class="btn btn-sm {% if row.opted_in %}btn-success{% else %}btn-outline-secondary{% endif %}">{% if row.opted_in %}On (turn off){% else %}Off (allow){% endif %}</button>
+									</form>
+									{% else %}
+									<small class="text-muted">{% if row.opted_in %}on{% else %}off{% endif %} (only the data's PIs and deputies decide)</small>
+									{% endif %}
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="text-muted small mb-0">You lead no restricted data{% if is_staff %} (administrators act on the object pages){% endif %}.</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-3 col-12">
+			{% include "YSE_App/access_help.html" %}
+		</div>
+	</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+{% include "YSE_App/access_direction_script.html" %}
+{% endblock %}

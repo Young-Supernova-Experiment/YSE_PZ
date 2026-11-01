@@ -30,6 +30,7 @@ from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils import timezone
 
+from YSE_App.jobs import enqueue, job
 from YSE_App.models.favorite_models import UserFavoriteTransient
 from YSE_App.models.notification_models import Notification
 from YSE_App.models.transient_models import Transient
@@ -299,31 +300,127 @@ def on_transient_changed(transient_id: int, changes: Dict[str, Iterable], *, act
     return record_activity(transient, "change", "; ".join(parts), actor=actor)
 
 
+SPECTRUM_JOB_KIND = "favorites.spectrum_activity"
+# Seconds between a spectrum's creation and its announcement: the upload paths
+# attach its collaboration groups (and access rules) after the ``post_save``.
+SPECTRUM_DELAY_SETTING = "FAVORITE_SPECTRUM_DELAY_SECONDS"
+
+
+def spectrum_delay_seconds() -> int:
+    try:
+        return max(0, int(getattr(settings, SPECTRUM_DELAY_SETTING, 120) or 0))
+    except (TypeError, ValueError):
+        return 120
+
+
 def on_spectrum(spectrum) -> List[Notification]:
+    """A new spectrum: queue its announcement (see :func:`announce_spectrum`).
+
+    At ``post_save`` the spectrum's groups are not set yet, so its visibility
+    is decided later, by a job that runs after :func:`spectrum_delay_seconds`.
+    Never inline: an inline run would decide before the groups exist.
+    """
     if not _has_favoriters(spectrum.transient_id):
+        return []
+    enqueue(SPECTRUM_JOB_KIND, {"spectrum_id": spectrum.pk}, delay=spectrum_delay_seconds() or None,
+            transient=spectrum.transient, inline=False)
+    return []
+
+
+def _user_sees_spectrum(user: User, spectrum) -> bool:
+    from YSE_App.services.visibility import dataset_visible_to_user, user_sees_everything
+
+    return user_sees_everything(user) or dataset_visible_to_user(user, spectrum)
+
+
+def announce_spectrum(spectrum_id: int) -> List[Notification]:
+    """Announce a new spectrum to the favoriters who may see it (#761); the others get nothing."""
+    from YSE_App.models.spectra_models import TransientSpectrum
+
+    spectrum = (TransientSpectrum.objects.filter(pk=spectrum_id)
+                .select_related("instrument", "transient", "created_by").first())
+    if spectrum is None or not _has_favoriters(spectrum.transient_id):
+        return []
+    actor = getattr(spectrum, "created_by", None)
+    recipients = favoriters(spectrum.transient_id, exclude=[actor] if actor is not None else None)
+    viewers = [u for u in recipients if _user_sees_spectrum(u, spectrum)]
+    if not viewers:
         return []
     instrument = getattr(spectrum, "instrument", None)
     text = "new spectrum" + (" from %s" % instrument.name if instrument is not None else "")
     obs_date = getattr(spectrum, "obs_date", None)
     if obs_date:
         text += " (observed %s)" % obs_date.strftime("%Y-%m-%d")
-    return record_activity(spectrum.transient, "spectrum", text, actor=getattr(spectrum, "created_by", None))
+    return record_activity(spectrum.transient, "spectrum", text, actor=actor, recipients=viewers)
 
 
-def on_photometry(transient_id: int, new_points: int, *, latest_mag=None, latest_band: str = "") -> List[Notification]:
-    """New detections counted by the photometry-stat recompute (``num_det_global`` grew)."""
+@job(SPECTRUM_JOB_KIND)
+def spectrum_activity_job(payload):
+    spectrum_id = (payload or {}).get("spectrum_id")
+    if spectrum_id:
+        announce_spectrum(int(spectrum_id))
+
+
+def _visible_point_ids(user: User, transient_id: int) -> Optional[set]:
+    """Ids of the transient's photometry points ``user`` may see (per point, #648); ``None``: all of them."""
+    from YSE_App.models.phot_models import TransientPhotData
+    from YSE_App.services.visibility import visible_photometry_ids_q
+
+    q = visible_photometry_ids_q(user)
+    if q is None:
+        return None
+    return set(TransientPhotData.objects.filter(photometry__transient_id=transient_id).filter(q)
+               .values_list("pk", flat=True))
+
+
+def on_photometry(transient_id: int, new_points: int) -> List[Notification]:
+    """New detections counted by the photometry-stat recompute (``num_det_global`` grew).
+
+    Per recipient and per point (#761): the new detections are the
+    ``new_points`` most recently stored detection points; each favoriter is
+    told how many of them they may see, with the latest magnitude of the
+    detections they may see (the photometry statistics of their visible
+    points). A favoriter who may see none of the new points gets no event.
+    """
     if new_points <= 0 or not _has_favoriters(transient_id):
         return []
     transient = Transient.objects.filter(pk=transient_id).first()
     if transient is None:
         return []
-    def text_for(total):
-        text = "%d new photometry point%s" % (total, "" if total == 1 else "s")
-        if latest_mag is not None:
-            text += ", latest %.2f%s" % (float(latest_mag), (" " + latest_band) if latest_band else "")
-        return text
+    recipients = favoriters(transient_id)
+    if not recipients:
+        return []
+    from YSE_App.services import photstat
 
-    return record_activity(transient, "photometry", text_for(new_points), count=new_points, merge_text=text_for)
+    points = photstat.points_by_transient([transient_id]).get(transient_id, [])
+    detections = [p for p in points if photstat.is_detection(p) and photstat._finite(p.mjd) is not None]
+    newest = sorted(detections, key=lambda p: p.point_id or 0)[-int(new_points):]
+    new_ids = {p.point_id for p in newest}
+
+    by_text: Dict[Tuple[int, Optional[float], str], List[User]] = {}
+    for user in recipients:
+        visible = _visible_point_ids(user, transient_id)
+        mine = points if visible is None else [p for p in points if p.point_id in visible]
+        n_new = len(new_ids) if visible is None else len(new_ids & visible)
+        if n_new <= 0:
+            continue
+        values = photstat.compute_stats(mine)
+        band = ""
+        if values.last_detected_band_id is not None:
+            band = next((p.band_name for p in mine if p.band_id == values.last_detected_band_id), "") or ""
+        by_text.setdefault((n_new, values.last_detected_mag, band), []).append(user)
+
+    rows: List[Notification] = []
+    for (n_new, latest_mag, latest_band), users in by_text.items():
+        def text_for(total, latest_mag=latest_mag, latest_band=latest_band):
+            text = "%d new photometry point%s" % (total, "" if total == 1 else "s")
+            if latest_mag is not None:
+                text += ", latest %.2f%s" % (float(latest_mag), (" " + latest_band) if latest_band else "")
+            return text
+
+        rows += record_activity(transient, "photometry", text_for(n_new), count=n_new, merge_text=text_for,
+                                recipients=users)
+    return rows
 
 
 def on_followup(followup, *, created: bool, old_status: str = "") -> List[Notification]:

@@ -70,14 +70,14 @@ def get_psstamp_url(request, transient_id, Transient):
 	except t.DoesNotExist:
 		raise Http404("Transient id does not exist")
 	
-	ps1url = ("http://plpsipp1v.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
+	ps1url = ("https://ps1images.stsci.edu/cgi-bin/ps1cutouts?pos=%.7f+%.7f&filter=color" % (t.ra,t.dec))
 	try:
 		response = requests.get(url=ps1url,timeout=5)
 	except: return("")
 	response_text = response.content.decode('utf-8')
 	if "<td><img src=" in response.content.decode('utf-8'):
 		jpegurl = response.content.decode('utf-8').split('<td><img src="')[1].split('" width="240" height="240" /></td>')[0]
-		jpegurl = "http:%s"%jpegurl
+		jpegurl = "https:%s"%jpegurl
 	else:
 		jpegurl=""
 

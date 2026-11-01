@@ -3,6 +3,7 @@
 {% block content %}
 <section class="content-header">
 	<h1>{{ group.name }}{% if not profile.is_active %} <span class="badge badge-secondary">inactive</span>{% endif %}</h1>
+	{% include 'YSE_App/partials/settings_tabs.html' %}
 </section>
 
 <section class="content" id="yse-team-detail">

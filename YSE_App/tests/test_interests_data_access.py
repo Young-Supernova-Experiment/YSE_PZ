@@ -207,6 +207,8 @@ class InterestPageTests(InterestBase):
                                     {"title": "Form paper", "group": self.yse.pk, "role": "coauthor",
                                      "description": "via the form"})
         self.assertEqual(response.status_code, 302)
+        # Back to the page itself, not scrolled to a tab pane (the tab bar stays in view).
+        self.assertEqual(response["Location"], self.detail)
         interest = TransientInterest.objects.get(title="Form paper")
         self.assertEqual(interest.user, self.alice)
         self.assertEqual(interest.group, self.yse)

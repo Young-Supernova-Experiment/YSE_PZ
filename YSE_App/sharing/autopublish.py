@@ -18,6 +18,7 @@ from django.utils import timezone
 from YSE_App.jobs import job
 from YSE_App.models.sharing_models import AutoPublisher, SharingSubmission
 from YSE_App.sharing import tns
+from YSE_App.sharing.report_scope import ReportScope
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,10 @@ def apply_rule(rule: AutoPublisher, transient, *, dispatch: bool = True):
         return None
     options = {"coauthors": rule.coauthors, "remarks": rule.remarks}
     if rule.kind == SharingSubmission.KIND_CLASSIFICATION:
-        spectrum = transient.best_spectrum or transient.transientspectrum_set.order_by("-obs_date").first()
+        # only spectra the rule may publish: public, or opted in by a PI (#691)
+        allowed = ReportScope.autopublish().spectrum_ids(transient)
+        spectrum = transient.best_spectrum if transient.best_spectrum_id in allowed else None
+        spectrum = spectrum or transient.transientspectrum_set.filter(pk__in=allowed).order_by("-obs_date").first()
         options["spectrum"] = spectrum
     try:
         return tns.create_submission(rule.service, transient, rule.kind, None, auto_publisher=rule,

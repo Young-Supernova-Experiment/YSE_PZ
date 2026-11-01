@@ -1,0 +1,62 @@
+name: pip-audit
+
+# Checks the pinned Python requirements against the PyPA / OSV advisory database.
+# Fails only on advisories that are not in .github/pip-audit-ignore.txt (the
+# accepted baseline, with a reason per group). Runs on changes to the
+# requirements and weekly, so a new advisory against an existing pin is reported
+# without blocking unrelated pull requests.
+
+on:
+  push:
+    branches: [master, develop, experimental]
+    paths:
+      - 'requirements*.txt'
+      - '.github/pip-audit-ignore.txt'
+      - '.github/workflows/pip-audit.yml'
+  pull_request:
+    branches: [master, develop, experimental]
+    paths:
+      - 'requirements*.txt'
+      - '.github/pip-audit-ignore.txt'
+      - '.github/workflows/pip-audit.yml'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install "pip-audit==2.9.0"
+
+      - name: Build the pinned requirement set
+        run: |
+          # requirements.txt pins every package (Django included). requirements-ingest.txt
+          # includes requirements.txt via -r; audit its extra pins once.
+          mkdir -p "$RUNNER_TEMP/audit"
+          cp requirements.txt "$RUNNER_TEMP/audit/web.txt"
+          grep -q '^Django==' "$RUNNER_TEMP/audit/web.txt" || { echo "::error::Django is not pinned with == in requirements.txt; update this step"; exit 1; }
+          grep -v '^-r ' requirements-ingest.txt > "$RUNNER_TEMP/audit/ingest.txt"
+
+      - name: Audit (fails on advisories not in the ignore list)
+        run: |
+          IGNORES=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' .github/pip-audit-ignore.txt | grep -v '^$' | sed 's/^/--ignore-vuln /' | tr '\n' ' ')
+          echo "accepted advisories: $(echo "$IGNORES" | wc -w | awk '{print $1/2}')"
+          # --no-deps --disable-pip: audit exactly the pinned versions, without
+          # installing them (the set needs Python 3.8 and native builds).
+          pip-audit --no-deps --disable-pip --progress-spinner off \
+            -r "$RUNNER_TEMP/audit/web.txt" -r "$RUNNER_TEMP/audit/ingest.txt" \
+            $IGNORES

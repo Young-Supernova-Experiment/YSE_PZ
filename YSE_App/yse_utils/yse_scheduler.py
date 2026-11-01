@@ -24,7 +24,23 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-_ztf_obs_url = "http://skyvision.caltech.edu/ztf/msip/nightly_summary?obsdate=%04i-%02i-%02i"
+# These two ZTF hosts refuse https (skyvision) or present a certificate for
+# another name (schedule), so the defaults stay http. They are settings, so
+# switching is a settings.ini change once the hosts are fixed (recheck from
+# time to time; see the runbook, "https follow-up").
+_ZTF_OBS_SUMMARY_URL_DEFAULT = "http://skyvision.caltech.edu/ztf/msip/nightly_summary"
+_ZTF_SCHEDULE_URL_DEFAULT = "http://schedule.ztf.uw.edu"
+
+
+def _url_setting(name, default):
+    try:
+        return (getattr(djangoSettings, name, None) or default).rstrip("/")
+    except Exception:  # settings not configured (script run outside Django)
+        return default
+
+
+def _ztf_obs_url_template():
+    return _url_setting("ZTF_OBS_SUMMARY_URL", _ZTF_OBS_SUMMARY_URL_DEFAULT) + "?obsdate=%04i-%02i-%02i"
 
 def sendemail(from_addr, to_addr,
               subject, message,
@@ -326,7 +342,7 @@ class YSE_Scheduler:
             if not os.path.exists('%s/ztf_obs_%04i-%02i-%02i.csv'%(rootdir,d.year,d.month,d.day)):
                 hp = HTMLTableParser()
                 print(d)
-                tables = hp.parse_url(_ztf_obs_url%(d.year,d.month,d.day))
+                tables = hp.parse_url(_ztf_obs_url_template()%(d.year,d.month,d.day))
                 if len(tables) > 1:
                     table = tables[1]
                     table.to_csv('%s/ztf_obs_%04i-%02i-%02i.csv'%(rootdir,d.year,d.month,d.day))
@@ -373,7 +389,7 @@ class YSE_Scheduler:
         # now get the scheduled observations for tonight
         # if the weather looks to be bad, these are tomorrow's fields!
         last_date = date_to_schedule - datetime.timedelta(1)
-        data = requests.get('http://schedule.ztf.uw.edu/ZTF_ObsLoc_%04i-%02i-%02i.json'%(
+        data = requests.get(_url_setting('ZTF_SCHEDULE_URL', _ZTF_SCHEDULE_URL_DEFAULT) + '/ZTF_ObsLoc_%04i-%02i-%02i.json'%(
             last_date.year,last_date.month,last_date.day)).json()
 
         tonights_fields = []

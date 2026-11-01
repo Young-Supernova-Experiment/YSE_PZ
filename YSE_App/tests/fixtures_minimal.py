@@ -12,6 +12,9 @@ from YSE_App.models import (
     ObservationGroup,
     Observatory,
     PhotometricBand,
+    SurveyField,
+    SurveyObservation,
+    TaskStatus,
     Telescope,
     Transient,
     TransientPhotData,
@@ -167,6 +170,48 @@ def attach_synthetic_log(user, transient, comment="Synthetic perf-test log entry
     return Log.objects.create(transient=transient, comment=comment, **audit)
 
 
+def attach_synthetic_survey_field(
+    user, transient, *, obs_group=None, instrument=None, band=None, n_observations=20
+):
+    """A YSE survey field covering the transient plus ``n_observations`` of it.
+
+    ``Transient.LikelyYSEField`` (the "YSE Field" line of the detail shell) must
+    stay at a constant number of queries however many observations the field has.
+    """
+    audit = audit_fields(user)
+    if obs_group is None or instrument is None or band is None:
+        obs_group, instrument, band = create_instrument_stack(user)
+    field_id = f"perf-field-{transient.name}"
+    field, _ = SurveyField.objects.get_or_create(
+        field_id=field_id,
+        defaults={
+            "obs_group": obs_group,
+            "instrument": instrument,
+            "ra_cen": transient.ra,
+            "dec_cen": transient.dec,
+            "width_deg": 3.4,
+            "height_deg": 3.4,
+            **audit,
+        },
+    )
+    status, _ = TaskStatus.objects.get_or_create(name="Successful", defaults=audit)
+    base_mjd = 60000.0
+    SurveyObservation.objects.bulk_create(
+        [
+            SurveyObservation(
+                survey_field=field,
+                status=status,
+                obs_mjd=base_mjd + i,
+                exposure_time=45.0,
+                photometric_band=band,
+                **audit,
+            )
+            for i in range(n_observations)
+        ]
+    )
+    return field
+
+
 def create_transient_with_synthetic_data(
     user,
     name="perf-detail-sn",
@@ -176,6 +221,7 @@ def create_transient_with_synthetic_data(
     with_host=True,
     with_spectrum=True,
     with_log=True,
+    with_survey_field=True,
 ):
     """
     Transient detail page with realistic related rows (synthetic photometry, etc.).
@@ -214,6 +260,10 @@ def create_transient_with_synthetic_data(
         )
     if with_log:
         attach_synthetic_log(user, transient)
+    if with_survey_field:
+        attach_synthetic_survey_field(
+            user, transient, obs_group=obs_group, instrument=instrument, band=band
+        )
     transient.refresh_from_db()
     return transient
 

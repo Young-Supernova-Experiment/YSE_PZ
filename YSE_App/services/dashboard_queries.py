@@ -93,7 +93,7 @@ def strip_leading_sql_comments(sql):
     return text[match.end():] if match else text
 
 
-def dashboard_sql_rejection_reason(sql):
+def dashboard_sql_rejection_reason(sql, user=None):
     """
     Why a saved Explorer query cannot back a dashboard section, or None when
     it can. The dashboard runs the text as-is and reads ``name`` from the
@@ -102,6 +102,11 @@ def dashboard_sql_rejection_reason(sql):
     ``YSE_App_transient`` that mentions ``name``. Leading whitespace and
     comments are ignored (Explorer keeps whatever the author typed); a
     statement that is not a SELECT/WITH is refused.
+
+    With ``user`` (the viewer the page is for), a query that reads tables other
+    than transient metadata is also refused unless that viewer sees all data
+    (#715, ``services/page_query_scope.py``). ``user=None`` skips that check
+    (internal callers such as the cache warmer).
     """
     body = strip_leading_sql_comments(sql)
     lowered = body.lower()
@@ -111,11 +116,15 @@ def dashboard_sql_rejection_reason(sql):
         return "the query must read from YSE_App_transient"
     if "name" not in lowered:
         return "the query must return the transient name column"
+    if user is not None:
+        from YSE_App.services.page_query_scope import page_query_table_refusal
+
+        return page_query_table_refusal(sql, user)
     return None
 
 
-def dashboard_sql_is_supported(sql):
-    return dashboard_sql_rejection_reason(sql) is None
+def dashboard_sql_is_supported(sql, user=None):
+    return dashboard_sql_rejection_reason(sql, user) is None
 
 
 def explorer_query_cache_seconds():

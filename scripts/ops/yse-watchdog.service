@@ -1,0 +1,12 @@
+# YSE-PZ watchdog (#769): one check per run; scheduled by yse-watchdog.timer.
+# Install: docs/ziggy-runbook.md, "Server watchdog".
+[Unit]
+Description=YSE-PZ health watchdog
+After=network-online.target mysql.service apache2.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/yse-watchdog.sh
+# A run that restarts MySQL can take a few minutes; never let one hang forever.
+TimeoutStartSec=15min
+Nice=-5

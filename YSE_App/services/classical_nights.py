@@ -159,3 +159,55 @@ def upcoming_classical_resources(
     # ORDER BY expression that is not a selected column.
     return ClassicalResource.objects.filter(pk__in=kept_pks).order_by(ordering)
 
+
+
+def night_followups(classical_obs_date: ClassicalObservingDate, user) -> QuerySet:
+    """Follow-ups of one classical observing night that ``user`` may see.
+
+    The single queryset behind the observing-night page and both target-list
+    downloads, so they cannot drift apart again (#64): follow-ups on the
+    night's resource whose window contains the night's ``obs_date`` (not the
+    resource's whole validity window), restricted by the follow-up
+    visibility rules (#499).
+    """
+    from YSE_App.models.followup_models import TransientFollowup
+    from YSE_App.services.visibility import filter_transient_followups_for_user
+
+    followups = TransientFollowup.objects.filter(
+        classical_resource=classical_obs_date.resource,
+        valid_start__lte=classical_obs_date.obs_date,
+        valid_stop__gte=classical_obs_date.obs_date,
+    )
+    return filter_transient_followups_for_user(followups, user)
+
+
+def upcoming_classical_nights(
+    nights: QuerySet, days_ahead: int, now: Optional[datetime.datetime] = None
+) -> List[ClassicalObservingDate]:
+    """``ClassicalObservingDate`` rows still ahead, one entry per night (#65).
+
+    ``nights`` is the user's authorised observing dates. A night is kept until
+    the morning after it at the observatory (``night_cutoff``), and while its
+    UTC date is at most ``days_ahead`` days after today. Ordered by night,
+    then telescope name, then pk.
+    """
+    if now is None:
+        now = timezone.now()
+    horizon = _utc_date(now) + datetime.timedelta(days=days_ahead)
+    horizon_end = datetime.datetime.combine(
+        horizon + datetime.timedelta(days=1), datetime.time(0, 0), tzinfo=datetime.timezone.utc
+    )
+    candidates = (
+        nights.filter(obs_date__gt=now - _COARSE_GRACE, obs_date__lt=horizon_end)
+        .select_related(
+            "resource__telescope__observatory", "resource__principal_investigator"
+        )
+        .order_by("obs_date", "resource__telescope__name", "pk")
+    )
+    upcoming = []
+    for night in candidates:
+        night_date = _utc_date(night.obs_date)
+        tz = observatory_timezone(night.resource.telescope.observatory)
+        if night_date <= horizon and now < night_cutoff(night_date, tz):
+            upcoming.append(night)
+    return upcoming

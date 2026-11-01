@@ -2,6 +2,8 @@
 
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 from astropy.io import fits
 import astropy.table as at
 from YSE_App.models import *
@@ -235,7 +237,9 @@ class ForcedPhot(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)        
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
 
         try:
             tstart = time.time()
@@ -454,7 +458,7 @@ class ForcedPhot(CronJobBase):
                 img_dict[k][img_key_out] = []
                 img_dict[k][img_key_out+'_png'] = []
 
-                session = requests.Session()
+                session = ingest_session()
                 session.auth = (self.options.ifauser,self.options.ifapass)
                 for i in range(len(img_dict[k][img_key_in])):
                     if img_dict[k][img_key_in][i] is None:
@@ -588,8 +592,9 @@ class ForcedPhot(CronJobBase):
     def UploadTransients(self,TransientUploadDict):
 
         url = '%s'%self.options.dburl.replace('/api','/add_transient')
-        r = requests.post(url = url, data = json.dumps(TransientUploadDict),
-                          auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword))
+        r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
+                          auth=HTTPBasicAuth(self.options.dblogin,self.options.dbpassword),
+                          timeout=upload_timeout())
 
         try: print('YSE_PZ says: %s'%json.loads(r.text)['message'])
         except: print(r.text)
@@ -605,7 +610,7 @@ class ForcedPhot(CronJobBase):
             phot_link = 'http://128.171.123.254:22281/ds/pstampresults/'
             phot_results_link = '{}/{}/'.format(phot_link,request_name)
 
-            phot_page = requests.get(url=phot_results_link)
+            phot_page = ingest_http.get(url=phot_results_link)
             if phot_page.status_code != 200:
                 raise RuntimeError('results page {} does not exist'.format(phot_results_link))
 
@@ -615,7 +620,7 @@ class ForcedPhot(CronJobBase):
             for f in fitsfiles:
                 if 'detectability' in f:
                     phot_fits_link = '{}/{}/{}'.format(phot_link,request_name,f)
-                    fits_response = requests.get(url=phot_fits_link,stream=True)
+                    fits_response = ingest_http.get(url=phot_fits_link,stream=True)
 
                     # this is a pain but it seems necessary
                     tmpfits = tempfile.NamedTemporaryFile(delete=False)
@@ -689,8 +694,8 @@ class ForcedPhot(CronJobBase):
         stamp_link = 'http://128.171.123.254:22281/ds/yse-pstamp-results/'
         stamp_results_link = '{}/{}/results.mdc'.format(stamp_link,request_name)
         stamp_fitsfile_link = '{}/{}/'.format(stamp_link,request_name)
-
-        stamps_page = requests.get(url=stamp_results_link)
+        
+        stamps_page = ingest_http.get(url=stamp_results_link)
         if stamps_page.status_code != 200:
             raise RuntimeError('results page {} does not exist'.format(stamp_results_link))
         
@@ -763,7 +768,7 @@ class ForcedPhot(CronJobBase):
     def get_status(self,request_name):
         
         status_link = 'https://pstamp.ipp.ifa.hawaii.edu/status.php'
-        session = requests.Session()
+        session = ingest_session()
         session.auth = (self.options.ifauser,self.options.ifapass)
 
         page = _pstamp_post(session, status_link)
@@ -908,7 +913,7 @@ class ForcedPhot(CronJobBase):
 
     def submit_to_ipp(self,filename_or_obj):
 
-        session = requests.Session()
+        session = ingest_session()
         session.auth = (self.options.ifauser,self.options.ifapass)
         stampurl = 'https://pstamp.ipp.ifa.hawaii.edu/upload.php'
 
@@ -963,7 +968,9 @@ class ForcedPhotUpdate(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)        
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
 
         
         try:

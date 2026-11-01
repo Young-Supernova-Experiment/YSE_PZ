@@ -32,7 +32,11 @@ from django.db import models
 from YSE_App.models.photometric_band_models import PhotometricBand
 from YSE_App.models.transient_models import Transient
 
-__all__ = ['TransientPhotStat', 'MJD_EPOCH', 'datetime_to_mjd', 'mjd_to_datetime']
+__all__ = ['PhotStatValuesBase', 'TransientPhotStat', 'TransientPhotStatScope', 'PUBLIC_SCOPE_KEY',
+           'scope_key_for_group', 'MJD_EPOCH', 'datetime_to_mjd', 'mjd_to_datetime']
+
+# Columns filled by the Bazin job, not by the photometry recompute (#271).
+EXTRAPOLATED_FIELDS = ('extrapolated_mag', 'extrapolated_band', 'extrapolated_mjd', 'extrapolated_at')
 
 MJD_EPOCH = datetime.datetime(1858, 11, 17, tzinfo=datetime.timezone.utc)
 
@@ -55,12 +59,8 @@ def mjd_to_datetime(mjd):
     return MJD_EPOCH + datetime.timedelta(days=float(mjd))
 
 
-class TransientPhotStat(models.Model):
-    """Stored photometry aggregates for one transient (see module docstring)."""
-
-    transient = models.OneToOneField(
-        Transient, on_delete=models.CASCADE, related_name='photstat'
-    )
+class PhotStatValuesBase(models.Model):
+    """The statistic columns shared by the all-data row and the per-scope rows (#607)."""
 
     # Counts over unflagged points.
     num_obs_global = models.IntegerField(default=0)
@@ -127,25 +127,6 @@ class TransientPhotStat(models.Model):
     schema_version = models.IntegerField(default=0)
     last_updated = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        indexes = [
-            models.Index(fields=['peak_mag'], name='yse_photstat_peak_mag_idx'),
-            models.Index(fields=['last_detected_mjd'], name='yse_photstat_last_det_mjd_idx'),
-            models.Index(fields=['last_detected_mag'], name='yse_photstat_last_det_mag_idx'),
-            models.Index(fields=['last_obs_date'], name='yse_photstat_last_obs_idx'),
-            models.Index(fields=['num_det_global'], name='yse_photstat_num_det_idx'),
-            models.Index(fields=['first_detected_mjd'], name='yse_photstat_first_det_idx'),
-            # The remaining search filters on the stat row (#286).
-            models.Index(fields=['first_detected_date'], name='yse_photstat_first_det_dt_idx'),
-            models.Index(fields=['last_detected_date'], name='yse_photstat_last_det_dt_idx'),
-            models.Index(fields=['rise_rate'], name='yse_photstat_rise_rate_idx'),
-            models.Index(fields=['decay_rate'], name='yse_photstat_decay_rate_idx'),
-            models.Index(fields=['deepest_limit'], name='yse_photstat_deep_limit_idx'),
-        ]
-
-    def __str__(self):
-        return 'PhotStat: %s' % self.transient_id
-
     @property
     def per_band(self):
         """Per-band summary dict (``{}`` when nothing is stored)."""
@@ -173,3 +154,91 @@ class TransientPhotStat(models.Model):
     def deepest_limit_date(self):
         """Aware UTC datetime of the deepest upper limit."""
         return mjd_to_datetime(self.deepest_limit_mjd)
+
+    class Meta:
+        abstract = True
+
+
+class TransientPhotStat(PhotStatValuesBase):
+    """Stored photometry aggregates for one transient over *all* its photometry (see module docstring).
+
+    What staff see, and what anyone sees when no photometry of the transient
+    is hidden from them; otherwise the best ``TransientPhotStatScope`` row
+    they may see is used (``services.photstat_visibility``, #607).
+    """
+
+    transient = models.OneToOneField(
+        Transient, on_delete=models.CASCADE, related_name='photstat'
+    )
+
+    # Bazin-extrapolated magnitude (#271, for #225 scheduling): the joint fit
+    # of ``services.bazin`` evaluated at ``extrapolated_mjd``, in
+    # ``extrapolated_band``; written by ``bazin.store_extrapolations`` (the
+    # ``photstat.bazin_extrapolate`` job), never by the photometry recompute.
+    # ``extrapolated_at`` is when it was computed; a NULL magnitude with a set
+    # ``extrapolated_at`` means no usable fit then. Nullable (shared DB).
+    extrapolated_mag = models.FloatField(null=True, blank=True)
+    extrapolated_band = models.ForeignKey(
+        PhotometricBand, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    extrapolated_mjd = models.FloatField(null=True, blank=True)
+    extrapolated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['peak_mag'], name='yse_photstat_peak_mag_idx'),
+            models.Index(fields=['last_detected_mjd'], name='yse_photstat_last_det_mjd_idx'),
+            models.Index(fields=['last_detected_mag'], name='yse_photstat_last_det_mag_idx'),
+            models.Index(fields=['last_obs_date'], name='yse_photstat_last_obs_idx'),
+            models.Index(fields=['num_det_global'], name='yse_photstat_num_det_idx'),
+            models.Index(fields=['first_detected_mjd'], name='yse_photstat_first_det_idx'),
+            # The remaining search filters on the stat row (#286).
+            models.Index(fields=['first_detected_date'], name='yse_photstat_first_det_dt_idx'),
+            models.Index(fields=['last_detected_date'], name='yse_photstat_last_det_dt_idx'),
+            models.Index(fields=['rise_rate'], name='yse_photstat_rise_rate_idx'),
+            models.Index(fields=['decay_rate'], name='yse_photstat_decay_rate_idx'),
+            models.Index(fields=['deepest_limit'], name='yse_photstat_deep_limit_idx'),
+        ]
+
+    def __str__(self):
+        return 'PhotStat: %s' % self.transient_id
+
+
+PUBLIC_SCOPE_KEY = 'public'
+
+
+def scope_key_for_group(group_id):
+    """``scope_key`` of a scope row: ``public`` for ``None``, else ``g<group id>``."""
+    return PUBLIC_SCOPE_KEY if group_id is None else 'g%d' % int(group_id)
+
+
+class TransientPhotStatScope(PhotStatValuesBase):
+    """The statistics of one visibility scope of a transient with restricted photometry (#607).
+
+    Written only for transients with at least one photometry set that has
+    collaboration groups: one row for the **public** scope (the sets without
+    groups; ``group`` NULL) and one per restricting group (the public sets
+    plus every set shared with that group). A user who may not see all of a
+    transient's photometry is shown the most complete scope row they may see
+    (``services.photstat_visibility``); the all-data ``TransientPhotStat`` row
+    is never shown to them. Same columns and rules as ``TransientPhotStat``,
+    without the Bazin columns. New table, so safe on the shared database.
+    """
+
+    transient = models.ForeignKey(
+        Transient, on_delete=models.CASCADE, related_name='photstat_scopes'
+    )
+    group = models.ForeignKey(
+        'auth.Group', null=True, blank=True, on_delete=models.CASCADE, related_name='+'
+    )
+    # ``public`` or ``g<group id>``: a unique key that, unlike ``group``, is
+    # never NULL, so the database enforces one row per transient and scope.
+    scope_key = models.CharField(max_length=24)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['transient', 'scope_key'], name='yse_photstat_scope_unique'),
+        ]
+
+    def __str__(self):
+        return 'PhotStatScope: %s %s' % (self.transient_id, self.scope_key)

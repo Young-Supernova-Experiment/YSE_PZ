@@ -59,6 +59,9 @@
 						<label for="yse-report-remarks">Remarks</label>
 						<input class="form-control form-control-sm" id="yse-report-remarks" name="remarks" value="{{ sharing_services.0.default_remarks }}">
 					</div>
+					{% if sharing_omitted %}
+					<div class="alert alert-info small" id="yse-report-omitted">Left out of this report: {% if sharing_omitted.photometry_sets %}{{ sharing_omitted.photometry_sets }} restricted photometry set{{ sharing_omitted.photometry_sets|pluralize }}{% endif %}{% if sharing_omitted.photometry_sets and sharing_omitted.spectra %} and {% endif %}{% if sharing_omitted.spectra %}{{ sharing_omitted.spectra }} restricted spectr{{ sharing_omitted.spectra|pluralize:"um,a" }}{% endif %}. {{ sharing_omitted_reason }}</div>
+					{% endif %}
 					<div id="yse-report-problems" class="alert alert-warning" style="display:none"></div>
 					<div id="yse-report-preview-wrap" style="display:none">
 						<div class="d-flex justify-content-between"><strong>Payload preview</strong> <small class="text-muted" id="yse-report-endpoint"></small></div>

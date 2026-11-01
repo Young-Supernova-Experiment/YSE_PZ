@@ -21,6 +21,7 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from django.utils.html import escape
 
+from YSE_App.common.url_utils import public_base_url
 from YSE_App.models import Log
 from YSE_App.models.instrument_models import Instrument
 from YSE_App.models.profile_models import UserTelescopeToFollow
@@ -34,11 +35,7 @@ CHANNEL = "channel"
 
 
 def _comment_base_url() -> str:
-    if getattr(settings, "YSE_PUBLIC_BASE_URL", None):
-        return settings.YSE_PUBLIC_BASE_URL.rstrip("/") + "/"
-    if settings.DEBUG:
-        return "http://127.0.0.1:8000/"
-    return "https://ziggy.ucolick.org/yse/"
+    return public_base_url()
 
 
 def normalise_instrument_name(name: str) -> str:

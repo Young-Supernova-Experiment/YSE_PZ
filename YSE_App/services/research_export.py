@@ -20,7 +20,8 @@ only: it is a management command; nothing is reachable over the web).
 * **Demographics** (encrypted profile values) stay ciphertext, decrypted only offline with
   the custodian's private key.
 * **Excluded:** credentials, sessions, tokens, notification and job tables, request payloads,
-  external ids and URLs, IP addresses and every other audit internal.
+  external ids and URLs, IP addresses and every other audit internal; the access rules, standing
+  grants, program deputies and access history (#648), which are permission settings, not activity.
 
 Transients, their statuses and classes are public astronomy objects and keep their real ids
 and names, so the export can be linked to public data.
@@ -149,8 +150,8 @@ class TableSpec:
 
 def _specs() -> List[TableSpec]:
     from YSE_App.models import (
-        DataAccessRequest, FacilityRequest, Log, TransientAnnotation, TransientFollowup,
-        TransientFollowupRequest, TransientInterest, UserFavoriteTransient,
+        DataAccessRequest, FacilityRequest, Log, NightPlan, ObservedBlock, TransientAnnotation, TransientFollowup,
+        TransientFollowupRequest, TransientInterest, UserFavoriteTransient, ValueChange,
     )
     return [
         TableSpec("followups", lambda: TransientFollowup.objects.all(), "created_by_id", "created_date",
@@ -166,8 +167,10 @@ def _specs() -> List[TableSpec]:
         TableSpec("annotations", lambda: TransientAnnotation.objects.all(), "created_by_id", "created_date",
                   columns=("transient_id", "origin"), text=("data",), row_namespace="annotation"),
         TableSpec("data_access_requests", lambda: DataAccessRequest.objects.all(), "requester_id", "created_date",
-                  columns=("transient_id", "dataset_kind", "status", "decided_at", "decided_as"),
-                  refs={"owner_group_id": "group", "target_group_id": "group"}, users=("decided_by_id",),
+                  columns=("transient_id", "dataset_kind", "status", "decided_at", "decided_as", "revoked_at",
+                           "revoke_direction"),
+                  refs={"owner_group_id": "group", "target_group_id": "group"},
+                  users=("decided_by_id", "revoked_by_id"),
                   text=("message", "note"), row_namespace="data_access_request"),
         TableSpec("facility_requests", lambda: FacilityRequest.objects.all(), "submitted_by_id", "created_date",
                   columns=("transient_id", "kind", "state", "submitted_at", "hours_charged", "n_results"),
@@ -178,6 +181,21 @@ def _specs() -> List[TableSpec]:
                   text=("title", "description"), row_namespace="interest"),
         TableSpec("favorites", lambda: UserFavoriteTransient.objects.all(), "user_id", "created",
                   columns=("transient_id",)),
+        # Experimental-only activity (backport of #746): changes people made through the change log
+        # (#737; system rows have no actor and are never included), AstroScheduler night plans and
+        # what was recorded at the telescope (#666/#670). Hosts and nights are random per export.
+        TableSpec("value_changes", lambda: ValueChange.objects.all(), "actor_id", "created_at",
+                  columns=("transient_id", "category", "field", "old_source", "source", "service", "restricted"),
+                  refs={"host_id": "host"}, text=("old_value", "new_value", "note"), row_namespace="value_change"),
+        TableSpec("night_plans", lambda: NightPlan.objects.all(), "author_id", "created_date",
+                  columns=("version", "state", "solver", "approved_at"),
+                  refs={"night_id": "night", "parent_id": "night_plan"}, users=("approved_by_id",),
+                  text=("notes",), row_namespace="night_plan"),
+        TableSpec("observed_blocks", lambda: ObservedBlock.objects.all(), "recorded_by_id", "created_date",
+                  columns=("transient_id", "kind", "start_ut", "end_ut", "outcome", "reason_id", "achieved_sn",
+                           "seeing", "source"),
+                  refs={"night_id": "night", "followup_id": "followup", "facility_request_id": "facility_request"},
+                  text=("comments",), row_namespace="observed_block"),
     ]
 
 
@@ -297,12 +315,15 @@ class Exporter:
         demographics = [(self.people(uid), name, row.ciphertext, row.key_fingerprint)
                         for (uid, name), row in sorted(latest.items())]
         mentorships = []
-        for m in Mentorship.objects.filter(Q(mentee_id__in=consenting) | Q(mentor_id__in=consenting)):
+        # Each side keeps its own confirmed row; export the rows of consenting owners, saying
+        # whose side reported it (the same relation can appear once per side).
+        for m in Mentorship.objects.filter(owner_id__in=consenting, status=Mentorship.STATUS_CONFIRMED):
             mentee = self.people(m.mentee_id) if m.mentee_id in consenting else None
             mentor = self.people(m.mentor_id) if m.mentor_id in consenting else None
             if mentee is None and mentor is None:
                 continue
-            mentorships.append((mentor, mentee, m.kind, m.start_year, m.end_year))
+            reported_by = "mentor" if m.owner_id == m.mentor_id else "mentee"
+            mentorships.append((mentor, mentee, m.kind, m.start_year, m.end_year, reported_by))
         metrics = [(self.people(r.user_id), r.source, _value(r.fetched_at), r.h_index, r.citation_count,
                     r.refereed_count, r.first_author_count)
                    for r in ResearcherMetrics.objects.filter(user_id__in=consenting)]
@@ -311,7 +332,7 @@ class Exporter:
                               "institution", "pronouns", "research_interests", "time_zone"], participants),
             "participant_instruments": (["participant", "instrument"], instruments),
             "demographics": (["participant", "field", "ciphertext", "key_fingerprint"], demographics),
-            "mentorships": (["mentor", "mentee", "kind", "start_year", "end_year"], mentorships),
+            "mentorships": (["mentor", "mentee", "kind", "start_year", "end_year", "reported_by"], mentorships),
             "metrics": (["participant", "source", "fetched_at", "h_index", "citations", "refereed_papers",
                          "first_author_papers"], metrics),
         }

@@ -1,0 +1,18 @@
+{% comment %}Effect and grantee fields of an access form. Context: groups, prefix and suffix (a unique id prefix).{% endcomment %}
+<label class="sr-only" for="{{ prefix }}{{ suffix }}-effect">Effect</label>
+<select name="effect" id="{{ prefix }}{{ suffix }}-effect" class="form-control form-control-sm mr-1">
+	<option value="allow">Allow</option>
+	<option value="deny">Restrict</option>
+</select>
+<label class="sr-only" for="{{ prefix }}{{ suffix }}-kind">Grantee</label>
+<select name="grantee_kind" id="{{ prefix }}{{ suffix }}-kind" class="form-control form-control-sm mr-1">
+	<option value="group">Group</option>
+	<option value="user">One person</option>
+</select>
+<label class="sr-only" for="{{ prefix }}{{ suffix }}-group">Group</label>
+<select name="group" id="{{ prefix }}{{ suffix }}-group" class="form-control form-control-sm mr-1">
+	<option value="">(group)</option>
+	{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}
+</select>
+<label class="sr-only" for="{{ prefix }}{{ suffix }}-user">Username</label>
+<input type="text" name="username" id="{{ prefix }}{{ suffix }}-user" class="form-control form-control-sm mr-1" placeholder="or username" maxlength="150">

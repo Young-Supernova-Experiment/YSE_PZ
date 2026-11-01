@@ -1,4 +1,5 @@
 import requests
+from YSE_App.common.casjobs_credentials import configure_casjobs_env
 import time
 import imaplib
 import socket
@@ -11,24 +12,23 @@ import urllib.request
 from bs4 import BeautifulSoup
 from datetime import datetime
 from enum import Enum
-from astroquery.ned import Ned
-Ned.TIMEOUT = 5
 import astropy.units as u
 from astropy import coordinates
 import numpy as np
 from astroquery.irsa_dust import IrsaDust
 from datetime import timedelta
-import glob
 import json
 import logging
 import os
-import shutil
+import tempfile
 from astropy.coordinates import SkyCoord, Angle
 from astropy.coordinates import ICRS, Galactic, FK4, FK5
 from astropy.time import Time
 import coreapi
 from urllib.parse import quote,unquote
 from requests.auth import HTTPBasicAuth
+from YSE_App.common.ingest_http import default_timeout, ingest_session, upload_timeout
+from YSE_App.common.ingest_http import http as ingest_http  # timeouts + retries (#473)
 import struct
 import threading
 import queue
@@ -42,7 +42,12 @@ from itertools import islice
 from astropy.cosmology import FlatLambdaCDM
 import sys
 from YSE_App.common import mast_query,chandra_query,spitzer_query
-from YSE_App.common.data_references import tns_reference
+from YSE_App.common.data_references import (
+    TNS_PHOTOMETRY_REPORT_KEYS,
+    TNS_SPECTRUM_REPORT_KEYS,
+    tns_reference_with_reports,
+    tns_report_id,
+)
 from YSE_App.common.collaboration_groups import (
     PUBLIC_COLLABORATION_GROUP_NAME,
     TNS_IMPORT_COLLABORATION_GROUPS,
@@ -58,19 +63,6 @@ def _remove_quietly(*paths):
             os.remove(path)
         except FileNotFoundError:
             pass
-        except OSError as exc:
-            logger.warning("could not remove %s: %s", path, exc)
-
-
-def _remove_dated_ghost_dirs():
-    """Remove the transients_<YYYYMMDD>* scratch trees GHOST writes in the cwd."""
-    stamp = datetime.utcnow().isoformat().split('T')[0].replace('-', '')
-    for path in glob.glob('transients_%s*' % stamp):
-        try:
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
         except OSError as exc:
             logger.warning("could not remove %s: %s", path, exc)
 
@@ -121,8 +113,7 @@ def get_ps_score(RA, DEC):
     # get the WSID and password if not already defined
     # get your WSID by going to https://mastweb.stsci.edu/ps1casjobs/changedetails.aspx after you login to Casjobs.
 
-    os.environ['CASJOBS_WSID'] = str(1862226089)
-    os.environ['CASJOBS_PW'] = 'tr4nsientsP!z'
+    configure_casjobs_env()  # credentials from settings.ini [casjobs] / env; raises if missing
     query = """select top 1 p.ps_score
     from pointsource_magnitudes_view as p
     inner join fGetNearbyObjEq(%.5f, %.5f, 0.05) nb on p.objid=nb.objid
@@ -140,6 +131,16 @@ def get_ps_score(RA, DEC):
 
     return output
     
+# Prost scratch handling and the matching itself live in YSE_App.services.prost_hosts (#439);
+# these names stay importable from here.
+from YSE_App.services.prost_hosts import (  # noqa: E402,F401
+    PROST_RUN_PREFIX,
+    PROST_STALE_SECONDS,
+    make_prost_run_dir,
+)
+from YSE_App.services import prost_hosts as _prost_hosts  # noqa: E402
+
+
 class processTNS:
     
     def __init__(self):
@@ -166,8 +167,6 @@ class processTNS:
                             help='if set, update photometry from ZTF')
         parser.add_argument('--redohost', default=False, action="store_true",
                             help='if set, repeat search to find host matches (slow-ish)')
-        parser.add_argument('--nedradius', default=5, type=float,
-                            help='NED search radius, in arcmin')
         parser.add_argument('--ndays', default=None, type=int,
                             help='number of days before today update events')
 
@@ -202,7 +201,9 @@ class processTNS:
             parser.add_argument('--hostmatchrad', default=config.get('main','hostmatchrad'), type=float,
                                 help='matching radius for hosts (arcmin) (default=%default)')
             parser.add_argument('--ghost_path', default=config.get('main','ghost_path'), type=str,
-                                help='GHOST data directory (default=%default)')
+                                help='Prost scratch directory; legacy name, used when prost_path is unset (default=%default)')
+            parser.add_argument('--prost_path', default=config.get('main','prost_path',fallback=''), type=str,
+                                help='Prost scratch base directory; falls back to ghost_path (default=%default)')
 
             parser.add_argument('--ztfurl', default=config.get('ztf','ztfurl'), type=str,
                                 help='ZTF URL (default=%default)')
@@ -238,7 +239,9 @@ class processTNS:
             parser.add_argument('--ztfurl', default="", type=str,
                                 help='ZTF URL (default=%default)')
             parser.add_argument('--ghost_path', default="", type=str,
-                                help='GHOST data directory (default=%default)')
+                                help='Prost scratch directory; legacy name, used when prost_path is unset (default=%default)')
+            parser.add_argument('--prost_path', default="", type=str,
+                                help='Prost scratch base directory; falls back to ghost_path (default=%default)')
             
             parser.add_argument('--SMTP_LOGIN', default='', type=str,
                                 help='SMTP login (default=%default)')
@@ -314,7 +317,9 @@ class processTNS:
             if not TransientDict['obs_group']:
                 TransientDict['obs_group'] = 'Unknown'
             z = jd['redshift']
-            if z: TransientDict['redshift'] = float(z)
+            if z:
+                TransientDict['redshift'] = float(z)
+                TransientDict['redshift_source'] = 'TNS'  # provenance (#436, #437)
             evt_type = jd['object_type']['name']
             if evt_type:
                 TransientDict['best_spec_class'] = evt_type
@@ -428,7 +433,8 @@ class processTNS:
             np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([]),np.array([])
 
         nondetectmaglim,nondetectdate,nondetectfilt,nondetectins = "","","",""
-        from YSE_App.common.tns_photometry_map import resolve_tns_photometry
+        report_ids = np.array([], dtype=object)
+        from YSE_App.common.tns_photometry_map import TNS_OBS_GROUP_NAME, resolve_tns_photometry
 
         for p in jd['photometry']:
             resolved = resolve_tns_photometry(
@@ -457,6 +463,7 @@ class processTNS:
             obsgroups = np.append(obsgroups, observer)
             tinst = np.append(tinst, yse_instrument)
             tfilt = np.append(tfilt, yse_band)
+            report_ids = np.append(report_ids, tns_report_id(p, TNS_PHOTOMETRY_REPORT_KEYS))
 
         disc_flag = np.zeros(len(tmag))
         iMag = np.where((tmag != -99) & (tmag != None))[0]
@@ -466,15 +473,12 @@ class processTNS:
         photometrycount = 0
         for ins in np.unique(tinst):
 
-            if np.array(obsgroups)[np.array(tinst) == ins][0] is None:
-                obsgroup = None
-            else:
-                obsgroup = re.sub(r'[^\x00-\x7f]',r'',np.array(obsgroups)[np.array(tinst) == ins][0])
-            
+            # #645: TNS-reported points get their own header (a dedicated TNS obs_group), so they are
+            # never mixed with the same survey's forced photometry; the reference says where they came from.
             photometrydict = {'instrument':ins,
-                              'obs_group':obsgroup,
+                              'obs_group':TNS_OBS_GROUP_NAME,
                               'groups': list(TNS_IMPORT_COLLABORATION_GROUPS),
-                              'reference': tns_reference(jd),  # #447: public data carries its reference
+                              'reference': tns_reference_with_reports(jd, report_ids[tinst == ins]),
                               'photdata':{}}
 
             for f,k in zip(np.unique(tfilt),range(len(np.unique(tfilt)))):
@@ -510,6 +514,7 @@ class processTNS:
     def getTNSSpectra(self,jd,sc):
         specinst,specobsdate,specobsgroup,specfiles = \
             np.array([]),np.array([]),np.array([]),np.array([])
+        specreports = np.array([], dtype=object)
 
         SpecDictAll = {'clobber':self.clobber}
         keyslist = ['ra','dec','instrument','rlap','obs_date','redshift',
@@ -528,8 +533,9 @@ class processTNS:
             else:
                 specobsgroup = np.append(specobsgroup,'Unknown')
             specfiles = np.append(specfiles,spec['asciifile'])
+            specreports = np.append(specreports,tns_report_id(spec, TNS_SPECTRUM_REPORT_KEYS))
         
-        for s,si,so,sog in zip(specfiles,specinst,specobsdate,specobsgroup):
+        for s,si,so,sog,srid in zip(specfiles,specinst,specobsdate,specobsgroup,specreports):
             Spectrum = {}
             SpecData = {}
             _remove_quietly('spec_tns_upload.txt')
@@ -608,7 +614,7 @@ class processTNS:
             Spectrum['obs_date'] = so
             Spectrum['obs_group'] = re.sub(r'[^\x00-\x7f]',r'',sog)
             Spectrum['groups'] = PUBLIC_COLLABORATION_GROUP_NAME
-            Spectrum['reference'] = tns_reference(jd)  # #447: public data carries its reference
+            Spectrum['reference'] = tns_reference_with_reports(jd, [srid])  # #447/#645: object plus the TNS report id, when sent
             SpecDictAll[s] = Spectrum
 
         return SpecDictAll
@@ -636,177 +642,20 @@ class processTNS:
             print("astro_prost not installed; skipping host association")
             return None
 
-        # Define and create output file root directory
-        output_dir = os.path.join(self.ghost_path, objs[0])
-        os.makedirs(output_dir, exist_ok=True)
-
-        # define priors for properties
-        priorfunc_z = halfnorm(loc=0.0001, scale=0.5)
-        priorfunc_offset = uniform(loc=0, scale=5)
-        priorfunc_absmag = uniform(loc=-30, scale=20)
-
-
-        likefunc_offset = gamma(a=0.75)
-        likefunc_absmag = SnRateAbsmag(a=-25, b=20)
-
-        priors = {
-            "offset": priorfunc_offset,
-            "absmag": priorfunc_absmag
-        }
-        likes = {
-            "offset": likefunc_offset,
-            "absmag": likefunc_absmag
-        }
-
-        transient_catalog = pd.DataFrame(
-            {'IAUID': objs,
-             'RA': [t.ra.deg for t in transient_positions],
-             'Dec': [t.dec.deg for t in transient_positions]
-             }
+        # The matching is YSE_App.services.prost_hosts.associate (#439): same priors and
+        # catalogues; each run gets its own scratch directory under the configured base (#617).
+        return _prost_hosts.associate(
+            objs,
+            [t.ra.deg for t in transient_positions],
+            [t.dec.deg for t in transient_positions],
+            getattr(self, 'prost_path', '') or self.ghost_path,
+            transient_redshift=transient_redshift,
+            associate_fn=associate_sample,
+            absmag_cls=SnRateAbsmag,
         )
 
-        # add the redshift info from the transient if it exists
-        if transient_redshift is not None:
-            priors['redshift'] = priorfunc_z
-            transient_catalog['redshift'] = transient_redshift
-
-        catalogs = ["glade", "decals", "panstarrs", "skymapper"]
-        transient_coord_cols = ("RA", "Dec")
-        # transient_name_col = "IAUID"
-        parallel = False
-        save = True
-        progress_bar = False
-        cat_cols = False
-
-        try:
-            hosts = associate_sample(
-                transient_catalog,
-                coord_cols=transient_coord_cols,
-                priors=priors,
-                likes=likes,
-                catalogs=catalogs,
-                parallel=parallel,
-                save=save,
-                save_path=output_dir,
-                progress_bar=progress_bar,
-                cat_cols=cat_cols,
-                verbose=0,
-                best_redshift=True
-            )
-        finally:
-            # Cleanup Prost file cache
-            # TODO: Over time we may accumulate Prost temp files that are not deleted
-            #       due to processes aborted before this block is executed. More robust
-            #       garbage collection may be necessary, such as a periodic task triggered
-            #       by Celery Beat.
-            rmtree(self.ghost_path, ignore_errors=True)
-
-        return hosts
-
-    
     def getProstHosts(self,jd,sc,prost_host):
-        if prost_host['host_name'].to_numpy()[0]:
-            host_name = prost_host['host_name'].to_numpy()[0]
-        else:
-            host_name = str(prost_host['host_objID'].to_numpy()[0])
-
-        hostdict = {}; hostcoords = ''
-        hostdict = {'name':host_name,
-                    'ra':prost_host['host_ra'].to_numpy()[0],
-                    'dec':prost_host['host_dec'].to_numpy()[0]}
-
-
-        # a weird issue with photo-z that really seem like spec-z.  Let's trust accurate zphot.
-        if 'host_redshift_info' in prost_host.keys() and prost_host['host_redshift_info'].to_numpy()[0] == 'SPEC':
-            hostdict['redshift'] = prost_host['host_redshift_mean'].to_numpy()[0]
-            hostdict['redshift_err'] = prost_host['host_redshift_std'].to_numpy()[0]
-        else:
-            hostdict['photo_z_internal'] = prost_host['host_redshift_mean'].to_numpy()[0]
-            hostdict['photo_z_err_internal'] = prost_host['host_redshift_std'].to_numpy()[0]
-
-        return hostdict,hostcoords
-        
-    def getNEDData(self,jd,sc,ned_table):
-
-        gal_candidates = 0
-        radius = 5
-        while (radius < 11 and gal_candidates < 21):
-            try:
-                print("Radius: %s" % radius)
-                gal_candidates = len(ned_table)
-                radius += 1
-                print("Result length: %s" % gal_candidates)
-            except Exception as e:
-                radius += 1
-                print("NED exception: %s" % e.args)
-
-        galaxy_names,noz_galaxy_names = [],[]
-        galaxy_zs,noz_galaxy_zs = [],[]
-        galaxy_seps,noz_galaxy_seps = [],[]
-        galaxies_with_z,noz_galaxies_with_z = [],[]
-        galaxy_ras,noz_galaxy_ras = [],[]
-        galaxy_decs,noz_galaxy_decs = [],[]
-        galaxy_mags,noz_galaxy_mags = [],[]
-        if ned_table is not None:
-            print("NED Matches: %s" % len(ned_table))
-
-            galaxy_candidates = np.asarray([entry.decode("utf-8") for entry in ned_table["Type"]])
-            galaxies_indices = np.where(galaxy_candidates == 'G')
-            galaxies = ned_table[galaxies_indices]
-
-            print("Galaxy Candidates: %s" % len(galaxies))
-
-            # Get Galaxy name, z, separation for each galaxy with z
-            for l in range(len(galaxies)):
-                if isinstance(galaxies[l]["Redshift"], float):
-                    galaxies_with_z.append(galaxies[l])
-                    galaxy_names.append(galaxies[l]["Object Name"])
-                    galaxy_zs.append(galaxies[l]["Redshift"])
-                    galaxy_seps.append(galaxies[l]["Separation"])
-                    galaxy_ras.append(galaxies[l]["RA"])
-                    galaxy_decs.append(galaxies[l]["DEC"])
-                    galaxy_mags.append(galaxies[l]["Magnitude and Filter"])
-
-                noz_galaxies_with_z.append(galaxies[l])
-                noz_galaxy_names.append(galaxies[l]["Object Name"])
-                noz_galaxy_zs.append(galaxies[l]["Redshift"])
-                noz_galaxy_seps.append(galaxies[l]["Separation"])
-                noz_galaxy_ras.append(galaxies[l]["RA"])
-                noz_galaxy_decs.append(galaxies[l]["DEC"])
-                noz_galaxy_mags.append(galaxies[l]["Magnitude and Filter"])
-
-            print("Galaxies with z: %s" % len(galaxies_with_z))
-            # Get Dust in LoS for each galaxy with z
-            if len(galaxies_with_z) > 0:
-                for l in range(len(galaxies_with_z)):
-                    co_l = coordinates.SkyCoord(ra=galaxies_with_z[l]["RA"],
-                                                dec=galaxies_with_z[l]["DEC"],
-                                                unit=(u.deg, u.deg), frame='fk4', equinox='J2000.0')
-
-            else:
-                print("No NED Galaxy hosts with z")
-
-        # put in the hosts
-        hostcoords = ''; hosturl = ''; ned_mag = ''
-        galaxy_z_times_seps = np.array(galaxy_seps)*np.array(np.abs(galaxy_zs))
-        hostdict = {}
-        for z,name,ra,dec,sep,mag,gzs in zip(galaxy_zs,galaxy_names,galaxy_ras,
-                                             galaxy_decs,galaxy_seps,galaxy_mags,
-                                             galaxy_z_times_seps):
-            if gzs == np.min(galaxy_z_times_seps):
-                cosmo = FlatLambdaCDM(70,0.3)
-                if sep*60/cosmo.arcsec_per_kpc_proper(z).value < 100:
-                    hostdict = {'name':name,'ra':ra,'dec':dec,'redshift':z}
-            hostcoords += f'ra={ra:.7f}, dec={dec:.7f}\n'
-
-        # if this didn't work, let's get the nearest potential host
-        if 'name' not in hostdict.keys():
-            for z,name,ra,dec,sep,mag in zip(noz_galaxy_zs,noz_galaxy_names,noz_galaxy_ras,
-                                             noz_galaxy_decs,noz_galaxy_seps,noz_galaxy_mags):
-                if sep == np.min(noz_galaxy_seps):
-                    hostdict = {'name':name,'ra':ra,'dec':dec,'redshift':None}
-            
-        return hostdict,hostcoords
+        return _prost_hosts.host_dict(prost_host), ''
 
     def UpdateFromTNS(self,ndays=None,allowed_statuses=['New','Following','Watch','FollowupRequested','Interesting'],doTNS=True):
 
@@ -1009,21 +858,15 @@ class processTNS:
         else: nsn = 0
         return nsn
 
-    def GetAndUploadAllData(self,objs,ras,decs,doProst=True,doEBV=True,doTNS=True): #doNED=True
+    def GetAndUploadAllData(self,objs,ras,decs,doProst=True,doEBV=True,doTNS=True):
         TransientUploadDict = {}
         assert len(ras) == len(decs)
 
-        ebvall,nedtables = [],[]
+        ebvall = []
         ebvtstart = time.time()
         ebv_timeout,ned_timeout = False,False
         if doProst:
 
-            #if not os.path.exists(f'{self.ghost_path}/database/GHOST.csv'):
-            #    try:
-            #        getGHOST(real=True, verbose=True, installpath=self.ghost_path)
-            #    except:
-            #        pass
-                
             def handler(signum, frame):
                 raise Exception("timeout!")
                 
@@ -1082,23 +925,7 @@ class processTNS:
             scall = SkyCoord(ras,decs,frame="fk5",unit=(u.hourangle,u.deg))
 
                 
-        #    signal.signal(signal.SIGALRM, handler)              
-        #    try:
-        #        signal.alarm(600)
-        #        for sc in scall:
-        #            try:
-        #                ned_region_table = \
-        #                    Ned.query_region(
-        #                        sc, radius=self.nedradius*u.arcmin,
-        #                        equinox='J2000.0')
-        #            except:
-        #                ned_region_table = None
-        #            nedtables += [ned_region_table]
-        #    except:
-        #        print('NED timeout!')
-        #        ned_timeout = True
-
-            print('E(B-V)/NED time: %.1f seconds'%(time.time()-ebvtstart))
+            print('E(B-V) time: %.1f seconds'%(time.time()-ebvtstart))
             signal.alarm(0)
         
         tstart = time.time()
@@ -1158,11 +985,6 @@ class processTNS:
             else:
                 prost_host = None
                 
-            #if doNED:
-            #    if not ned_timeout:
-            #        nedtable = nedtables[iobj]
-            #    else: nedtable = None
-            #else: nedtable = None
             
             print("Object: %s\nRA: %s\nDEC: %s" % (obj,ras[iobj],decs[iobj]))
 
@@ -1248,8 +1070,9 @@ class processTNS:
 
         url = '%s'%self.dburl.replace('/api','/add_transient')
         try:
-            r = requests.post(url = url, data = json.dumps(TransientUploadDict),
-                              auth=HTTPBasicAuth(self.dblogin,self.dbpassword))
+            r = ingest_http.post(url = url, data = json.dumps(TransientUploadDict),
+                              auth=HTTPBasicAuth(self.dblogin,self.dbpassword),
+                              timeout=upload_timeout())
 
             if r.status_code >= 400:
                 print(self._format_add_transient_error(r))
@@ -1288,7 +1111,7 @@ def fetch(url):
     count = 0
     while not urlresponse and count < 3:
         try:
-            urlresponse = urllib.request.urlopen(url).read()
+            urlresponse = urllib.request.urlopen(url, timeout=default_timeout()[1]).read()
             return url, urlresponse
         except Exception as e:
             pass
@@ -1353,7 +1176,7 @@ def search(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # construct a dictionary of api key data and search obj data
     search_data={'api_key':api_key, 'data':json.dumps(json_file)}
     # search obj using request module
-    response=requests.post(search_url, headers=headers, data=search_data)
+    response=ingest_http.post(search_url, headers=headers, data=search_data)
     # return response
     return response
   except Exception as e:
@@ -1371,7 +1194,7 @@ def get(url,json_list,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # construct a dictionary of api key data and get obj data
     get_data={'api_key':api_key, 'data':json.dumps(json_file)}
     # get obj using request module
-    response=requests.post(get_url, headers=headers, data=get_data)
+    response=ingest_http.post(get_url, headers=headers, data=get_data)
     # return response
     return response
   except Exception as e:
@@ -1384,7 +1207,7 @@ def get_file(url,api_key,tns_bot_id,tns_bot_name,marker_type="bot"):
     # headers
     headers={'User-Agent': tns_marker_user_agent(tns_bot_id, tns_bot_name, marker_type)}
     # downloading file using request module
-    response=requests.post(url, headers=headers, data={'api_key':api_key}, stream=True)
+    response=ingest_http.post(url, headers=headers, data={'api_key':api_key}, stream=True)
     return response
   except Exception as e:
     print ('Error message : \n'+str(e))
@@ -1432,13 +1255,13 @@ class TNS_emails(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = options.redohost
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
         tnsproc.tns_bot_name = options.tns_bot_name
         tnsproc.ztfurl = options.ztfurl
         tnsproc.ghost_path = options.ghost_path
+        tnsproc.prost_path = options.prost_path
         
         # in case of code failures
         smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
@@ -1456,7 +1279,9 @@ class TNS_emails(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
             
         try:
             if options.update:
@@ -1517,7 +1342,6 @@ class TNS_updates(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = False #True
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
@@ -1541,7 +1365,9 @@ class TNS_updates(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         try:
             tnsproc.noupdatestatus = True
@@ -1599,7 +1425,6 @@ class TNS_Ignore_updates(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = False #True
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
@@ -1623,7 +1448,9 @@ class TNS_Ignore_updates(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
         
         try:
             tnsproc.noupdatestatus = True
@@ -1680,7 +1507,6 @@ class TNS_recent(CronJobBase):
         tnsproc.clobber = options.clobber
         tnsproc.noupdatestatus = options.noupdatestatus
         tnsproc.redohost = True
-        tnsproc.nedradius = options.nedradius
         tnsproc.tnsapi = options.tnsapi
         tnsproc.tnsapikey = options.tnsapikey
         tnsproc.tns_bot_id = options.tns_bot_id
@@ -1706,7 +1532,9 @@ class TNS_recent(CronJobBase):
             sendemail(from_addr, options.dbemail, subject,
                       f"multiple instances of {code} are running",
                       options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
+            # return, not sys.exit: runcrons runs every cron in one process (#757)
+            print(f"{code}: another instance is already running; skipping this run")
+            return f"skipped: another instance of {code} is running"
             
         try:
             tnsproc.noupdatestatus = True
@@ -1722,138 +1550,21 @@ class TNS_recent(CronJobBase):
         print('TNS -> YSE_PZ took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
 
 class TNS_recent_realtime(CronJobBase):
+    """Removed (#438); kept only so an old ``runcrons`` crontab line stays harmless.
+
+    It searched TNS for objects made public in the last ``tns_fastupdates_nminutes`` (10)
+    minutes but was scheduled only at 00:00 and 08:00, so it covered about 20 minutes a
+    day. ``TNS_emails`` (every 3 minutes) already imports new objects within minutes,
+    ``TNS_recent`` covers the last ``tns_recent_ndays`` twice a day, and the TNS re-sync
+    sweep (``TNS_Resync.TNSResync``) imports anything public in the last
+    ``TNS_RESYNC_GAP_DAYS`` that is still missing. Not in ``CRON_CLASSES``.
+    """
 
     RUN_AT_TIMES = ['00:00', '08:00']
 
     schedule = Schedule(run_at_times=RUN_AT_TIMES)
     code = 'YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime'
-        
+
     def do(self):
-
-        code = 'YSE_App.data_ingest.TNS_uploads.TNS_recent_realtime'
-        
-        # execute only if run as a script
-        print("checking for recent TNS events at {}".format(datetime.now().isoformat()))
-        usagestring = "TNS_Synopsis.py <options>"
-
-        tstart = time.time()
-        tnsproc = processTNS()
-
-        # read in the options from the param file and the command line
-        # some convoluted syntax here, making it so param file is not required
-        parser = tnsproc.add_options(usage=usagestring)
-        options,  args = parser.parse_known_args()
-        options.settingsfile = "%s/settings.ini"%djangoSettings.PROJECT_DIR
-        
-        config = configparser.ConfigParser()
-        config.read(options.settingsfile)
-
-        parser = tnsproc.add_options(usage=usagestring,config=config)
-        options,  args = parser.parse_known_args()
-        tnsproc.hostmatchrad = options.hostmatchrad
-
-        tnsproc.login = options.login
-        tnsproc.password = options.password
-        tnsproc.dblogin = options.dblogin
-        tnsproc.dbpassword = options.dbpassword
-        tnsproc.dbemailpassword = options.dbemailpassword
-        tnsproc.dburl = options.dburl
-        tnsproc.status = options.status
-        tnsproc.settingsfile = options.settingsfile
-        tnsproc.clobber = options.clobber
-        tnsproc.noupdatestatus = options.noupdatestatus
-        tnsproc.redohost = True
-        tnsproc.nedradius = options.nedradius
-        tnsproc.tnsapi = options.tnsapi
-        tnsproc.tnsapikey = options.tnsapikey
-        tnsproc.tns_bot_id = options.tns_bot_id
-        tnsproc.tns_bot_name = options.tns_bot_name
-        tnsproc.ztfurl = options.ztfurl
-        tnsproc.ghost_path = options.ghost_path
-        tnsproc.ndays = float(options.tns_recent_ndays)
-        tnsproc.tns_fastupdates_nminutes = float(options.tns_fastupdates_nminutes)
-
-        # in case of code failures
-        smtpserver = "%s:%s" % (options.SMTP_HOST, options.SMTP_PORT)
-        from_addr = "%s@gmail.com" % options.SMTP_LOGIN
-        subject = "TNS Transient Upload Failure in GetRecentEvents"
-        html_msg = f"Alert : YSE_PZ Failed to upload transients in {code}\n"
-        html_msg += "Error : %s at line number %s"
-
-        # check for instance of code already running
-        try:
-            me = singleton.SingleInstance(flavor_id="5")
-        except singleton.SingleInstanceException:
-            print("Sending error email")
-            sendemail(from_addr, options.dbemail, subject,
-                      f"multiple instances of {code} are running",
-                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-            sys.exit(1)
-
-
-        try:
-            tnsproc.noupdatestatus = True
-            nsn = tnsproc.GetRecentEvents(ndays=tnsproc.tns_fastupdates_nminutes/60./24.)
-        except Exception as e:
-            print("Sending error email")
-            exc_type, exc_obj, exc_tb = sys.exc_info()
-            nsn = 0
-            sendemail(from_addr, options.dbemail, subject,
-                      html_msg%(e,exc_tb.tb_lineno),
-                      options.SMTP_LOGIN, options.dbemailpassword, smtpserver)
-
-        print('TNS -> YSE_PZ took %.1f seconds for %i transients'%(time.time()-tstart,nsn))
-
-
-class UpdateGHOST(CronJobBase):
-
-    RUN_AT_TIMES = ['00:00', '08:00']
-
-    schedule = Schedule(run_at_times=RUN_AT_TIMES)
-    code = 'YSE_App.data_ingest.TNS_uploads.UpdateGHOST'
-    
-    def do(self):
-        
-        # check for instance of code already running
-        # no email hook on this one for now
-        me = singleton.SingleInstance(flavor_id="6")
-
-        from astro_ghost.ghostHelperFunctions import getTransientHosts
-        try:
-            from astro_ghost.photoz_helper import calc_photoz
-            is_photoz = True
-        except ImportError:
-            is_photoz = False
-
-        from YSE_App.models import Transient,User,Host
-        transients = Transient.objects.filter(
-            modified_date__gt=datetime.now()-timedelta(days=5),
-            host__isnull=True)
-
-        scall = [SkyCoord(t.ra,t.dec,unit=u.deg) for t in transients]
-        names = [t.name for t in transients]
-
-        ghost_hosts = getTransientHosts(names, scall, verbose=True, starcut='gentle', ascentMatch=False, GHOSTpath=djangoSettings.ghost_path)
-        if is_photoz:
-            iNorth = ghost_hosts['decMean'] > -30
-            iSouth = ghost_hosts['decMean'] <= -30
-            ghost_zphot = calc_photoz(ghost_hosts[iNorth])
-            ghost_hosts = pd.concat([ghost_zphot,ghost_hosts[iSouth]])
-
-        _remove_dated_ghost_dirs()
-
-        for i in ghost_hosts.index:
-            t = Transient.objects.get(name=ghost_hosts['TransientName'][i])
-            print(f'Adding host for {t.name}')
-            t.host = Host.objects.create(name=ghost_hosts['objName'][i],ra=ghost_hosts['raMean'][i],dec=ghost_hosts['decMean'][i],
-                                         modified_by=User.objects.get(username='admin'),created_by=User.objects.get(username='admin'))
-
-            if ghost_hosts['NED_redshift'][i] == ghost_hosts['NED_redshift'][i]:
-                t.host.redshift = ghost_hosts['NED_redshift'][i]
-
-            if 'photo_z' in ghost_hosts.keys() and ghost_hosts['photo_z'][i] == ghost_hosts['photo_z'][i]:
-                t.host.photo_z_internal = ghost_hosts['photo_z'][i]
-            
-            t.host.save()
-            t.save()
-        print('success')
+        print("TNS_recent_realtime was removed (#438); remove its crontab line. Nothing to do.")
+        return "removed"

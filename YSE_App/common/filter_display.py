@@ -8,6 +8,8 @@ of legend entries lives in ``YSE_App/common/band_order.py``.
 
 from __future__ import annotations
 
+import re
+
 # Swope / PS1 uBVgrizy palette (matches YSE_App_photometricband seed values).
 FILTER_COLORS = {
     'u': '#ff7f0e',
@@ -117,39 +119,102 @@ FILTER_EFFECTIVE_WAVELENGTH_AA = {
 # Used when neither the band name nor its family is known (mid-optical).
 DEFAULT_EFFECTIVE_WAVELENGTH_AA = 6000.0
 
-# Instrument / telescope name substrings -> short legend label (e.g. ZTF-Cam -> ZTF).
-TELESCOPE_SHORT_LABELS = (
+# Telescope family -> short legend label (e.g. ZTF-Cam -> ZTF), matched on whole words of the
+# names (#788, #793). A rule's words must appear as consecutive words of the name; a trailing
+# camera number is allowed (ACAM1 matches acam). Generic camera names used at many
+# observatories (Direct, PIXIS, ACP) are deliberately absent: such data keep their own
+# telescope name (Nickel, Lulin), never another observatory's label.
+#
+# Rules checked against the TELESCOPE name (the database row is authoritative).
+TELESCOPE_NAME_RULES = (
     (('ztf',), 'ZTF'),
-    (('swift', 'uvot'), 'Swift'),
-    # PS2 before PS1: 'pan-starrs' would otherwise claim Pan-STARRS2 rows.
-    (('gpc2', 'ps2', 'pan-starrs2', 'panstarrs2'), 'PS2'),
-    (('gpc1', 'ps1', 'pan-starrs', 'panstarrs'), 'PS1'),
+    (('swift',), 'Swift'),
+    # PS2 before PS1: 'pan starrs' would otherwise claim Pan-STARRS2 rows.
+    (('ps2', 'pan starrs2', 'panstarrs2'), 'PS2'),
+    (('ps1', 'pan starrs1', 'panstarrs1', 'pan starrs', 'panstarrs'), 'PS1'),
     (('swope',), 'Swope'),
-    (('acam', 'atlas'), 'ATLAS'),
-    (('direct', 'p200'), 'P200'),
-    (('sinistro', 'pixis', 'lco', 'lcogt'), 'LCO'),
-    (('acp', 'decam'), 'DECam'),
-    (('sta1600', 'soar'), 'SOAR'),
+    (('atlas',), 'ATLAS'),
+    (('p200', 'hale', 'palomar 200'), 'P200'),
+    (('lco', 'lcogt', 'las cumbres'), 'LCO'),
+    (('blanco', 'decam'), 'DECam'),
+    (('soar',), 'SOAR'),
     (('ptf',), 'PTF'),
-    (('hst', 'acs', 'wfc3'), 'HST'),
+    (('hst', 'hubble'), 'HST'),
     (('lsst', 'rubin', 'simonyi'), 'LSST'),
 )
-
-# Instrument / telescope name substrings -> Bokeh glyph.
-TELESCOPE_SYMBOL_RULES = (
-    (('ztf',), 'diamond'),
-    (('gpc1', 'gpc2', 'ps1', 'ps2', 'pan-starrs', 'panstarrs'), 'square'),
-    (('swope',), 'circle'),
-    (('acam', 'atlas'), 'asterisk'),
-    (('direct', 'p200'), 'hex'),
-    (('sinistro', 'pixis', 'lco', 'lcogt'), 'dash'),
-    (('acp', 'decam', 'decam'), 'star'),
-    (('soar', 'sta1600'), 'triangle'),
-    (('ptf',), 'cross'),
-    (('swift', 'uvot'), 'diamond'),
-    (('hst', 'wfc3', 'acs'), 'square'),
-    (('lsst', 'rubin', 'simonyi'), 'plus'),
+# Rules checked against the INSTRUMENT name: only cameras unique to one survey or telescope.
+INSTRUMENT_NAME_RULES = (
+    (('ztf',), 'ZTF'),
+    (('uvot',), 'Swift'),
+    (('gpc2',), 'PS2'),
+    (('gpc1',), 'PS1'),
+    (('acam',), 'ATLAS'),
+    (('sinistro',), 'LCO'),
+    (('decam',), 'DECam'),
+    (('sta1600',), 'SOAR'),
+    (('wfc3', 'acs'), 'HST'),
+    (('lsstcam',), 'LSST'),
 )
+# Kept for callers that list the families (labels only).
+TELESCOPE_SHORT_LABELS = TELESCOPE_NAME_RULES + INSTRUMENT_NAME_RULES
+
+# Family label -> Bokeh glyph.
+FAMILY_SYMBOLS = {
+    'ZTF': 'diamond',
+    'Swift': 'diamond',
+    'PS1': 'square',
+    'PS2': 'square',
+    'HST': 'square',
+    'Swope': 'circle',
+    'ATLAS': 'asterisk',
+    'P200': 'hex',
+    'LCO': 'dash',
+    'DECam': 'star',
+    'SOAR': 'triangle',
+    'PTF': 'cross',
+    'LSST': 'plus',
+}
+# Kept for callers that list (patterns, symbol) pairs.
+TELESCOPE_SYMBOL_RULES = tuple(
+    (patterns, FAMILY_SYMBOLS[label]) for patterns, label in TELESCOPE_SHORT_LABELS
+)
+
+
+def _words(name: str | None) -> list[str]:
+    return re.findall(r'[a-z0-9]+', (name or '').lower())
+
+
+def _word_match(words: list[str], pattern: str) -> bool:
+    """True when the words of ``pattern`` appear consecutively in ``words``.
+
+    The last pattern word may be followed by digits in the name (``acam`` matches ``ACAM1``).
+    """
+    pwords = _words(pattern)
+    n = len(pwords)
+    if not n:
+        return False
+    for start in range(len(words) - n + 1):
+        window = words[start:start + n]
+        if window[:-1] != pwords[:-1]:
+            continue
+        last, want = window[-1], pwords[-1]
+        if last == want or (last.startswith(want) and last[len(want):].isdigit()):
+            return True
+    return False
+
+
+def telescope_family(instrument_name: str | None = None, telescope_name: str | None = None) -> str | None:
+    """Known telescope family label of a series, or None (telescope name first, then a unique camera)."""
+    tel_words = _words(telescope_name)
+    for patterns, label in TELESCOPE_NAME_RULES:
+        if any(_word_match(tel_words, pat) for pat in patterns):
+            return label
+    inst_words = _words(instrument_name)
+    for patterns, label in INSTRUMENT_NAME_RULES:
+        if any(_word_match(inst_words, pat) for pat in patterns):
+            return label
+    return None
+
 
 _FALLBACK_COLORS = ('#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9')
 
@@ -212,12 +277,13 @@ def band_display_color(
 def telescope_display_symbol(
     instrument_name: str | None,
     disp_symbol: str | None = None,
+    telescope_name: str | None = None,
 ) -> str:
-    """Resolve Bokeh marker from telescope family (shape groups by instrument)."""
-    inst_lower = (instrument_name or '').lower()
-    for patterns, symbol in TELESCOPE_SYMBOL_RULES:
-        if any(pat in inst_lower for pat in patterns):
-            return symbol
+    """Bokeh marker of the series' telescope family (``telescope_family``); else the band's own
+    ``disp_symbol``; else a triangle."""
+    family = telescope_family(instrument_name, telescope_name)
+    if family in FAMILY_SYMBOLS:
+        return FAMILY_SYMBOLS[family]
     if disp_symbol and disp_symbol not in (None, 'None', 'inverted_triangle'):
         return disp_symbol
     return 'triangle'
@@ -239,22 +305,17 @@ def telescope_display_name(
 ) -> str:
     """Short telescope family label for plot legends (e.g. ZTF-Cam -> ZTF).
 
-    Both names are checked against the family patterns before either is
-    used verbatim, so ``ZTF-Cam`` on a telescope row named ``Palomar 48``
-    still reads ``ZTF`` (#250).
+    A known family (``telescope_family``: the telescope name first, then a camera unique to
+    one survey) gives its short label, so ``ZTF-Cam`` on a telescope row named
+    ``Palomar 48`` still reads ``ZTF`` (#250). Otherwise the telescope's own name, else the
+    instrument's (#788, #793: Nickel and Lulin data are never relabelled P200 or LCO).
     """
-    candidates = [
-        str(candidate).strip()
-        for candidate in (telescope_name, instrument_name)
-        if candidate and str(candidate).strip()
-    ]
-    for candidate in candidates:
-        lower = candidate.lower()
-        for patterns, label in TELESCOPE_SHORT_LABELS:
-            if any(pat in lower for pat in patterns):
-                return label
-    if candidates:
-        return candidates[0]
+    family = telescope_family(instrument_name, telescope_name)
+    if family:
+        return family
+    for candidate in (telescope_name, instrument_name):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip()
     return 'Unknown'
 
 
@@ -295,19 +356,9 @@ def filter_color_groups_for_display() -> list[dict]:
 
 def telescope_symbol_groups_for_display() -> list[dict]:
     """Human-readable telescope -> symbol groups."""
-    labels = {
-        'diamond': 'ZTF, Swift/UVOT',
-        'square': 'PS1 / PS2 (GPC1 / GPC2), HST',
-        'circle': 'Swope',
-        'asterisk': 'ATLAS (ACAM)',
-        'hex': 'P200 Direct',
-        'dash': 'LCO Sinistro / PIXIS',
-        'star': 'DECam (ACP)',
-        'triangle': 'SOAR / STA1600 (default fallback)',
-        'cross': 'PTF',
-        'plus': 'LSST (Rubin LSSTCam)',
-    }
-    seen = {}
-    for _patterns, symbol in TELESCOPE_SYMBOL_RULES:
-        seen.setdefault(symbol, labels.get(symbol, symbol))
+    seen: dict = {}
+    for label, symbol in FAMILY_SYMBOLS.items():
+        seen.setdefault(symbol, []).append(label)
+    seen = {sym: ', '.join(labels) for sym, labels in seen.items()}
+    seen.setdefault('triangle', 'other telescopes (default)')
     return [{'symbol': sym, 'telescopes': desc} for sym, desc in seen.items()]

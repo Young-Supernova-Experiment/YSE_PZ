@@ -1,0 +1,72 @@
+{# Feedback dialog (#443); included by YSE_App/base.html when FEEDBACK_ENABLED is on. #}
+<div class="modal fade" id="yse-feedback-modal" tabindex="-1" role="dialog" aria-labelledby="yse-feedback-title" aria-hidden="true">
+	<div class="modal-dialog" role="document">
+		<form class="modal-content" id="yse-feedback-form" method="post" action="{% url 'feedback_submit' %}">
+			{% csrf_token %}
+			<input type="hidden" name="page_url" id="yse-feedback-page" value="{{ request.get_full_path }}">
+			<input type="hidden" name="next" id="yse-feedback-next" value="{{ request.get_full_path }}">
+			<div class="modal-header">
+				<h5 class="modal-title" id="yse-feedback-title">Send feedback</h5>
+				<button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+			</div>
+			<div class="modal-body">
+				<p class="small text-muted">Your message is stored in YSE-PZ for the team to read. Staff may turn it, edited, into an issue on the public GitHub repository; your name is never included. Leave out unpublished results and personal details you would not want public.</p>
+				<div class="form-group">
+					<label for="yse-feedback-kind">Type</label>
+					<select class="form-control form-control-sm" id="yse-feedback-kind" name="kind">
+						<option value="bug">Bug</option>
+						<option value="idea">Idea</option>
+						<option value="question">Question</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label for="yse-feedback-subject">Short title</label>
+					<input class="form-control form-control-sm" id="yse-feedback-subject" name="title" maxlength="200">
+				</div>
+				<div class="form-group">
+					<label for="yse-feedback-text">Description</label>
+					<textarea class="form-control form-control-sm" id="yse-feedback-text" name="text" rows="6" maxlength="5000" required></textarea>
+				</div>
+				<div class="form-check">
+					<input class="form-check-input" type="checkbox" id="yse-feedback-include-page" name="include_page" value="1" checked>
+					<label class="form-check-label" for="yse-feedback-include-page">Include a link to this page</label>
+				</div>
+				<div class="alert mt-2 mb-0" id="yse-feedback-result" role="status" hidden></div>
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-default btn-sm" data-dismiss="modal">Close</button>
+				<button type="submit" class="btn btn-primary btn-sm" id="yse-feedback-send">Send</button>
+			</div>
+		</form>
+	</div>
+</div>
+<script>
+	(function () {
+		var form = document.getElementById("yse-feedback-form");
+		if (!form || !window.fetch || !window.FormData) { return; }
+		var result = document.getElementById("yse-feedback-result"), send = document.getElementById("yse-feedback-send");
+		function show(ok, text) {
+			result.className = "alert mt-2 mb-0 " + (ok ? "alert-success" : "alert-danger");
+			result.textContent = text;
+			result.removeAttribute("hidden");
+		}
+		form.addEventListener("submit", function (ev) {
+			ev.preventDefault();
+			var here = window.location.pathname + window.location.search;
+			document.getElementById("yse-feedback-page").value = here;
+			document.getElementById("yse-feedback-next").value = here;
+			send.disabled = true;
+			fetch(form.action, {
+				method: "POST", credentials: "same-origin", body: new FormData(form),
+				headers: { "X-Requested-With": "XMLHttpRequest" }
+			})
+				.then(function (r) { return r.json().catch(function () { return { ok: false, message: "Feedback could not be sent (HTTP " + r.status + ")." }; }); })
+				.then(function (d) {
+					show(!!d.ok, d.message || (d.ok ? "Sent." : "Feedback could not be sent."));
+					if (d.ok) { form.reset(); }
+				})
+				.catch(function () { show(false, "Feedback could not be sent; please try again."); })
+				.then(function () { send.disabled = false; });
+		});
+	})();
+</script>

@@ -4,7 +4,10 @@ from YSE_App.common.utilities import GetSexigesimalString
 from django.db.models import FloatField,ExpressionWrapper, F, Q
 from YSE_App.util import tnsAPI
 from django.conf import settings as djangoSettings
+from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_POST
 import numpy as np
 
 _author_list = np.array(["S. Dhawan", "K. Mandel", "S. Thorp", "S. Ward (Cambridge)", "A. Agnello", "C. R. Angus", "Z. Ansari", "N. Arendse", "C. Cold", "D. Farias", "C. Gall", "C. Grillo", "S. H. Bruun", "J. Hjorth", "A. Kolborg", "L. Izzo", "N. Khetan", "S. L. Schrøder (DARK)", "H. Korhonen", "S. Raimundo (UCLA, DARK Univ. Copenhagen, Univ. Southampton)", "D. Kodi Ramanah", "A. Sarangi", "R. Wojtak (DARK U Copenhagen)", "H. Pfister (DARK, U Copenhagen)", "K. Auchettl (U Melbourne, UC Santa Cruz, DARK)", "M. Soraisam (Gemini Observatory)", "K. C. Chambers", "M. E. Huber", "E. A. Magnier", "T. J. L. de Boer", "J. R. Fairlamb", "C. C. Lin", "R. J. Wainscoat", "T. Lowe", "M. Willman", "J. Bulger", "A. S. B. Schultz (IfA, Hawaii)", "P. D. Aleo", "D. Chatterjee", "N. Earl", "K. D. French", "A. Gagliano", "K. L. Malanchev", "F. Matasic", "G. Narayan", "S. Sharief", "A. Thiruvengadam", "J. Vazquez (Illinois)", "R. Angulo", "Q. Wang (JHU)", "A. Rest (JHU, STScI)", "G. Terreran (Las Cumbres Observatory)", "Y.-C. Pan (NCU)", "F. Valdes", "A. Zenteno (NOIRLab)", "K. Alexander", "P. Blanchard", "L. DeMarchi (Northwestern U.)", "A. Hajela", "C. D. Kilpatrick", "C. Stauffer", "M. Stroh (Northwestern University)", "V. A. Villar", "K. de Soto", "K. Yadavalli (PSU)", "S. J. Smartt", "K. W. Smith (Queen's University Belfast)", "S. Gomez", "J. Pierel", "L. Strolger (STScI)", "G. Dimitriadis (Trinity College Dublin)", "W. Jacobson-Galán", "R. Margutti", "D. Matthews (UC Berkeley)", "D. A. Coulter", "K. W. Davis", "S. A. Dodd", "R. J. Foley", "D. O. Jones", "J. A. P. Law-Smith", "B. Mockler", "C. Rojas-Bravo", "M. R. Siebert", "K. Taggart", "S. Tinyanont (UC Santa Cruz)", "E. Ramirez-Ruiz (UC Santa Cruz, DARK)", "R. Ridden-Harper (University of Canterbury)", "M. Drout (U Toronto)", "V. F. Baldassare (WSU)"])
@@ -81,14 +84,41 @@ _json_template = {
 
 tns_filt_ids = {'g':21,'r':22,'i':23,'z':24}
 
+# Auth groups whose members may use this legacy DECam report (#495), besides
+# staff and users who may use an enabled TNS sharing service.
+LEGACY_TNS_REPORTER_GROUPS = ('DECAT',)
+
+
+def user_may_submit_legacy_tns(user):
+    """Staff, members of LEGACY_TNS_REPORTER_GROUPS, or users of an enabled TNS sharing service."""
+    if user is None or not user.is_authenticated:
+        return False
+    if user.is_staff or user.is_superuser:
+        return True
+    if user.groups.filter(name__in=LEGACY_TNS_REPORTER_GROUPS).exists():
+        return True
+    return bool(SharingService.for_user(user, kind=SharingService.KIND_TNS))
+
+
+@login_required
+@require_POST
 def submit_to_tns(request,transient_name):
 
-    t = Transient.objects.get(name=transient_name)
+    if not user_may_submit_legacy_tns(request.user):
+        return JsonResponse({'msg': 'You are not allowed to submit reports to TNS.'}, status=403)
+
+    t = get_object_or_404(Transient, name=transient_name)
 
     # to submit, we need to get:
     # discovery date
     # can this just be the first 5-sigma detection?
-    tp = TransientPhotData.objects.filter(photometry__transient=t).filter(photometry__instrument__name='DECam')
+    # only photometry the submitter may see and send (#691)
+    from YSE_App.sharing.report_scope import ReportScope
+    scope = ReportScope.for_user(request.user)
+    tp = TransientPhotData.objects.filter(photometry__transient=t, photometry_id__in=scope.photometry_ids(t))
+    if scope.point_filter() is not None:
+        tp = tp.filter(scope.point_filter())  # only the points the submitter may see (#714)
+    tp = tp.filter(photometry__instrument__name='DECam')
     tp = tp.annotate(snr=ExpressionWrapper(F('flux')/F('flux_err'),output_field=FloatField()))
     tp_det = tp.filter(snr__gt=5).order_by('obs_date')
     
@@ -214,6 +244,14 @@ def submit_to_tns(request,transient_name):
              "comments": ""
              }
 
+    # the points this report carries (made public once the real TNS accepts it, #708)
+    reported_point_ids = [disc_data.pk]
+    if len(tp_seconddisc) == 1:
+        reported_point_ids.append(tp_seconddisc[0].pk)
+    if 'non_detection' in json_tmpl['at_report']['0'] and len(tp_nondet) and \
+            json_tmpl['at_report']['0']['non_detection'].get('obsdate'):
+        reported_point_ids.append(tp_nondet[0].pk)
+
     # do we want to send this to the sandbox or the real TNS?
     # if it's going to the real TNS, we first need to make sure that the sandbox link
     # is available for inspection and the user is aware
@@ -279,6 +317,14 @@ def submit_to_tns(request,transient_name):
             t.save()
 
         context = {'msg':f'success!  This SN is now called: {obj_name}'}
+
+        # what went to TNS is public now, and stays public (#708)
+        try:
+            from YSE_App.services import tns_public
+            tns_public.mark_reported_public(t, photometry_point_ids=reported_point_ids)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('could not mark reported photometry public for %s', t.name)
     else:
         context = {'msg':str(message),
                    'new_id':None}

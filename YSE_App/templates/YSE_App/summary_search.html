@@ -48,7 +48,7 @@
         <a href="{% url 'transient_detail' r.transient.slug %}"><strong>{{ r.transient.name }}</strong></a>
         <span class="badge badge-light">{{ r.transient.status }}</span>
         {% if r.transient.best_spec_class %}<span class="badge badge-info">{{ r.transient.best_spec_class }}</span>{% endif %}
-        {% if r.transient.redshift %}<span class="small text-muted">z = {{ r.transient.redshift|floatformat:4 }}</span>{% endif %}
+        {% with bz=r.transient.best_z %}{% if bz.value is not None %}<span class="small text-muted">z = {{ bz.value|floatformat:4 }}</span>{% endif %}{% endwith %}
         {% if search_mode == 'embedding' %}<span class="small text-muted yse-summary-score float-right pull-right" title="cosine similarity">{{ r.score|floatformat:3 }}</span>{% endif %}
       </div>
       <p class="yse-summary-snippet">{{ r.snippet }}</p>

@@ -1,0 +1,6 @@
+{% comment %}Forward / backward choice of a turn-off form. A backwards choice asks for confirmation (access_direction_script.html). Context: id, n1, n2 (make the element id unique).{% endcomment %}
+<label class="sr-only" for="{{ id }}-{{ n1 }}-{{ n2 }}-direction">When</label>
+<select name="direction" id="{{ id }}-{{ n1 }}-{{ n2 }}-direction" class="form-control form-control-sm mr-1 yse-access-direction" title="Going forward (default): data taken before now stay visible to them. Backwards: they also lose earlier data.">
+	<option value="forward" selected>going forward (keep earlier data)</option>
+	<option value="backward">backwards (also earlier data)</option>
+</select>

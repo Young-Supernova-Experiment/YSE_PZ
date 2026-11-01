@@ -1,0 +1,28 @@
+# /etc/yse-watchdog/watchdog.conf (root:root, mode 600). Sourced by yse-watchdog.sh (#769).
+# Every key is optional except DB_HEALTH_URL and STATIC_URL; defaults are in the script.
+
+# Django + DB. Use /healthz/ (#768) once the stack runs it; until then a page that
+# needs Django but not a login (for example the login page) still detects a stuck
+# web process, and db_direct covers MySQL.
+DB_HEALTH_URL="https://<HOST>/<STACK_PREFIX>/healthz/"
+# A file Apache serves straight from disk (no Django, no DB).
+STATIC_URL="https://<HOST>/<STATIC_PREFIX>/<A_STATIC_FILE>"
+
+# Monitoring login for the direct MySQL check (see the runbook for the grants).
+MYCNF=/etc/yse-watchdog/my.cnf
+
+NOTIFY="<YOUR_EMAIL>"
+
+FAILS_NEEDED=3
+COOLDOWN=900
+MAX_PER_HOUR=3
+SNAPSHOT_DAYS=30
+
+# Optional: before reloading Apache, KILL QUERY statements from these MySQL users
+# that have run longer than this many seconds (needs CONNECTION_ADMIN for the
+# monitoring login). 0 disables.
+KILL_QUERY_SECONDS=0
+KILL_QUERY_USERS=""
+
+# Start with DRY_RUN=1 for a day: it logs and mails what it would do, and changes nothing.
+DRY_RUN=1

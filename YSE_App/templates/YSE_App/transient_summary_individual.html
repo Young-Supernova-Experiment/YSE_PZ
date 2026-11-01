@@ -98,14 +98,16 @@
                     {{ transient.disc_date }}
                 </td>
                 <td>
-                  {% if transient.redshift %}
-                    {{ transient.redshift }} 
-                    {% if transient.redshift_err %}
-                    +/- {{ transient.redshift_err }}
+                  {% with bz=transient.best_z %}
+                  {% if bz.value is not None %}
+                    {{ bz.value }} 
+                    {% if bz.error %}
+                    +/- {{ bz.error }}
                   {% endif %}
                   {% else %}
                     Unknown
                   {% endif %}
+                  {% endwith %}
                 </td>
                 <td>
                   {% if transient.best_spec_class %}
@@ -116,7 +118,7 @@
                 </td>
                 <td>{{ transient.photo_class }}</td>
                 <td>
-                  {{ transient.CoordString|galcoordsl }}&nbsp;&nbsp;&nbsp;&nbsp;{{ transient.CoordString|galcoordsb }} 
+                  {{ transient|galcoordsl }}&nbsp;&nbsp;&nbsp;&nbsp;{{ transient|galcoordsb }} 
                 </td>
                 <td>
                   {% if transient.mw_ebv %}
@@ -600,7 +602,7 @@
         return cookieValue;
       }
 
-      var csrftoken = getCookie('csrftoken');
+      var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
       /*
       The functions below will create a header with csrftoken

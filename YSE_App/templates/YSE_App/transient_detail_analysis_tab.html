@@ -5,7 +5,7 @@
      data-fragment-url="{% url 'transient_detail_analysis_fragment' transient.id %}"
      data-active="{% if analysis_active %}1{% else %}0{% endif %}"
      data-poll-seconds="{{ analysis_poll_seconds }}">
-	<script type="application/json" id="yse_analysis_services_json">{{ analysis_services_json|safe }}</script>
+	{{ analysis_services_data|json_script:"yse_analysis_services_json" }}
 
 	{% if not analysis_sees_data %}<p class="text-muted small"><i class="fa fa-lock"></i> You do not have access to this transient's photometry or spectra; only your own runs are listed and a new run sees only data you may access.</p>{% endif %}
 	<div class="row">

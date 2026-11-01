@@ -37,9 +37,9 @@ KIND_GROUPS = (
      ("alert", "upload_error", "candidate")),
     ("collaboration", "Interests and data access",
      "Paper interests registered on transients you work on; data access requests and team membership "
-     "requests you can decide, and decisions on your own requests; for administrators, research opt-outs "
-     "whose data to purge.",
-     ("interest", "data_access", "team_request", "research_optout")),
+     "requests you can decide, and decisions on your own requests; advisor and advisee relationships to "
+     "confirm; for administrators, research opt-outs whose data to purge.",
+     ("interest", "data_access", "team_request", "mentorship", "research_optout")),
     ("favorite", "Favorite transients",
      "Activity on transients you starred: comments, status / class / redshift changes, new spectra and "
      "photometry, follow-up requests and their status (batched per transient).",
@@ -151,6 +151,7 @@ class Notification(models.Model):
         ("data_access", "Data access"),
         ("interest", "Interest"),
         ("research_optout", "Research opt-out"),
+        ("mentorship", "Relationship to confirm"),
         ("sharing_result", "Sharing result"),
         ("job_result", "Job result"),
     )

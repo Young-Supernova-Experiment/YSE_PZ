@@ -388,7 +388,7 @@ class TNSRequestHelperTests(TestCase):
 
     def test_search_and_get_raise_when_the_request_fails(self):
         TNS_uploads = _import_module_or_skip(self, "YSE_App.data_ingest.TNS_uploads")
-        with mock.patch.object(TNS_uploads.requests, "post", side_effect=OSError("cron-smoke: no network")):
+        with mock.patch.object(TNS_uploads.ingest_http, "post", side_effect=OSError("cron-smoke: no network")):
             with self.assertRaises(TNS_uploads.TNSRequestError):
                 TNS_uploads.search(*self.ARGS)
             with self.assertRaises(TNS_uploads.TNSRequestError):

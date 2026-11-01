@@ -3,6 +3,7 @@ from django.db.models import DateTimeField, ExpressionWrapper, F, Q
 from django.db.models.functions import Greatest
 from django.db.models.expressions import RawSQL
 from datetime import timedelta
+import inspect
 import astropy.coordinates as cd
 import astropy.units as u
 import numpy as np
@@ -22,23 +23,97 @@ def makeRegistrar():
     return registrar
 python_query_reg = makeRegistrar()
 
-def annotate_rising_transient_qs(qs):
+
+def get_python_query(name):
+    """The registered python query called ``name`` (#505); KeyError when there is none."""
+    func = python_query_reg.all.get(name) if isinstance(name, str) else None
+    if func is None:
+        raise KeyError(name)
+    return func
+
+
+def run_python_query(name, user=None):
+    """Run the saved Python query ``name`` for ``user`` (#687).
+
+    Queries that take a ``user`` (the rising-transient family) select rows
+    using only the photometry that viewer may see, so a row cannot appear or
+    vanish because of data they cannot read. Staff and ``user=None`` keep the
+    all-data selection. Queries without a ``user`` parameter read no
+    photometry (position and tag selections) and are called as before. The
+    caller still applies ``filter_listed_transients`` to the rows.
+    """
+    func = get_python_query(name)
+    if user is not None and 'user' in inspect.signature(func).parameters:
+        return func(user=user)
+    return func()
+
+def annotate_recent_mag(qs, user=None):
+    """``recent_mag`` for the saved-query and planning tables: the stored last detection (#270).
+
+    ``TransientPhotStat.last_detected_mag`` (a LEFT JOIN, NULL without a stat
+    row or detection) instead of a correlated photometry subquery per row, so
+    the "Max Recent Mag" filter and the "Last Det." cell agree: the latest
+    unflagged detection by the light-curve plot's rule. Explorer users read
+    the same columns from ``yse_transient_photstat_v`` (docs/photstat.md).
+
+    With ``user`` the value is the one that user may see (#607, #692): the
+    stored per-scope stat for a viewer (staff included, #706) with hidden photometry, so
+    filters on it cannot probe restricted points. Staff, and callers that
+    pass no user, keep the all-data column.
+    """
+    if user is None:
+        return qs.annotate(recent_mag=F('photstat__last_detected_mag'))
+    from YSE_App.services.photstat_visibility import stat_expression
+
+    return qs.annotate(recent_mag=stat_expression(user, 'last_detected_mag'))
+
+
+def _visible_point_sql(user):
+    """``(sql, params)`` of an ``EXISTS`` body keeping only photometry ``user`` may see, or ``None``.
+
+    Correlated on the raw query's ``p`` (``TransientPhotometry``) alias and
+    built from the central rule, so group rules and any later read-time
+    grants (#648) apply. Staff (and ``user=None``) get ``None``: unchanged SQL.
+    """
+    from YSE_App.services.visibility import photometry_visible_q, user_sees_everything
+
+    if user is None or user_sees_everything(user):
+        return None
+    qs = TransientPhotometry.objects.filter(photometry_visible_q(user)).extra(
+        where=['`YSE_App_transientphotometry`.`id` = p.id']).values('pk')
+    return qs.query.sql_with_params()
+
+
+def _last_mag_sql(column, filters, offset, visible=None):
+    sql = LAST_MAG_BY_BAND_SQL % (column, filters, offset)
+    if visible is None:
+        return sql, ()
+    vis_sql, vis_params = visible
+    return sql.replace('ORDER BY', 'AND EXISTS (%s)\n   ORDER BY' % vis_sql, 1), tuple(vis_params)
+
+
+def _last_mag(column, filters, offset, visible=None):
+    """``_last_mag_sql`` as a float annotation. Django 4.x needs the type to do arithmetic on it (dm, dt, rise rate)."""
+    return RawSQL(*_last_mag_sql(column, filters, offset, visible), output_field=FloatField())
+
+
+def annotate_rising_transient_qs(qs, user=None):
+    """Rise-rate annotations; for a ``user`` who is not a service reader only from photometry they may see (#692)."""
+    visible = _visible_point_sql(user)
 
     g_filters = "('g-ZTF', 'g', 'V', 'gp', 'g-Sloan')"
     r_filters = "('r-ZTF', 'r', 'rp', 'r-Sloan')"
     i_filters = "('i-ZTF', 'i')"
 
-    last_mag_query = LAST_MAG_BY_BAND_SQL
-
     # g/V rise
-    qs = qs.annotate(recent_g_mag=RawSQL(last_mag_query%('pd.mag',g_filters,0),())).\
-            annotate(recent_g_mag_err=RawSQL(last_mag_query%('pd.mag_err',g_filters,0),())).\
-            annotate(recent_g_obs=RawSQL(last_mag_query%('UNIX_TIMESTAMP(pd.obs_date)',g_filters,0),())).\
-            annotate(second_most_recent_g_mag=RawSQL(last_mag_query%('pd.mag',g_filters,1),())).\
-            annotate(second_most_recent_g_obs=RawSQL(last_mag_query%('UNIX_TIMESTAMP(pd.obs_date)',g_filters,1),())).\
-            annotate(second_most_recent_g_ulim=RawSQL(last_mag_query%('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',g_filters,1),())).\
-            annotate(second_most_recent_g_flux=RawSQL(last_mag_query%('pd.flux',g_filters,1),())).\
-            annotate(second_most_recent_g_flux_err=RawSQL(last_mag_query%('pd.flux_err',g_filters,1),()))
+    qs = qs.annotate(recent_g_mag=_last_mag('pd.mag',g_filters,0,visible)).\
+            annotate(recent_g_mag_err=_last_mag('pd.mag_err',g_filters,0,visible)).\
+            annotate(recent_g_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',g_filters,0,visible)).\
+            annotate(second_most_recent_g_mag=_last_mag('pd.mag',g_filters,1,visible)).\
+            annotate(second_most_recent_g_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',g_filters,1,visible)).\
+            annotate(second_most_recent_g_ulim=_last_mag('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',g_filters,1,visible)).\
+            annotate(second_most_recent_g_flux=_last_mag('pd.flux',g_filters,1,visible)).\
+            annotate(second_most_recent_g_flux_err=_last_mag('pd.flux_err',g_filters,1,visible))
 
     qs = qs.annotate(dm_g=-1.0*(F('recent_g_mag') - F('second_most_recent_g_mag')))
     qs = qs.annotate(dt_g=F('recent_g_obs') - F('second_most_recent_g_obs'))
@@ -50,14 +125,14 @@ def annotate_rising_transient_qs(qs):
 
     # r rise
     qs = qs.\
-            annotate(recent_r_mag=RawSQL(last_mag_query%('pd.mag',r_filters,0),())).\
-            annotate(recent_r_mag_err=RawSQL(last_mag_query%('pd.mag_err',r_filters,0),())).\
-            annotate(recent_r_obs=RawSQL(last_mag_query%('UNIX_TIMESTAMP(pd.obs_date)',r_filters,0),())).\
-            annotate(second_most_recent_r_mag=RawSQL(last_mag_query%('pd.mag',r_filters,1),())).\
-            annotate(second_most_recent_r_obs=RawSQL(last_mag_query%('UNIX_TIMESTAMP(pd.obs_date)',r_filters,1),())).\
-            annotate(second_most_recent_r_ulim=RawSQL(last_mag_query%('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',r_filters,1),())).\
-            annotate(second_most_recent_r_flux=RawSQL(last_mag_query%('pd.flux',r_filters,1),())).\
-            annotate(second_most_recent_r_flux_err=RawSQL(last_mag_query%('pd.flux_err',r_filters,1),()))
+            annotate(recent_r_mag=_last_mag('pd.mag',r_filters,0,visible)).\
+            annotate(recent_r_mag_err=_last_mag('pd.mag_err',r_filters,0,visible)).\
+            annotate(recent_r_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',r_filters,0,visible)).\
+            annotate(second_most_recent_r_mag=_last_mag('pd.mag',r_filters,1,visible)).\
+            annotate(second_most_recent_r_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',r_filters,1,visible)).\
+            annotate(second_most_recent_r_ulim=_last_mag('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',r_filters,1,visible)).\
+            annotate(second_most_recent_r_flux=_last_mag('pd.flux',r_filters,1,visible)).\
+            annotate(second_most_recent_r_flux_err=_last_mag('pd.flux_err',r_filters,1,visible))
 
     qs = qs.annotate(dm_r=-1.0*(F('recent_r_mag') - F('second_most_recent_r_mag')))
     qs = qs.annotate(dt_r=F('recent_r_obs') - F('second_most_recent_r_obs'))
@@ -69,14 +144,14 @@ def annotate_rising_transient_qs(qs):
 
     # i rise
     qs = qs.\
-        annotate(recent_i_mag=RawSQL(last_mag_query%('pd.mag',i_filters,0),())).\
-        annotate(recent_i_mag_err=RawSQL(last_mag_query%('pd.mag_err',i_filters,0),())).\
-        annotate(recent_i_obs=RawSQL(last_mag_query%('UNIX_TIMESTAMP(pd.obs_date)',i_filters,0),())).\
-        annotate(second_most_recent_i_mag=RawSQL(last_mag_query%('pd.mag',i_filters,1),())).\
-        annotate(second_most_recent_i_obs=RawSQL(last_mag_query%('UNIX_TIMESTAMP(pd.obs_date)',i_filters,1),())).\
-        annotate(second_most_recent_i_ulim=RawSQL(last_mag_query%('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',i_filters,1),())).\
-        annotate(second_most_recent_i_flux=RawSQL(last_mag_query%('pd.flux',i_filters,1),())).\
-        annotate(second_most_recent_i_flux_err=RawSQL(last_mag_query%('pd.flux_err',i_filters,1),()))
+        annotate(recent_i_mag=_last_mag('pd.mag',i_filters,0,visible)).\
+        annotate(recent_i_mag_err=_last_mag('pd.mag_err',i_filters,0,visible)).\
+        annotate(recent_i_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',i_filters,0,visible)).\
+        annotate(second_most_recent_i_mag=_last_mag('pd.mag',i_filters,1,visible)).\
+        annotate(second_most_recent_i_obs=_last_mag('UNIX_TIMESTAMP(pd.obs_date)',i_filters,1,visible)).\
+        annotate(second_most_recent_i_ulim=_last_mag('-2.5*LOG10(pd.flux+3*pd.flux_err)+27.5 as lim',i_filters,1,visible)).\
+        annotate(second_most_recent_i_flux=_last_mag('pd.flux',i_filters,1,visible)).\
+        annotate(second_most_recent_i_flux_err=_last_mag('pd.flux_err',i_filters,1,visible))
 
     qs = qs.annotate(dm_i=-1.0*(F('recent_i_mag') - F('second_most_recent_i_mag')))
     qs = qs.annotate(dt_i=F('recent_i_obs') - F('second_most_recent_i_obs'))
@@ -89,11 +164,11 @@ def annotate_rising_transient_qs(qs):
     return qs
 
 @python_query_reg
-def fastrising_transient_queryset(ndays=7):
+def fastrising_transient_queryset(ndays=7, user=None):
 
     # g/V rise
     qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays))
-    qs = annotate_rising_transient_qs(qs)
+    qs = annotate_rising_transient_qs(qs, user)
 
     qs_final = qs.filter((Q(rise_rate_g__gte=0.5) & (Q(rise_rate_g_sig__gte=1)))|
                          (Q(rise_rate_g_lim__gte=0.5) & (Q(rise_rate_g_lim_sig__gte=1)))|
@@ -105,11 +180,11 @@ def fastrising_transient_queryset(ndays=7):
     return qs_final
 
 @python_query_reg
-def rising_transient_queryset(ndays=14):
+def rising_transient_queryset(ndays=14, user=None):
 
     # g/V rise
     qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays))
-    qs = annotate_rising_transient_qs(qs)
+    qs = annotate_rising_transient_qs(qs, user)
     qs_final = qs.filter((Q(rise_rate_g__gte=0) & (Q(rise_rate_g_sig__gte=1)))|
                          (Q(rise_rate_g_lim__gte=0) & (Q(rise_rate_g_lim_sig__gte=1)))|
                          (Q(rise_rate_r__gte=0) & (Q(rise_rate_r_sig__gte=1)))|
@@ -120,11 +195,11 @@ def rising_transient_queryset(ndays=14):
     return qs_final
 
 @python_query_reg
-def tns_yse_rising_transient_queryset(ndays=14):
+def tns_yse_rising_transient_queryset(ndays=14, user=None):
 
     # g/V rise
-    qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays)).filter(tags__name__in='YSE').filter(name__startswith='20')
-    qs = annotate_rising_transient_qs(qs)
+    qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays)).filter(tags__name='YSE').filter(name__startswith='20')
+    qs = annotate_rising_transient_qs(qs, user)
     qs_final = qs.filter((Q(rise_rate_g__gte=0.0) & (Q(rise_rate_g_sig__gte=1.0)))|
                          (Q(rise_rate_g_lim__gte=0.0) & (Q(rise_rate_g_lim_sig__gte=1.0)))|
                          (Q(rise_rate_r__gte=0.0) & (Q(rise_rate_r_sig__gte=1.0)))|
@@ -136,11 +211,11 @@ def tns_yse_rising_transient_queryset(ndays=14):
 
 
 @python_query_reg
-def recent_rising_transient_queryset(ndays=5):
+def recent_rising_transient_queryset(ndays=5, user=None):
 
     # g/V rise
     qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(ndays))
-    qs = annotate_rising_transient_qs(qs)
+    qs = annotate_rising_transient_qs(qs, user)
     qs_final = qs.filter((Q(rise_rate_g__gte=0) & (Q(rise_rate_g_sig__gte=1)))|
                          (Q(rise_rate_g_lim__gte=0) & (Q(rise_rate_g_lim_sig__gte=1)))|
                          (Q(rise_rate_r__gte=0) & (Q(rise_rate_r_sig__gte=1)))|
@@ -273,3 +348,111 @@ HAVING sep < 3.3
     qs = Transient.objects.filter(created_date__gte=datetime.datetime.utcnow()-datetime.timedelta(90)).filter(name__in=(x[0] for x in cursor))
 
     return qs
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard queries rewritten from saved SQL (#720)
+#
+# Each one selects the same transients as the saved SQL query named in its
+# docstring (``YSE_App/queries/dashboard_saved_queries.py`` holds that SQL), but
+# only from photometry the viewer may see, so a row cannot appear or vanish
+# because of a point they cannot read. Staff with access to everything and
+# ``user=None`` keep the all-data selection. The caller still applies
+# ``filter_listed_transients``.
+# --------------------------------------------------------------------------- #
+
+def _visible_points(user=None):
+    """``TransientPhotData`` limited to the points ``user`` may see (all points for ``user=None``)."""
+    from YSE_App.services.visibility import visible_photometry_ids_q
+
+    points = TransientPhotData.objects.all()
+    if user is None:
+        return points
+    visible = visible_photometry_ids_q(user)
+    return points if visible is None else points.filter(visible)
+
+
+def _with_snr(points):
+    from django.db.models import ExpressionWrapper
+
+    return points.annotate(
+        dash_snr=ExpressionWrapper(F('flux') / F('flux_err'), output_field=FloatField()))
+
+
+@python_query_reg
+def yse_magnitude_limited_sample(user=None):
+    """YSE Magnitude-Limited Sample (min mag < 18.6): YSE-tagged 201x/202x names whose brightest clean point is < 18.6.
+
+    A clean point has a magnitude, flux/flux_err > 3 and no data-quality flag.
+    """
+    from django.db.models import Min
+
+    bright = _with_snr(_visible_points(user)).filter(
+        mag__isnull=False, dash_snr__gt=3, data_quality__isnull=True,
+    ).order_by().values('photometry__transient_id').annotate(
+        dash_min_mag=Min('mag')).filter(dash_min_mag__lt=18.6).values('photometry__transient_id')
+    return Transient.objects.filter(pk__in=bright, tags__name='YSE').filter(
+        Q(name__startswith='202') | Q(name__startswith='201'))
+
+
+def _recent_detection_ids(user, mag_err, first_days, latest_days, min_span_days):
+    """Ids of transients with more than two qualifying points, first seen within
+    ``first_days`` and last seen within ``latest_days`` (calendar days, like TO_DAYS).
+
+    ``min_span_days`` > 0 also requires the last point to be on a later day than the first.
+    """
+    from django.db.models import Count, Max, Min
+
+    today = datetime.datetime.utcnow().date()
+    midnight = lambda d: datetime.datetime(d.year, d.month, d.day, tzinfo=datetime.timezone.utc)
+    latest_cut = midnight(today - datetime.timedelta(days=latest_days - 1))
+    first_cut = midnight(today - datetime.timedelta(days=first_days - 1))
+    qualifying = _with_snr(_visible_points(user)).filter(
+        Q(dash_snr__gt=2) | Q(mag_err__lt=mag_err) | (Q(mag_err__isnull=True) & Q(mag__isnull=False)))
+    rows = qualifying.order_by().values('photometry__transient_id').annotate(
+        dash_first=Min('obs_date'), dash_last=Max('obs_date'), dash_n=Count('obs_date'),
+    ).filter(dash_last__gte=latest_cut, dash_first__gte=first_cut, dash_n__gt=2).values_list(
+        'photometry__transient_id', 'dash_first', 'dash_last')
+    return [tid for tid, first, last in rows
+            if (last.date() - first.date()).days >= min_span_days]
+
+
+@python_query_reg
+def fast_and_young_targets(user=None):
+    """Fast & Young Target Search: unclassified, first detection within 8 days, last within 3, more than one day apart."""
+    ids = _recent_detection_ids(user, mag_err=0.2, first_days=8, latest_days=3, min_span_days=1)
+    return Transient.objects.filter(pk__in=ids, TNS_spec_class__isnull=True).order_by('-pk')
+
+
+@python_query_reg
+def new_transients_last_two_days(user=None):
+    """New Transients Last Two Days: not a classified SN Ia, first detection within 15 days, last within 2."""
+    ids = _recent_detection_ids(user, mag_err=0.35, first_days=15, latest_days=2, min_span_days=0)
+    return Transient.objects.filter(pk__in=ids).filter(
+        Q(TNS_spec_class__isnull=True) | ~Q(TNS_spec_class='SN Ia'))
+
+
+@python_query_reg
+def interesting_new_targets(user=None):
+    """Interesting New Targets: status New with a host, E(B-V) < 0.5, and a brightest visible magnitude < 17
+    or a redshift (own or host) in (0, 0.01] with a projected host offset < 40 kpc."""
+    from django.db.models import ExpressionWrapper, Min, OuterRef, Subquery
+    from django.db.models.functions import ACos, Abs, Coalesce, Cos, Power, Radians, Sin
+
+    brightest = Subquery(
+        _visible_points(user).filter(photometry__transient_id=OuterRef('pk'), mag__isnull=False)
+        .order_by().values('photometry__transient_id').annotate(m=Min('mag')).values('m')[:1],
+        output_field=FloatField())
+    z = Coalesce('redshift', 'host__redshift')
+    offset_kpc = ExpressionWrapper(
+        ACos(Sin(Radians(F('dec'))) * Sin(Radians(F('host__dec')))
+             + Cos(Radians(F('dec'))) * Cos(Radians(F('host__dec')))
+             * Cos(Radians(Abs(F('ra') - F('host__ra')))))
+        * (3e+5 * F('dash_z') / 73) / Power(1.0 + F('dash_z'), 2) * 1000,
+        output_field=FloatField())
+    return (Transient.objects.filter(status_id=1, host__isnull=False, mw_ebv__lt=0.5)
+            .annotate(dash_min_mag=brightest, dash_z=ExpressionWrapper(z, output_field=FloatField()))
+            .filter(dash_min_mag__isnull=False)
+            .annotate(dash_offset_kpc=offset_kpc)
+            .filter(Q(dash_min_mag__lt=17)
+                    | (Q(dash_z__gt=0) & Q(dash_z__lte=0.01) & Q(dash_offset_kpc__lt=40))))

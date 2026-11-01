@@ -25,17 +25,21 @@ from YSE_App import view_utils
 
 
 class AnnotateDashboardFieldsTests(TestCase):
-    def test_recent_mag_and_date_populated_when_photometry_exists(self):
+    def test_last_det_and_last_obs_come_from_the_stat_row(self):
+        """#270: the dashboard rows carry the stat row, not photometry subqueries."""
+        from YSE_App.services import photstat
+
         user = create_test_user(username="annotate_dashboard_user")
         transient = create_minimal_transient(user, name="annotate-mag-test")
         attach_synthetic_photometry(user, transient, n_points=3)
+        photstat.recompute(transient.pk)
 
         row = annotate_dashboard_transient_fields(
             Transient.objects.filter(pk=transient.pk)
         ).first()
 
-        self.assertIsNotNone(row.recent_mag)
-        self.assertIsNotNone(row.recent_magdate)
+        self.assertIsNotNone(row.photstat.last_detected_mag)
+        self.assertIsNotNone(row.photstat.last_obs_date)
 
 
 class HostPhotDataHelperTests(TestCase):

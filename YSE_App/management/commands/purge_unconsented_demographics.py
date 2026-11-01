@@ -59,8 +59,9 @@ def opted_out_user_ids():
 
 
 def _mentorships(user):
-    """Rows the user entered themselves (as mentee or mentor)."""
-    return Mentorship.objects.filter(Q(mentee=user) | Q(mentor=user), created_by=user)
+    """The user's own rows (their side of each relation, confirmed or pending); the other
+    side's rows stay with the other person."""
+    return Mentorship.objects.filter(owner=user)
 
 
 def research_data_counts(user) -> Dict[str, int]:

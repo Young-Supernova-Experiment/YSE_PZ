@@ -645,6 +645,26 @@ class ResearchExportTests(TestCase):
         self.assertIn("[email]", text)  # an address of nobody known
         self.assertTrue(text.startswith("Thanks @p_"), text)
 
+    def test_value_changes_follow_the_same_rules(self):
+        # Experimental's change log (#737): only people's changes, under the same inclusion rules,
+        # with names in the values and note replaced (backport of #746).
+        from YSE_App.models import Transient, ValueChange
+        transient = Transient.objects.get(name="2026synthexp")
+        alice, bob = self.users["exp_alice"], self.users["exp_bob"]
+        for actor in (alice, bob, None):
+            ValueChange.objects.create(transient=transient, category="redshift", field="redshift",
+                                       old_value="0.1", new_value="0.2", service="manual", actor=actor,
+                                       note="checked with Vandermolen", created_at=at(5))
+        conn = self.export("v.sqlite")
+        rows = conn.execute("SELECT participant, transient_id, new_value, note FROM value_changes "
+                            "WHERE note LIKE 'checked with %'").fetchall()
+        self.assertEqual(len(rows), 1, rows)  # alice consented; bob declined; the system row has no person
+        participant, transient_id, new_value, note = rows[0]
+        self.assertTrue(participant.startswith("p_"))
+        self.assertEqual((transient_id, new_value), (transient.pk, "0.2"))
+        self.assertNotIn("Vandermolen", note)
+        self.assertRegex(note, r"p_[0-9a-f]{20}")
+
     def test_two_exports_share_no_identifiers(self):
         first, second = self.export("c1.sqlite"), self.export("c2.sqlite")
         for table, column in (("participants", "participant"), ("comments", "id"), ("comments", "participant")):

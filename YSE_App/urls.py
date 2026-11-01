@@ -4,10 +4,11 @@ from django.contrib.auth import views as auth_views
 from django.contrib import admin
 from rest_framework.urlpatterns import format_suffix_patterns
 from rest_framework.routers import DefaultRouter
+from rest_framework import permissions as rf_permissions, routers as rf_routers
 from rest_framework.schemas import get_schema_view
 from django.urls import re_path, include
 
-from . import views, view_utils, data_utils, table_utils, yse_views
+from . import views, view_utils, data_utils, table_utils, yse_views, planner_views
 from . import api_views
 from .form_views import *
 from .yse_utils.yse_forms import MoveYSEFormView
@@ -16,22 +17,38 @@ from YSE_App.yse_utils import yse_pointings, yse_view_utils
 from YSE_App.views import SearchResultsView
 from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
+from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
+from YSE_App import change_log_views
+from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import signup_views
+from YSE_App import access_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
+    feedback_views,
     feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
-schema_view = get_schema_view(title='Young Supernova Experiment (YSE) API')
+# The API root listing and the schema need a signed-in user (or Basic/token auth).
+schema_view = get_schema_view(
+    title='Young Supernova Experiment (YSE) API',
+    permission_classes=[rf_permissions.IsAuthenticated],
+)
+
+
+class AuthenticatedAPIRootView(rf_routers.APIRootView):
+    permission_classes = (rf_permissions.IsAuthenticated,)
+
 
 # Wire up our API using automatic URL routing.
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
     # ex: /yse/
     re_path(r'^$', views.index, name='index'),
+    # Monitoring: DB-backed health check, public, one query (#768).
+    re_path(r'^healthz/$', health_views.healthz, name='healthz'),
     re_path(r'^dashboard/$', views.dashboard, name='dashboard'),
     re_path(
         r'^dashboard/section/(?P<status_key>[a-zA-Z]+)/$',
@@ -86,11 +103,6 @@ urlpatterns = [
         name='transient_detail_followup_rest_fragment',
     ),
     re_path(
-        r'^transient_detail/(?P<transient_id>[0-9]+)/comments_fragment/$',
-        views.transient_detail_comments_fragment,
-        name='transient_detail_comments_fragment',
-    ),
-    re_path(
         r'^transient_detail/(?P<transient_id>[0-9]+)/gw_fragment/$',
         views.transient_detail_gw_fragment,
         name='transient_detail_gw_fragment',
@@ -123,6 +135,9 @@ urlpatterns = [
     # Interests (#290) and data access requests (#293): before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/interests/register/$',
             collaboration_views.interest_register, name='interest_register'),
+    # before the transient_detail slug catch-all (#648, PR 5)
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/data_access/rules/$', access_views.transient_rules,
+            name='access_transient_rules'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/data_access/request/$',
             collaboration_views.data_access_request_create, name='data_access_request_create'),
     # Sharing services (#326): report dialog preview/submit for one transient; before the slug catch-all.
@@ -144,6 +159,9 @@ urlpatterns = [
             analysis_views.transient_salt_fit_fragment, name='transient_detail_salt_fit_fragment'),
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/ngsf_fragment/$',
             analysis_views.transient_ngsf_fragment, name='transient_detail_ngsf_fragment'),
+    # History tab (#737): the change log of one transient and its host; before the slug catch-all.
+    re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/history_fragment/$',
+            change_log_views.transient_history_fragment, name='transient_detail_history_fragment'),
     # Annotations tab (#317, #318): fragment, summary JSON and actions for one transient; before the slug catch-all.
     re_path(r'^transient_detail/(?P<transient_id>[0-9]+)/annotations_fragment/$',
             annotation_views.transient_annotations_fragment, name='transient_detail_annotations_fragment'),
@@ -202,6 +220,11 @@ urlpatterns = [
 
     re_path(r'^yse_oncall_calendar/$', views.yse_oncall_calendar, name='yse_oncall_calendar'),
     re_path(r'^observing_night/(?P<telescope>.*)/(?P<obs_date>[a-zA-Z0-9_-]+)/(?P<pi_name>.*)$', views.observing_night, name='observing_night'),
+    # AstroScheduler night planner (#659); 404 unless ASTROSCHEDULER_ENABLED
+    re_path(r'^night_planner/(?P<night_id>[0-9]+)/$', planner_views.night_planner_page, name='night_planner'),
+    re_path(r'^night_planner/(?P<night_id>[0-9]+)/frame/$', planner_views.night_planner_frame, name='night_planner_frame'),
+    re_path(r'^night_plans/(?P<plan_id>[0-9]+)/target_list\.txt$', planner_views.night_plan_target_list,
+            name='night_plan_target_list'),
     re_path(r'^too_requests/(?P<telescope>.*)/(?P<pi_name>.*)/$', views.too_requests, name='too_requests'),
     #re_path(r'^survey_observing_calendar/$', views.survey_observing_calendar, name='survey_observing_calendar'),
     re_path(r'^yse_observing_night/(?P<obs_date>[a-zA-Z0-9_-]+)/$', views.yse_observing_night, name='yse_observing_night'),
@@ -217,6 +240,7 @@ urlpatterns = [
     re_path(r'^add_transient_phot/', data_utils.add_transient_phot, name='add_transient_phot'),
     re_path(r'^add_transient_spec/', data_utils.add_transient_spec, name='add_transient_spec'),
     re_path(r'^ztf_forced_phot/(?P<slug>.*)/$', views.ztf_forced_phot, name='ztf_forced_phot'),
+    re_path(r'^desi_lookup/(?P<slug>[^/]+)/$', views.desi_lookup, name='desi_lookup'),
     re_path(r'^get_host/(?P<ra>\d+\.\d+)/(?P<dec>[+-]?\d+\.\d+)/(?P<sep>\d+\.?\d*)/$', data_utils.get_host, name='get_host'),
     re_path(r'^get_rising_transients_box/(?P<ra>\d+\.\d+)/(?P<dec>[+-]?\d+\.\d+)/(?P<ra_width>\d+\.?\d*)/(?P<dec_width>\d+\.?\d*)/$',
         data_utils.get_rising_transients_box, name='get_rising_transients_box'),
@@ -227,6 +251,8 @@ urlpatterns = [
     re_path(r'^search/$',
         SearchResultsView.as_view(), name='search'),
     re_path(r'^search/save/$', views.save_search, name='save_search'),
+    re_path(r'^search/bulk/$', views.search_bulk_action, name='search_bulk_action'),
+    re_path(r'^search/export/$', views.search_export_csv, name='search_export_csv'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',
@@ -309,6 +335,8 @@ urlpatterns = [
     re_path(r'^sharing/submissions/(?P<submission_id>[0-9]+)/retry/$', sharing_views.sharing_submission_retry,
             name='sharing_submission_retry'),
     re_path(r'^sharing/services/$', sharing_views.sharing_services, name='sharing_services'),
+    re_path(r'^sharing/autopublish_optin/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/$',
+            sharing_views.autopublish_optin, name='sharing_autopublish_optin'),
     re_path(r'^sharing/services/(?P<service_id>[0-9]+)/rules/(?P<rule_id>[0-9]+)/dry_run\.json$',
             sharing_views.autopublisher_dry_run, name='sharing_autopublisher_dry_run'),
     re_path(r'^add_dashboard_query/', AddDashboardQueryFormView.as_view(), name='add_dashboard_query'),
@@ -348,7 +376,7 @@ urlpatterns = [
     re_path(r'^get_legacy_image/(?P<transient_id>[0-9]+)',
         view_utils.get_legacy_image, name='get_legacy_image'),
 
-    # User agreement, researcher profile and "My students" (#627, #628, #630)
+    # User agreement, researcher profile, "My advisees" and "My advisors" (#627, #628, #630)
     re_path(r'^agreement/$', profile_views.agreement, name='agreement'),
     re_path(r'^research-consent/$', profile_views.research_consent, name='research_consent'),
     re_path(r'^profile/$', profile_views.researcher_profile, name='researcher_profile'),
@@ -359,6 +387,11 @@ urlpatterns = [
     re_path(r'^profile/students/add/$', profile_views.researcher_student_add, name='researcher_student_add'),
     re_path(r'^profile/students/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_student_update,
             name='researcher_student_update'),
+    re_path(r'^profile/advisors/add/$', profile_views.researcher_advisor_add, name='researcher_advisor_add'),
+    re_path(r'^profile/advisors/(?P<mentorship_id>[0-9]+)/$', profile_views.researcher_advisor_update,
+            name='researcher_advisor_update'),
+    re_path(r'^profile/relationships/(?P<mentorship_id>[0-9]+)/decide/$', profile_views.researcher_mentorship_decide,
+            name='researcher_mentorship_decide'),
     # Research teams, invitation links (#445) and user settings (#440)
     re_path(r'^settings/$', group_views.user_settings, name='user_settings'),
     re_path(r'^teams/$', group_views.team_list, name='team_list'),
@@ -388,6 +421,10 @@ urlpatterns = [
             name='interest_status'),
     re_path(r'^my/interests/$', collaboration_views.my_interests, name='my_interests'),
     # Favorite transients (#323)
+    # Feedback button (#443): stored for staff review; nothing is posted automatically.
+    path('feedback/', feedback_views.feedback_submit, name='feedback_submit'),
+    path('feedback/review/', feedback_views.feedback_review_list, name='feedback_review_list'),
+    path('feedback/review/<int:pk>/', feedback_views.feedback_review_detail, name='feedback_review_detail'),
     re_path(r'^my/favorites/$', favorite_views.my_favorites, name='my_favorites'),
     re_path(r'^my/favorites/section/$', favorite_views.my_favorites_section, name='my_favorites_section'),
     re_path(r'^my/favorites/ids\.json$', favorite_views.favorite_ids, name='favorite_ids'),
@@ -398,6 +435,12 @@ urlpatterns = [
     re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/decide/$', collaboration_views.data_access_decide,
             name='data_access_decide'),
     re_path(r'^data_sharing_deputies/$', collaboration_views.data_sharing_deputies, name='data_sharing_deputies'),
+    # Read-time access rules (#648, PR 5); 404 unless DATA_ACCESS_GRANTS_ENABLED
+    re_path(r'^data_access_requests/(?P<request_id>[0-9]+)/revoke/$', collaboration_views.data_access_revoke,
+            name='data_access_revoke'),
+    re_path(r'^data_access/$', access_views.dashboard, name='access_dashboard'),
+    re_path(r'^data_access/programs/$', access_views.programs, name='access_programs'),
+    re_path(r'^data_access/programs/(?P<allocation_id>[0-9]+)/$', access_views.program, name='access_program'),
     # Background job queue (#263) and notifications (#266)
     re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
     re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),
@@ -429,12 +472,19 @@ urlpatterns = [
     re_path(r'^notifications/mention_suggest\.json$', notification_views.mention_suggest,
             name='mention_suggest'),
 
+    # Logout is POST-only (#504): send the stock auth and DRF logout URLs to the
+    # same view, ahead of the includes that would otherwise log out on GET.
+    path('accounts/logout/', views.auth_logout),
+    path('api-auth/logout/', views.auth_logout),
+    # Before the auth.urls include so it takes precedence (PASSWORD_RESET_DOMAIN).
+    path('accounts/password_reset/', yse_auth_views.PasswordResetView.as_view(), name='password_reset'),
     path('accounts/', include('django.contrib.auth.urls')),
     re_path(r'^explorer/', include('explorer.urls')),
     #url(r'^silk/', include('silk.urls', namespace='silk')),
 ]
 
 router = DefaultRouter()
+router.APIRootView = AuthenticatedAPIRootView
 router.register(r'transientwebresources', api_views.TransientWebResourceViewSet)
 router.register(r'hostwebresources', api_views.HostWebResourceViewSet)
 router.register(r'transientstatuses', api_views.TransientStatusViewSet)
@@ -528,7 +578,57 @@ api_url_patterns = [
         api_views.TransientCommentListCreate.as_view(),
         name='api-transient-comments',
     ),
+    re_path(r'^api/transients/(?P<transient_id>[0-9]+)/history/$',
+            change_log_views.TransientHistoryAPIView.as_view(), name='api-transient-history'),
     re_path(r'^api/summary_search/$', api_views.SummarySearchAPIView.as_view(), name='api-summary-search'),
+    # AstroScheduler night planner (#655, #656, #658); 404 unless ASTROSCHEDULER_ENABLED (#654)
+    re_path(r'^api/observing_nights/$', api_views.PlannerNightsAPIView.as_view(), name='api-planner-nights'),
+    re_path(r'^api/observing_nights/(?P<night_id>[0-9]+)/plans/$', api_views.NightPlansAPIView.as_view(),
+            name='api-night-plans'),
+    re_path(r'^api/night_plans/(?P<plan_id>[0-9]+)/approve/$', api_views.NightPlanApproveAPIView.as_view(),
+            name='api-night-plan-approve'),
+    re_path(r'^api/observing_nights/(?P<night_id>[0-9]+)/observations/$',
+            api_views.NightObservationsAPIView.as_view(), name='api-night-observations'),
+    re_path(r'^api/observed_blocks/(?P<block_id>[0-9]+)/assess/$',
+            api_views.ObservedBlockAssessAPIView.as_view(), name='api-observed-block-assess'),
+    # The program (allocation) a dataset was taken under (#648, PR 3)
+    re_path(r'^api/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/program/$',
+            api_views.DatasetProgramLinkAPIView.as_view(), name='api-dataset-program'),
+    # Access actions (#648, PR 5); 404 unless DATA_ACCESS_GRANTS_ENABLED
+    re_path(r'^api/access/programs/(?P<allocation_id>[0-9]+)/grants/$', api_views.AccessProgramGrantsAPIView.as_view(),
+            name='api-access-program-grants'),
+    re_path(r'^api/access/standing_grants/(?P<grant_id>[0-9]+)/stop/$',
+            api_views.AccessStandingGrantStopAPIView.as_view(), name='api-access-grant-stop'),
+    re_path(r'^api/access/programs/(?P<allocation_id>[0-9]+)/deputies/$',
+            api_views.AccessProgramDeputiesAPIView.as_view(), name='api-access-program-deputies'),
+    re_path(r'^api/access/programs/(?P<allocation_id>[0-9]+)/deputies/(?P<deputy_id>[0-9]+)/remove/$',
+            api_views.AccessProgramDeputyRemoveAPIView.as_view(), name='api-access-program-deputy-remove'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/rules/$',
+            api_views.AccessDatasetRulesAPIView.as_view(), name='api-access-dataset-rules'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/rules/remove/$',
+            api_views.AccessDatasetRulesRemoveAPIView.as_view(), name='api-access-dataset-rules-remove'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/groups/remove/$',
+            api_views.AccessDatasetGroupRemoveAPIView.as_view(), name='api-access-dataset-group-remove'),
+    re_path(r'^api/access/datasets/(?P<kind>photometry|spectrum)/(?P<dataset_id>[0-9]+)/autopublish/$',
+            api_views.AccessDatasetAutopublishAPIView.as_view(), name='api-access-dataset-autopublish'),
+    re_path(r'^api/access/transients/(?P<transient_id>[0-9]+)/nights/$',
+            api_views.AccessTransientNightsAPIView.as_view(), name='api-access-transient-nights'),
+    # The embedded planner POSTs to <apiBase>/api/schedule (#659): the same solve view.
+    re_path(
+        r'^night_planner/(?P<night_id>[0-9]+)/api/schedule$',
+        api_views.PlannerSolveAPIView.as_view(),
+        name='night-planner-solve',
+    ),
+    re_path(
+        r'^api/observing_nights/(?P<night_id>[0-9]+)/planner_targets/$',
+        api_views.PlannerTargetsAPIView.as_view(),
+        name='api-planner-targets',
+    ),
+    re_path(
+        r'^api/observing_nights/(?P<night_id>[0-9]+)/planner_solve/$',
+        api_views.PlannerSolveAPIView.as_view(),
+        name='api-planner-solve',
+    ),
     re_path(r'^api/', include(router.urls)),
     re_path(r'^api/schema/$', schema_view),
     re_path(
@@ -538,3 +638,8 @@ api_url_patterns = [
 ]
 
 urlpatterns += api_url_patterns
+
+# Two-factor sign-in pages for staff (#512); only when STAFF_MFA_REQUIRED is on,
+# which is also when django-otp is installed and in INSTALLED_APPS.
+if getattr(settings, 'STAFF_MFA_REQUIRED', False):
+    urlpatterns += [path('', include('YSE_App.staff_mfa.urls'))]

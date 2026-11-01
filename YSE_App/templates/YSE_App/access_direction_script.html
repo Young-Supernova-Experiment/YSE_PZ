@@ -1,0 +1,10 @@
+<script>
+// A backwards turn-off removes access to earlier data too: ask first (#648, PR 6a).
+document.addEventListener("submit", function (event) {
+	var select = event.target.querySelector("select.yse-access-direction");
+	if (select && select.value === "backward" &&
+			!window.confirm("Backwards: they will also lose access to data taken earlier, including data they may already have looked at or downloaded. Continue?")) {
+		event.preventDefault();
+	}
+}, true);
+</script>

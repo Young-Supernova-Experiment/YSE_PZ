@@ -471,7 +471,6 @@ class NotificationAdmin(admin.ModelAdmin):
 	search_fields = ("recipient__username", "subject", "text")
 	readonly_fields = ("created", "delivered")
 	raw_id_fields = ("recipient", "transient")
-	date_hierarchy = "created"
 	list_select_related = ("recipient",)
 
 	def delivery_summary(self, obj):
@@ -598,6 +597,18 @@ class CandidateAdmin(admin.ModelAdmin):
 
 # --- Allocations and facility requests (#303, #298) -----------------------------
 from YSE_App.models.allocation_models import Allocation, FacilityRequest  # noqa: E402
+from YSE_App.models.data_access_grant_models import (  # noqa: E402
+	AllocationDelegate, DataAccessRule, DatasetGroupShare, GroupMembershipPeriod, StandingAccessGrant)
+
+
+class AllocationDelegateInline(admin.TabularInline):
+	"""Program deputies (#648): may set access rules for this allocation's data, like its PI."""
+	model = AllocationDelegate
+	fk_name = "allocation"
+	extra = 0
+	raw_id_fields = ("user",)
+	fields = ("user", "note", "added_by", "created_at")
+	readonly_fields = ("added_by", "created_at")
 
 
 @admin.register(Allocation)
@@ -609,6 +620,7 @@ class AllocationAdmin(admin.ModelAdmin):
 	filter_horizontal = ("groups",)
 	raw_id_fields = ("credential",)
 	readonly_fields = ("service", "created_by", "created_date", "modified_by", "modified_date")
+	inlines = [AllocationDelegateInline]
 
 	def save_model(self, request, obj, form, change):
 		if not change or not obj.created_by_id:
@@ -618,6 +630,151 @@ class AllocationAdmin(admin.ModelAdmin):
 		from YSE_App.services.allocations import ensure_service
 
 		ensure_service(obj, request.user)
+
+	def save_formset(self, request, form, formset, change):
+		instances = formset.save(commit=False)
+		for obj in instances:
+			if isinstance(obj, AllocationDelegate) and not obj.added_by_id:
+				obj.added_by = request.user
+			obj.save()
+		for obj in formset.deleted_objects:
+			obj.delete()
+		formset.save_m2m()
+
+
+@admin.register(AllocationDelegate)
+class AllocationDelegateAdmin(admin.ModelAdmin):
+	"""Program deputies (#648), separate from the PIs' data-sharing deputies (DataSharingDelegate)."""
+	list_display = ("allocation", "user", "added_by", "created_at")
+	search_fields = ("allocation__name", "user__username")
+	raw_id_fields = ("allocation", "user")
+	readonly_fields = ("added_by", "created_at", "modified_at")
+
+	def save_model(self, request, obj, form, change):
+		if not obj.added_by_id:
+			obj.added_by = request.user
+		super().save_model(request, obj, form, change)
+
+
+# Per-point access rules and standing grants (#648). Staff may add a rule or a standing
+# grant (recorded as an administrator action). Once shared a point stays shared, so rules
+# are never revoked: staff may only delete one to correct a mistake, and django-auditlog
+# records the deletion. Standing grants are stopped (affects only later points), never deleted.
+@admin.register(DataAccessRule)
+class DataAccessRuleAdmin(admin.ModelAdmin):
+	list_display = ("id", "effect", "grantee_group", "grantee_user", "transient", "transient_phot_data",
+	                "transient_spectrum", "granted_by", "granted_as", "standing_grant", "created_at", "updated_at")
+	list_filter = ("effect", "granted_as")
+	search_fields = ("grantee_group__name", "grantee_user__username", "transient__name")
+	raw_id_fields = ("transient_phot_data", "transient_spectrum", "grantee_user", "grantee_group")
+	list_select_related = ("grantee_group", "grantee_user", "transient", "granted_by")
+	_ADD_FIELDS = ("effect", "transient_phot_data", "transient_spectrum", "grantee_group", "grantee_user")
+	_PROVENANCE = ("transient", "photometry", "granted_by", "granted_as", "standing_grant", "created_at",
+	               "updated_at")
+
+	def get_fields(self, request, obj=None):
+		return self._ADD_FIELDS if obj is None else self._ADD_FIELDS + self._PROVENANCE
+
+	def get_readonly_fields(self, request, obj=None):
+		if obj is None:
+			return ()
+		return self._ADD_FIELDS + self._PROVENANCE
+
+	def has_delete_permission(self, request, obj=None):
+		return bool(request.user.is_active and request.user.is_staff)
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.granted_by = request.user
+			obj.granted_as = DataAccessRule.AS_STAFF
+		super().save_model(request, obj, form, change)
+
+	@staticmethod
+	def _invalidate(rules):
+		from YSE_App.services import access_rules, photstat
+
+		if access_rules.enabled():
+			photstat.invalidate_scopes([(r.transient_id, r.grantee_group_id) for r in rules
+			                            if r.grantee_group_id and r.transient_phot_data_id])
+
+	def delete_model(self, request, obj):
+		super().delete_model(request, obj)
+		self._invalidate([obj])
+
+	def delete_queryset(self, request, queryset):
+		rules = list(queryset)
+		super().delete_queryset(request, queryset)
+		self._invalidate(rules)
+
+
+@admin.register(StandingAccessGrant)
+class StandingAccessGrantAdmin(admin.ModelAdmin):
+	list_display = ("id", "effect", "grantee_group", "grantee_user", "allocation", "night_start", "night_end",
+	                "created_by", "created_as", "created_at", "stopped_at")
+	list_filter = ("effect", "created_as", ("stopped_at", admin.EmptyFieldListFilter))
+	search_fields = ("grantee_group__name", "grantee_user__username", "allocation__name", "note")
+	raw_id_fields = ("allocation", "classical_night", "grantee_user", "grantee_group")
+	list_select_related = ("grantee_group", "grantee_user", "allocation", "created_by")
+	actions = ("stop",)
+	_ADD_FIELDS = ("effect", "allocation", "night_start", "night_end", "classical_night", "grantee_group",
+	               "grantee_user", "note")
+	_PROVENANCE = ("created_by", "created_as", "created_at", "stopped_at", "stopped_by")
+
+	def get_fields(self, request, obj=None):
+		return self._ADD_FIELDS if obj is None else self._ADD_FIELDS + self._PROVENANCE
+
+	def get_readonly_fields(self, request, obj=None):
+		if obj is None:
+			return ()
+		return tuple(f for f in self._ADD_FIELDS if f != "note") + self._PROVENANCE
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.created_by = request.user
+			obj.created_as = StandingAccessGrant.AS_STAFF
+		super().save_model(request, obj, form, change)
+
+	def stop(self, request, queryset):
+		from django.utils import timezone
+
+		n = 0
+		for grant in queryset.filter(stopped_at__isnull=True):
+			grant.stopped_at = timezone.now()
+			grant.stopped_by = request.user
+			grant.save(update_fields=["stopped_at", "stopped_by"])
+			n += 1
+		self.message_user(request, "%d standing grant(s) stopped; rules already written stay." % n)
+	stop.short_description = "Stop (points that arrive later are no longer covered)"
+
+
+class _ReadOnlyHistoryAdmin(admin.ModelAdmin):
+	"""Access history (#648): written by signals, never edited by hand."""
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(GroupMembershipPeriod)
+class GroupMembershipPeriodAdmin(_ReadOnlyHistoryAdmin):
+	list_display = ("id", "user", "group", "joined_at", "left_at")
+	search_fields = ("user__username", "group__name")
+	list_select_related = ("user", "group")
+
+
+@admin.register(DatasetGroupShare)
+class DatasetGroupShareAdmin(_ReadOnlyHistoryAdmin):
+	list_display = ("id", "group", "transient_photometry", "transient_spectrum", "shared_at")
+	search_fields = ("group__name",)
+	list_select_related = ("group",)
 
 
 @admin.register(FacilityRequest)
@@ -646,7 +803,6 @@ class UserFavoriteTransientAdmin(admin.ModelAdmin):
 	list_display = ("user", "transient", "created")
 	search_fields = ("user__username", "transient__name")
 	raw_id_fields = ("user", "transient")
-	date_hierarchy = "created"
 	list_select_related = ("user", "transient")
 
 
@@ -700,7 +856,8 @@ class DataAccessRequestAdmin(admin.ModelAdmin):
 	list_filter = ("status", "decided_as", "dataset_kind", "owner_group")
 	search_fields = ("transient__name", "requester__username", "message", "note")
 	raw_id_fields = ("transient", "requester", "decided_by")
-	readonly_fields = ("granted_dataset_ids", "decided_as", "created_by", "created_date", "modified_by", "modified_date")
+	readonly_fields = ("granted_dataset_ids", "added_dataset_ids", "decided_as", "revoked_by", "revoked_at",
+	                   "revoke_direction", "created_by", "created_date", "modified_by", "modified_date")
 @admin.register(SharingSubmission)
 class SharingSubmissionAdmin(admin.ModelAdmin):
 	list_display = ("id", "service", "transient", "kind", "status", "tns_name", "external_id", "attempts",
@@ -826,6 +983,43 @@ class TransientSummaryPreferenceAdmin(admin.ModelAdmin):
 	raw_id_fields = ("user",)
 
 
+from django.urls import reverse as _reverse  # noqa: E402
+from django.utils.html import format_html as _format_html  # noqa: E402
+
+from YSE_App.models.feedback_models import Feedback  # noqa: E402
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+	"""Feedback button rows (#443). Posting to GitHub is only on the staff review page."""
+	list_display = ("id", "created", "kind", "title", "status", "page_url", "review_link")
+	list_filter = ("status", "kind")
+	search_fields = ("title", "text", "page_url")
+	readonly_fields = ("user", "kind", "title", "text", "page_url", "created", "github_issue_url",
+					   "reviewed_by", "reviewed_at", "review_link")
+	fields = ("status", "review_link", "user", "created", "kind", "title", "text", "page_url",
+			  "github_issue_url", "reviewed_by", "reviewed_at")
+
+	def has_add_permission(self, request):
+		return False
+
+	def review_link(self, obj):
+		if not obj or not obj.pk:
+			return ""
+		return _format_html('<a href="{}">Review / create GitHub issue</a>', _reverse("feedback_review_detail", args=[obj.pk]))
+
+	review_link.short_description = "review"
+
+
+# Two-factor sign-in (#512): superuser action on Users to reset a user's devices.
+from django.conf import settings as _settings  # noqa: E402
+
+if getattr(_settings, 'STAFF_MFA_REQUIRED', False):
+    from YSE_App.staff_mfa.admin import install_user_admin_action  # noqa: E402
+
+    install_user_admin_action()
+
+
 # ---------------------------------------------------------------------------
 # Researcher profile, mentorship, metrics and the user agreement (#627-#630).
 # Encrypted values are write-only: the admin shows only "(encrypted, set on <date>)".
@@ -915,10 +1109,10 @@ class ProfileFieldHistoryAdmin(_ReadOnlyAdmin):
 
 @admin.register(Mentorship)
 class MentorshipAdmin(admin.ModelAdmin):
-	list_display = ("id", "kind", "mentor_label", "mentee_label", "start_year", "end_year")
-	list_filter = ("kind",)
+	list_display = ("id", "kind", "mentor_label", "mentee_label", "owner", "status", "start_year", "end_year")
+	list_filter = ("kind", "status")
 	search_fields = ("mentor__username", "mentee__username", "mentor_name", "mentee_name")
-	raw_id_fields = ("mentor", "mentee", "created_by")
+	raw_id_fields = ("mentor", "mentee", "created_by", "owner", "counterpart")
 
 
 @admin.register(AffiliationHistory)
@@ -1120,6 +1314,73 @@ class GroupMembershipRequestAdmin(admin.ModelAdmin):
 	list_display = ("id", "group", "user", "status", "created_at", "decided_by", "decided_at")
 	list_filter = ("status", "group")
 	readonly_fields = ("user", "group", "message", "status", "created_at", "decided_by", "decided_at")
+	fields = readonly_fields
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+
+from YSE_App.models.night_plan_models import NightPlan, PlannedBlock  # noqa: E402
+
+
+class _PlannedBlockInline(admin.TabularInline):
+	model = PlannedBlock
+	fields = ("order", "kind", "target_name", "start_ut", "end_ut", "followup", "priority_at_plan")
+	readonly_fields = fields
+	extra = 0
+	can_delete = False
+
+	def has_add_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(NightPlan)
+class NightPlanAdmin(admin.ModelAdmin):
+	"""Night plans are saved and approved from the planner (#662, #663); read-only here."""
+	list_display = ("id", "night", "version", "state", "author", "approved_by", "approved_at", "created_date")
+	list_filter = ("state",)
+	readonly_fields = ("night", "version", "parent", "state", "author", "approved_by", "approved_at",
+	                   "solver", "solver_inputs", "notes", "created_by", "created_date")
+	fields = readonly_fields
+	inlines = (_PlannedBlockInline,)
+
+	def has_add_permission(self, request):
+		return False
+
+	def has_change_permission(self, request, obj=None):
+		return False
+
+
+from YSE_App.models.observed_block_models import ObservedBlock, OutcomeReason  # noqa: E402
+
+
+@admin.register(OutcomeReason)
+class OutcomeReasonAdmin(admin.ModelAdmin):
+	"""Reasons are a lookup table (#666): add or retire them here; codes stay stable."""
+	list_display = ("code", "label", "category", "active")
+	list_filter = ("category", "active")
+	readonly_fields = ("created_by", "created_date", "modified_by", "modified_date")
+
+	def save_model(self, request, obj, form, change):
+		if not change:
+			obj.created_by = request.user
+		obj.modified_by = request.user
+		super().save_model(request, obj, form, change)
+
+	def has_delete_permission(self, request, obj=None):
+		return False
+
+
+@admin.register(ObservedBlock)
+class ObservedBlockAdmin(admin.ModelAdmin):
+	"""Observed blocks are recorded from the planner (#667); read-only here."""
+	list_display = ("id", "night", "target_name", "outcome", "reason", "end_ut", "recorded_by", "source")
+	list_filter = ("outcome", "source")
+	readonly_fields = ("night", "target_name", "followup", "planned_block", "outcome", "reason", "start_ut",
+	                   "end_ut", "comments", "recorded_by", "source", "created_date")
 	fields = readonly_fields
 
 	def has_add_permission(self, request):

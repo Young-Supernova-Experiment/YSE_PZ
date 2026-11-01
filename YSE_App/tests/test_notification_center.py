@@ -37,6 +37,7 @@ from YSE_App.services.followup_notices import notify_followup_created
 from YSE_App.services.notify import notify
 from YSE_App.templatetags.comment_extras import format_comment_text
 from YSE_App.tests.fixtures_minimal import (
+    attach_synthetic_photometry,
     audit_fields,
     create_instrument_stack,
     create_minimal_transient,
@@ -279,6 +280,10 @@ class FollowupNoticeTests(TestCase):
         self.follower = create_test_user("fn_follower", email="fol@example.com", is_staff=False)
         self.bystander = create_test_user("fn_bystander", is_staff=False)
         self.transient = create_minimal_transient(self.requester, name="2026fnt")
+        public = Group.objects.get_or_create(name="Public")[0]
+        for user in (self.requester, self.follower, self.bystander):
+            user.groups.add(public)  # every user is in Public; the follow-up visibility rule needs it (#730)
+        attach_synthetic_photometry(self.requester, self.transient, n_points=3)
         _obs, instrument, _b = create_instrument_stack(self.requester, obs_group_name="fn-stack")
         self.telescope = instrument.telescope
         self.status, _ = FollowupStatus.objects.get_or_create(name="Requested", defaults=audit_fields(self.requester))

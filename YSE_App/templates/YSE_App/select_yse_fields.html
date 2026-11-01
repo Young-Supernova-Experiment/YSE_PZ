@@ -189,9 +189,6 @@
 {% endblock %}
 
 {% block scripts %}
-
-<script src="{% static 'YSE_App/bower_components/datatables.net/js/jquery.dataTables.min.js' %}"></script>
-<script src="{% static 'YSE_App/bower_components/datatables.net-bs/js/dataTables.bootstrap.min.js' %}"></script>
 <script src="{% static 'YSE_App/plugins/loopj-jquery-tokeninput-201d2d1/src/jquery.tokeninput.js' %}"></script>
 <script src="{% static 'YSE_App/plugins/bootstrap-autocomplete.min.js' %}"></script>
 <!--<script src="https://cdn.rawgit.com/xcash/bootstrap-autocomplete/3de7ad37/dist/latest/bootstrap-autocomplete.js"></script>-->
@@ -498,7 +495,7 @@ $(function() {
 				return cookieValue;
 			}
 
-			var csrftoken = getCookie('csrftoken');
+			var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
 			/*
 			The functions below will create a header with csrftoken

@@ -34,16 +34,18 @@ import requests
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
+from YSE_App.common.quality_mask import legacy_good
 from YSE_App.jobs import JobFailed, JobRetry, enqueue, job
 from YSE_App.models.log_models import Log
 from YSE_App.models.phot_models import TransientPhotData
 from YSE_App.models.sharing_models import SharingService, SharingSubmission, is_tns_name
 from YSE_App.models.spectra_models import TransientSpecData, TransientSpectrum
 from YSE_App.models.transient_models import AlternateTransientNames, Transient
+from YSE_App.sharing.report_scope import ReportScope
 
 log = logging.getLogger(__name__)
 
@@ -232,11 +234,19 @@ def system_user() -> Optional[User]:
 
 # --- photometry selection -----------------------------------------------------
 
-def _photometry_rows(service: SharingService, transient: Transient):
+def _scope(scope):
+    """The report scope to apply: none given means public data only (#691)."""
+    return scope if scope is not None else ReportScope.public_only()
+
+
+def _photometry_rows(service: SharingService, transient: Transient, scope: Optional[ReportScope] = None):
+    point_filter = _scope(scope).point_filter()
     qs = (
-        TransientPhotData.objects.filter(photometry__transient=transient)
+        TransientPhotData.objects.filter(photometry__transient=transient,
+                                         photometry_id__in=_scope(scope).photometry_ids(transient))
+        .filter(point_filter if point_filter is not None else Q())
         .select_related("photometry__instrument", "photometry__obs_group", "band")
-        .annotate(n_dq=Count("data_quality"))
+        .filter(legacy_good('TransientPhotData'))
         .order_by("obs_date")
     )
     allowed_inst = service.allowed_instrument_ids()
@@ -245,7 +255,7 @@ def _photometry_rows(service: SharingService, transient: Transient):
         qs = qs.filter(photometry__instrument_id__in=allowed_inst)
     if allowed_groups:
         qs = qs.filter(photometry__obs_group_id__in=allowed_groups)
-    return [p for p in qs if not p.n_dq]
+    return list(qs)
 
 
 def _limiting_mag(point) -> Optional[float]:
@@ -261,15 +271,17 @@ def _limiting_mag(point) -> Optional[float]:
     return -2.5 * math.log10(flux + 3.0 * flux_err) + zp
 
 
-def select_photometry(service: SharingService, transient: Transient, max_points: Optional[int] = None):
+def select_photometry(service: SharingService, transient: Transient, max_points: Optional[int] = None,
+                      scope: Optional[ReportScope] = None):
     """``(detections, last_pre_detection_limit)`` from the allowed instruments/groups.
 
     Detections are unflagged rows with a magnitude, oldest first; the first one
     is the discovery point (a row flagged ``discovery_point`` wins when set).
     The limit is the latest non-detection *before* the discovery point (limits
-    during the decline are not reported).
+    during the decline are not reported). Only photometry sets in ``scope``
+    are used (public data when none is given, #691).
     """
-    rows = _photometry_rows(service, transient)
+    rows = _photometry_rows(service, transient, scope)
     detections = [p for p in rows if _finite(p.mag) is not None]
     if not detections:
         return [], None
@@ -317,7 +329,8 @@ def _phot_entry(service, point, *, limiting=False) -> dict:
 
 
 def build_at_report(service: SharingService, transient: Transient, *, coauthors: str = "",
-                    remarks: str = "", internal_name: str = "", max_points: Optional[int] = None) -> dict:
+                    remarks: str = "", internal_name: str = "", max_points: Optional[int] = None,
+                    scope: Optional[ReportScope] = None) -> dict:
     """A TNS ``at_report`` (discovery report) for ``transient``.
 
     Raises :class:`PayloadError` when the service has no reporting group, the
@@ -329,7 +342,7 @@ def build_at_report(service: SharingService, transient: Transient, *, coauthors:
         raise PayloadError("%s has no TNS reporting group id." % service.name)
     if is_tns_name(transient.name):
         raise PayloadError("%s already carries a TNS name." % transient.name)
-    detections, last_limit = select_photometry(service, transient, max_points=max_points)
+    detections, last_limit = select_photometry(service, transient, max_points=max_points, scope=scope)
     if not detections:
         raise PayloadError("No unflagged detection from the instruments this service may report.")
     discovery = detections[0]
@@ -381,7 +394,9 @@ def build_at_report(service: SharingService, transient: Transient, *, coauthors:
             "archiveid": "0",
             "archival_remarks": str(service.config_value("archival_remarks", "Other") or "Other"),
         }
-    return {"at_report": {"0": report}}
+    sent = list(detections) + ([last_limit[0]] if last_limit is not None else [])
+    # bookkeeping, stripped before sending: which points go out, so they can be made public once accepted (#708)
+    return {"at_report": {"0": report}, "_yse": {"photometry_point_ids": sorted({p.pk for p in sent})}}
 
 
 def spectrum_ascii(spectrum: TransientSpectrum) -> Optional[bytes]:
@@ -403,7 +418,7 @@ def spectrum_ascii(spectrum: TransientSpectrum) -> Optional[bytes]:
 
 def build_classification_report(service: SharingService, transient: Transient, *, spectrum: TransientSpectrum,
                                 classification: str = "", redshift=None, coauthors: str = "",
-                                remarks: str = "") -> dict:
+                                remarks: str = "", scope: Optional[ReportScope] = None) -> dict:
     """A TNS ``classification_report`` for ``transient`` based on ``spectrum``.
 
     The report carries ``_yse.spectrum_id`` (stripped before sending) so the
@@ -418,6 +433,9 @@ def build_classification_report(service: SharingService, transient: Transient, *
         raise PayloadError("%s has no TNS name yet; report the discovery first (or run TNS retrieval)." % transient.name)
     if spectrum is None or spectrum.transient_id != transient.pk:
         raise PayloadError("A spectrum of this transient is required for a classification report.")
+    if spectrum.pk not in _scope(scope).spectrum_ids(transient):
+        raise PayloadError("This spectrum is restricted and may not be reported by you; only its PI or a deputy "
+                           "can send it.")
     if not service.instrument_allowed(spectrum.instrument):
         raise PayloadError("Spectra from %s may not be reported through %s." % (spectrum.instrument.name, service.name))
     allowed_groups = service.allowed_obs_group_ids()
@@ -462,11 +480,13 @@ def build_classification_report(service: SharingService, transient: Transient, *
 def build_payload(service: SharingService, transient: Transient, kind: str, **options) -> dict:
     if kind == KIND_DISCOVERY:
         return build_at_report(service, transient, coauthors=options.get("coauthors", ""),
-                               remarks=options.get("remarks", ""), internal_name=options.get("internal_name", ""))
+                               remarks=options.get("remarks", ""), internal_name=options.get("internal_name", ""),
+                               scope=options.get("scope"))
     if kind == KIND_CLASSIFICATION:
         return build_classification_report(
             service, transient, spectrum=options.get("spectrum"), classification=options.get("classification", ""),
             redshift=options.get("redshift"), coauthors=options.get("coauthors", ""), remarks=options.get("remarks", ""),
+            scope=options.get("scope"),
         )
     if kind == KIND_HERMES:
         return {"hermes": {"transient": transient.name, "topic": service.hermes_topic,
@@ -480,6 +500,17 @@ def strip_private(payload: dict) -> dict:
 
 
 # --- the client ---------------------------------------------------------------
+
+def _rate_limited(response, body) -> "TNSRateLimited":
+    """The :class:`TNSRateLimited` for a 429 ``response``, waiting for TNS's reset time."""
+    reset = response.headers.get("x-rate-limit-reset") or response.headers.get("Retry-After") or "60"
+    try:
+        retry_after = max(5, int(float(reset)))
+    except ValueError:
+        retry_after = 60
+    return TNSRateLimited("TNS rate limit reached; retry in %ds" % retry_after, retry_after=retry_after,
+                          response=body)
+
 
 class TNSClient:
     """Thin wrapper over the TNS API (form-encoded POSTs with the tns_marker User-Agent)."""
@@ -527,13 +558,7 @@ class TNSClient:
         except ValueError:
             body = {"raw": (response.text or "")[:2000]}
         if status == 429:
-            reset = response.headers.get("x-rate-limit-reset") or response.headers.get("Retry-After") or "60"
-            try:
-                retry_after = max(5, int(float(reset)))
-            except ValueError:
-                retry_after = 60
-            raise TNSRateLimited("TNS rate limit reached; retry in %ds" % retry_after, retry_after=retry_after,
-                                 response=body)
+            raise _rate_limited(response, body)
         if status >= 500:
             raise TNSTransportError("TNS HTTP %d" % status, response=body, status_code=status)
         if status == 404 and allow_404:
@@ -564,11 +589,33 @@ class TNSClient:
         query = {"ra": "%.6f" % ra, "dec": "%.6f" % dec, "radius": str(radius_arcsec), "units": "arcsec",
                  "objname": "", "internal_name": ""}
         query.update(extra)
+        return self.search_query(query)
+
+    def search_query(self, query: dict) -> List[dict]:
+        """``get/search`` with any query, e.g. ``public_timestamp`` plus paging (#438)."""
         reply = self._post(SEARCH, {"data": json.dumps(query)})
         data = reply.get("data")
         if isinstance(data, dict):
             data = data.get("reply", [])
         return [d for d in (data or []) if isinstance(d, dict)]
+
+    def get_file_text(self, url: str) -> str:
+        """Download a TNS file (a spectrum's ``asciifile``) as text, with the API calls' errors (#438)."""
+        try:
+            response = requests.post(url, headers=self.headers, data={"api_key": self.api_key},
+                                     timeout=self.timeout)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            raise TNSTransportError("TNS unreachable: %s" % exc) from exc
+        except requests.RequestException as exc:
+            raise TNSTransportError("TNS request failed: %s" % exc) from exc
+        status = response.status_code
+        if status == 429:
+            raise _rate_limited(response, None)
+        if status >= 500:
+            raise TNSTransportError("TNS HTTP %d" % status, status_code=status)
+        if status >= 400:
+            raise TNSError("TNS HTTP %d for a file download" % status, status_code=status)
+        return response.text or ""
 
     def get_object(self, objname: str, photometry: bool = False, spectra: bool = False) -> dict:
         query = {"objname": objname, "photometry": "1" if photometry else "0", "spectra": "1" if spectra else "0"}
@@ -695,6 +742,19 @@ def _notify(submission: SharingSubmission, text: str):
         log.exception("sharing: could not notify about submission %s", submission.pk)
 
 
+def _publish_reported(submission: SharingSubmission) -> dict:
+    """After a confirmed report, make exactly the data that was sent public (#708); never for the sandbox."""
+    if submission.service.testing:
+        return {}
+    from YSE_App.services import tns_public
+
+    try:
+        return tns_public.mark_reported_public(submission.transient, **tns_public.reported_ids(submission.payload))
+    except Exception:  # noqa: BLE001 - the report is accepted; a failure here is logged and can be re-run
+        log.exception("sharing: could not mark reported data public for submission %s", submission.pk)
+        return {}
+
+
 def apply_acceptance(submission: SharingSubmission, outcome: Outcome, reply: dict) -> str:
     submission.mark_accepted(outcome.objname, reply)
     transient = submission.transient
@@ -704,6 +764,7 @@ def apply_acceptance(submission: SharingSubmission, outcome: Outcome, reply: dic
                                  user=submission.created_by, source="TNS")
     actor = submission.created_by or system_user()
     where = "sandbox" if submission.service.testing else "TNS"
+    published = _publish_reported(submission)
     Log.objects.create(
         transient=transient, created_by=actor, modified_by=actor,
         comment="Submitted to TNS (%s): %s report %s accepted as %s %s" % (
@@ -726,6 +787,8 @@ def create_submission(service: SharingService, transient: Transient, kind: str, 
     if not service.enabled:
         raise SharingError("%s is disabled." % service.name)
     if payload is None:
+        # a rule (no user) sends public data and opted-in restricted data; a person, what they may see and share (#691)
+        options.setdefault("scope", ReportScope.for_user(user) if user is not None else ReportScope.autopublish())
         payload = build_payload(service, transient, kind, **options)
     submission = SharingSubmission.objects.create(
         service=service, transient=transient, kind=kind, payload=payload, auto_publisher=auto_publisher,
@@ -763,6 +826,9 @@ def _prepare_report(submission: SharingSubmission, client: TNSClient) -> dict:
     if submission.kind == KIND_CLASSIFICATION:
         private = payload.get("_yse") or {}
         spectrum = TransientSpectrum.objects.filter(pk=private.get("spectrum_id")).first()
+        if spectrum is not None and spectrum.pk not in ReportScope.for_submission(submission).spectrum_ids(
+                submission.transient):
+            raise JobFailed("Spectrum %s is restricted and was not cleared for reporting." % spectrum.pk)
         group = payload.get("classification_report", {}).get("0", {}).get("spectra", {}).get("spectra-group", {}).get("0", {})
         if spectrum is not None and not group.get("ascii_file"):
             content = spectrum_ascii(spectrum)

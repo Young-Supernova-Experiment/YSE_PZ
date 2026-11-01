@@ -544,7 +544,12 @@ class OtherAdapterTests(_Base):
         self.assertEqual(result.state, "accepted")
         self.assertEqual(result.external_id, "GN-2026B-Q-101-45")
         self.assertEqual(post.call_args[0][1], "https://gnodb.gemini.edu:8443/too")
-        self.assertFalse(post.call_args[1]["verify"])
+        # certificate verification is on unless a CA bundle path is configured
+        self.assertIs(post.call_args[1]["verify"], True)
+        with override_settings(GEMINI_CA_BUNDLE="/path/to/ca-bundle.pem"):
+            with mock.patch("YSE_App.facilities.gemini.http_request", return_value=_FakeResponse(200, text="GN-2026B-Q-101-46\n")) as post:
+                gemini.submit(req)
+        self.assertEqual(post.call_args[1]["verify"], "/path/to/ca-bundle.pem")
         with mock.patch("YSE_App.facilities.gemini.http_request", return_value=_FakeResponse(401, text="bad key")):
             with self.assertRaises(FacilityError):
                 gemini.submit(req)

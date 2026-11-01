@@ -32,7 +32,7 @@
 					<table class="table table-sm table-hover mb-0" id="data_access_requests_tbl">
 						<thead>
 							<tr>
-								<th>#</th><th>Transient</th><th>Data</th><th>Owner group</th><th>{% if box == 'mine' %}Share with{% else %}Requester &rarr; group{% endif %}</th><th>Message</th><th>Status</th><th>When</th>{% if box == 'inbox' %}<th>Decision</th>{% endif %}
+								<th>#</th><th>Transient</th><th>Data</th><th>Owner group</th><th>{% if box == 'mine' %}Share with{% else %}Requester &rarr; group{% endif %}</th><th>Message</th><th>Status</th><th>When</th>{% if box == 'inbox' %}<th>Decision</th>{% elif box == 'decided' %}<th>Revoke</th>{% endif %}
 							</tr>
 						</thead>
 						<tbody>
@@ -45,10 +45,11 @@
 								<td>{% if box != 'mine' %}{{ r.requester.username }} &rarr; {% endif %}{{ r.target_group.name }}</td>
 								<td><small>{{ r.message|default:"-" }}</small></td>
 								<td>
-									<span class="badge {% if r.status == 'accepted' %}badge-success{% elif r.status == 'declined' %}badge-secondary{% else %}badge-info{% endif %}">{{ r.status_label }}</span>
+									<span class="badge {% if r.status == 'accepted' %}badge-success{% elif r.status == 'declined' %}badge-secondary{% elif r.status == 'revoked' %}badge-dark{% else %}badge-info{% endif %}">{{ r.status_label }}</span>
 									{% if r.decided_by %}<br><small class="text-muted">by {{ r.decided_by.username }}{% if r.decided_as %} ({{ r.decided_as_label }}){% endif %} {{ r.decided_at|date:"Y-m-d H:i" }}</small>{% endif %}
 									{% if r.note %}<br><small>&ldquo;{{ r.note }}&rdquo;</small>{% endif %}
 									{% if r.status == 'accepted' %}<br><small class="text-muted">{{ r.granted_count }} dataset{{ r.granted_count|pluralize }} shared</small>{% endif %}
+									{% if r.status == 'revoked' %}<br><small class="text-muted">{% if r.revoked_by %}by {{ r.revoked_by.username }} {% endif %}{{ r.revoked_at|date:"Y-m-d H:i" }}, {% if r.revoke_direction == 'backwards' %}backwards{% else %}going forward{% endif %}</small>{% endif %}
 								</td>
 								<td><small>{{ r.created_date|date:"Y-m-d H:i" }}</small></td>
 								{% if box == 'inbox' %}
@@ -67,6 +68,17 @@
 									<span class="small text-muted">the data's PIs and their deputies decide</span>
 									{% endif %}
 								</td>
+								{% elif box == 'decided' %}
+								<td class="text-nowrap">
+									{% if r.can_revoke %}
+									<form method="post" action="{% url 'data_access_revoke' r.id %}" class="form-inline yse-dar-revoke-form">
+										{% csrf_token %}
+										<input type="hidden" name="next" value="{% url 'data_access_requests' %}?box=decided">
+										{% include "YSE_App/access_direction.html" with id="yse-revoke" n1=r.id n2=0 %}
+										<button type="submit" class="btn btn-sm btn-outline-danger" title="Remove {{ r.target_group.name }} from the datasets this request shared">Revoke</button>
+									</form>
+									{% endif %}
+								</td>
 								{% endif %}
 							</tr>
 							{% endfor %}
@@ -83,12 +95,17 @@
 				<div class="box-header with-border"><strong>How it works</strong></div>
 				<div class="box-body small">
 					<p class="mb-1">When a transient has photometry or spectra restricted to a collaboration group you are not in, its Spectra and Detailed Photometry tabs show how many datasets are hidden and let you ask the owner group for access.</p>
-					<p class="mb-1">The data's PIs and the deputies they designated are notified and decide here; group members and group owners do not. Data without an explicit PI takes its allocation's PI; data with neither can only be shared by an administrator, and administrators' decisions are logged. <strong>Accept</strong> adds the requester's chosen group to the datasets you may share (the same mechanism every visibility check uses); <strong>Decline</strong> records a note. The requester is notified either way.</p>
+					<p class="mb-1">The data's PIs and the deputies they designated are notified and decide here; group members and group owners do not. Data without an explicit PI takes its allocation's PI; data with neither can only be shared by an administrator, and administrators' decisions are logged. <strong>Accept</strong> adds the requester's chosen group to the datasets you may share (the same mechanism every visibility check uses); <strong>Decline</strong> records a note. The requester is notified either way. An accepted request can be revoked from the Decided tab (or the data access dashboard): going forward by default, so data taken before stay visible to the group, or backwards to hide those too.</p>
 					<p class="mb-1">PIs: <a href="{% url 'data_sharing_deputies' %}">designate deputies</a> who may share your data.</p>
-					<p class="mb-0">REST: <code>/api/dataaccessrequests/</code> with <code>accept</code> / <code>decline</code> actions.</p>
+					<p class="mb-0">REST: <code>/api/dataaccessrequests/</code> with <code>accept</code> / <code>decline</code> / <code>revoke</code> actions.</p>
 				</div>
 			</div>
 		</div>
 	</div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+{% include "YSE_App/access_direction_script.html" %}
 {% endblock %}

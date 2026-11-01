@@ -31,7 +31,8 @@ class ProfileSerializer(serializers.HyperlinkedModelSerializer):
 		return instance
 
 class UserQuerySerializer(serializers.HyperlinkedModelSerializer):
-	user = serializers.HyperlinkedRelatedField(queryset=User.objects.all(), view_name='user-detail')
+	# Set from the request in UserQueryViewSet.perform_create, never from the payload.
+	user = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 	
 	created_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')
 	modified_by = serializers.HyperlinkedRelatedField(read_only=True, view_name='user-detail')

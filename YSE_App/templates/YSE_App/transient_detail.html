@@ -70,6 +70,7 @@
                     {% if has_gw_candidate_tag %}
                         <li class="nav-item"><a class="nav-link" href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW Info</a></li>
                     {% endif %}
+                    <li class="nav-item"><a class="nav-link" href="#history_tab" data-toggle="tab" id="history_tab_header">History</a></li>
                     <li class="nav-item d-none">
                         <a class="nav-link" href="#summary_tab" data-toggle="tab" id="yse-comments-tab-legacy">Comments (on Summary)</a>
                     </li>
@@ -285,6 +286,11 @@
                             {% endif %}
                         </div>
                     </div>
+                    <div class="tab-pane" id="history_tab">
+                        <div id="history_tab_content">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> The change history loads when you open this tab.</p>
+                        </div>
+                    </div>
             </div>
         </div>
 
@@ -298,9 +304,6 @@
 {% endblock %}
 
 {% block scripts %}
-
-    <script src="{% static 'YSE_App/bower_components/datatables.net/js/jquery.dataTables.min.js' %}"></script>
-    <script src="{% static 'YSE_App/bower_components/datatables.net-bs/js/dataTables.bootstrap.min.js' %}"></script>
     <script type="text/javascript" src="{% static 'YSE_App/bokeh-2.4.2.min.js' %}"></script>
     <script src="{% static 'YSE_App/bower_components/bootstrap-timepicker/js/bootstrap-timepicker.js' %}"></script>
 
@@ -412,15 +415,22 @@
                 var eligible = isPublicGroup ? !!meta.is_public : yseGroupIdEligible(groupId, meta);
                 var $label = $cb.closest('.yse-followup-audience-label');
                 var $choice = $cb.closest('.yse-followup-audience-choice');
+                // Groups the selected resource does not allow are hidden (and stay disabled,
+                // so they are never submitted), not shown greyed out.
                 if (!eligible) {
                     $cb.prop('disabled', true).prop('checked', false);
-                    $label.addClass('text-muted');
-                    $choice.addClass('yse-followup-audience-ineligible');
+                    $label.removeClass('text-muted');
+                    $choice.addClass('yse-followup-audience-ineligible').hide();
                 } else {
                     $cb.prop('disabled', false);
                     $label.removeClass('text-muted');
-                    $choice.removeClass('yse-followup-audience-ineligible');
+                    $choice.removeClass('yse-followup-audience-ineligible').show();
                 }
+            });
+            // Fold-away "More groups" only when one of them can be picked.
+            $panel.find('details.yse-followup-audience-more').each(function() {
+                var $details = $(this);
+                $details.toggle($details.find('.yse-followup-audience-choice:not(.yse-followup-audience-ineligible)').length > 0);
             });
             if (resetEligible) {
                 /* Saved defaults (#440) among the eligible shown groups; else every eligible
@@ -677,6 +687,27 @@
             "JWST (lookup failed)"
         );
 
+        /* ?dq=good|flagged on the page survives the deferred photometry load (#85). */
+        function yseDqQuery() {
+            var m = /[?&]dq=(good|flagged)(?:&|$)/.exec(window.location.search);
+            return m ? '?dq=' + m[1] : '';
+        }
+        /* Filter buttons reload just the photometry fragment and keep the URL in step. */
+        $(document).on('click', '#photometry_deferred_tables .yse-dq-filter a', function(e) {
+            e.preventDefault();
+            var dq = $(this).data('dq');
+            var q = (dq === 'good' || dq === 'flagged') ? '?dq=' + dq : '';
+            var $c = $('#photometry_deferred_tables');
+            $.get("{% url 'transient_detail_photometry_fragment' transient.id %}" + q).done(function(html) {
+                $c.html(html);
+                if (window.history && history.replaceState) {
+                    history.replaceState(null, '', window.location.pathname + q + '#photometry_tab');
+                }
+            }).fail(function() {
+                $c.prepend('<p class="text-danger">Failed to apply the filter.</p>');
+            });
+        });
+
         var yseDetailFragmentsLoaded = {};
         function yseLoadDetailFragment(key, url, selector) {
             var $c = $(selector);
@@ -691,7 +722,7 @@
             }
             yseDetailFragmentsLoaded[key] = true;
             $c.html('<p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Loading…</p>');
-            $.get(url).done(function(html) {
+            $.get(key === 'photometry' ? url + yseDqQuery() : url).done(function(html) {
                 $c.html(html);
                 if (key === 'followup_requests' && $.fn.boxWidget) {
                     $('.followupbox').boxWidget();
@@ -752,11 +783,20 @@
         var yseJwstObservationsLoaded = false;
         var yseChandraImagesLoaded = false;
         $(function() {
-            if (window.location.hash === '#followup_tab') {
-                if (window.yseResetFollowupFragmentCache) {
-                    window.yseResetFollowupFragmentCache();
-                }
-                $('a[href="#followup_tab"]').tab('show');
+            // A tab named in the URL (#followup_tab, #spectra_tab, ... after an action) opens that
+            // tab, and the page stays at the top so the tab bar is always in view: an action never
+            // scrolls the browser down to a pane.
+            var yseHash = window.location.hash;
+            var $yseHashTab = yseHash ? $('a[data-toggle="tab"]').filter(function() {
+                return $(this).attr('href') === yseHash;
+            }) : $();
+            if (yseHash === '#followup_tab' && window.yseResetFollowupFragmentCache) {
+                window.yseResetFollowupFragmentCache();
+            }
+            if ($yseHashTab.length) {
+                $yseHashTab.first().tab('show');
+                window.scrollTo(0, 0);
+                $(window).one('load', function() { window.scrollTo(0, 0); });
             }
             $('a[data-toggle="tab"]').on('shown.bs.tab', function(e) {
                 var target = $(e.target).attr('href');
@@ -804,6 +844,12 @@
                         'gw',
                         "{% url 'transient_detail_gw_fragment' transient.id %}",
                         '#gw_tab_content'
+                    );
+                } else if (target === '#history_tab') {
+                    yseLoadDetailFragment(
+                        'history',
+                        "{% url 'transient_detail_history_fragment' transient.id %}",
+                        '#history_tab_content'
                     );
                 }
             });
@@ -1705,6 +1751,35 @@
                 });
             });
 
+            // DESI lookup (#738): queue it, then poll the result a few times.
+            $(document).on('click', '.desirequest', function(event){
+                var url = "{% url 'desi_lookup' transient.slug %}";
+                var $btn = $(this);
+                var $status = $('#desi_status');
+                function poll(n){
+                    $.get(url).done(function(json){
+                        if (json.pending && n > 0){
+                            $status.text('DESI lookup running...');
+                            setTimeout(function(){ poll(n - 1); }, 5000);
+                        } else if (json.result){
+                            $status.text('DESI: ' + json.result);
+                            if (!json.pending && json.when){ $btn.prop('disabled', false); }
+                        } else if (json.pending){
+                            $status.text('DESI lookup is queued; check back shortly.');
+                        }
+                    });
+                }
+                $btn.prop('disabled', true);
+                $.post(url, {csrfmiddlewaretoken: "{{ csrf_token }}"}).done(function(json){
+                    $status.text(json.msg);
+                    poll(12);
+                }).fail(function(xhr){
+                    $status.text((xhr.responseJSON && xhr.responseJSON.msg) ||
+                        ('error: DESI lookup failed (HTTP ' + xhr.status + '); nothing was queued'));
+                    $btn.prop('disabled', false);
+                });
+            });
+
             $('.submit_to_tns').on('click', function(event){
 
                 {% if tns_sandbox_url %}
@@ -1717,7 +1792,7 @@
                 if (r1 == true){
                     var url = "{% url 'submit_to_tns' transient.name %}";
 
-                    $.get(url).done(function(json){
+                    $.post(url, {csrfmiddlewaretoken: "{{ csrf_token }}"}).done(function(json){
                         var message = json.msg;
                         alert(message);
                     reload();
@@ -2104,7 +2179,7 @@
                 return cookieValue;
             }
 
-            var csrftoken = getCookie('csrftoken');
+            var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
             /*
             The functions below will create a header with csrftoken
@@ -2622,7 +2697,7 @@
             }
             function post(url, data) {
                 return $.ajax({ url: url, method: 'POST', data: data,
-                                headers: { 'X-CSRFToken': $('input[name=csrfmiddlewaretoken]').first().val() || getCookie('csrftoken') } });
+                                headers: { 'X-CSRFToken': $('input[name=csrfmiddlewaretoken]').first().val() || getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}') } });
             }
             function getCookie(name) {
                 var m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');

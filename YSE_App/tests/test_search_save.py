@@ -14,9 +14,10 @@ import json
 
 from unittest import mock
 
+from django.core.cache import cache
 from django.db import connections
 from django.http import QueryDict
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -59,6 +60,8 @@ def run_sql(sql):
         cursor.close()
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class CompileEquivalenceTests(SearchFixture):
 
 
@@ -192,6 +195,8 @@ class LiteralTests(TestCase):
             inline_sql_params('SELECT 1', [1], conn)
 
 
+# 'search_staff' reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['search_staff'])
 class SaveServiceTests(SearchFixture):
 
 
@@ -255,10 +260,28 @@ class SaveServiceTests(SearchFixture):
         self.assertNotIn('/transient_detail/ps26abc/', html)
 
 
+class CacheIsolationTests(SearchFixture):
+    """#388: Explorer name lists cached by one test must not reach the next.
+
+    unittest runs these in name order, so the second test sees whatever the
+    first one left behind.
+    """
+
+    KEY = 'explorer_query_isolation_probe'
+
+    def test_a_leaves_a_cached_name_list_behind(self):
+        cache.set(self.KEY, ['stale-name'], timeout=600)
+        self.assertEqual(cache.get(self.KEY), ['stale-name'])
+
+    def test_b_starts_with_an_empty_cache(self):
+        self.assertIsNone(cache.get(self.KEY))
+
+
 class SavePageTests(SearchFixture):
 
 
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.client.force_login(self.user)
 
@@ -335,6 +358,7 @@ class SaveApiTests(SearchFixture):
 
 
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.client.force_login(self.user)
 

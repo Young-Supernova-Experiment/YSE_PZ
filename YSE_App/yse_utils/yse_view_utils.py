@@ -14,6 +14,8 @@ from django.shortcuts import render,redirect,get_object_or_404
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse 
 from django.http import HttpResponseRedirect, HttpResponseServerError
+from django.http import Http404
+from YSE_App.queries import yse_python_queries
 from django.urls import reverse, reverse_lazy
 from django.views.generic import View, ListView, DetailView
 from django.views.generic import UpdateView, DeleteView, CreateView
@@ -511,18 +513,29 @@ def init_draw_transients(request):
 				query = Query.objects.filter(title=unquote(query_name))
 				if len(query):
 					query = query[0]
-					if not dashboard_sql_is_supported(query.sql): return Http404('Invalid Query')
-					cursor = connections['explorer'].cursor()
-					cursor.execute(query.sql.replace('%','%%'), ())
-					transients = Transient.objects.filter(name__in=(x[0] for x in cursor)).order_by('-disc_date')
+					if not dashboard_sql_is_supported(query.sql, request.user): raise Http404('Invalid Query')
+					# Rewritten to the viewer's visible rows (#723).
+					from YSE_App.services.explorer_scope import viewer_time_cap
+					from YSE_App.services.page_query_scope import PageQueryRefused, page_query_sql
+					try: run_sql, viewer_cap_ms = page_query_sql(query.sql, request.user)
+					except PageQueryRefused: raise Http404('Invalid Query')
+					conn = connections['explorer']
+					cursor = conn.cursor()
+					with viewer_time_cap(conn, viewer_cap_ms):
+						cursor.execute(run_sql.replace('%','%%'), ())
+						names = [x[0] for x in cursor.fetchall()]
+					transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
 					cursor.close()
-					from YSE_App.services.visibility import filter_transients_by_user_access
-					transients = filter_transients_by_user_access(request.user, transients)
+					from YSE_App.services.visibility import filter_listed_transients
+					transients = filter_listed_transients(request.user, transients)
 				else:
 					query = UserQuery.objects.filter(python_query = unquote(query_name))
-					if not len(query): return Http404('Invalid Query')
+					if not len(query): raise Http404('Invalid Query')
 					query = query[0]
-					transients = getattr(yse_python_queries,query.python_query)()
+					try:
+						transients = filter_listed_transients(request.user, yse_python_queries.run_python_query(query.python_query, request.user))
+					except KeyError:
+						raise Http404('Invalid Query')
 			else: 
 				transients = Transient.objects.filter(~Q(status__name = 'Ignore'))
 

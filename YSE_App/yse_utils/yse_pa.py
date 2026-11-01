@@ -87,9 +87,10 @@ def yse_pa(msb_name,pa=None):
         pa = 180 - (-parallactic_angle.deg + rotator_angle)
         for i,transient_list in enumerate([transients_4best,transients_3best,transients_2best,transients_best]):
             for transient in transient_list:
-                cmd = "echo %.7f %.7f | /Users/David/Dropbox/research/YSE_FieldSelection/YSE_scheduler/findcells/pscoords in=sky out=cell ra=%.7f dec=%.7f pa=%.1f dx=0 dy=0 dpa=0 sc=38.856"%(
-                    transient.ra,transient.dec,sf.ra_cen,sf.dec_cen,pa)
-                output = subprocess.check_output(cmd, shell=True)
+                cmd = ['/Users/David/Dropbox/research/YSE_FieldSelection/YSE_scheduler/findcells/pscoords', 'in=sky', 'out=cell', 'ra=%.7f' % sf.ra_cen, 'dec=%.7f' % sf.dec_cen,
+                       'pa=%.1f' % pa, 'dx=0', 'dy=0', 'dpa=0', 'sc=38.856']
+                # argument list, no shell; the coordinates go in on stdin
+                output = subprocess.check_output(cmd, input=('%.7f %.7f\n' % (transient.ra, transient.dec)).encode())
                 ota,cell,centerx,centery = output.split()
                 if 'OTA'+ota.decode('utf-8') in goodcells.keys() and cell.decode('utf-8') in goodcells['OTA'+ota.decode('utf-8')]:
                     if i < 3: good_list += [transient.name]

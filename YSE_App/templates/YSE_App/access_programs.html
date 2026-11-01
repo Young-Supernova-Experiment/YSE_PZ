@@ -1,0 +1,38 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Program data access</h1>
+</section>
+
+<section class="content">
+	<div class="row">
+		<div class="col-lg-9 col-12">
+			<div class="box box-default box-solid">
+				<div class="box-body">
+					{% if allocations %}
+					<table class="table table-sm mb-0" id="yse-access-programs">
+						<thead><tr><th>Program</th><th>Telescope</th><th>PI</th><th>Dates</th></tr></thead>
+						<tbody>
+						{% for a in allocations %}
+							<tr data-allocation-id="{{ a.id }}">
+								<td><a href="{% url 'access_program' a.id %}">{{ a.name }}</a>{% if a.proposal_id %} <span class="text-muted small">{{ a.proposal_id }}</span>{% endif %}</td>
+								<td>{{ a.telescope.name }}</td>
+								<td>{{ a.principal_investigator.name|default:"-" }}</td>
+								<td><small>{{ a.start_date|date:"Y-m-d" }} to {{ a.end_date|date:"Y-m-d" }}</small></td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+					{% else %}
+					<p class="mb-0 text-muted">You are not the PI or a program deputy of any program, so there is no program access to set. Administrators link PI records to accounts.</p>
+					{% endif %}
+				</div>
+			</div>
+		</div>
+		<div class="col-lg-3 col-12">
+			{% include "YSE_App/access_help.html" %}
+		</div>
+	</div>
+</section>
+{% endblock %}

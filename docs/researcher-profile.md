@@ -11,7 +11,7 @@ Server steps: `docs/ziggy-runbook.md`, section "User agreement, researcher profi
 | --- | --- |
 | `/agreement/` | Current agreement, one checkbox, Accept. Acceptances store only user, version and time (no IP or user agent). |
 | `/research-consent/` | Optional research consent form: one checkbox, Consent, Decline or Not now; Withdraw once consented. Never a gate; every answer continues to the profile while its required fields are incomplete, then to the requested page. |
-| `/profile/` | Your profile; required and encrypted fields marked; "My students" for scientific staff and faculty. |
+| `/profile/` | Your profile; required and encrypted fields marked; "My advisees" for scientific staff and faculty; "My advisors" (PhD, postdoc, former advisors and supervisors) for everyone who consents. Rows edit kind and years in place. |
 | `/profile/edit/` | The form. Required fields depend on career level (below). |
 | user menu > My profile | Link from every page. |
 
@@ -78,14 +78,22 @@ record. Service: `YSE_App/services/research_consent.py`.
   (pronouns, department, career level, interests, website, GitHub, time zone), every encrypted field (country, PhD year, gender), advisors and
   students, affiliation history and SciX metrics. Research data are offered on `/profile/edit/`
   only to consenting users and required only from them (the onboarding gate requires only full
-  name and institution otherwise). "My students" and the SciX refresh are for consenting users only.
+  name and institution otherwise). "My advisees", "My advisors" and the SciX refresh are for consenting users only.
+* **Advisor and advisee relationships, one copy per side** (Ryan, 2026-10-22). Each person keeps
+  their own row (`Mentorship.owner`) and edits only that, so one side's changes never change the
+  other's. Adding a YSE-PZ user as your advisor or advisee also creates a *pending* row on their
+  side and sends them a `mentorship` notification ("Interests and data access" preferences); it
+  shows on their profile under "Relationships to confirm" until they confirm (it is then theirs,
+  and confirming needs research consent) or decline (their copy goes, yours stays). Names typed
+  without an account need no confirmation. Migration 0055 gave every existing relation between
+  two users a confirmed copy on the other side, so nothing that showed before disappeared.
 * **Decline or withdraw:** nothing is deleted automatically. The user is excluded from research at
   once, and the administrators in `RESEARCH_OPTOUT_NOTIFY_USERNAMES` (settings.ini `[research]
   optout_notify_usernames`, default every active superuser) get a `research_optout` notification
   (in-app, plus email per their preferences). They run `manage.py purge_unconsented_demographics
   [--user NAME] [--apply]` (dry run by default). It deletes that user's research data and keeps the
-  essential data and all activity. Advisor and student rows are deleted only when the opted-out
-  user entered them (as mentee or mentor); rows the other person entered stay, because privacy
+  essential data and all activity. Advisor and student rows are deleted only on the opted-out
+  user's own side (`owner`); the other person's copy stays, because privacy
   covers what an individual revealed, not information about them (Ryan, 2026-10-20). Users who have not answered keep stored values (they may still
   delete encrypted ones) but are never used for research.
 * **Admin:** read-only for superusers (Research consent forms, Research consent records); other
@@ -113,8 +121,14 @@ writes a standalone SQLite database under these rules. It is a management comman
 on the server.
 
 * **Activity tables:** `followups`, `followup_requests`, `comments`, `annotations`,
-  `data_access_requests`, `facility_requests`, `interests`, `favorites` and `transient_changes`
-  (status, class and redshift changes from the change log).
+  `data_access_requests` (with who revoked a request, when and how), `facility_requests`,
+  `interests`, `favorites` and `transient_changes` (status, class and redshift changes from the
+  audit log). Experimental also exports `value_changes` (changes people made in the value change
+  log, #737; system rows have no person and are left out), `night_plans` (AstroScheduler plans:
+  author, approver, state) and `observed_blocks` (what was recorded at the telescope). Hosts and
+  observing nights are random strings per export.
+* **Not exported (yet):** access rules, standing grants, program deputies and access history
+  (#648). They are permission settings, not activity, and name grantee users and groups.
 * **Public lookups:** `transients`, `transient_statuses`, `transient_classes`,
   `followup_statuses`. Transients keep their real ids and names.
 * **Participants:** `participants` (research profile only for consenting users; institution as a

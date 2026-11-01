@@ -14,7 +14,7 @@ Covers two regressions Ryan Foley found on yse_test (develop vs production):
 
 import datetime
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from YSE_App.models import Transient
@@ -45,6 +45,9 @@ class LastObsDateColumnTests(TestCase):
         user = create_test_user(username='last_obs_date_user')
         transient = create_minimal_transient(user, name='last-obs-date-test')
         attach_synthetic_photometry(user, transient, n_points=3)
+        from YSE_App.services.photstat import recompute_many
+
+        recompute_many([transient.pk])  # the "Last Obs." cell reads the stat row (#557)
 
         table = TransientTable(
             annotate_dashboard_transient_fields(
@@ -58,6 +61,8 @@ class LastObsDateColumnTests(TestCase):
         self.assertEqual(cell, expected)
 
 
+# The fixture account reads all data as a service reader; staff alone no longer do (#706).
+@override_settings(DATA_SERVICE_READER_USERNAMES=['dash_sort_user'])
 class DashboardDeferredSectionTests(TestCase):
     @classmethod
     def setUpTestData(cls):

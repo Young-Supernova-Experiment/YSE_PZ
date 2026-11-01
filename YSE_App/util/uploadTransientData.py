@@ -39,6 +39,8 @@ class upload():
 						  help='group who observed this transient')
 		parser.add_option('--permissionsgroup', default='', type="string",
 						  help='group that has permission to view this photometry on YSE_PZ')
+		parser.add_option('--reference', default=None, type="string",
+						  help="optional reference for the data, e.g. an ADS bibcode (literature data)")
 		parser.add_option('--inputformat', default='snana', type="string",
 						  help="input file format, can be 'basic' or 'snana' (photometry only) ")
 		parser.add_option('--instrument', default='GPC1', type="string",
@@ -196,6 +198,8 @@ less than this, in the same filter/instrument are treated as the same data.	 All
 					'obs_group':self.options.obsgroup,
 					'transient':snid,
 					'groups':self.options.permissionsgroup}
+		if self.options.reference:
+			photdict['reference'] = self.options.reference
 
 		return(transientdict,photdict)
 			
@@ -208,7 +212,7 @@ less than this, in the same filter/instrument are treated as the same data.	 All
 		SpecHeader = {}
 		keyslist = ['ra','dec','instrument','rlap','obs_date','redshift',
 					'redshift_err','redshift_quality','spectrum_notes',
-					'obs_group','groups','spec_phase','snid','data_quality']
+					'obs_group','groups','spec_phase','snid','data_quality','reference']
 		requiredkeyslist = ['ra','dec','instrument','obs_date','obs_group','snid']
 		fin = open(self.options.inputfile)
 		count = 0
@@ -244,6 +248,8 @@ less than this, in the same filter/instrument are treated as the same data.	 All
 			if key not in SpecHeader.keys():
 				print('Warning: %s not in spectrum header'%key)
 				SpecHeader[key] = None
+		if self.options.reference:
+			SpecHeader['reference'] = self.options.reference
 		SpecHeader['clobber'] = self.options.clobber
 		SpecDictAll['header'] = SpecHeader
 

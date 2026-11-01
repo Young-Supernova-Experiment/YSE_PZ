@@ -248,6 +248,7 @@ class AntaresZTF(CronJobBase):
 									'dec':data['result'][k][0][_allowed_galaxy_catalogs[k]['dec_key']]}
 						if _allowed_galaxy_catalogs[k]['redshift_key'] is not None:
 							hostdict['redshift'] = data['result'][k][0][_allowed_galaxy_catalogs[k]['redshift_key']]
+							hostdict['redshift_source'] = 'ANTARES %s' % k  # provenance (#436, #437)
 				
 			else:
 				hostdict = {}

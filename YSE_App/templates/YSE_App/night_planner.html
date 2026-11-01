@@ -1,0 +1,221 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+  <h1>Plan {{ telescope.name }}, night of {{ night_info.date }}</h1>
+  <p class="text-muted" style="margin-bottom: 0;">
+    {{ instrument|upper }}{% if night_info.night_type %} · {{ night_info.night_type }}{% endif %}
+    · {{ n_targets }} follow-up{{ n_targets|pluralize }}
+    · <a href="{{ observing_night_url }}">Back to the observing night</a>
+  </p>
+</section>
+
+<section class="content yse-page-night-planner">
+  {% if warnings %}
+  <div class="alert alert-warning" role="alert">
+    <strong>Check before planning:</strong>
+    <ul style="margin-bottom: 0;">
+      {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="card card-outline card-secondary" id="night-plans-card">
+    <div class="card-header">
+      <h3 class="card-title">Saved plans</h3>
+      {% if plan %}<span class="badge badge-info ml-2" id="current-plan">Opened v{{ plan.version }} ({{ plan.state }})</span>{% endif %}
+    </div>
+    <div class="card-body">
+      <form class="form-inline mb-2" onsubmit="return false;">
+        <input type="text" class="form-control form-control-sm mr-2" id="plan-notes" maxlength="5000"
+               placeholder="Notes for this version (optional)" style="min-width: 320px;">
+        <button type="button" class="btn btn-primary btn-sm" id="save-plan-btn">Save plan</button>
+        <span class="ml-2 small" id="plan-status"></span>
+      </form>
+      {% if plans %}
+      <table class="table table-sm table-striped mb-0" id="night-plans-table">
+        <thead><tr><th>Version</th><th>State</th><th>Author</th><th>Saved (UTC)</th><th>Blocks</th><th>Notes</th><th></th></tr></thead>
+        <tbody>
+        {% for p in plans %}
+          <tr data-plan="{{ p.id }}">
+            <td>v{{ p.version }}{% if p.parent %} <span class="text-muted small">(from #{{ p.parent }})</span>{% endif %}</td>
+            <td>{{ p.state }}{% if p.approved_by %} <span class="text-muted small">by {{ p.approved_by }}</span>{% endif %}</td>
+            <td>{{ p.author }}</td>
+            <td>{{ p.created|slice:":16" }}</td>
+            <td>{{ p.blocks }}</td>
+            <td>{{ p.notes|default:"" }}</td>
+            <td class="text-nowrap">
+              <a class="btn btn-default btn-xs" href="{{ planner_url }}?plan={{ p.id }}">Open</a>
+              <a class="btn btn-default btn-xs" href="{% url 'night_plan_target_list' p.id %}">Target list</a>
+              {% if can_approve and p.state != 'approved' %}
+              <button type="button" class="btn btn-success btn-xs approve-plan-btn" data-plan="{{ p.id }}">Approve</button>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-muted small mb-0">No saved plans yet. Recalculate, adjust, then Save plan.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card card-outline card-secondary" id="observing-log-card">
+    <div class="card-header"><h3 class="card-title">Tonight's observing log</h3></div>
+    <div class="card-body">
+      <p class="text-muted small">
+        Real-Time Mode in the planner records Start, Completed (data taken), Failed and Punted here.
+        Judge data-taken observations with Good / Failed / Punted: a good one marks the request
+        Successful. Finished targets are left out of the next solve; use "Recalculate Schedule
+        Starting Now" to re-plan the rest of the night.
+      </p>
+      <table class="table table-sm table-striped mb-0" id="observing-log-table">
+        <thead><tr><th>End (UTC)</th><th>Target</th><th>Outcome</th><th>Reason</th><th>Note</th><th>Recorded by</th><th></th></tr></thead>
+        <tbody>
+        {% for o in observing_log %}
+          <tr data-outcome="{{ o.outcome }}" data-block="{{ o.id }}">
+            <td>{{ o.end_ut|slice:"11:16" }}</td><td>{{ o.target_name }}</td><td>{{ o.outcome_label }}</td>
+            <td>{{ o.reason|default:"" }}</td><td>{{ o.note|default:"" }}</td><td>{{ o.recorded_by }}</td>
+            <td class="text-nowrap">{% if o.outcome == "observed" %}
+              <button type="button" class="btn btn-default btn-xs judge-toggle" data-block="{{ o.id }}">Judge</button>
+            {% endif %}</td>
+          </tr>
+          {% if o.outcome == "observed" %}
+          <tr class="judge-row" id="judge-{{ o.id }}" style="display: none;">
+            <td colspan="7">
+              <form class="judge-form" data-block="{{ o.id }}" onsubmit="return false;">
+                <div class="mb-1">
+                  <label class="mr-3"><input type="radio" name="outcome" value="success" checked> Good data</label>
+                  <label class="mr-3"><input type="radio" name="outcome" value="failed"> Failed (missed it, bad S/N...)</label>
+                  <label class="mr-3"><input type="radio" name="outcome" value="punted"> Punted (no usable data)</label>
+                </div>
+                <fieldset class="judge-reasons mb-1">
+                  <legend class="small mb-0">Reasons (at least one for Failed or Punted)</legend>
+                  {% for r in outcome_reasons %}
+                  <label class="mr-3 small"><input type="checkbox" name="reasons" value="{{ r.code }}"> {{ r.label }}</label>
+                  {% endfor %}
+                </fieldset>
+                <textarea class="form-control form-control-sm mb-1" name="note" rows="2" maxlength="2000"
+                          placeholder="Comment (optional)"></textarea>
+                <button type="button" class="btn btn-primary btn-xs judge-save">Save</button>
+                <button type="button" class="btn btn-default btn-xs judge-cancel">Cancel</button>
+                <span class="small text-danger judge-error"></span>
+              </form>
+            </td>
+          </tr>
+          {% endif %}
+        {% empty %}
+          <tr class="observing-log-empty"><td colspan="7" class="text-muted small">Nothing recorded yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="text-muted small">The planner solves only when you press Recalculate.</p>
+  <iframe id="night-planner-frame" src="{{ frame_url }}" title="Night planner"
+          style="width: 100%; height: calc(100vh - 220px); min-height: 720px; border: 0; border-radius: 6px;"></iframe>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{{ block.super }}
+<script>
+(function () {
+  const plansApi = "{{ plans_api|escapejs }}";
+  const observationsApi = "{{ observations_api|escapejs }}";
+  const plannerUrl = "{{ planner_url|escapejs }}";
+  const approveBase = "{% url 'api-night-plan-approve' 0 %}".replace("/0/approve/", "/");
+  const csrf = "{{ csrf_token|escapejs }}";
+  const parentPlan = {% if plan %}{{ plan.id }}{% else %}null{% endif %};
+  const status = document.getElementById("plan-status");
+
+  function say(msg, bad) { status.textContent = msg; status.className = "ml-2 small " + (bad ? "text-danger" : "text-muted"); }
+
+  async function post(url, body) {
+    const r = await fetch(url, {method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json", "X-CSRFToken": csrf}, body: JSON.stringify(body || {})});
+    let data = {};
+    try { data = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(data.detail || ("HTTP " + r.status));
+    return data;
+  }
+
+  document.getElementById("save-plan-btn").addEventListener("click", async function () {
+    const planner = document.getElementById("night-planner-frame").contentWindow.AstroScheduler;
+    const result = planner && planner.getResult();
+    if (!result || !result.blocks || !result.blocks.length) { say("Recalculate first: there is no schedule to save.", true); return; }
+    say("Saving…");
+    try {
+      const saved = await post(plansApi, {
+        result: {blocks: result.blocks, solver_version: result.solver_version},
+        targets: planner.getTargets(), parent: parentPlan,
+        notes: document.getElementById("plan-notes").value.trim() || null});
+      window.location.href = plannerUrl + "?plan=" + saved.id;
+    } catch (e) { say("Not saved: " + e.message, true); }
+  });
+
+  // Planner actions are recorded in YSE_PZ; if YSE_PZ refuses, the planner cancels the action.
+  const frame = document.getElementById("night-planner-frame");
+  frame.addEventListener("load", function () {
+    const planner = frame.contentWindow.AstroScheduler;
+    if (!planner) return;
+    planner.hooks.onObservationEvent = async function (event) {
+      let started = null;
+      if (event.action !== "start") {
+        planner.getObservationLog().forEach(function (e) {
+          if (e.action === "start" && e.target_name === event.target_name) started = e.time_utc;
+        });
+      }
+      const saved = await post(observationsApi, Object.assign({}, event, {started_utc: started, plan: parentPlan}));
+      if (saved.observed_block) {
+        const tbody = document.querySelector("#observing-log-table tbody");
+        const empty = tbody.querySelector(".observing-log-empty");
+        if (empty) empty.remove();
+        const row = tbody.insertRow(0);
+        row.dataset.outcome = saved.outcome;
+        [event.time_utc.slice(11, 16), event.target_name, saved.outcome === "observed" ? "Data taken" : saved.outcome,
+         event.reason || "", event.note || "", "you", ""]
+          .forEach(function (text) { row.insertCell().textContent = text; });
+      }
+    };
+  });
+
+  // Judge a data-taken observation (#672): outcome, any number of reasons, a comment.
+  const assessBase = "{% url 'api-observed-block-assess' 0 %}".replace("/0/assess/", "/");
+  document.getElementById("observing-log-table").addEventListener("click", async function (ev) {
+    const toggle = ev.target.closest(".judge-toggle");
+    if (toggle) {
+      const row = document.getElementById("judge-" + toggle.dataset.block);
+      row.style.display = row.style.display === "none" ? "" : "none";
+      return;
+    }
+    const form = ev.target.closest(".judge-form");
+    if (!form) return;
+    if (ev.target.closest(".judge-cancel")) { form.closest("tr").style.display = "none"; return; }
+    if (!ev.target.closest(".judge-save")) return;
+    const error = form.querySelector(".judge-error");
+    const body = {
+      outcome: form.querySelector("input[name=outcome]:checked").value,
+      reasons: Array.from(form.querySelectorAll("input[name=reasons]:checked")).map(function (c) { return c.value; }),
+      note: form.querySelector("textarea[name=note]").value.trim(),
+    };
+    if (body.outcome !== "success" && !body.reasons.length) { error.textContent = "Tick at least one reason."; return; }
+    try {
+      await post(assessBase + form.dataset.block + "/assess/", body);
+      window.location.reload();
+    } catch (e) { error.textContent = "Not saved: " + e.message; }
+  });
+
+  document.querySelectorAll(".approve-plan-btn").forEach(function (btn) {
+    btn.addEventListener("click", async function () {
+      try {
+        await post(approveBase + btn.dataset.plan + "/approve/");
+        window.location.reload();
+      } catch (e) { say("Not approved: " + e.message, true); }
+    });
+  });
+})();
+</script>
+{% endblock %}
