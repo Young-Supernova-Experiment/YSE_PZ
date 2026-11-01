@@ -203,6 +203,78 @@ class DeployChecklistFlowTests(TestCase):
         self.assertContains(response, "Spectrum not uploaded. Permissions: Select a valid choice.")
         self.assertEqual(TransientSpectrum.objects.count(), n_before)
 
+    # ---- #900 / #901 / #902: the form on the transient page
+
+    def _upload_box(self, html):
+        at = html.find('id="upload_spectrum_btn"')
+        self.assertGreater(at, 0)
+        return html[max(0, at - 400):at]
+
+    def test_upload_form_marks_and_requires_fields(self):
+        response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
+        html = response.content.decode()
+        self.assertIn("Fields marked", html)
+        self.assertRegex(html, r'<input(?=[^>]*\bname="filename")(?=[^>]*\brequired\b)[^>]*>')
+        self.assertRegex(html, r'<input(?=[^>]*\bname="obs_date")(?=[^>]*\brequired\b)[^>]*>')
+        self.assertRegex(html, r'<select(?=[^>]*\bname="instrument")(?=[^>]*\brequired\b)[^>]*>')
+        self.assertRegex(html, r'<select(?=[^>]*\bname="obs_group")(?=[^>]*\brequired\b)[^>]*>')
+        self.assertNotIn("required_id", html)
+        self.assertIn("spectrum-upload.js?v=spec-upload-1", html)
+        # Empty date (#900): no value, and the page says it is not set and is read as UT.
+        self.assertRegex(html, r'<input(?=[^>]*\bname="obs_date")(?=[^>]*\bvalue="")[^>]*>')
+        self.assertIn("Not set", html)
+        self.assertIn("Read as UT", html)
+        self.assertIn('id="obs_date_now"', html)
+        # Collapsed until there is something to show again.
+        self.assertIn("collapsed-box", self._upload_box(html))
+        self.assertNotIn("Choose the file again", html)
+
+    def test_upload_with_empty_date_returns_with_the_reason_and_values(self):
+        n_before = TransientSpectrum.objects.count()
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", obs_date="", spec_phase="12.5", reference="synthetic-ref-902"), follow=True)
+        self.assertContains(response, "Spectrum not uploaded. Obs date: This field is required.")
+        self.assertEqual(TransientSpectrum.objects.count(), n_before)
+        html = response.content.decode()
+        self.assertNotIn("collapsed-box", self._upload_box(html))
+        self.assertIn("Choose the file again", html)
+        self.assertIn("Not set", html)
+        self.assertRegex(html, r'<input(?=[^>]*\bname="spec_phase")(?=[^>]*\bvalue="12.5")[^>]*>')
+        self.assertIn("synthetic-ref-902", html)
+        self.assertRegex(html, r'<option value="%d" selected>' % self.kast.id)
+        self.assertRegex(html, r'<option value="%d" selected>' % self.ucsc_group.id)
+
+    def test_upload_failure_keeps_a_filled_date_once(self):
+        response = self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", instrument="", obs_date="2026-09-03 04:05"), follow=True)
+        self.assertContains(response, "Instrument: This field is required.")
+        html = response.content.decode()
+        self.assertRegex(html, r'<input(?=[^>]*\bname="obs_date")(?=[^>]*\bvalue="2026-09-03T04:05")[^>]*>')
+        self.assertNotIn("Not set", html)
+        self.assertRegex(html, r'<option value="%d" selected>' % self.ucsc_group.id)
+        # Shown once: the next visit has an empty form again.
+        again = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug})).content.decode()
+        self.assertNotIn("2026-09-03T04:05", again)
+        self.assertIn("collapsed-box", self._upload_box(again))
+
+    def test_upload_failure_values_stay_with_their_transient(self):
+        other = create_transient_with_synthetic_data(self.user, name="chk-flow-other", n_phot_points=1)
+        self.client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", instrument="", obs_date="2026-09-04T05:06"))
+        html = self.client.get(reverse("transient_detail", kwargs={"slug": other.slug})).content.decode()
+        self.assertNotIn("2026-09-04T05:06", html)
+        self.assertNotIn("Choose the file again", html)
+
+    def test_upload_failure_by_basic_auth_keeps_no_session(self):
+        from django.contrib.sessions.models import Session
+
+        client = Client()
+        n_sessions = Session.objects.count()
+        response = client.post(reverse("upload_spectrum"), self._upload_payload(
+            b"4000 1.0\n", instrument=""), **self.auth)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Session.objects.count(), n_sessions)
+
     def test_upload_spectrum_page_on_its_own(self):
         response = self.client.get(reverse("upload_spectrum"))
         self.assertContains(response, "Spectra are uploaded from the transient")

@@ -62,7 +62,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         instance.host = validated_data.get('host', instance.host)
         instance.abs_mag_peak_band = validated_data.get('abs_mag_peak_band', instance.abs_mag_peak_band)
         instance.created_by = validated_data.get('created_by', instance.created_by)
-        instance.modified_by = validated_data.get('modified_by_id', instance.modified_by)
+        # the viewsets pass the requesting user's id as ``modified_by`` (#886)
+        instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
         instance.antares_classification = validated_data.get('antares_classification', instance.antares_classification)
         instance.internal_survey = validated_data.get('internal_survey', instance.internal_survey)
 

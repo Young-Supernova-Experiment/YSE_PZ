@@ -42,6 +42,7 @@ class SurveyFieldSerializer(serializers.HyperlinkedModelSerializer):
 					t = transient_result.first()
 					instance.targeted_transients.add(t)
 		
+		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
 		instance.save()
 
 		return instance
@@ -97,6 +98,7 @@ class SurveyFieldMSBSerializer(serializers.ModelSerializer):
 					s = survey_field_result.first()
 					instance.survey_fields.add(s)
 		
+		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
 		instance.save()
 
 		return instance
@@ -140,6 +142,7 @@ class SurveyObservationSerializer(serializers.HyperlinkedModelSerializer):
 		instance.quality = validated_data.get('quality', instance.quality)
 		instance.n_good_skycell = validated_data.get('n_good_skycell', instance.n_good_skycell)		
 
+		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
 		instance.save()
 
 		return instance
