@@ -95,9 +95,11 @@ class NavPreviewTests(TestCase):
         self.assertGreaterEqual(html.count('href="/acknowledgements/"'), 2)
 
     def test_links_keep_script_prefix(self):
-        # The stack's mount point (mod_wsgi SCRIPT_NAME) becomes the script prefix.
+        # Under mod_wsgi the stack's mount point becomes the script prefix; the test
+        # client does not set it, so set it as WSGIHandler would.
         self.addCleanup(set_script_prefix, get_script_prefix())
-        html = self._get(self.staff, "/dashboard/", preview=True, SCRIPT_NAME="/yse_test")
+        set_script_prefix("/yse_test/")
+        html = self._get(self.staff, "/dashboard/", preview=True)
         for href in ('href="/yse_test/search/"', 'href="/yse_test/data_access/"',
                      'href="/yse_test/glossary/"', 'href="/yse_test/acknowledgements/"',
                      'href="/yse_test/jobs/"'):
