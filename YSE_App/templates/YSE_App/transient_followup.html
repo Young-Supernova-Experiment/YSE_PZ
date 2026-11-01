@@ -20,6 +20,9 @@
     <!-- Main content -->
     <section class="content">
 
+      {% if ui_preview and followup_tables %}{% load observable_tonight %}
+      {% observable_tonight_control id_selector="tr[data-transient-id]" %}
+      {% endif %}
       <!-- Default box -->
     {% for followup_table in followup_tables %}
     {% if followup_table.3|length %}

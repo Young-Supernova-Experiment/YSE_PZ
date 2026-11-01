@@ -79,3 +79,29 @@ Paranal, a polar site; a morning object, a zenith-transiting object, one that ne
 the cache (hit, key contents, one hour timeout, bypass), the page and the endpoint
 (login, telescope list, date handling, `mine`, `telescope`, `plots=0`, 400/404/405, cache
 reuse, the Bokeh item, the inline script's bracket balance) and the link on the detail page.
+
+## "Observable tonight" on a shortlist (#854, UI preview only)
+
+For users with the UI preview switch on, three shortlists carry an **Observable tonight from
+`<site>`** control: the follow-up list (`/followup/`), the tabbed dashboard (the open tab) and a
+search (`/search/`) that has at least one filter and at most 500 matches. It is the last step on
+a list someone already narrowed: it never runs over the whole database, and it never hides,
+reorders or scores rows. Under each row's name it adds one line: the UTC window
+(`YYYYMMDD.ddd`, MJD on hover) in which the object is at or below the airmass limit (default 2)
+during astronomical night, the minimum airmass that night, and the mean moon distance.
+
+* `GET /observable-tonight/?site=<telescope id>&ids=1,2,3&airmass=2&date=YYYY-MM-DD`
+  (login and preview required, else 404). At most 500 ids (400 with a message otherwise);
+  ids the user may not see listed are left out of the answer.
+* `YSE_App/services/observable_tonight.py` solves the site's twilights once, samples the dark
+  window 121 times and transforms every object at every sample in one astropy call
+  (objects x times). The night, the airmass formula and `iers_quiet` (no IERS downloads) are
+  the ones above. The answer is cached for an hour per (site, night, object set, airmass
+  limit), with the coordinates in the key.
+* The site list is every telescope with coordinates, by name. The page remembers the last
+  choice in the browser (localStorage); otherwise it uses the first telescope in the list.
+  Per-user and per-team default sites are still an open question in #854.
+* Template tag `{% observable_tonight_control id_selector=... %}`
+  (`templatetags/observable_tonight.py`), script `observable-tonight.js`.
+
+Tests: `YSE_App/tests/test_observable_tonight.py`.

@@ -1,6 +1,7 @@
 {% extends 'YSE_App/base.html' %}
 {% load static %}
 {% load bootstrap3 %}
+{% load observable_tonight %}
 {% comment %}Tabbed main dashboard for UI preview users (#859); the current page is dashboard.html.{% endcomment %}
 
 {% block styles %}
@@ -49,6 +50,8 @@
       </div>
     </details>
   </div>
+
+  {% observable_tonight_control id_selector=".yse-dash-select" scope="#yse-dash2 .yse-dash-panel:not([hidden])" watch="#yse-dash2" %}
 
   <div class="yse-dash-bulk" aria-live="polite">
     <span class="yse-dash-bulk-count">0 selected</span>
