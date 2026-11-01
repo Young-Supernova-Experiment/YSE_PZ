@@ -16,7 +16,7 @@ from django.db.migrations.operations import AddField, CreateModel
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.utils import timezone
 
-from YSE_App.common import spectrum_arrays
+from YSE_App.common import fk_on_delete, spectrum_arrays
 from YSE_App.models import (
     CatalogDataMatch,
     CatalogEntry,
@@ -25,9 +25,12 @@ from YSE_App.models import (
     GroupProfile,
     HostSpectrum,
     HostSpectrumArrays,
+    Observatory,
+    Telescope,
     TransientSpectrum,
     TransientSpectrumArrays,
     TransientSpectrumCatalogInfo,
+    UserPreference,
 )
 from YSE_App.tests.fixtures_minimal import (
     attach_synthetic_host,
@@ -248,3 +251,71 @@ class ReverseForwardTests(TransactionTestCase):
         finally:
             self._run(fk_migration.forwards)
         self.assertEqual(_rule(table, column), [fk_migration.CASCADE])
+
+
+default_site_migration = importlib.import_module("YSE_App.migrations.0063_userpreference_observing_default_site")
+
+
+class DefaultSiteColumnTests(SimpleTestCase):
+    def test_list_matches_the_model(self):
+        field = UserPreference._meta.get_field("observing_default_site")
+        self.assertTrue(field.null)
+        self.assertIs(field.remote_field.on_delete, models.SET_NULL)
+        self.assertEqual(
+            default_site_migration.FOREIGN_KEYS,
+            ((UserPreference._meta.db_table, field.column, Telescope._meta.db_table, fk_on_delete.SET_NULL),),
+        )
+
+    def test_0062_uses_the_shared_helper(self):
+        self.assertIs(fk_migration.current_constraints, fk_on_delete.current_constraints)
+        self.assertEqual(fk_migration.PLAIN_RULES, fk_on_delete.PLAIN_RULES)
+
+
+class DefaultSiteRawDeleteTests(TestCase):
+    """develop deletes a telescope with raw SQL semantics: it does not know the new column (#959)."""
+
+    def setUp(self):
+        if connection.vendor != "mysql":
+            self.skipTest("ON DELETE rules are MySQL constraints")
+        self.user = create_test_user("fk_default_site_user")
+        audit = audit_fields(self.user)
+        observatory = Observatory.objects.create(name="Synthetic FK Obs", utc_offset=0, tz_name="UTC", **audit)
+        self.telescope = Telescope.objects.create(name="Synthetic FK 2m", observatory=observatory, latitude=0.0,
+                                                  longitude=0.0, elevation=0.0, **audit)
+        self.pref = UserPreference.objects.create(user=self.user, comment_default_public=True,
+                                                  observing_default_site=self.telescope)
+
+    def test_constraint_is_set_null(self):
+        for table, column, _, rule in default_site_migration.FOREIGN_KEYS:
+            self.assertEqual(_rule(table, column), [rule])
+
+    def test_telescope_delete_nulls_the_default(self):
+        _sql("DELETE FROM YSE_App_telescope WHERE id = %s", [self.telescope.id])
+
+        self.assertFalse(Telescope.objects.filter(pk=self.telescope.pk).exists())
+        self.pref.refresh_from_db()
+        self.assertIsNone(self.pref.observing_default_site_id)
+        self.assertTrue(self.pref.comment_default_public)
+
+
+class DefaultSiteReverseForwardTests(TransactionTestCase):
+    def setUp(self):
+        if connection.vendor != "mysql":
+            self.skipTest("ON DELETE rules are MySQL constraints")
+
+    def _run(self, func):
+        with connection.schema_editor(atomic=False) as editor:
+            func(None, editor)
+
+    def test_reverse_then_forward(self):
+        (table, column, _, rule), = default_site_migration.FOREIGN_KEYS
+        try:
+            self._run(default_site_migration.backwards)
+            rules = _rule(table, column)
+            self.assertEqual(len(rules), 1)
+            self.assertIn(rules[0], fk_on_delete.PLAIN_RULES)
+        finally:
+            self._run(default_site_migration.forwards)
+        self.assertEqual(_rule(table, column), [rule])
+        self._run(default_site_migration.forwards)  # idempotent
+        self.assertEqual(_rule(table, column), [rule])

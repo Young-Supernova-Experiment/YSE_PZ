@@ -18,7 +18,8 @@ TRANSIENT_STATUS_DISPLAY: Dict[str, Tuple[str, str]] = {
     'FollowupRequested': ('Follow-up requested', 'Someone asked for follow-up observations.'),
     'Following': ('Following', 'Follow-up observations are under way.'),
     'Interesting': ('Interesting', 'Worth a closer look; no follow-up yet.'),
-    'Watch': ('Watch', 'Keep an eye on it; no follow-up yet.'),
+    'Watch': ('Watch', 'Someone has looked at it (it is no longer New) but did not mark it Interesting or '
+                       'request follow-up, and did not want to ignore it yet.'),
     'FollowupFinished': ('Follow-up finished', 'Follow-up observations are done.'),
     'NeedsTemplate': ('Needs template', 'Waiting for a template image after the transient fades.'),
     'Ignore': ('Ignore', 'Not of interest; left off the status lists.'),

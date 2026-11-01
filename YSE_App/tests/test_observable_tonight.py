@@ -24,7 +24,7 @@ from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from YSE_App.models import ClassicalResource, FollowupStatus, Observatory, Telescope
+from YSE_App.models import ClassicalResource, FollowupStatus, Observatory, Telescope, UserPreference
 from YSE_App.services import observability as obs_svc
 from YSE_App.services import observable_tonight as tonight
 from YSE_App.tests.fixtures_minimal import (
@@ -332,7 +332,7 @@ class ShortlistPageTests(ObservableTonightBase):
         self.assertContains(response, self.CONTROL)
         self.assertRegex(response.content.decode(), r'<tr\s[^>]*data-transient-id="%d"' % self.listed[0].pk)
         self.assertContains(response, 'data-id-selector="tr[data-transient-id]"')
-        self.assertContains(response, "observable-tonight.js?v=obs-tonight-1")
+        self.assertContains(response, "observable-tonight.js?v=obs-tonight-2")
 
     def test_site_list_starts_with_the_first_telescope(self):
         self._followup()
@@ -379,3 +379,83 @@ class ShortlistPageTests(ObservableTonightBase):
             response = self.client_for(self.viewer).get(reverse("search"), {"name_contains": "2026obs"})
         self.assertNotContains(response, self.CONTROL)
         self.assertContains(response, "this search has 3 matches; it works on at most 2.")
+
+
+class DefaultSiteTests(ObservableTonightBase):
+    """Per-user default site (#959): saved on the server, used before the browser's last choice."""
+
+    def post(self, client, site):
+        return client.post(reverse("observable_tonight_default_site"), {"site": site})
+
+    def control(self, user):
+        html = self.client_for(user).get(reverse("dashboard")).content.decode()
+        start = html.index('class="yse-obs-tonight form-inline"')
+        return html[start:html.index("</div>", start)]
+
+    def other_site(self):
+        return Telescope.objects.get(name="ZZZ Synthetic 1m")
+
+    def test_preview_off_is_not_found_and_anonymous_is_sent_to_login(self):
+        self.assertEqual(self.post(self.client_for(self.viewer, preview=False), self.site.pk).status_code, 404)
+        self.assertEqual(self.post(Client(), self.site.pk).status_code, 302)
+        self.assertFalse(UserPreference.objects.filter(user=self.viewer).exists())
+
+    def test_post_only_and_csrf_checked(self):
+        client = self.client_for(self.viewer)
+        self.assertEqual(client.get(reverse("observable_tonight_default_site")).status_code, 405)
+        strict = Client(enforce_csrf_checks=True)
+        strict.force_login(self.viewer)
+        strict.cookies[PREVIEW_COOKIE] = "1"
+        self.assertEqual(self.post(strict, self.site.pk).status_code, 403)
+
+    def test_save_shows_it_selected_and_clear_removes_it(self):
+        client = self.client_for(self.viewer)
+        other = self.other_site()
+        before = self.control(self.viewer)
+        self.assertIn('data-default-site=""', before)
+        self.assertNotIn(" selected>", before)
+        self.assertRegex(before, r'<button type="button" class="btn btn-link btn-sm yse-obs-make-default">'
+                                 r'Make this my default</button>')
+
+        response = self.post(client, other.pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"default_site": other.pk, "name": other.name})
+        self.assertEqual(UserPreference.objects.get(user=self.viewer).observing_default_site_id, other.pk)
+        after = self.control(self.viewer)
+        self.assertIn('data-default-site="%d"' % other.pk, after)
+        self.assertIn('<option value="%d" selected>' % other.pk, after)
+        self.assertIn('yse-obs-make-default" hidden>', after)
+        self.assertRegex(after, r'<span class="yse-obs-default-note small text-muted">your default site</span>')
+        # another user's control is unchanged
+        self.assertIn('data-default-site=""', self.control(self.owner))
+
+        response = self.post(client, "")
+        self.assertEqual(response.json(), {"default_site": None, "name": ""})
+        self.assertIsNone(UserPreference.objects.get(user=self.viewer).observing_default_site_id)
+        self.assertIn('data-default-site=""', self.control(self.viewer))
+
+    def test_bad_sites_are_refused(self):
+        client = self.client_for(self.viewer)
+        no_coords = Telescope.objects.create(name="Synthetic no coordinates", observatory=self.site.observatory,
+                                             **audit_fields(self.owner))
+        for value in ("x", "999999", str(no_coords.pk)):
+            with self.subTest(site=value):
+                self.assertEqual(self.post(client, value).status_code, 400)
+        self.assertFalse(UserPreference.objects.filter(user=self.viewer, observing_default_site__isnull=False).exists())
+
+    def test_deleted_default_falls_back(self):
+        audit = audit_fields(self.owner)
+        doomed = Telescope.objects.create(name="Synthetic doomed", observatory=self.site.observatory,
+                                          latitude=0.0, longitude=0.0, elevation=0.0, **audit)
+        self.post(self.client_for(self.viewer), doomed.pk)
+        doomed.delete()
+        pref = UserPreference.objects.get(user=self.viewer)
+        self.assertIsNone(pref.observing_default_site_id)
+        self.assertIn('data-default-site=""', self.control(self.viewer))
+
+    def test_existing_preferences_are_kept(self):
+        pref = UserPreference.objects.create(user=self.viewer, comment_default_public=True)
+        self.post(self.client_for(self.viewer), self.site.pk)
+        pref.refresh_from_db()
+        self.assertTrue(pref.comment_default_public)
+        self.assertEqual(pref.observing_default_site_id, self.site.pk)

@@ -145,6 +145,12 @@ class UserPreference(models.Model):
     followup_default_groups = models.ManyToManyField(Group, blank=True, related_name="followup_default_for_preferences")
     # None = the site default (not public).
     comment_default_public = models.BooleanField(null=True, blank=True)
+    # "Observable tonight" default site (#959). Nullable, and ON DELETE SET NULL in MySQL too
+    # (migration 0063), because develop's code on the shared database does not know the column.
+    observing_default_site = models.ForeignKey(
+        "YSE_App.Telescope", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+        help_text="Site that Observable tonight starts from for this user.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

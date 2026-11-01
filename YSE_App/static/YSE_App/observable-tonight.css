@@ -8,3 +8,5 @@
 .yse-obs-line { white-space: nowrap; margin-top: 2px; }
 .yse-obs-line.yse-obs-up strong { color: #2e7d32; }
 .yse-obs-line.yse-obs-down { color: #6c757d; }
+.yse-obs-tonight .yse-obs-make-default { padding-left: 0; margin-right: 0.6rem; }
+.yse-obs-tonight .yse-obs-default-note { margin-right: 0.6rem; }

@@ -4,8 +4,9 @@
  * observable-tonight/?site=&ids=&airmass= once for all of them, and adds one
  * line under each row's name: the UTC window above the airmass limit during
  * astronomical night, the minimum airmass and the moon distance. Rows are
- * never hidden or reordered. The chosen site is remembered in localStorage;
- * otherwise the first telescope in the list is used.
+ * never hidden or reordered. The site menu starts from the user's default site
+ * (saved on the server with "Make this my default", #959); without one, from the
+ * last choice in this browser (localStorage); otherwise the first telescope.
  */
 (function () {
   'use strict';
@@ -56,9 +57,56 @@
     var lastKey = '';
     var pending = 0;
 
+    var makeDefault = box.querySelector('.yse-obs-make-default');
+    var defaultNote = box.querySelector('.yse-obs-default-note');
+    var defaultSite = box.getAttribute('data-default-site') || '';
+
     var stored = loadSite();
-    if (stored && /^\d+$/.test(stored) && site.querySelector('option[value="' + stored + '"]')) {
+    if (defaultSite && site.querySelector('option[value="' + defaultSite + '"]')) {
+      site.value = defaultSite;
+    } else if (stored && /^\d+$/.test(stored) && site.querySelector('option[value="' + stored + '"]')) {
       site.value = stored;
+    }
+
+    function showDefaultState() {
+      var isDefault = !!defaultSite && site.value === defaultSite;
+      if (makeDefault) { makeDefault.hidden = isDefault; }
+      if (defaultNote) { defaultNote.hidden = !isDefault; }
+    }
+    showDefaultState();
+
+    function saveDefault() {
+      var chosen = site.value;
+      makeDefault.disabled = true;
+      fetch(box.getAttribute('data-default-url'), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-CSRFToken': box.getAttribute('data-csrf') || '',
+          Accept: 'application/json'
+        },
+        body: 'site=' + encodeURIComponent(chosen)
+      })
+        .then(function (r) {
+          return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+        })
+        .then(function (res) {
+          makeDefault.disabled = false;
+          if (!res.ok) {
+            status.textContent = res.body.error || 'Could not save your default site.';
+            status.classList.add('text-danger');
+            return;
+          }
+          defaultSite = String(res.body.default_site || '');
+          box.setAttribute('data-default-site', defaultSite);
+          showDefaultState();
+        })
+        .catch(function () {
+          makeDefault.disabled = false;
+          status.textContent = 'Could not save your default site. Try again.';
+          status.classList.add('text-danger');
+        });
     }
 
     function rows() {
@@ -183,8 +231,10 @@
       status.textContent = '';
       clear.hidden = true;
     });
+    if (makeDefault) { makeDefault.addEventListener('click', saveDefault); }
     site.addEventListener('change', function () {
       saveSite(site.value);
+      showDefaultState();
       if (active) { run(true); }
     });
     airmass.addEventListener('change', function () { if (active) { run(true); } });

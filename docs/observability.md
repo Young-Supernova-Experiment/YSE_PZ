@@ -98,9 +98,12 @@ during astronomical night, the minimum airmass that night, and the mean moon dis
   (objects x times). The night, the airmass formula and `iers_quiet` (no IERS downloads) are
   the ones above. The answer is cached for an hour per (site, night, object set, airmass
   limit), with the coordinates in the key.
-* The site list is every telescope with coordinates, by name. The page remembers the last
-  choice in the browser (localStorage); otherwise it uses the first telescope in the list.
-  Per-user and per-team default sites are still an open question in #854.
+* The site list is every telescope with coordinates, by name. It starts from the user's
+  default site (#959): "Make this my default" next to the menu saves it on the server
+  (`UserPreference.observing_default_site`, POST `observable-tonight/default-site/` with
+  `site=<telescope id>`, or empty to clear). Without a default it uses the last choice in this
+  browser (localStorage), otherwise the first telescope in the list. Per-team default sites are
+  not built.
 * Template tag `{% observable_tonight_control id_selector=... %}`
   (`templatetags/observable_tonight.py`), script `observable-tonight.js`.
 
