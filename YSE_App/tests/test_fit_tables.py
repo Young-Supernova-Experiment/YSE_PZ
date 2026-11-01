@@ -12,7 +12,7 @@ Pins:
   pass (job queue, idempotent, previous run's user and parameters), the ``FIT_REFIT_ENABLED`` gate;
 * the Analysis tab's fit history only with the UI preview on;
 * Explorer: the new tables are staff-only;
-* migration 0063's ON DELETE list against the models, and raw-SQL deletes on MySQL.
+* migration 0064's ON DELETE list against the models, and raw-SQL deletes on MySQL.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from YSE_App.tests.fixtures_minimal import (
     create_test_user,
 )
 
-fit_migration = importlib.import_module("YSE_App.migrations.0063_fit_tables")
+fit_migration = importlib.import_module("YSE_App.migrations.0064_fit_tables_fk_on_delete")
 
 
 def bazin_result(peak_g=60010.0, peak_r=60011.0, last_nd=60000.0, reference="r"):

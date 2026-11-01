@@ -2,7 +2,7 @@
 
 Two new tables only: no existing table, column or row changes. Their foreign keys to
 ``YSE_App_transient`` and ``YSE_App_externalservicerun`` (tables develop knows) get
-database-level ``ON DELETE CASCADE`` (``YSE_App/common/fk_on_delete.py``, as in 0062), so
+database-level ``ON DELETE CASCADE`` in 0064 (``YSE_App/common/fk_on_delete.py``, as in 0062), so
 develop's deletes of a transient or a run on the shared database still succeed. Nothing is
 filled here: ``manage.py backfill_fit_tables --apply`` writes rows for older runs.
 """
@@ -11,25 +11,9 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 import YSE_App.models.fields
-from YSE_App.common import fk_on_delete
-from YSE_App.common.fk_on_delete import CASCADE
-
-# (table, column, referenced table, ON DELETE rule); test_fit_tables.py checks it against the models.
-FOREIGN_KEYS = (
-    ("YSE_App_bazinfit", "run_id", "YSE_App_externalservicerun", CASCADE),
-    ("YSE_App_bazinfit", "transient_id", "YSE_App_transient", CASCADE),
-    ("YSE_App_saltfit", "run_id", "YSE_App_externalservicerun", CASCADE),
-    ("YSE_App_saltfit", "transient_id", "YSE_App_transient", CASCADE),
-)
-
-forwards = fk_on_delete.forwards(FOREIGN_KEYS)
-backwards = fk_on_delete.backwards(FOREIGN_KEYS)
 
 
 class Migration(migrations.Migration):
-
-    # ALTER TABLE in RunPython: MySQL commits DDL implicitly, so no surrounding transaction.
-    atomic = False
 
     dependencies = [
         ('YSE_App', '0062_shared_db_fk_on_delete'),
@@ -115,6 +99,4 @@ class Migration(migrations.Migration):
                 'constraints': [models.UniqueConstraint(fields=('run',), name='yse_saltfit_run_uniq')],
             },
         ),
-        # shared-db-safe: only sets ON DELETE CASCADE on the foreign keys of the two tables created above, which develop's code never reads or writes; no row or column of an existing table changes (#846)
-        migrations.RunPython(forwards, backwards),
     ]
