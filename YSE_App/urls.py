@@ -273,6 +273,8 @@ urlpatterns = [
     # Observability page (#307): every telescope's altitude/airmass curve for one night.
     re_path(r'^observability/(?P<transient_id>[0-9]+)/$', observability_views.observability_page, name='observability'),
     re_path(r'^observability/(?P<transient_id>[0-9]+)/data/$', observability_views.observability_data, name='observability_data'),
+    # "Observable tonight" on a shortlist, preview users only (#854).
+    re_path(r'^observable-tonight/$', observability_views.observable_tonight_data, name='observable_tonight_data'),
     re_path(r'^lightcurveplot_detail/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_detail, name='lightcurveplot_detail'),
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),

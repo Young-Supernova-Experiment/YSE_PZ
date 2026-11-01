@@ -792,6 +792,11 @@ def followup(request):
     ).distinct():
         telescope_ids.update(pk for pk in ids if pk is not None)
     telescopes = Telescope.objects.filter(pk__in=telescope_ids)
+    # Preview users get "Observable tonight" (#854), which reads each row's transient id.
+    from YSE_App.common.ui_preview import ui_preview_enabled
+    table_kwargs = {}
+    if ui_preview_enabled(request):
+        table_kwargs['row_attrs'] = {'data-transient-id': lambda record: record.transient_id}
 
     table_list = []
     for t in telescopes:
@@ -805,7 +810,7 @@ def followup(request):
         if not followuptransientfilter.qs.exists():
             continue
 
-        followup_table = FollowupTable(followuptransientfilter.qs,prefix=t)
+        followup_table = FollowupTable(followuptransientfilter.qs,prefix=t,**table_kwargs)
         RequestConfig(request, paginate={'per_page': 10}).configure(followup_table)
         table_list += [(t.name,followup_table,t.name.replace(' ','_'),followuptransientfilter.qs,followuptransientfilter)]
 
@@ -2878,7 +2883,25 @@ class SearchResultsView(TemplateView):
         context.update(self._save_search_context(params, filterset))
         # Backwards-compatible name used by older templates/tests.
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
+        context['obs_tonight'] = self._obs_tonight_context(filterset, context['result_count'])
         return context
+
+    def _obs_tonight_context(self, filterset, result_count):
+        """"Observable tonight" (#854) for preview users: only on a filtered search of at most MAX_OBJECTS."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+        from YSE_App.services.observable_tonight import MAX_OBJECTS
+
+        if not ui_preview_enabled(self.request):
+            return None
+        filters = [name for name, _, _ in filterset.active_filters() if name != 'ordering']
+        if not filters:
+            blocked = 'set at least one filter first. It is a last step on a short list, never the whole database.'
+        elif result_count is not None and result_count > MAX_OBJECTS:
+            blocked = ('this search has %d matches; it works on at most %d. Add filters to narrow it.'
+                       % (result_count, MAX_OBJECTS))
+        else:
+            blocked = ''
+        return {'blocked': blocked}
 
     @staticmethod
     def _bulk_params(params):

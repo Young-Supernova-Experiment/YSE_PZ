@@ -170,3 +170,52 @@ def observability_data(request, transient_id):
         "results": results,
         "rows": svc.summary_rows(results),
     })
+
+
+@login_required
+@require_GET
+def observable_tonight_data(request):
+    """"Observable tonight" for a shortlist (#854), preview users only.
+
+    ``?site=<telescope id>&ids=1,2,3&airmass=2&date=YYYY-MM-DD``. Answers one
+    entry per listed transient the user may see (others are left out), never
+    more than ``MAX_OBJECTS``; there is no "all transients" form.
+    """
+    from django.http import Http404
+
+    from YSE_App.common.ui_preview import ui_preview_enabled
+    from YSE_App.services import observable_tonight as tonight
+    from YSE_App.services.visibility import filter_listed_transients
+
+    if not ui_preview_enabled(request):
+        raise Http404("Observable tonight is part of the UI preview.")
+    try:
+        ids = tonight.parse_ids(request.GET.getlist("ids"))
+    except ValueError:
+        return JsonResponse({"error": "ids must be transient ids separated by commas."}, status=400)
+    if not ids:
+        return JsonResponse({"error": "No objects given: Observable tonight works on a shortlist."}, status=400)
+    if len(ids) > tonight.MAX_OBJECTS:
+        return JsonResponse({"error": "Observable tonight works on at most %d objects; this list has %d. "
+                                      "Narrow the list first." % (tonight.MAX_OBJECTS, len(ids)),
+                             "max": tonight.MAX_OBJECTS}, status=400)
+    try:
+        airmass = float(request.GET.get("airmass") or tonight.DEFAULT_AIRMASS)
+    except ValueError:
+        airmass = float("nan")
+    if not (tonight.MIN_AIRMASS_LIMIT <= airmass <= tonight.MAX_AIRMASS_LIMIT):
+        return JsonResponse({"error": "The airmass limit must be between %g and %g."
+                                      % (tonight.MIN_AIRMASS_LIMIT, tonight.MAX_AIRMASS_LIMIT)}, status=400)
+    night, date_error = _night_from_request(request)
+    if date_error:
+        return JsonResponse({"error": date_error}, status=400)
+    site = request.GET.get("site", "")
+    telescope = svc.telescopes_with_coordinates().filter(pk=int(site)).first() if site.isdigit() else None
+    if telescope is None:
+        return JsonResponse({"error": "Choose a telescope with known coordinates."}, status=400)
+    listed = filter_listed_transients(request.user, Transient.objects.filter(pk__in=ids))
+    targets = sorted((pk, float(ra), float(dec)) for pk, ra, dec in listed.values_list("pk", "ra", "dec")
+                     if ra is not None and dec is not None)
+    payload = dict(tonight.shortlist_visibility(targets, telescope, night, round(airmass, 2)))
+    payload["date"] = night.isoformat()
+    return JsonResponse(payload)

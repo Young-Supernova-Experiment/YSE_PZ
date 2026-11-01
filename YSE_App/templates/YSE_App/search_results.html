@@ -125,6 +125,9 @@
     {% if bulk_result %}
     <div class="alert alert-info py-1 px-2" role="alert" id="search-bulk-result">{{ bulk_result }}</div>
     {% endif %}
+    {% if obs_tonight %}{% load observable_tonight %}
+    {% observable_tonight_control id_selector=".search-select-row" scope="#search-results" blocked=obs_tonight.blocked %}
+    {% endif %}
     <form id="search-bulk-form" class="form-inline mb-2" action="{% url 'search_bulk_action' %}" method="post">
       {% csrf_token %}
       <input type="hidden" name="params" value="{{ bulk_params }}">
