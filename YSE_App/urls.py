@@ -23,6 +23,7 @@ from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
+from YSE_App import selection_views
 from YSE_App.common import ui_preview as ui_preview_views
 from YSE_App import signup_views
 from YSE_App import access_views
@@ -255,6 +256,13 @@ urlpatterns = [
     re_path(r'^search/save/$', views.save_search, name='save_search'),
     re_path(r'^search/bulk/$', views.search_bulk_action, name='search_bulk_action'),
     re_path(r'^search/export/$', views.search_export_csv, name='search_export_csv'),
+    # Selections (#841): saved criteria shared by owner, team or all YSE; pages are UI preview only.
+    re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),
+    re_path(r'^selections/save/$', selection_views.selection_save, name='selection_save'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/$', selection_views.selection_detail, name='selection_detail'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/edit/$', selection_views.selection_edit, name='selection_edit'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/delete/$', selection_views.selection_delete,
+            name='selection_delete'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',
@@ -577,6 +585,7 @@ router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename=
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
 router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
 router.register(r'feedsources', api_views.FeedSourceViewSet, basename='feedsource')
+router.register(r'selections', api_views.SelectionViewSet, basename='selection')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

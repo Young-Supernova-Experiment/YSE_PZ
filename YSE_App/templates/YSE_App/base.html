@@ -140,6 +140,14 @@
 							<p>Transient Search</p>
 						</a>
 					</li>
+					{% if ui_preview %}{# Selections (#841), preview only #}
+					<li class="nav-item">
+						<a href="{% url 'selection_list' %}" class="nav-link{% if url_name == 'selection_list' or url_name == 'selection_detail' %} active{% endif %}">
+							<i class="nav-icon fa fa-bookmark"></i>
+							<p>My Selections</p>
+						</a>
+					</li>
+					{% endif %}
 					{% if user.is_authenticated %}
 					<li class="nav-item">
 						<a href="{% url 'my_favorites' %}" class="nav-link{% if url_name == 'my_favorites' %} active{% endif %}">

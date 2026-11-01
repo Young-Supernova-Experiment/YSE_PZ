@@ -15,6 +15,7 @@ from .data import PhotometryService, SpectraService, ObservingResourceService
 from YSE_App.services.visibility import filter_listed_transients, filter_transients_by_user_access
 from YSE_App.services.visibility import user_sees_everything as _sees_all_data  # service readers only (#706)
 from YSE_App.filters.transient_search import TransientSearchFilterSet
+from YSE_App.serializers.selection_serializers import SelectionSerializer
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
@@ -2429,3 +2430,48 @@ class FeedSourceViewSet(viewsets.ReadOnlyModelViewSet):
         job = enqueue_poll(source, created_by=request.user, force=True,
                            dry_run=str((request.data or {}).get("dry_run", "")).lower() in ("1", "true", "yes"))
         return Response({"job_id": job.pk, "source": source.slug, "status": job.status}, status=status.HTTP_202_ACCEPTED)
+
+
+class SelectionViewSet(viewsets.ReadOnlyModelViewSet):
+    """``/api/selections/`` (#841): the Selections the requesting user may view, read-only.
+
+    ``GET /api/selections/<slug>/`` is one Selection (its criteria; never SQL text).
+    ``GET /api/selections/<slug>/transients/`` lists the transients it selects for the
+    requesting user (id, name, slug, ra, dec), paginated with ``limit`` / ``offset`` and in the
+    search page's order. Only rows the user may see listed are returned (#607); a Selection never
+    widens access. ``?kind=`` and ``?visibility=`` narrow the list; ``?mine=true`` keeps the
+    user's own.
+    """
+
+    serializer_class = SelectionSerializer
+
+    permission_classes = (permissions.IsAuthenticated,)
+    lookup_field = 'slug'
+    lookup_value_regex = '[-a-zA-Z0-9_]+'
+
+    def get_queryset(self):
+        from YSE_App.services.selections import visible_selections
+
+        qs = visible_selections(self.request.user).order_by('name', 'pk')
+        params = self.request.query_params
+        if params.get('kind'):
+            qs = qs.filter(kind=params['kind'])
+        if params.get('visibility'):
+            qs = qs.filter(visibility=params['visibility'])
+        if params.get('mine') in ('1', 'true', 'True'):
+            qs = qs.filter(owner=self.request.user)
+        return qs
+
+    @action(detail=True, methods=['get'])
+    def transients(self, request, slug=None):
+        from YSE_App.services.selections import SelectionError, selection_queryset
+
+        selection = self.get_object()
+        try:
+            rows = selection_queryset(selection, request.user).values('id', 'name', 'slug', 'ra', 'dec')
+        except SelectionError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
+        page = self.paginate_queryset(rows)
+        if page is not None:
+            return self.get_paginated_response(list(page))
+        return Response(list(rows))
