@@ -29,7 +29,7 @@ from YSE_App import access_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feedback_views,
-    feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
+    feed_views, glossary_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
 # The API root listing and the schema need a signed-in user (or Basic/token auth).
@@ -79,6 +79,8 @@ urlpatterns = [
     re_path(r'^team/$', surveypages.team, name='team'),
     re_path(r'^contact/$', surveypages.contact, name='contact'),
     re_path(r'^acknowledgements/$', surveypages.acknowledgements, name='acknowledgements'),
+    # Glossary of terms used on the transient pages (#862); signed-in users.
+    re_path(r'^glossary/$', glossary_views.glossary, name='glossary'),
     
     re_path(r'^transient_edit/$', views.transient_edit, name='transient_edit'),
     re_path(r'^transient_edit/(?P<transient_id>[0-9]+)/$', views.transient_edit, name='transient_edit'),

@@ -1,0 +1,227 @@
+{% load user_extras %}{% comment %}
+Sidebar grouped by task (#858), shown only with the UI preview on; base.html keeps
+the current sidebar for everyone else. Groups: Find, Observe, Discover, Analyze,
+Share & access, YSE, Help, and a collapsed Staff group (staff only).
+Every link is built with the url tag, so it keeps the stack's script prefix.
+{% endcomment %}
+<li class="nav-header yse-nav-v2 yse-nav-find">Find</li>
+<li class="nav-item">
+	<a href="{% url 'dashboard' %}" class="nav-link{% if url_name == 'dashboard' %} active{% endif %}">
+		<i class="nav-icon fa fa-dashboard"></i>
+		<p>Main dashboard</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'search' %}" class="nav-link{% if url_name == 'search' %} active{% endif %}">
+		<i class="nav-icon fa fa-search"></i>
+		<p>Transient search</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'transient_tags' %}" class="nav-link{% if url_name == 'transient_tags' %} active{% endif %}">
+		<i class="nav-icon fa fa-tags"></i>
+		<p>Search by tag</p>
+	</a>
+</li>
+{% if user.is_authenticated %}
+<li class="nav-item">
+	<a href="{% url 'my_favorites' %}" class="nav-link{% if url_name == 'my_favorites' %} active{% endif %}">
+		<i class="nav-icon fa fa-star"></i>
+		<p>Favorites</p>
+	</a>
+</li>
+{% endif %}
+<li class="nav-item">
+	<a href="{% url 'personaldashboard' %}" class="nav-link{% if url_name == 'personaldashboard' %} active{% endif %}">
+		<i class="nav-icon fa fa-id-card"></i>
+		<p>My dashboard</p>
+	</a>
+</li>
+
+<li class="nav-header yse-nav-v2 yse-nav-observe">Observe</li>
+<li class="nav-item">
+	<a href="{% url 'followup' %}" class="nav-link{% if url_name == 'followup' %} active{% endif %}">
+		<i class="nav-icon fa fa-binoculars"></i>
+		<p>Follow-up requests</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'observing_calendar' %}" class="nav-link{% if url_name == 'observing_calendar' %} active{% endif %}">
+		<i class="nav-icon fa fa-calendar-check-o"></i>
+		<p>Observing calendar</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'calendar' %}" class="nav-link{% if url_name == 'calendar' %} active{% endif %}">
+		<i class="nav-icon fa fa-calendar"></i>
+		<p>On-call calendar</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'facility_requests' %}" class="nav-link{% if url_name == 'facility_requests' %} active{% endif %}">
+		<i class="nav-icon fa fa-paper-plane-o"></i>
+		<p>Facility requests</p>
+	</a>
+</li>
+
+<li class="nav-header yse-nav-v2 yse-nav-discover">Discover</li>
+<li class="nav-item">
+	<a href="{% url 'candidate_list' %}" class="nav-link{% if url_name == 'candidate_list' %} active{% endif %}">
+		<i class="nav-icon fa fa-filter"></i>
+		<p>Broker candidates</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'broker_search' %}" class="nav-link{% if url_name == 'broker_search' %} active{% endif %}">
+		<i class="nav-icon fa fa-crosshairs"></i>
+		<p>Broker search</p>
+	</a>
+</li>
+
+<li class="nav-header yse-nav-v2 yse-nav-analyze">Analyze</li>
+<li class="nav-item">
+	<a href="{% url 'summary_search' %}" class="nav-link{% if url_name == 'summary_search' %} active{% endif %}">
+		<i class="nav-icon fa fa-comments-o"></i>
+		<p>Ask the summaries</p>
+	</a>
+</li>
+{% explorer_link_allowed as show_explorer_link %}
+{% if show_explorer_link %}
+<li class="nav-item">
+	<a href="{% url 'explorer_index' %}" class="nav-link{% if '/explorer/' in request.path %} active{% endif %}">
+		<i class="nav-icon fa fa-database"></i>
+		<p>Query Explorer</p>
+	</a>
+</li>
+{% endif %}
+
+<li class="nav-header yse-nav-v2 yse-nav-share">Share &amp; access</li>
+<li class="nav-item">
+	<a href="{% url 'sharing_submissions' %}" class="nav-link{% if url_name == 'sharing_submissions' or url_name == 'sharing_submission_detail' or url_name == 'sharing_services' %} active{% endif %}">
+		<i class="nav-icon fa fa-share-square-o"></i>
+		<p>TNS reports</p>
+	</a>
+</li>
+{% if user.is_authenticated %}
+<li class="nav-item">
+	<a href="{% url 'access_dashboard' %}" class="nav-link{% if url_name == 'access_dashboard' or url_name == 'access_programs' or url_name == 'access_program' %} active{% endif %}">
+		<i class="nav-icon fa fa-unlock-alt"></i>
+		<p>Data access</p>
+	</a>
+</li>
+{% endif %}
+
+{% if user|has_group:'YSE' > 0 %}
+<li class="nav-header yse-nav-v2 yse-nav-yse">YSE</li>
+<li class="nav-item">
+	<a href="{% url 'yse_home' %}" class="nav-link{% if url_name == 'yse_home' %} active{% endif %}">
+		<i class="nav-icon fa fa-home"></i>
+		<p>YSE home</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'yse_planning' %}" class="nav-link{% if url_name == 'yse_planning' %} active{% endif %}">
+		<i class="nav-icon fa fa-map-o"></i>
+		<p>YSE planning</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'yse_observing_calendar' %}" class="nav-link{% if url_name == 'yse_observing_calendar' %} active{% endif %}">
+		<i class="nav-icon fa fa-calendar"></i>
+		<p>YSE schedule</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'yse_oncall_calendar' %}" class="nav-link{% if url_name == 'yse_oncall_calendar' %} active{% endif %}">
+		<i class="nav-icon fa fa-phone"></i>
+		<p>YSE on-call calendar</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="https://drive.google.com/open?id=1w-ojG_yGO2b2_9_0WuMC76QOVusf-lYP" target="_blank" rel="noopener noreferrer" class="nav-link">
+		<i class="nav-icon fa fa-book"></i>
+		<p>YSE help and survey docs</p>
+	</a>
+</li>
+{% endif %}
+
+<li class="nav-header yse-nav-v2 yse-nav-help">Help</li>
+<li class="nav-item">
+	<a href="{% url 'glossary' %}" class="nav-link{% if url_name == 'glossary' %} active{% endif %}">
+		<i class="nav-icon fa fa-question"></i>
+		<p>Glossary</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="https://yse-pz.readthedocs.io/en/latest/howto.html" target="_blank" rel="noopener noreferrer" class="nav-link">
+		<i class="nav-icon fa fa-question-circle"></i>
+		<p>Help/How-to</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="https://docs.google.com/document/d/1VtMY2v7hssj6DF4Jn--skd1VfAHYCBWvptm3vkqFA8o/edit?usp=sharing" target="_blank" rel="noopener noreferrer" class="nav-link">
+		<i class="nav-icon fa fa-list-alt"></i>
+		<p>Follow-up guidelines</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'survey' %}" class="nav-link{% if url_name == 'survey' %} active{% endif %}">
+		<i class="nav-icon fa fa-globe"></i>
+		<p>Survey home</p>
+	</a>
+</li>
+<li class="nav-item">
+	<a href="{% url 'acknowledgements' %}" class="nav-link{% if url_name == 'acknowledgements' %} active{% endif %}">
+		<i class="nav-icon fa fa-book"></i>
+		<p>Acknowledgements</p>
+	</a>
+</li>
+
+{% if user.is_staff %}
+<li class="nav-item yse-nav-staff{% if request.resolver_match.namespace == 'admin' or url_name == 'jobs_status' or url_name == 'feed_sources' or url_name == 'external_service_runs' or url_name == 'external_service_run_detail' or url_name == 'allocations' or url_name == 'allocation_create' or url_name == 'allocation_edit' or url_name == 'feedback_review_list' or url_name == 'feedback_review_detail' %} menu-open{% endif %}">
+	<a href="#" class="nav-link" role="button" aria-label="Staff pages">
+		<i class="nav-icon fa fa-wrench"></i>
+		<p>Staff <i class="right fa fa-angle-left" aria-hidden="true"></i></p>
+	</a>
+	<ul class="nav nav-treeview">
+		<li class="nav-item">
+			<a href="{% url 'admin:index' %}" class="nav-link{% if request.resolver_match.namespace == 'admin' %} active{% endif %}">
+				<i class="nav-icon fa fa-th"></i>
+				<p>Admin</p>
+			</a>
+		</li>
+		<li class="nav-item">
+			<a href="{% url 'jobs_status' %}" class="nav-link{% if url_name == 'jobs_status' %} active{% endif %}">
+				<i class="nav-icon fa fa-tasks"></i>
+				<p>Background jobs</p>
+			</a>
+		</li>
+		<li class="nav-item">
+			<a href="{% url 'feed_sources' %}" class="nav-link{% if url_name == 'feed_sources' %} active{% endif %}">
+				<i class="nav-icon fa fa-rss"></i>
+				<p>External feeds</p>
+			</a>
+		</li>
+		<li class="nav-item">
+			<a href="{% url 'external_service_runs' %}" class="nav-link{% if url_name == 'external_service_runs' or url_name == 'external_service_run_detail' %} active{% endif %}">
+				<i class="nav-icon fa fa-cogs"></i>
+				<p>Service runs</p>
+			</a>
+		</li>
+		<li class="nav-item">
+			<a href="{% url 'allocations' %}" class="nav-link{% if url_name == 'allocations' or url_name == 'allocation_create' or url_name == 'allocation_edit' %} active{% endif %}">
+				<i class="nav-icon fa fa-clock-o"></i>
+				<p>Allocations</p>
+			</a>
+		</li>
+		{% if feedback_enabled %}
+		<li class="nav-item">
+			<a href="{% url 'feedback_review_list' %}" class="nav-link{% if url_name == 'feedback_review_list' or url_name == 'feedback_review_detail' %} active{% endif %}">
+				<i class="nav-icon fa fa-comment-o"></i>
+				<p>Feedback review</p>
+			</a>
+		</li>
+		{% endif %}
+	</ul>
+</li>
+{% endif %}
