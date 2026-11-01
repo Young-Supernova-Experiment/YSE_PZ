@@ -146,7 +146,7 @@ class UserPreference(models.Model):
     # None = the site default (not public).
     comment_default_public = models.BooleanField(null=True, blank=True)
     # "Observable tonight" default site (#959). Nullable, and ON DELETE SET NULL in MySQL too
-    # (migrations 0065 and 0066), because develop's code on the shared database does not know the column.
+    # (migrations 0067 and 0068), because develop's code on the shared database does not know the column.
     observing_default_site = models.ForeignKey(
         "YSE_App.Telescope", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
         help_text="Site that Observable tonight starts from for this user.",

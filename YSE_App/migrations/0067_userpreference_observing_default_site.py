@@ -2,7 +2,7 @@
 
 Additive only: one nullable column, ``observing_default_site_id``, on ``YSE_App_userpreference``
 (a table develop knows). develop's INSERTs leave it NULL. No existing row is changed. Its MySQL
-foreign key gets ``ON DELETE SET NULL`` in the next migration (0066): Django adds the constraint
+foreign key gets ``ON DELETE SET NULL`` in the next migration (0068): Django adds the constraint
 from deferred SQL at the end of this migration, so the rule cannot be changed in the same one.
 """
 
@@ -13,7 +13,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("YSE_App", "0064_fit_tables_fk_on_delete"),
+        ("YSE_App", "0066_selection_fk_on_delete"),
     ]
 
     operations = [
