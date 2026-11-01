@@ -99,7 +99,7 @@ def _dash(request, transient, query, tab):
     if text:
         label += ' (filter "%s")' % text
     back = '%s?%s#%s' % (reverse('dashboard'), query, tab) if query else '%s#%s' % (reverse('dashboard'), tab)
-    return dict(window, label=label, back_url=back, page_param='%s-page' % tab)
+    return dict(window, label=label, back_url=back, page_param=table.prefixed_page_field)
 
 
 def _search(request, transient, query, tab):
@@ -116,7 +116,7 @@ def _search(request, transient, query, tab):
         chips = []
     label = 'Search' + (' (%s)' % '; '.join(chips) if chips else ' results')
     back = '%s?%s' % (reverse('search'), query) if query else reverse('search')
-    return dict(window, label=label, back_url=back, page_param='page')
+    return dict(window, label=label, back_url=back, page_param=table.prefixed_page_field)
 
 
 def tag_queryset(user, tag_ids, match_all=False):

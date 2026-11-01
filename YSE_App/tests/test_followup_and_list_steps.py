@@ -189,17 +189,17 @@ class NeighbourTests(ListStepsBase):
         self.assertEqual(ctx["position"], 10)
         nxt = parse_qs(urlparse(ctx["next_url"]).query)
         self.assertIn("/%s/" % self.rows[10].slug, ctx["next_url"])
-        self.assertEqual(nxt["lq"], ["following-page=2"])
+        self.assertEqual(nxt["lq"], ["followingpage=2"])
         ctx = self.step_context(self.rows[10], {"ls": "dash", "lt": "following", "lq": nxt["lq"][0]})
         self.assertEqual((ctx["position"], ctx["count"]), (11, 11))
         self.assertIsNone(ctx["next_url"])
         prev = parse_qs(urlparse(ctx["prev_url"]).query)
         self.assertNotIn("lq", prev)  # page 1 needs no page parameter
-        self.assertEqual(ctx["back_url"], reverse("dashboard") + "?following-page=2#following")
+        self.assertEqual(ctx["back_url"], reverse("dashboard") + "?followingpage=2#following")
 
     def test_dashboard_sort_and_filter_come_from_the_list(self):
         # Ascending discovery date reverses the order.
-        ctx = self.step_context(self.rows[3], {"ls": "dash", "lt": "following", "lq": "following-sort=disc_date_string"})
+        ctx = self.step_context(self.rows[3], {"ls": "dash", "lt": "following", "lq": "followingsort=disc_date_string"})
         self.assertEqual(ctx["position"], 8)
         self.assertIn("/%s/" % self.rows[4].slug, ctx["prev_url"])
         # The shared filter narrows the list and is named in the label.
@@ -245,10 +245,12 @@ class NeighbourTests(ListStepsBase):
             self.step_context(self.rows[3], {"ls": "dash", "lt": "following", "lq": ""})
         # Status lookup, COUNT, the page-plus-one window: never one query per row.
         self.assertLessEqual(len(queries), 8, [q["sql"] for q in queries])
-        # The window: the transients ordered like the tab, at most a page plus one row either side.
-        window = [q["sql"] for q in queries if "ORDER BY" in q["sql"].upper() and "LIMIT" in q["sql"].upper() and "disc_date" in q["sql"]]
-        self.assertEqual(len(window), 1, window)
-        self.assertLessEqual(int(re.search(r"LIMIT\s+(\d+)", window[0], re.I).group(1)), 12, window)
+        # The rows read: ordered like the tab, never more than a page plus one row either side
+        # (the paginator's page and the stepping window).
+        window = [q["sql"] for q in queries if "ORDER BY" in q["sql"].upper() and "disc_date" in q["sql"]]
+        self.assertTrue(1 <= len(window) <= 2, window)
+        for sql in window:
+            self.assertLessEqual(int(re.findall(r"LIMIT\s+(\d+)", sql, re.I)[-1]), 12, sql)
 
 
 class StepperOnPageTests(ListStepsBase):
@@ -268,7 +270,7 @@ class StepperOnPageTests(ListStepsBase):
     def test_no_context_no_stepper_and_no_default_comment(self):
         html = self.detail(self.rows[3]).content.decode()
         self.assertIn('data-yse-hook="list-stepping"', html)
-        self.assertNotIn("data-default-comment", html)
+        self.assertNotIn('data-default-comment="', html)
         self.assertNotIn("Back to list", html)
         self.assertIn('id="yse-v2-request-modal"', html)
 
