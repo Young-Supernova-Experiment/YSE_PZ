@@ -14,6 +14,7 @@
 	{% endif %}
 	<div class="row">
 		<div class="col-lg-9 col-12">
+			{% if ui_preview %}{% include "YSE_App/access_dashboard_v2.html" %}{% else %}
 			<div class="box box-default box-solid">
 				<div class="box-header with-border"><strong>Your programs</strong> <a class="small ml-2" href="{% url 'access_programs' %}">all program pages</a></div>
 				<div class="box-body">
@@ -161,6 +162,7 @@
 					{% endif %}
 				</div>
 			</div>
+			{% endif %}
 		</div>
 		<div class="col-lg-3 col-12">
 			{% include "YSE_App/access_help.html" %}
@@ -172,4 +174,5 @@
 {% block scripts %}
 {{ block.super }}
 {% include "YSE_App/access_direction_script.html" %}
+{% if ui_preview %}{% include "YSE_App/access_editor_script.html" %}{% endif %}
 {% endblock %}
