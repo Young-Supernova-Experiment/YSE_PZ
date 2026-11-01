@@ -1674,11 +1674,15 @@ def _transient_followup_form_context(request, transient_obj):
 def transient_detail_followup_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
     followups = _load_transient_followups(transient_id, request.user)
-    return render(
-        request,
-        'YSE_App/transient_detail_followup_boxes.html',
-        {'followups': followups, 'transient': transient_obj},
+    from YSE_App.common.ui_preview import ui_preview_enabled
+
+    # Preview layout (#857): the same boxes, with an empty state that points down to the form.
+    template_name = (
+        'YSE_App/transient_detail/followup_existing_v2.html'
+        if ui_preview_enabled(request)
+        else 'YSE_App/transient_detail_followup_boxes.html'
     )
+    return render(request, template_name, {'followups': followups, 'transient': transient_obj})
 
 
 @login_required
@@ -1696,11 +1700,15 @@ def transient_detail_followup_classical_fragment(request, transient_id):
 def transient_detail_followup_rest_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
     ctx = _transient_followup_form_context(request, transient_obj)
-    return render(
-        request,
-        'YSE_App/transient_detail_followup_rest.html',
-        ctx,
+    from YSE_App.common.ui_preview import ui_preview_enabled
+
+    # Preview layout (#857): facility requests, one "New request" form, then "Advanced".
+    template_name = (
+        'YSE_App/transient_detail/followup_new_v2.html'
+        if ui_preview_enabled(request)
+        else 'YSE_App/transient_detail_followup_rest.html'
     )
+    return render(request, template_name, ctx)
 
 
 def _authorized_transient_spectra(request, transient_id):
@@ -2133,11 +2141,14 @@ def transient_detail(request, slug):
         # Preview layout (#856, #851) only for users with the UI preview on.
         from YSE_App.common.ui_preview import ui_preview_enabled
 
-        template_name = (
-            'YSE_App/transient_detail_v2.html'
-            if ui_preview_enabled(request)
-            else 'YSE_App/transient_detail.html'
-        )
+        if ui_preview_enabled(request):
+            template_name = 'YSE_App/transient_detail_v2.html'
+            # Opened from a list (#850): "4 of 23", previous/next and back to the list.
+            from YSE_App.list_context import list_step_context
+
+            context['list_step'] = list_step_context(request, transient_obj)
+        else:
+            template_name = 'YSE_App/transient_detail.html'
         return render(request, template_name, context)
 
     else:
@@ -2802,6 +2813,41 @@ def search_results_queryset(user=None):
     )
 
 
+def build_search_table(request, params=None):
+    """``(filterset, table, per_page)`` for the search page: filtered, sorted and paginated from ``request.GET``.
+
+    Shared by the search page and the transient page's list stepping (#850), so both
+    see the same rows in the same order.
+    """
+    from YSE_App.filters.transient_search import TransientSearchFilterSet, quick_search_params
+    from .table_utils import SearchTransientTable
+
+    if params is None:
+        params = quick_search_params(request.GET)
+    filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(request.user),
+                                         request=request)
+    cone = filterset.cone
+
+    try:
+        per_page = int(params.get('per_page', SEARCH_PER_PAGE_CHOICES[0]))
+    except (TypeError, ValueError):
+        per_page = SEARCH_PER_PAGE_CHOICES[0]
+    if per_page not in SEARCH_PER_PAGE_CHOICES:
+        per_page = SEARCH_PER_PAGE_CHOICES[0]
+
+    excluded = () if cone else ('separation',)
+    if not filterset.uses_gal_b:
+        excluded = excluded + ('gal_b',)
+    annotation_column = filterset.annotation_column_spec
+    if annotation_column is None:
+        excluded = excluded + ('annotation_value',)
+    table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
+    if annotation_column is not None:
+        table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
+    RequestConfig(request, paginate={'per_page': per_page}).configure(table)
+    return filterset, table, per_page
+
+
 @method_decorator(login_required, name='dispatch')
 class SearchResultsView(TemplateView):
     """``/search/``: the shared ``TransientSearchFilterSet`` as a form over a sortable table (#284).
@@ -2817,36 +2863,12 @@ class SearchResultsView(TemplateView):
     template_name = 'YSE_App/search_results.html'
 
     def get_context_data(self, **kwargs):
-        from YSE_App.filters.transient_search import (
-            FIELD_GROUPS,
-            TransientSearchFilterSet,
-            quick_search_params,
-        )
-        from .table_utils import SearchTransientTable
+        from YSE_App.filters.transient_search import FIELD_GROUPS, quick_search_params
 
         context = super().get_context_data(**kwargs)
         params = quick_search_params(self.request.GET)
-        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(self.request.user),
-                                             request=self.request)
+        filterset, table, per_page = build_search_table(self.request, params)
         cone = filterset.cone
-
-        try:
-            per_page = int(params.get('per_page', SEARCH_PER_PAGE_CHOICES[0]))
-        except (TypeError, ValueError):
-            per_page = SEARCH_PER_PAGE_CHOICES[0]
-        if per_page not in SEARCH_PER_PAGE_CHOICES:
-            per_page = SEARCH_PER_PAGE_CHOICES[0]
-
-        excluded = () if cone else ('separation',)
-        if not filterset.uses_gal_b:
-            excluded = excluded + ('gal_b',)
-        annotation_column = filterset.annotation_column_spec
-        if annotation_column is None:
-            excluded = excluded + ('annotation_value',)
-        table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
-        if annotation_column is not None:
-            table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
-        RequestConfig(self.request, paginate={'per_page': per_page}).configure(table)
 
         visible = {name for _, names in FIELD_GROUPS for name in names}
         form = filterset.form

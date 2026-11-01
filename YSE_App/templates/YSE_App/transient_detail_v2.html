@@ -29,6 +29,13 @@ Archives (only when an archive has data), GW (GW candidates only), History.
         .yse-v2-actionbar .yse-v2-name { font-weight: 600; margin-right: 8px; }
         .yse-v2-more > summary { cursor: pointer; list-style: revert; }
         .yse-v2-evidence #lcplot, .yse-v2-evidence #specplot { min-height: 120px; }
+        /* List stepping (#850) and the follow-up tab (#857). */
+        .yse-v2-list-stepper { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .yse-v2-list-position { white-space: nowrap; max-width: 28em; overflow: hidden; text-overflow: ellipsis; }
+        #yse-v2-followup-existing, #yse-v2-facility-requests, #yse-v2-new-request { margin-bottom: 18px; }
+        .yse-v2-empty { padding: 10px 12px; border: 1px dashed rgba(127, 127, 127, 0.5); border-radius: 4px; margin-bottom: 10px; }
+        .yse-v2-advanced > summary { cursor: pointer; list-style: revert; font-weight: 600; margin-bottom: 8px; }
+        #yse-v2-request-modal .yse-v2-tab-only { display: none !important; }
     </style>
 {% endblock %}
 
@@ -80,8 +87,18 @@ Archives (only when an archive has data), GW (GW candidates only), History.
                         {% if user.is_staff %}<a class="dropdown-item" href="{% url 'admin:YSE_App_transient_change' transient.id %}" target="_blank">Edit in admin</a>{% endif %}
                     </div>
                 </div>
-                {# List stepping (#850) goes here. #}
-                <span class="ml-auto" id="yse-v2-list-stepper" data-yse-hook="list-stepping"></span>
+                {# List stepping (#850): only when the page was opened from a list. Nothing about the path is saved. #}
+                <span class="ml-auto yse-v2-list-stepper" id="yse-v2-list-stepper" data-yse-hook="list-stepping"{% if list_step %} data-prev-url="{{ list_step.prev_url|default:'' }}" data-next-url="{{ list_step.next_url|default:'' }}" data-default-comment="{{ list_step.default_comment }}"{% endif %}>
+                    {% if list_step %}
+                    <span class="btn-group btn-group-sm" role="group" aria-label="Step through {{ list_step.label }}">
+                        {% if list_step.prev_url %}<a class="btn btn-outline-secondary" href="{{ list_step.prev_url }}" rel="prev" title="Previous in this list (K)" aria-keyshortcuts="K">&lsaquo; Previous</a>{% else %}<span class="btn btn-outline-secondary disabled" aria-disabled="true">&lsaquo; Previous</span>{% endif %}
+                        {% if list_step.next_url %}<a class="btn btn-outline-secondary" href="{{ list_step.next_url }}" rel="next" title="Next in this list (J)" aria-keyshortcuts="J">Next &rsaquo;</a>{% else %}<span class="btn btn-outline-secondary disabled" aria-disabled="true">Next &rsaquo;</span>{% endif %}
+                    </span>
+                    <span class="yse-v2-list-position small" id="yse-v2-list-position">{% if list_step.position %}{{ list_step.position }} of {{ list_step.count }}{% else %}Not on this page of the list ({{ list_step.count }}){% endif %} &middot; {{ list_step.label }}</span>
+                    <a class="btn btn-sm btn-link" href="{{ list_step.back_url }}" id="yse-v2-back-to-list">Back to list</a>
+                    {% endif %}
+                </span>
+                <span class="small text-success" id="yse-v2-request-status" role="status" aria-live="polite"></span>
             </div>
 
             <div class="nav-tabs-custom yse-page-transient-summary yse-v2-tabs">
@@ -228,10 +245,25 @@ Archives (only when an archive has data), GW (GW candidates only), History.
         </div>
     </div>
     {% include "YSE_App/transient_detail/report_modal.html" %}
+    {# "Request follow-up" (#850): the Follow-up tab's own form, moved in here while the dialog is open. #}
+    <div class="modal fade" id="yse-v2-request-modal" tabindex="-1" role="dialog" aria-labelledby="yse-v2-request-modal-title" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="yse-v2-request-modal-title">Request follow-up for {{ transient.name }}</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                </div>
+                <div class="modal-body" id="yse-v2-request-modal-body">
+                    <p class="text-muted yse-v2-request-loading"><i class="fa fa-spinner fa-spin"></i> Loading the request form…</p>
+                </div>
+            </div>
+        </div>
+    </div>
 {% endblock %}
 
 {% block scripts %}
     {{ block.super }}
+    <script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
     <script>
     /* Preview layout (#856, #851). Handlers are delegated on document, so fragments that
        load later are covered. Nothing here scores, ranks or hides evidence. */
@@ -294,11 +326,100 @@ Archives (only when an archive has data), GW (GW candidates only), History.
             $('a[href="#analysis_tab"]').tab('show');
         });
 
-        /* Pinned-header actions. "Request follow-up" opens the Follow-up tab (#857 builds
-           the request flow inside it). */
+        /* Follow-up tab (#857): the type selector shows one form at a time. */
+        $(document).on('change', 'input[name="yse-v2-request-type"]', function() {
+            var type = $('input[name="yse-v2-request-type"]:checked').val() || 'followup';
+            $('.yse-v2-request-form').each(function() {
+                this.hidden = $(this).data('yse-request-type') !== type;
+            });
+        });
+        $(document).on('click', '.yse-v2-goto-new', function(event) {
+            event.preventDefault();
+            var el = document.getElementById('yse-v2-new-request');
+            if (el && el.scrollIntoView) { el.scrollIntoView({block: 'start'}); }
+        });
+
+        /* Default comment (#850): only when the page was opened from a list, the list
+           says why the object is here ("In list: ..."). It fills an empty, untouched
+           comment box and stays editable; without a list it stays empty. */
+        var defaultComment = $('#yse-v2-list-stepper').attr('data-default-comment') || '';
+        function applyDefaultComment() {
+            if (!defaultComment) { return; }
+            var $c = $('#add_transient_followup [name="comment"]');
+            if ($c.length && !$c.val() && !$c.data('yse-touched')) { $c.val(defaultComment); }
+        }
+        $(document).on('input', '#add_transient_followup [name="comment"]', function() {
+            $(this).data('yse-touched', true);
+        });
+        $(document).on('shown.bs.tab', 'a[href="#followup_tab"]', applyDefaultComment);
+        $(document).ajaxComplete(function(event, xhr, settings) {
+            if (settings && settings.url && settings.url.indexOf("{% url 'transient_detail_followup_rest_fragment' transient.id %}") === 0) {
+                applyDefaultComment();
+            }
+        });
+
+        /* Automated spectrum form: the current page binds it directly, which misses the
+           copy that arrives with the deferred fragment. Delegate, unless a direct
+           handler already took the submit. */
+        $(document).on('submit', '#automated_spectrum_request', function(event) {
+            if (event.isDefaultPrevented()) { return; }
+            event.preventDefault();
+            var data = $(this).serialize() + '&transient=' + encodeURIComponent($('#transient_pk').val());
+            $.ajax({url: "{% url 'automated_spectrum_request' %}", type: 'POST', data: data}).done(function(json) {
+                var errors = json && json.data && json.data.errors;
+                if (errors) { window.alert(errors); } else { window.location.reload(); }
+            }).fail(function(xhr) {
+                window.alert(xhr.status + ': ' + xhr.responseText);
+            });
+        });
+
+        /* "Request follow-up" (#850): the Follow-up tab's form in a dialog, so you stay on
+           the page (and in the list). The form box is moved, not copied: ids stay unique
+           and every handler keeps working. It goes back when the dialog closes. */
+        var deferMode = {{ transient_detail_defer|yesno:"true,false" }};
+        var $modal = $('#yse-v2-request-modal');
+        var $modalBody = $('#yse-v2-request-modal-body');
+        var requestOpen = false;
+        function moveFormIntoModal() {
+            var $box = $('#followup_rest_slot #facility_request_box');
+            if (!requestOpen || !$box.length) { return; }
+            $modalBody.find('.yse-v2-request-loading').remove();
+            $box.detach().appendTo($modalBody);
+            applyDefaultComment();
+            $modalBody.find('#add_transient_followup select, #add_transient_followup textarea').first().trigger('focus');
+        }
+        function moveFormBack() {
+            var $box = $modalBody.find('#facility_request_box');
+            if ($box.length && !$('#followup_rest_slot #facility_request_box').length) {
+                $box.detach().appendTo('#followup_rest_slot');
+            } else {
+                $box.remove();
+            }
+            if (!$modalBody.find('.yse-v2-request-loading').length) {
+                $modalBody.html('<p class="text-muted yse-v2-request-loading"><i class="fa fa-spinner fa-spin"></i> Loading the request form…</p>');
+            }
+        }
         $(document).on('click', '.yse-v2-request-followup', function(event) {
             event.preventDefault();
-            $('a[href="#followup_tab"]').tab('show');
+            $('#yse-v2-request-status').text('');
+            requestOpen = true;
+            $modal.modal('show');
+            var loading = window.yseLoadFollowupPhased ? window.yseLoadFollowupPhased() : null;
+            $.when(loading).always(moveFormIntoModal);
+        });
+        $modal.on('hidden.bs.modal', function() {
+            requestOpen = false;
+            moveFormBack();
+        });
+        $(document).ajaxSuccess(function(event, xhr, settings) {
+            if (!requestOpen || !settings || String(settings.type).toUpperCase() !== 'POST' ||
+                    !settings.url || settings.url.indexOf("{% url 'add_transient_followup' %}") === -1) { return; }
+            if (deferMode) {
+                /* The current page reloads the follow-up fragments after a request; this copy is stale. */
+                $modalBody.find('#facility_request_box').remove();
+            }
+            $modal.modal('hide');
+            $('#yse-v2-request-status').text('Follow-up requested.');
         });
         $(document).on('click', '.yse-v2-share', function(event) {
             event.preventDefault();

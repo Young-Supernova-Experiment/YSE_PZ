@@ -75,9 +75,10 @@
     </li>
     {% endfor %}
   </ul>
-  <div class="yse-dash-panels">
+  {# data-yse-list-*: links into a transient keep this tab, filter, sort and page (#850). #}
+  <div class="yse-dash-panels" data-yse-list-source="dash">
     {% for tab in tabs %}
-    <div class="yse-dash-panel" role="tabpanel" id="yse-dash-panel-{{ tab.key }}" data-dash-panel="{{ tab.key }}"
+    <div class="yse-dash-panel" role="tabpanel" id="yse-dash-panel-{{ tab.key }}" data-dash-panel="{{ tab.key }}" data-yse-list-tab="{{ tab.key }}"
          aria-labelledby="yse-dash-tab-{{ tab.key }}"{% if tab.key != default_tab %} hidden{% endif %}>
       <p class="yse-dash-summary-link"><a href="{% url 'transient_summary' tab.key %}">Summary view of {{ tab.title }}</a></p>
       <div class="yse-dash-slot" data-url="{% url 'dashboard_section' tab.key %}">
@@ -91,4 +92,5 @@
 
 {% block scripts %}
 <script src="{% static 'YSE_App/dashboard-tabs.js' %}?v=dash-tabs-1"></script>
+<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
 {% endblock %}

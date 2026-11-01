@@ -1,0 +1,12 @@
+{% comment %}
+Existing follow-up requests on the preview layout (#857): the current page's boxes, or an
+empty state that points to the form below. Loaded into #followup_container.
+{% endcomment %}
+{% if followups %}
+{% include "YSE_App/transient_detail_followup_boxes.html" %}
+{% else %}
+<div class="col-12 yse-v2-empty" id="yse-v2-followup-empty">
+    <p class="mb-1"><strong>No follow-up has been requested for this transient yet.</strong></p>
+    <p class="text-muted small mb-0">Ask for one with <a href="#yse-v2-new-request" class="yse-v2-goto-new">New request</a> below.</p>
+</div>
+{% endif %}
