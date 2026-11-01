@@ -11,7 +11,7 @@ the model says: ``CASCADE`` becomes ``ON DELETE CASCADE`` and ``SET_NULL`` becom
 kept. Running it again does nothing. On other database backends it does nothing. No row or
 column is changed.
 
-First used by migration 0062 (#941); moved here when 0063 needed it too.
+First used by migration 0062 (#941); moved here when 0064 needed it too.
 """
 
 import hashlib

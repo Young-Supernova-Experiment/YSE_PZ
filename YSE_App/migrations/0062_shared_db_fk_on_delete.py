@@ -21,7 +21,7 @@ The reverse puts the plain constraints back.
 
 from django.db import migrations
 
-# The helper moved to YSE_App.common.fk_on_delete when 0063 needed it too; the names stay
+# The helper moved to YSE_App.common.fk_on_delete when 0064 needed it too; the names stay
 # importable from here for the tests.
 from YSE_App.common.fk_on_delete import (  # noqa: F401
     CASCADE,

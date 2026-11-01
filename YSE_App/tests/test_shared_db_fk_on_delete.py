@@ -253,7 +253,7 @@ class ReverseForwardTests(TransactionTestCase):
         self.assertEqual(_rule(table, column), [fk_migration.CASCADE])
 
 
-default_site_migration = importlib.import_module("YSE_App.migrations.0063_userpreference_observing_default_site")
+default_site_migration = importlib.import_module("YSE_App.migrations.0064_userpreference_default_site_on_delete")
 
 
 class DefaultSiteColumnTests(SimpleTestCase):
@@ -285,9 +285,12 @@ class DefaultSiteRawDeleteTests(TestCase):
         self.pref = UserPreference.objects.create(user=self.user, comment_default_public=True,
                                                   observing_default_site=self.telescope)
 
-    def test_constraint_is_set_null(self):
-        for table, column, _, rule in default_site_migration.FOREIGN_KEYS:
-            self.assertEqual(_rule(table, column), [rule])
+    def test_exactly_one_constraint_and_it_is_set_null(self):
+        for table, column, ref_table, rule in default_site_migration.FOREIGN_KEYS:
+            found = fk_on_delete.current_constraints(connection, table, column)
+            self.assertEqual(len(found), 1, found)
+            self.assertEqual(found[0][1], ref_table)
+            self.assertEqual(found[0][3], rule)
 
     def test_telescope_delete_nulls_the_default(self):
         _sql("DELETE FROM YSE_App_telescope WHERE id = %s", [self.telescope.id])
