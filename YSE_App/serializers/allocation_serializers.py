@@ -29,6 +29,14 @@ class AllocationSerializer(serializers.HyperlinkedModelSerializer):
         exclude = ("credential", "service")
         read_only_fields = ("hours_used",)
 
+    def update(self, instance, validated_data):
+        # The viewsets pass the requesting user's id as ``modified_by``; the default
+        # ModelSerializer.update would assign that int to the FK and fail (#886).
+        if "modified_by" in validated_data:
+            modified_by = validated_data.pop("modified_by")
+            instance.modified_by_id = getattr(modified_by, "pk", modified_by)
+        return super().update(instance, validated_data)
+
     def get_facility_name(self, obj):
         from YSE_App.facilities import get_facility
 
