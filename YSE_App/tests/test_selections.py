@@ -66,7 +66,7 @@ class SharingTests(TestCase):
         cls.outsider.groups.add(cls.other_team)
 
     def _make(self, visibility, team=None, name="Young things"):
-        return svc.create_selection(self.owner, name, visibility=visibility, team=team, search_params="status=New")
+        return svc.create_selection(self.owner, name, visibility=visibility, team=team, search_params="q=2099abc")
 
     def test_me_is_owner_only(self):
         sel = self._make(Selection.VISIBILITY_ME)
@@ -128,8 +128,8 @@ class SharingTests(TestCase):
         self.assertNotEqual(self._make(Selection.VISIBILITY_ME, name="save").slug, "save")
 
     def test_criteria_are_stored_without_page_state(self):
-        sel = svc.create_selection(self.owner, "x", search_params="status=New&page=3&sort=-name&per_page=50&q=")
-        self.assertEqual(sel.search_params, "status=New")
+        sel = svc.create_selection(self.owner, "x", search_params="q=2099abc&page=3&sort=-name&per_page=50&ra_gte=")
+        self.assertEqual(sel.search_params, "q=2099abc")
         with self.assertRaises(svc.SelectionError):
             svc.create_selection(self.owner, "bad", search_params="ra_gte=notanumber")
         with self.assertRaises(svc.SelectionError):
@@ -148,17 +148,32 @@ class CompilerMatchesSearchTests(SearchFixture):
 
     PARAMS = ("", "status=New&status=Watch", "has_spectrum=false", "q=PS26", "status=New&has_spectrum=true")
 
-    def test_same_rows_and_order_as_the_search_page(self):
+    def _page(self, viewer, params):
+        client = Client()
+        client.force_login(viewer)
+        response = client.get("/search/?" + params)
+        self.assertEqual(response.status_code, 200)
+        return response
+
+    def test_same_rows_as_the_search_page(self):
         for params in self.PARAMS:
             sel = svc.create_selection(self.user, "match %s" % params, visibility=Selection.VISIBILITY_ALL,
                                        search_params=params)
             for viewer in (self.user, self.member, self.outsider):
                 with self.subTest(params=params, viewer=viewer.username):
-                    client = Client()
-                    client.force_login(viewer)
-                    response = client.get("/search/?" + params)
-                    self.assertEqual(response.status_code, 200)
-                    expected = list(response.context["table"].data.data.values_list("name", flat=True))
+                    response = self._page(viewer, params)
+                    expected = set(response.context["table"].data.data.values_list("name", flat=True))
+                    got = set(sel.queryset(viewer).values_list("name", flat=True))
+                    self.assertEqual(got, expected)
+
+    def test_same_order_as_the_search_filters(self):
+        for params in ("ordering=name", "ordering=-ra&has_spectrum=false"):
+            sel = svc.create_selection(self.user, "order %s" % params, visibility=Selection.VISIBILITY_ALL,
+                                       search_params=params)
+            for viewer in (self.user, self.outsider):
+                with self.subTest(params=params, viewer=viewer.username):
+                    response = self._page(viewer, params)
+                    expected = list(response.context["filterset"].qs.values_list("name", flat=True))
                     got = list(sel.queryset(viewer).values_list("name", flat=True))
                     self.assertEqual(got, expected)
 
@@ -392,9 +407,9 @@ class PageTests(TestCase):
         from YSE_App.models import Transient
 
         sel = self._sel()
-        # Default order -disc_date, -pk (no discovery dates here): c, b, a.
-        first, middle, last = (Transient.objects.get(name=n) for n in ("2099selc", "2099selb", "2099sela"))
-        request = RequestFactory().get("/", {"ls": "sel", "lt": sel.slug, "lq": ""})
+        # Sorted by name on the results page: a, b, c.
+        first, middle, last = (Transient.objects.get(name=n) for n in ("2099sela", "2099selb", "2099selc"))
+        request = RequestFactory().get("/", {"ls": "sel", "lt": sel.slug, "lq": "sort=name_string"})
         request.user = self.mate
         step = list_step_context(request, middle)
         self.assertIsNotNone(step)

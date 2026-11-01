@@ -40,7 +40,7 @@ database keep working.
 - `selection_queryset(selection, user)` (or `selection.queryset(user)`): matching `Transient`
   rows, with the search page's annotations and order (`-disc_date, -pk`), always passed through
   `filter_listed_transients`.
-  - `search`: the same base queryset and `TransientSearchFilterSet` as `/search/`.
+  - `search`: the same base queryset and `TransientSearchFilterSet` as `/search/`. It returns the same rows, and the same order when the criteria include `ordering`.
   - `sql`: the dashboards' runner for the viewer (refused where the dashboards refuse, else scoped, #715/#723). The owner's rights never apply.
   - `function`: `run_python_query`.
   - It raises `SelectionAccessError` or `SelectionError` (the message can be shown to the user).

@@ -6,7 +6,8 @@ only for the models it knows, and creates the MySQL foreign keys without an ``ON
 (that is, RESTRICT). So when develop deletes a row that one of these tables still references,
 MySQL rejects the DELETE (error 1451).
 
-A migration that creates such a table lists its foreign keys as
+A migration that creates such a table (in the same migration or an earlier one) lists its
+foreign keys as
 ``(table, column, referenced table, rule)`` and runs::
 
     migrations.RunPython(fk_on_delete.forwards_for(FOREIGN_KEYS),
@@ -81,6 +82,13 @@ def set_rules(schema_editor, foreign_keys, target):
     if connection.vendor != "mysql":
         return
     q = schema_editor.quote_name
+    # A CreateModel earlier in the same migration leaves its foreign keys in deferred_sql until
+    # the migration ends. Run them now, so the constraints exist before their rules are set
+    # (otherwise the plain constraints would be added afterwards, next to ours).
+    if schema_editor.deferred_sql:
+        for statement in list(schema_editor.deferred_sql):
+            schema_editor.execute(statement)
+        schema_editor.deferred_sql.clear()
     for table, column, ref_table, rule in foreign_keys:
         rule = target(rule)
         if not _table_exists(connection, table):
