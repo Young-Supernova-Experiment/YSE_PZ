@@ -57,24 +57,26 @@ the PR but the Merge button still works.
 ## Dependencies
 
 `requirements.txt` is the web/app runtime (Apache/mod_wsgi and the django_cron
-ingest jobs; it still carries TensorFlow for the `Photo_Z` / `SDSS_Photo_Z` crons
-until #186, although `astro-ghost`, which first pulled it in, was dropped in #613);
+ingest jobs; it still pins TensorFlow 2.13.1 because the `Photo_Z` cron imports it,
+although `astro-ghost`, which first pulled it in, was dropped in #613; removing it is
+tracked in #600);
 `requirements-ingest.txt` layers the machine-learning extras
 nothing in the web venv imports (RAPID/TCN, TensorFlow-addons) on top of it for a
-cron or analysis environment. Both install without `--no-deps`. Django stays on
-the 3.2 LTS line until the Django 4 upgrade (#133) is scheduled.
+cron or analysis environment. Both install without `--no-deps`. Django is on the
+4.2 LTS line (`Django==4.2.30`, #781), the newest that supports the stacks'
+Python 3.8; Django 5.2 waits for the Python upgrade (#601, #591).
 
 ### Advisory checks and Dependabot
 
 - `.github/workflows/pip-audit.yml` audits the exact pins of both files (Django as
-  3.2.25) when they change and every Monday. It fails only on advisories missing from
+  4.2.30) when they change and every Monday. It fails only on advisories missing from
   `.github/pip-audit-ignore.txt`, the accepted baseline with a reason per group (Django
-  3.2 by decision, pins held back by Python 3.8 / TensorFlow, older pins
-  left for #186). When a package is upgraded past a fix, delete its lines; add a line
+  4.2 until the Python upgrade, pins held back by Python 3.8 / TensorFlow, older pins
+  left for a requirements regeneration). When a package is upgraded past a fix, delete its lines; add a line
   only with a reason.
 - `.github/dependabot.yml` opens weekly pip and GitHub Actions update PRs into
   `develop` (at most three open per ecosystem), skipping `experimental`. It never proposes
-  Django 4+ or the other versions that the stack cannot take yet (listed with reasons in
+  Django 5+ or the other versions that the stack cannot take yet (listed with reasons in
   the file), and it excludes the archived `docker/web_image_history/**`.
   - Merge Dependabot PRs into `develop` once CI is green. Merging deploys to ziggy
     `/yse_test/`.
@@ -82,6 +84,7 @@ the 3.2 LTS line until the Django 4 upgrade (#133) is scheduled.
     `experimental` (same rule as a hotfix backport), so the next promotion does not
     revert the bump.
   - Dependabot reads its configuration only from the default branch (`master`), so the
-    `develop` target takes effect when `develop -> master` (#143) merges.
+    `develop` target takes effect once `.github/dependabot.yml` reaches `master`
+    (it is on `develop`, not yet on `master`; the next `develop -> master` is #792).
   - GitHub "security updates" PRs always target the default branch (`master`), whatever
     `target-branch` says; handle them as a hotfix (land on `experimental`, promote).

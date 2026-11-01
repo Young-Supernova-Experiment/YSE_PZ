@@ -115,7 +115,7 @@ naming a repo module, fails the inventory.
 
 Note: #183 pins `protobuf==3.20.3` in `requirements.txt` and `docker/requirements.web.dev`; once the CI image is rebuilt with it, the two TensorFlow crons import and are smoke-tested like the others (`Photo_Z`/`SDSS_Photo_Z` still skip on missing `SciServer`).
 
-Django version: the target is the **3.2 LTS line** (`Django>=3.2,<4.0` in `requirements.txt`, `Django==3.2.25` in `docker/requirements.web.dev`) until the Django 4 upgrade (#133) is scheduled; `ci.yml` installs that pin into the pulled GHCR image (which ships 4.0) before running the checks.
+Django version: the target is the **4.2 LTS line** (`Django==4.2.30` with `asgiref==3.8.1` in both `requirements.txt` and `docker/requirements.web.dev`, #781), the newest that supports the stacks' Python 3.8; Django 5.2 waits for the Python upgrade (#601). The pulled GHCR image ships Django 4.0, so `ci.yml` builds a local image on top of it with the `requirements.txt` pins (Django, asgiref and every Django add-on) and fails unless `django.get_version()` starts with `4.2.`.
 
 Known follow-ups surfaced by the smoke test (XFAIL or reported in the `-v2`
 output, not failures):
