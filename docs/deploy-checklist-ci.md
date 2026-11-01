@@ -38,7 +38,7 @@ All new modules live in `YSE_App/tests/`:
 | Forced photometry | partial | `DeployChecklistFlowTests.test_forced_photometry_request_logs_and_rate_limits` (`/ztf_forced_phot/` request + 12 h rate limit, ZTF client mocked); `test_cron_smoke` runs `YSE_Forced_Phot.ForcedPhot`/`ForcedPhotUpdate`/`ZTF_Forced_Phot_Cron.ForcedPhot` with I/O stubbed. Real IPP/ZTF forced photometry: **manual** (credentials + remote jobs). |
 | Flux plots | covered | `DeployChecklistFlowTests.test_flux_plot_with_photometry_returns_html`; `test_lightcurve` (`test_lightcurveplot_flux_query_count_bounded`, `test_lightcurveplot_flux_empty_returns_empty_body`) |
 | Ingesting YSE observation records | covered | `DeployChecklistFlowTests.test_survey_obs_schedule_and_ingest_observation_record` (`/add_yse_survey_obs/`, the path `yse_obs.bash` → `YSE_observations.SurveyObs` posts to); the IMAP side of `SurveyObs` is stubbed in `test_cron_smoke` |
-| SALT fit | partial | `DeployChecklistFlowTests.test_salt2_plot_endpoints_without_fit_return_200` (`salt2fit=0` branch). The fit (`salt2fit=1`) needs the SALT3 model download via sncosmo plus multi-band data in `bandpassdict`; **manual**. Note: the fit has no error handling, so a failed fit is a 500 — Ryan's "salt fit broken?" is plausible and a try/except around `sncosmo.fit_lc` is a follow-up. |
+| SALT fit | partial | `DeployChecklistFlowTests.test_salt2_plot_endpoints_without_fit_return_200` (`salt2fit=0` branch). The fit (`salt2fit=1`) needs the SALT3 model download via sncosmo plus multi-band data in `bandpassdict`; **manual**. A failed fit no longer 500s (#189): the plot endpoints catch it and annotate the plot (`test_salt2_fit_guard`), and the stored-fit job (`analysis/sncosmo_fit.py`) turns an `sncosmo.fit_lc` error into a failed run for that one fit (`test_analysis_services`, `test_summary_refit`). |
 | Download data: photometry | covered | `DeployChecklistFlowTests.test_download_photometry_snana_text` |
 | Download data: all data | partial | `DeployChecklistFlowTests.test_download_data_json_bundle_within_ceiling` (200 + JSON shape + 20 s ceiling on a 6-point object). The prod timeout is data-volume dependent; **manual** on a large object, or raise a follow-up to stream/paginate. |
 | Comments | covered | `test_phase2_comments.Phase2CommentTests` (AJAX add, non-AJAX add, fragment, API list/create, Slack signature/outbound) |
@@ -77,8 +77,9 @@ An entry whose *import* fails for environment reasons is reported as skipped, no
 failed: a missing or broken third-party package (`SciServer`; TensorFlow, whose
 generated protobuf code is incompatible with the former `protobuf==4.25.3` pin in the web
 image, so `Photo_Z` and `SDSS_Photo_Z` never import there), a
-network fetch at import time, or a DB row read at import (`PS1_cutouts` does
-`User.objects.get(username='admin')`; the test seeds that user). Only a
+network fetch at import time, or a DB row read at import (none today:
+`PS1_cutouts` looks up the `admin` user at call time since #182,
+`PS1CutoutsLazyAdminTests`). Only a
 crash-class exception raised by the cron module's own code, or an `ImportError`
 naming a repo module, fails the inventory.
 
@@ -86,7 +87,7 @@ naming a repo module, fails the inventory.
 | --- | --- | --- |
 | `tns_updates_realtime.bash` | `TNS_uploads.TNS_recent_realtime` *(inferred)* | **removed** from `CRON_CLASSES` (#438); the class is a no-op kept so the old crontab line is harmless; remove the line. `TNS_Resync.TNSResync` (hourly TNS re-sync, off by default) is smoke-tested like the others |
 | `tags.bash` | `Apply_Tags.Tags` | yes |
-| `yse_obs.bash` | `YSE_observations.SurveyObs` | yes — XFAIL: `uploaddict` unbound when IMAP fails (follow-up bug) |
+| `yse_obs.bash` | `YSE_observations.SurveyObs` | yes (IMAP stubbed; an IMAP failure no longer leaves `uploaddict` unbound, #181) |
 | `yse_ingest.bash` | `QUB_data.YSE` *(inferred)* | yes (dust map stubbed) |
 | `qub_ingest.bash` | `QUB_data.QUB` | yes (dust map stubbed) |
 | `forcedphot.bash` | `YSE_Forced_Phot.ForcedPhot` | yes (IPP stubbed) |
@@ -117,25 +118,12 @@ Note: #183 pins `protobuf==3.20.3` in `requirements.txt` and `docker/requirement
 
 Django version: the target is the **3.2 LTS line** (`Django>=3.2,<4.0` in `requirements.txt`, `Django==3.2.25` in `docker/requirements.web.dev`) until the Django 4 upgrade (#133) is scheduled; `ci.yml` installs that pin into the pulled GHCR image (which ships 4.0) before running the checks.
 
-Known follow-ups surfaced by the smoke test (XFAIL or reported in the `-v2`
-output, not failures):
-
-- `TNS_uploads.search()` / `get()` catch every exception and return
-  `[None, 'Error message ...']`; the callers (`GetRecentEvents`,
-  `GetRecentMissingEvents`, `GetAndUploadAllData`) read `response.status_code`
-  and crash with `AttributeError`. `TNS_recent_realtime.do()` has no try/except
-  around the call, so any TNS outage kills that cron (XFAIL).
-- `YSE_observations.SurveyObs.do()` reads `uploaddict` after the try block, so an
-  IMAP failure ends in `UnboundLocalError` (XFAIL).
-- Duplicate django_cron `code` values (`QUB_data.YSE_Weekly` reuses
-  `QUB_data.YSE`'s; `ZTF_Forced_Phot_Cron.ForcedPhot` reuses
-  `YSE_Forced_Phot.ForcedPhot`'s), which makes django_cron share one run history
-  between two jobs.
-- The web image could not import TensorFlow (`protobuf==4.25.3` vs the TF 2.13
-  generated code), so the four TensorFlow crons were untestable there; fixed by
-  pinning `protobuf==3.20.3` (#183).
-- `PS1_cutouts` queries the `admin` user at import time; `runcrons` for that class
-  crashes on any DB without that user.
+Known follow-ups surfaced by the smoke test: none open. `EXPECTED_CRASHES` in
+`test_cron_smoke` is empty, so there are no XFAILs. Fixed and now asserted:
+TNS `search()`/`get()` callers when TNS is down (#180), `SurveyObs` after an IMAP
+failure (#181), `PS1_cutouts`' import-time `admin` lookup (#182), the protobuf pin
+for TensorFlow (#183), duplicate django_cron `code` values, which the inventory test
+now rejects (#188), and the unguarded SALT fit (#189).
 
 ## Manual-only summary
 
@@ -143,9 +131,6 @@ output, not failures):
 - Live TNS / ZTF / IPP forced-photometry / Gaia / ANTARES fetches (credentials and
   external services; CI stubs the network).
 - SALT3 fit (`salt2fit=1`): model download + real multi-band data.
-- On-call, survey-field and survey-obs *form* POSTs: their choice fields are built
-  at import time from DB rows, so they only work in a process started against a
-  populated DB. Making those querysets lazy would let CI cover them.
 - `download_data` on a large object (prod timeout): CI keeps a 20 s ceiling on a
   small object only.
 - Nightly `mysqldump` backup and backup cleanup scripts; the bash cron wrappers
