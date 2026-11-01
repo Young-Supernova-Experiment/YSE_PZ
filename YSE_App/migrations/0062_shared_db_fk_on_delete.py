@@ -16,21 +16,14 @@ audit columns of the catalogue tables) are left as they are.
 Only constraints on tables created by 0056-0061 are touched; no table that develop's migrations
 created, and no row, is changed. Constraint names are read from ``information_schema`` at run
 time and kept. Running it again does nothing. On other database backends it does nothing.
-The reverse puts the plain constraints back.
+The reverse puts the plain constraints back. The helper now lives in
+``YSE_App/common/fk_on_delete.py`` (moved there for 0063, #846).
 """
 
 from django.db import migrations
 
-# The helper moved to YSE_App.common.fk_on_delete when 0064 needed it too; the names stay
-# importable from here for the tests.
-from YSE_App.common.fk_on_delete import (  # noqa: F401
-    CASCADE,
-    PLAIN_RULES,
-    SET_NULL,
-    apply,
-    current_constraints,
-    revert,
-)
+from YSE_App.common import fk_on_delete
+from YSE_App.common.fk_on_delete import CASCADE, PLAIN_RULES, SET_NULL, current_constraints  # noqa: F401
 
 # (table, column, referenced table, ON DELETE rule). Every referenced column is ``id``.
 # Enumerated from migrations 0056, 0057, 0059 and 0061 (0058 and 0060 create no table);
@@ -76,13 +69,8 @@ FOREIGN_KEYS = (
     ("YSE_App_duplicatedatadecision", "transient_id", "YSE_App_transient", CASCADE),
 )
 
-
-def forwards(apps, schema_editor):
-    apply(schema_editor, FOREIGN_KEYS)
-
-
-def backwards(apps, schema_editor):
-    revert(schema_editor, FOREIGN_KEYS)
+forwards = fk_on_delete.forwards(FOREIGN_KEYS)
+backwards = fk_on_delete.backwards(FOREIGN_KEYS)
 
 
 class Migration(migrations.Migration):

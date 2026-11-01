@@ -27,7 +27,8 @@ from django.views.decorators.http import require_GET, require_POST
 from YSE_App.models import AnalysisResultFile, AnalysisService, ExternalService, ExternalServiceRun, Transient
 from YSE_App.services import analysis_services as svc
 from YSE_App.services import external_services as runs
-from YSE_App.services import fit_status
+from YSE_App.common.ui_preview import ui_preview_enabled
+from YSE_App.services import fit_status, fit_tables
 from YSE_App.services.visibility import filter_transients_by_user_access
 
 POLL_SECONDS = 4
@@ -87,7 +88,14 @@ def analysis_tab_context(request, transient):
     if not sees_data:
         qs = qs.filter(created_by=request.user)
     run_rows = [_run_entry(r, request.user) for r in qs[:50]]
+    fit_history = None
+    if ui_preview_enabled(request):
+        # Preview only (#846): every Bazin / SALT fit of the runs this user may see.
+        fit_history = fit_tables.history(transient.pk, run_ids=qs.prefetch_related(None).values_list("pk", flat=True))
+        if not (fit_history["bazin"] or fit_history["salt"]):
+            fit_history = None
     return {
+        "fit_history": fit_history,
         "transient": transient,
         "analysis_sees_data": sees_data,
         "analysis_services": services,

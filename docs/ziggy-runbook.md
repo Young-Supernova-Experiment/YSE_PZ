@@ -18,7 +18,7 @@ A living checklist for David Jones, in the order things should happen. It replac
   - the **unconfirmed** production rows of section 5: `SECRET_KEY` and `[secrets] credentials_key`, the 3.10 / 3.21-3.23 / 3.26 mirrors, `rewrite_dashboard_queries`, the `AntaresLSST` crontab line, the #784 pull, the Slack events check;
   - the per-database backfill of the [visibility policy](#transient-visibility) (#607) and the one command per database for the viewer-scoped dashboard queries (#720);
   - the [TNS re-sync](#tns-resync) crontab line to remove, the `run_jobs` crontab line (#431), the [staff visibility](#staff-visibility) script-account check, and the [CasJobs rotation](#casjobs-credential) (#626).
-- **When Ryan asks** (do not start these during the freeze): [enable access rules on yse\_experimental](#enable-access-rules), [Open Supernova Catalog step 1](#osc-step1), the [spectra-as-arrays](#spectrum-arrays) test conversion, `clean_duplicate_data` (changelog v114), and the research export ([research consent](#research-consent)).
+- **When Ryan asks** (do not start these during the freeze): [enable access rules on yse\_experimental](#enable-access-rules), [Open Supernova Catalog step 1](#osc-step1), the [spectra-as-arrays](#spectrum-arrays) test conversion, `clean_duplicate_data` (changelog v114), the [fit-table backfill and scheduled refits](#fit-tables), and the research export ([research consent](#research-consent)).
 
 **Done:** [#335](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/335) merged to `develop` (5da66de) and deployed green to yse\_test at 18:01 UTC; migrations `0010_dashboard_indexes` (18 min) through 0029 (#341 PhotStat 18:43 UTC to #386 broker streams) already applied on the shared `YSE_test` database, nothing on yse\_test to run for them; [#143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) (develop to master) is conflict-free with 8/8 checks green and its body carries all 66 `Fixes` lines. (2026-09-29 state; #143 was merged and deployed on 2026-10-21, see the status paragraph below.)
 
@@ -1070,6 +1070,27 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py rewrite_data_quali
 **Undo:** `<EXP_PYTHON> manage.py rewrite_data_quality_queries --revert <backup.json> --apply`.
 
 **Production:** only after production has migration 0002, and only when Ryan asks: the same two steps with `<PROD_PYTHON>` in the production checkout.
+
+<a id="fit-tables"></a>
+### SALT and Bazin fit tables, backfill and scheduled refits (2026-11-01, #846): migration applied by the deploy; backfill and refits when Ryan asks
+
+**What this is.** Migrations `0063_fit_tables` and `0064_fit_tables_fk_on_delete` create two new tables, `YSE_App_bazinfit` (one row per Bazin run and band) and `YSE_App_saltfit` (one row per SALT run), with MySQL `ON DELETE CASCADE` on their foreign keys to transients and runs. Every Bazin / SALT analysis run that succeeds from then on writes its rows. Nothing else runs on deploy.
+
+**F1. Backfill from earlier runs (when Ryan asks).** Dry run first (writes nothing):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_fit_tables
+```
+**Expected:** `dry run: N succeeded fit run(s), M without rows would be read, ...`. Then:
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_fit_tables --apply
+```
+**Expected:** `N succeeded fit run(s): M written (R row(s)), ...`. Running it again writes nothing (`... already had rows`).
+
+**F2. Scheduled refits (when Ryan asks).** Off by default. A dry run lists what would be refitted: `<EXP_PYTHON> manage.py refit_fits`. To turn it on, add under the existing `[site_settings]` section of that stack's `YSE_PZ/settings.ini` (no second header), then restart:
+```ini
+FIT_REFIT_ENABLED = True
+```
+The `FitRefit` cron (already in `CRON_CLASSES`) then queues one `fits.refit_pass` job a day; the job runner must be running. Optional keys: `FIT_REFIT_CRON_MINUTES` (1440), `FIT_REFIT_WINDOW_DAYS` (7), `FIT_REFIT_LIMIT` (200). `PHOTSTAT_BAZIN_CRON_ENABLED` stays as it is. **Undo:** remove the line and restart.
 
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
@@ -3750,6 +3771,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-11-01 v120, **nothing required; when Ryan asks: fit-table backfill and scheduled refits** (the deploy applies the migration; no new package). SALT and Bazin fit tables ([#846](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/846)): migrations `0063_fit_tables` and `0064_fit_tables_fk_on_delete` create two new tables (`YSE_App_bazinfit`, `YSE_App_saltfit`) with `ON DELETE CASCADE` on their foreign keys to transients and runs, so develop's deletes on the shared `YSE_test` database still succeed. Every succeeded Bazin / SALT run writes its rows. `manage.py backfill_fit_tables` (dry run by default, `--apply`) and the scheduled refits (`FIT_REFIT_ENABLED`, default False; new `FitRefit` cron is a no-op while it is off) are in the section [SALT and Bazin fit tables](#fit-tables). The helper of 0062 moved to `YSE_App/common/fk_on_delete.py`.
 * 2026-11-01 v119, **nothing required** (the deploy applies the migration; no new package). Deletes on `/yse_test/` no longer fail on rows that only experimental knows about ([#941](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/941)): migration `0062_shared_db_fk_on_delete` runs automatically on the yse\_experimental deploy and changes only foreign-key constraints on the experimental-only tables created by 0056-0061 (spectrum arrays, catalogue tables, team deputies, duplicate decisions). They get MySQL `ON DELETE CASCADE` (or `ON DELETE SET NULL` for the duplicate decisions' `kept_*` columns), as their models declare, so a spectrum, host, transient, user or group deleted through develop's code takes these rows with it instead of failing with error 1451. No row, column or develop table changes; constraint names are kept. The PROTECT audit columns (`created_by`, `modified_by`) of the catalogue tables are unchanged.
 * 2026-10-31 v118, **nothing required; when Ryan asks: rewrite saved queries** (no migration, no package). Saved Explorer queries that still use the dropped `data_quality_id` column ([#939](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/939)): the 43 in the docker seed data and `docs/example_queries.rst` now use the `..._data_quality` join table. The copies in the deployed databases are rewritten by `manage.py rewrite_data_quality_queries` (dry run by default, `--apply` keeps a JSON backup, `--revert` undoes); see the section [Saved queries that use the dropped data_quality_id column](#saved-queries-data-quality).
 * 2026-10-31 v117, **nothing to run** (docs only). Status reconciled ([#937](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/937)): the header no longer says production is unchanged (#143 was merged and deployed on 2026-10-21, v102 and v104); every row of [section 5](#pending) is labelled **done** (with date and source), **pending** or **unconfirmed** (no record; check on Ziggy), and rows were added for #784, #792, the yse\_test Django 4.2 packages and the CasJobs rotation; the callouts at the top and sections 2 and 3 carry a status line. New section [Freeze period (from 2026-10-31)](#freeze): #792 pending with David, no develop promotions until then, no Ziggy shell access for now, and the steps that wait for access.

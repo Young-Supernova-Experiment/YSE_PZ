@@ -54,6 +54,21 @@ def peak_mjd(fit: bazin.BazinFit):
     return t0 + tau_rise * math.log(ratio)
 
 
+def last_non_detection_mjd(payload: Dict, first_detection_mjd, *, include_flagged: bool = False):
+    """MJD of the last upper limit before ``first_detection_mjd`` in the payload, or None (#846)."""
+    if first_detection_mjd is None:
+        return None
+    out = None
+    for row in payload.get("photometry") or []:
+        if not row.get("upper_limit") or (row.get("flagged") and not include_flagged):
+            continue
+        mjd = row.get("mjd")
+        if mjd is None or not math.isfinite(float(mjd)) or float(mjd) >= first_detection_mjd:
+            continue
+        out = float(mjd) if out is None else max(out, float(mjd))
+    return out
+
+
 def run(payload: Dict, params: Dict) -> AnalysisResult:
     ref_band = str(param(params, "band", "", str) or "").strip()
     extrapolate_days = param(params, "extrapolate_days", 7.0, float)
@@ -109,6 +124,10 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
         "extrapolate_mjd": extrap_mjd,
         "mag_extrapolated": ref["mag_extrapolated"],
         "per_band": per_band,
+        # For the fit tables' "peak no earlier than the last non-detection" flag (#846).
+        "first_detection_mjd": min(r["mjd"] for r in rows),
+        "last_non_detection_mjd": last_non_detection_mjd(payload, min(r["mjd"] for r in rows),
+                                                         include_flagged=include_flagged),
     }
     out = AnalysisResult(results=clean_json(results))
     if ref["peak_mag"] is not None:

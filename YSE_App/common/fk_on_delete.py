@@ -1,17 +1,19 @@
-"""Database-level ON DELETE for foreign keys that older code on the shared database does not know.
+"""Database-level ON DELETE for foreign keys of tables that develop's code does not know (#941).
 
 ``/yse_test/`` runs develop's code on the shared ``YSE_test`` database. Django emulates
-``on_delete`` in Python, only for the models and fields it knows, and creates the MySQL foreign
-keys without an ``ON DELETE`` clause (that is, RESTRICT). When develop deletes a row that a
-newer table or column still references, MySQL rejects the DELETE (error 1451).
+``on_delete`` in Python, only for the models it knows, and creates the MySQL foreign keys
+without an ``ON DELETE`` clause (that is, RESTRICT). So when develop deletes a row that a
+table it does not know still references, MySQL rejects the DELETE (error 1451).
 
-Migrations call :func:`set_rules` to re-create such constraints so that the database does what
-the model says: ``CASCADE`` becomes ``ON DELETE CASCADE`` and ``SET_NULL`` becomes
-``ON DELETE SET NULL``. Constraint names are read from ``information_schema`` at run time and
-kept. Running it again does nothing. On other database backends it does nothing. No row or
-column is changed.
+A migration that creates such a table lists its foreign keys as
+``(table, column, referenced table, rule)`` and runs ``RunPython(forwards(KEYS), backwards(KEYS))``
+after the ``CreateModel``: the MySQL constraints are re-created so that the database does what
+the model says (``CASCADE`` -> ``ON DELETE CASCADE``, ``SET_NULL`` -> ``ON DELETE SET NULL``).
+Django keeps emulating both, which is harmless. Constraint names are read from
+``information_schema`` at run time and kept; running it again does nothing; on other database
+backends it does nothing. The reverse puts the plain constraints back.
 
-First used by migration 0062 (#941); moved here when 0064 needed it too.
+First written inside migration 0062 (#946); moved here when 0063 (#846) needed it too.
 """
 
 import hashlib
@@ -69,8 +71,7 @@ def _add(schema_editor, table, name, column, ref_table, ref_column, rule):
 
 
 def set_rules(schema_editor, foreign_keys, target):
-    """Make the ON DELETE of every ``(table, column, referenced table, rule)`` in ``foreign_keys``
-    ``target(rule)`` (None means plain). Every referenced column is ``id``."""
+    """Make every listed constraint's ON DELETE ``target(rule)`` (None means plain)."""
     connection = schema_editor.connection
     if connection.vendor != "mysql":
         return
@@ -99,11 +100,15 @@ def set_rules(schema_editor, foreign_keys, target):
                     cursor.execute("SET SESSION foreign_key_checks = 1")
 
 
-def apply(schema_editor, foreign_keys):
-    """Forwards: the rules listed in ``foreign_keys``."""
-    set_rules(schema_editor, foreign_keys, lambda rule: rule)
+def forwards(foreign_keys):
+    """A ``RunPython`` function that puts the listed ON DELETE rules on the constraints."""
+    def apply(apps, schema_editor):
+        set_rules(schema_editor, foreign_keys, lambda rule: rule)
+    return apply
 
 
-def revert(schema_editor, foreign_keys):
-    """Backwards: plain constraints again."""
-    set_rules(schema_editor, foreign_keys, lambda rule: None)
+def backwards(foreign_keys):
+    """The reverse of :func:`forwards`: plain constraints again."""
+    def revert(apps, schema_editor):
+        set_rules(schema_editor, foreign_keys, lambda rule: None)
+    return revert

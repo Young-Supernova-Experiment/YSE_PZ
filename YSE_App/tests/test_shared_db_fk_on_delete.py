@@ -253,7 +253,7 @@ class ReverseForwardTests(TransactionTestCase):
         self.assertEqual(_rule(table, column), [fk_migration.CASCADE])
 
 
-default_site_migration = importlib.import_module("YSE_App.migrations.0064_userpreference_default_site_on_delete")
+default_site_migration = importlib.import_module("YSE_App.migrations.0066_userpreference_default_site_on_delete")
 
 
 class DefaultSiteColumnTests(SimpleTestCase):
