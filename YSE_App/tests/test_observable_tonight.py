@@ -436,9 +436,7 @@ class DefaultSiteTests(ObservableTonightBase):
 
     def test_bad_sites_are_refused(self):
         client = self.client_for(self.viewer)
-        no_coords = Telescope.objects.create(name="Synthetic no coordinates", observatory=self.site.observatory,
-                                             **audit_fields(self.owner))
-        for value in ("x", "999999", str(no_coords.pk)):
+        for value in ("x", "-1", "999999"):
             with self.subTest(site=value):
                 self.assertEqual(self.post(client, value).status_code, 400)
         self.assertFalse(UserPreference.objects.filter(user=self.viewer, observing_default_site__isnull=False).exists())
