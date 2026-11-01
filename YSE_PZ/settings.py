@@ -421,6 +421,8 @@ TEMPLATES = [
                 'YSE_App.context_processors.feedback',
                 # csrf_cookie_name for inline scripts (per-stack CSRF_COOKIE_NAME, #637).
                 'YSE_App.context_processors.csrf_cookie_name',
+                # ui_preview for the per-user Tier 2 layout preview (#947).
+                'YSE_App.context_processors.ui_preview',
             ],
             # utcdate / status_label filters on every template without {% load %} (#807, #831).
             'builtins': ['YSE_App.templatetags.display_extras'],
@@ -799,6 +801,11 @@ DATA_SERVICE_READER_USERNAMES = sorted(set(API_SERVICE_USERNAMES) | {
 # staff otherwise (see issue #102). Dashboard SQL is post-filtered separately.
 EXPLORER_RESTRICTED_ACCESS = _authz_flag('YSE_EXPLORER_RESTRICTED_ACCESS', 'EXPLORER_RESTRICTED_ACCESS')
 EXPLORER_ACCESS_GROUP = config.get('site_settings', 'EXPLORER_ACCESS_GROUP', fallback='explorer_users')
+
+# Per-user UI preview switch (#947). Users opt in from the user menu; optional
+# [site_settings] UI_PREVIEW_DEFAULT = True (or env YSE_UI_PREVIEW_DEFAULT=1) shows
+# the preview to every signed-in user. Default off.
+UI_PREVIEW_DEFAULT = _flag('YSE_UI_PREVIEW_DEFAULT', 'site_settings', 'UI_PREVIEW_DEFAULT', False)
 
 # Feedback button (#443). Off by default: YSE_FEEDBACK_ENABLED=1 or
 # [site_settings] FEEDBACK_ENABLED = True shows the navbar button and accepts
