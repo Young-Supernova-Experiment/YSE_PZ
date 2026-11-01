@@ -7,8 +7,9 @@ else keeps today's pages. Templates read ``ui_preview`` (context processor
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from django.core.handlers.wsgi import get_script_name
 from django.http import HttpResponseRedirect
-from django.urls import get_script_prefix, reverse
+from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
@@ -35,10 +36,12 @@ def ui_preview_enabled(request):
     return request.COOKIES.get(PREVIEW_COOKIE) == "1"
 
 
-def _cookie_path():
+def _cookie_path(request):
     # The stack's URL prefix (/yse/, /yse_test/, /yse_experimental/), so stacks on one
-    # host keep separate switches.
-    return get_script_prefix() or "/"
+    # host keep separate switches. Same source as Django's script prefix:
+    # FORCE_SCRIPT_NAME if set, else the WSGI SCRIPT_NAME.
+    prefix = get_script_name(request.META) or ""
+    return prefix.rstrip("/") + "/"
 
 
 @require_POST
@@ -51,7 +54,7 @@ def ui_preview_switch(request):
     ):
         next_url = reverse("dashboard")
     response = HttpResponseRedirect(next_url)
-    path = _cookie_path()
+    path = _cookie_path(request)
     if request.POST.get("on") == "1":
         response.set_cookie(
             PREVIEW_COOKIE,

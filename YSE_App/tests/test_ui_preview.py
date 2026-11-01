@@ -15,13 +15,13 @@ from YSE_App.tests.fixtures_minimal import create_minimal_transient, create_test
 
 MENU_PARTIAL = "YSE_App/partials/ui_preview_menu.html"
 BANNER_CLASS = "yse-ui-preview-banner"
-_CSRF_RE = re.compile(r'(name="csrfmiddlewaretoken" value=")[^"]*(")')
+# Masked CSRF tokens (form fields and inline scripts) differ on every render.
+_CSRF_RE = re.compile(r"\b[A-Za-z0-9]{64}\b")
 _MENU_RE = re.compile(r'<form method="post" action="[^"]*" class="m-0" id="yse-ui-preview-form">.*?</form>\n?')
 
 
 def _normalise(html):
-    # CSRF form tokens are masked differently on every render.
-    return _CSRF_RE.sub(r"\1x\2", html)
+    return _CSRF_RE.sub("csrf-token", html)
 
 
 def _templates_without_preview():
@@ -160,6 +160,11 @@ class UIPreviewSwitchTests(TestCase):
             self.assertEqual(response.cookies[PREVIEW_COOKIE]["path"], "/yse_test/")
             response = self.client.post("/ui-preview/", {"on": "0", "next": "/yse_test/dashboard/"})
             self.assertEqual(response.cookies[PREVIEW_COOKIE]["path"], "/yse_test/")
+        # Without FORCE_SCRIPT_NAME the WSGI SCRIPT_NAME (mod_wsgi mount point) is used.
+        response = self.client.post(
+            "/ui-preview/", {"on": "1", "next": "/dashboard/"}, SCRIPT_NAME="/yse_experimental"
+        )
+        self.assertEqual(response.cookies[PREVIEW_COOKIE]["path"], "/yse_experimental/")
 
     # ----- preview off: pages unchanged -----
 
