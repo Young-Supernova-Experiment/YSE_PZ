@@ -7,7 +7,7 @@ from django.views import generic
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.urls import reverse, reverse_lazy
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from YSE_App.common.quality_mask import legacy_good
 from rest_framework.renderers import JSONRenderer
 import requests
@@ -59,6 +59,7 @@ from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
 from YSE_App.common.status_display import status_label
+from YSE_App.common.ui_preview import ui_preview_enabled
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
 from django.contrib.auth.models import AnonymousUser
 from YSE_App.services.page_query_scope import PageQueryRefused, page_query_cache_suffix, page_query_sql
@@ -821,6 +822,10 @@ def followup(request):
 
 @login_required
 def transient_tags(request):
+    if ui_preview_enabled(request):
+        # #866 preview: a keyboard- and touch-usable picker instead of drag and drop.
+        context = {'all_transient_tags': TransientTag.objects.order_by('name')}
+        return render(request, 'YSE_App/transient_tags_v2.html', context)
     all_transient_tags = TransientTag.objects.all()
     context = {
         'all_transient_tags': all_transient_tags
@@ -834,9 +839,17 @@ def get_transient_tags(request):
     for id in id_str:
         ids.append(int(id))
 
+    # ``match=all`` (#866): transients carrying every chosen tag. Anything else is
+    # today's behaviour, any of the chosen tags.
+    if request.GET.get('match') == 'all' and ids:
+        base = Transient.objects.all()
+        for tag_id in set(ids):
+            base = base.filter(Exists(Transient.tags.through.objects.filter(
+                transient_id=OuterRef('pk'), transienttag_id=tag_id)))
+    else:
+        base = Transient.objects.filter(tags__in=ids).distinct()
     # The listing rule (#607, #760), as on /api/transients/ and the search page.
-    transient_queryset = filter_listed_transients(
-        request.user, Transient.objects.filter(tags__in=ids).distinct())
+    transient_queryset = filter_listed_transients(request.user, base)
     transient_objs = [t for t in transient_queryset]
 
     serializer = TransientSerializer(transient_objs, context={'request': request}, many=True)

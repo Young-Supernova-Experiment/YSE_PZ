@@ -1,0 +1,183 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+
+{% comment %}
+  #866 preview version of "View Transient By Tag" (shown only with the UI preview switch on).
+  A labelled multi-select with type-ahead (Select2, vendored) replaces jQuery-UI drag and drop,
+  so the page works with a keyboard and on touch screens. Results come from the same
+  /get_transient_tags/ endpoint as the current page; "all" adds match=all.
+{% endcomment %}
+
+{% block styles %}
+	<link rel="stylesheet" href="{% static 'YSE_App/bower_components/select2/dist/css/select2.min.css' %}">
+{% endblock %}
+
+{% block content %}
+
+	<section class="content-header">
+	  <h1>
+		Young Supernova Experiment
+		<small>View Transient By Tag</small>
+	  </h1>
+	</section>
+
+	<section class="content">
+		<div class="row">
+			<div class="col-12">
+				<div class="box box-default box-solid">
+					<div class="box-header with-border">
+						<h2 class="box-title">Choose tags</h2>
+					</div>
+					<form id="tag-search-form" class="box-body" action="{% url 'search' %}" method="get">
+						<div class="form-group">
+							<label for="tag-picker">Tags</label>
+							<select id="tag-picker" name="tags" multiple class="form-control"
+									aria-describedby="tag-picker-help" style="width: 100%">
+								{% for tag in all_transient_tags %}
+									<option value="{{ tag.name }}" data-tag-id="{{ tag.id }}">{{ tag.name }}</option>
+								{% endfor %}
+							</select>
+							<small id="tag-picker-help" class="form-text text-muted">
+								Type to filter the list; press Enter to add a tag and Backspace to remove the last one.
+							</small>
+						</div>
+						<fieldset class="form-group">
+							<legend class="col-form-label pt-0">Show transients with</legend>
+							<div class="form-check form-check-inline">
+								<input class="form-check-input" type="radio" name="tag-match" id="tag-match-any" value="any" checked>
+								<label class="form-check-label" for="tag-match-any">any of these tags</label>
+							</div>
+							<div class="form-check form-check-inline">
+								<input class="form-check-input" type="radio" name="tag-match" id="tag-match-all" value="all">
+								<label class="form-check-label" for="tag-match-all">all of these tags</label>
+							</div>
+						</fieldset>
+						<noscript>
+							<button type="submit" class="btn btn-primary">Search (any of these tags)</button>
+						</noscript>
+						<p class="mb-0">
+							<a id="tag-search-link" href="{% url 'search' %}">Open this search in Transient search</a>
+							<small class="text-muted">(more filters, sorting and export)</small>
+						</p>
+					</form>
+				</div>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-12">
+				<div class="box">
+					<div class="box-header with-border">
+						<h2 class="box-title" id="tag-results-title">Matching Transients</h2>
+					</div>
+					<div class="box-body">
+						<p id="tag-results-status" class="text-muted" role="status" aria-live="polite">Choose one or more tags.</p>
+						<div class="table-responsive">
+							<table id="transient_tag_tbl" class="table table-bordered table-hover" aria-labelledby="tag-results-title">
+								<thead>
+									<tr>
+										<th scope="col">Name</th>
+										<th scope="col">RA</th>
+										<th scope="col">Dec</th>
+										<th scope="col">Disc. Date (UTC)</th>
+										<th scope="col">Spec Class</th>
+										<th scope="col">Internal Survey</th>
+									</tr>
+								</thead>
+								<tbody>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</section>
+
+{% endblock %}
+
+
+{% block scripts %}
+	<script src="{% static 'YSE_App/bower_components/select2/dist/js/select2.full.min.js' %}"></script>
+	<script src="{% static 'YSE_App/yse-dates.js' %}?v=ux-dates-1"></script>
+	<script>
+	$(function () {
+		var $picker = $("#tag-picker");
+		var $status = $("#tag-results-status");
+		var $tbody = $("#transient_tag_tbl > tbody");
+		var dataUrl = "{% url 'get_transient_tags' %}";
+		var searchUrl = "{% url 'search' %}";
+		var detailUrl = "{% url 'transient_detail' slug='123456789' %}";
+		var pending = null;
+
+		if ($.fn.select2) {
+			$picker.select2({width: "100%", placeholder: "Type a tag name", closeOnSelect: false});
+			// Select2 4.0 does not copy the <label>/description onto its search box.
+			$picker.next(".select2").find(".select2-search__field")
+				.attr("aria-label", "Tags").attr("aria-describedby", "tag-picker-help");
+			$("label[for='tag-picker']").on("click", function () { $picker.select2("open"); });
+		}
+
+		function chosen() {
+			return $picker.find("option:selected").map(function () {
+				return {id: $(this).data("tag-id"), name: $(this).val()};
+			}).get();
+		}
+
+		function matchMode() {
+			return $("input[name='tag-match']:checked").val() === "all" ? "all" : "any";
+		}
+
+		function cell(text) {
+			return $("<td>").text(text === null || text === undefined ? "" : text);
+		}
+
+		function render(data) {
+			$tbody.empty();
+			var n = 0;
+			$.each(data, function (_, value) {
+				n += 1;
+				var link = $("<a>").attr("href", detailUrl.replace("123456789", value.slug)).text(value.name);
+				$("<tr>")
+					.append($("<td>").append(link))
+					.append(cell(value.ra))
+					.append(cell(value.dec))
+					.append($("<td>").html(yseUtcDateHtml(value.disc_date)))
+					.append(cell(value.TNS_spec_class))
+					.append(cell(value.internal_survey))
+					.appendTo($tbody);
+			});
+			$status.text(n === 1 ? "1 matching transient." : n + " matching transients.");
+		}
+
+		function update() {
+			var tags = chosen();
+			var mode = matchMode();
+			var param = mode === "all" ? "tags_all" : "tags";
+			$("#tag-search-link").attr("href", searchUrl + (tags.length ? "?" + $.param(
+				$.map(tags, function (t) { return {name: param, value: t.name}; })) : ""));
+			if (pending) { pending.abort(); pending = null; }
+			if (!tags.length) {
+				$tbody.empty();
+				$status.text("Choose one or more tags.");
+				return;
+			}
+			var query = $.map(tags, function (t) { return {name: "tagid", value: t.id}; });
+			if (mode === "all") { query.push({name: "match", value: "all"}); }
+			$status.text("Loading…");
+			pending = $.ajax({type: "GET", url: dataUrl + "?" + $.param(query), dataType: "json"})
+				.done(render)
+				.fail(function (xhr, textStatus) {
+					if (textStatus === "abort") { return; }
+					$tbody.empty();
+					$status.text("Could not load the matching transients. Please try again.");
+				})
+				.always(function () { pending = null; });
+		}
+
+		$picker.on("change", update);
+		$("input[name='tag-match']").on("change", update);
+		$("#tag-search-form").on("submit", function (e) { e.preventDefault(); update(); });
+		update();
+	});
+	</script>
+{% endblock %}
