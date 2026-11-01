@@ -7,6 +7,7 @@ below as reference functions and compared against the new responses. Synthetic d
 
 import base64
 import datetime
+import secrets
 from unittest import mock
 
 import numpy as np
@@ -42,7 +43,6 @@ from YSE_App.tests.fixtures_minimal import (
 )
 
 READER = "dls929_reader"
-SYNTHETIC_PASSWORD = "dls929-synthetic-pass"
 
 
 # --- reference: the view bodies before #929, unchanged apart from taking ``user`` directly ---------
@@ -174,11 +174,13 @@ class DownloadStreamingTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.reader = create_test_user(READER, is_staff=False)
-        cls.reader.set_password(SYNTHETIC_PASSWORD)
+        cls.password = secrets.token_hex(12)  # generated per run, never a stored credential
+        cls.reader.set_password(cls.password)
         cls.reader.save()
         cls.member = create_test_user("dls929_member", is_staff=False)
         cls.group, _ = Group.objects.get_or_create(name="dls929-g")
         cls.member.groups.add(cls.group)
+        cls.reader.groups.add(cls.group)
         audit = audit_fields(cls.reader)
 
         cls.transient = create_minimal_transient(cls.reader, name="2026dls", ra=12.5, dec=-30.25)
@@ -240,7 +242,7 @@ class DownloadStreamingTests(TestCase):
         client = Client()
         headers = {}
         if basic:
-            cred = base64.b64encode(("%s:%s" % (READER, SYNTHETIC_PASSWORD)).encode()).decode()
+            cred = base64.b64encode(("%s:%s" % (READER, self.password)).encode()).decode()
             headers["HTTP_AUTHORIZATION"] = "Basic " + cred
         else:
             client.force_login(user)
@@ -281,7 +283,9 @@ class DownloadStreamingTests(TestCase):
         with mock.patch.object(download_stream, "ROW_BATCH", 2), mock.patch.object(download_stream, "FLUSH_CHARS", 64):
             response, body = self._get("download_data", self.reader)
             self.assertEqual(body, expected_json)
-            chunks = list(self._get("download_data", self.reader)[0].streaming_content)
+            client = Client()
+            client.force_login(self.reader)
+            chunks = list(client.get(reverse("download_data", kwargs={"slug": self.transient.slug})).streaming_content)
             self.assertGreater(len(chunks), 5)
             self.assertEqual(self._get("download_photometry", self.reader)[1], expected_snana)
 
