@@ -151,7 +151,9 @@
       </div>
       <button type="submit" class="btn btn-primary btn-sm" id="search-bulk-submit">Apply</button>
     </form>
+    {% if ui_preview %}<div data-yse-list-source="search">{% endif %}{# links into a transient keep this search (#850) #}
     {% render_table table %}
+    {% if ui_preview %}</div>{% endif %}
   </div>
   <div class="box-footer"></div>
 </div>
@@ -261,4 +263,5 @@ $(function() {
   });
 });
 </script>
+{% if ui_preview %}<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>{% endif %}
 {% endblock %}

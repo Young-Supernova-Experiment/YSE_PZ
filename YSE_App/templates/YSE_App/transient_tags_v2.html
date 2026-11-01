@@ -72,7 +72,7 @@
 					<div class="box-body">
 						<p id="tag-results-status" class="text-muted" role="status" aria-live="polite">Choose one or more tags.</p>
 						<div class="table-responsive">
-							<table id="transient_tag_tbl" class="table table-bordered table-hover" aria-labelledby="tag-results-title">
+							<table id="transient_tag_tbl" class="table table-bordered table-hover" aria-labelledby="tag-results-title" data-yse-list-source="tag" data-yse-list-query="">
 								<thead>
 									<tr>
 										<th scope="col">Name</th>
@@ -99,6 +99,7 @@
 {% block scripts %}
 	<script src="{% static 'YSE_App/bower_components/select2/dist/js/select2.full.min.js' %}"></script>
 	<script src="{% static 'YSE_App/yse-dates.js' %}?v=ux-dates-1"></script>
+	<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
 	<script>
 	$(function () {
 		var $picker = $("#tag-picker");
@@ -163,6 +164,7 @@
 			}
 			var query = $.map(tags, function (t) { return {name: "tagid", value: t.id}; });
 			if (mode === "all") { query.push({name: "match", value: "all"}); }
+			$("#transient_tag_tbl").attr("data-yse-list-query", $.param(query));  // links keep this list (#850)
 			$status.text("Loading…");
 			pending = $.ajax({type: "GET", url: dataUrl + "?" + $.param(query), dataType: "json"})
 				.done(render)
