@@ -714,6 +714,45 @@ class FlaggedSeriesRenderTests(TestCase):
                 clean = legend_series(legend_blocks(self._doc(view, self.clean)))
                 self.assertFalse([label for label in clean if label.startswith("flagged")])
 
+    def test_quicklook_spectrum_is_drawn_like_a_good_one(self):
+        # #903: Quicklook is most uploads; it must be easy to see, so it is not drawn as flagged.
+        from YSE_App.models import DataQuality
+
+        quicklook_dq, _ = DataQuality.objects.get_or_create(name="Quicklook", defaults=audit_fields(self.user))
+        transient = create_minimal_transient(self.user, name="lc-quicklook-spec")
+        quick = attach_synthetic_spectrum(self.user, transient)
+        both = attach_synthetic_spectrum(self.user, transient, obs_group=quick.obs_group, instrument=quick.instrument)
+        TransientSpectrum.objects.filter(pk=both.pk).update(obs_date=quick.obs_date - datetime.timedelta(days=3))
+        quick.data_quality.add(quicklook_dq)
+        both.data_quality.add(quicklook_dq, self.bad)
+        for spectrum in (quick, both):
+            TransientSpecData.objects.bulk_create([
+                TransientSpecData(spectrum=spectrum, wavelength=4000 + 10 * i, flux=1.0 + 0.1 * i,
+                                  **audit_fields(self.user))
+                for i in range(20)
+            ])
+        for view in ("spectrumplot", "spectrumplot_summary"):
+            with self.subTest(view=view):
+                doc = self._doc(view, transient)
+                refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
+                entries = {}
+                for legend in legends_in_doc(doc):
+                    for item in legend["attributes"].get("items", []):
+                        attrs = refs[item["id"]]["attributes"]
+                        renderer = refs[attrs["renderers"][0]["id"]]["attributes"]
+                        glyph = refs[renderer["glyph"]["id"]]["attributes"]
+                        entries[attrs["label"]["value"]] = (renderer, glyph)
+                quick_labels = [label for label in entries if label.endswith(" (quicklook)")]
+                flagged_labels = [label for label in entries if label.endswith(" (flagged)")]
+                self.assertEqual((len(quick_labels), len(flagged_labels)), (1, 1))
+                renderer, glyph = entries[quick_labels[0]]
+                self.assertFalse(renderer.get("muted", False))
+                self.assertNotIn("line_dash", glyph)
+                # Quicklook plus Bad is still flagged.
+                renderer, glyph = entries[flagged_labels[0]]
+                self.assertTrue(renderer.get("muted"))
+                self.assertEqual(glyph.get("line_dash"), [6])
+
     def test_flagged_spectrum_is_dashed_muted_and_labelled(self):
         transient = create_minimal_transient(self.user, name="lc-flagged-spec")
         good = attach_synthetic_spectrum(self.user, transient)

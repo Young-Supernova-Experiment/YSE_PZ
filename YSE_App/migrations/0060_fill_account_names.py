@@ -32,5 +32,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # shared-db-safe: data only; fills auth_user first/last names only where both are empty (no schema change, valid values for any code version)
         migrations.RunPython(fill, migrations.RunPython.noop),
     ]
