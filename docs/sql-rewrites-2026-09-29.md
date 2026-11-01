@@ -449,7 +449,7 @@ SELECT %s
 | `order_recent_magdate` (`table_utils.py`) | code, ORM `Max()` | ORM aggregate, not raw SQL; not measured as slow. |
 | `Transient.recent_mag()` and friends (`models/transient_models.py`) | code, ORM | per-row ORM queries on the detail page; ORM, not raw SQL; out of scope. |
 | `YSE_App/perf/mag_limited.py` benchmark SQL | perf harness | intentionally the old shape: it measures it. |
-| `docs/example_queries.rst` examples 3 and 4 | documentation | not executed by the app. Example 3 still references `pd2.data_quality_id`, a column the migrated schema no longer has; follow-up to update the examples to the shapes above (or to the PhotStat table, #270). |
+| `docs/example_queries.rst` examples 3 and 4 | documentation | not executed by the app. Example 3 used `pd2.data_quality_id`, a column the migrated schema no longer has; it now uses the `..._data_quality` join table (`YSE_App/queries/data_quality_sql.py`, `manage.py rewrite_data_quality_queries`). |
 
 ## Saved queries whose SQL could not be seen
 

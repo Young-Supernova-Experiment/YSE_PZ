@@ -1050,6 +1050,27 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py catalog_instrument
 
 **O7. Send Ryan** `offline-summary.txt`, `instrument-census.txt` and `offline-review/failures.csv` from `<OSC_DIR>/reports/`. They hold only public catalogue data. Keep `<OSC_DIR>`: every later step reads it.
 
+<a id="saved-queries-data-quality"></a>
+### Saved queries that use the dropped `data_quality_id` column (2026-10-31, #939): when Ryan asks
+
+**What this is.** Migration 0002 replaced the `data_quality_id` column on photometry and spectra with a join table. Saved Explorer queries written before that (43 in the docker seed data, several pinned to personal dashboards) fail with `Unknown column 'pd2.data_quality_id'` on a migrated database. `manage.py rewrite_data_quality_queries` rewrites them to the join-table form that returns the same rows. Nothing runs on deploy. It changes `explorer_query` rows, which yse\_test and yse\_experimental share, so run it only when Ryan asks.
+
+**Q1. Dry run** (writes nothing):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py rewrite_data_quality_queries
+```
+**Expected:** a `REWRITE <id> <title>` line and a diff for each query that uses the column, then `N saved queries to rewrite: ...` and `Dry run — no changes made`. `REVIEW` lines name queries that use the column in a form the command does not rewrite; they are left alone. If the first line says the table `still has the data_quality_id column`, this database is not migrated and nothing needs doing: stop and tell Ryan.
+
+**Q2. Apply:**
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py rewrite_data_quality_queries --apply
+```
+**Expected:** `Previous SQL saved to <backup.json>` (keep the file), `Updated N saved queries.`, and a `Revert with:` line. Running it again prints `Nothing to change.` Send Ryan the `REVIEW` lines, if any.
+
+**Undo:** `<EXP_PYTHON> manage.py rewrite_data_quality_queries --revert <backup.json> --apply`.
+
+**Production:** only after production has migration 0002, and only when Ryan asks: the same two steps with `<PROD_PYTHON>` in the production checkout.
+
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
 
@@ -3729,6 +3750,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-31 v118, **nothing required; when Ryan asks: rewrite saved queries** (no migration, no package). Saved Explorer queries that still use the dropped `data_quality_id` column ([#939](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/939)): the 43 in the docker seed data and `docs/example_queries.rst` now use the `..._data_quality` join table. The copies in the deployed databases are rewritten by `manage.py rewrite_data_quality_queries` (dry run by default, `--apply` keeps a JSON backup, `--revert` undoes); see the section [Saved queries that use the dropped data_quality_id column](#saved-queries-data-quality).
 * 2026-10-31 v117, **nothing to run** (docs only). Status reconciled ([#937](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/937)): the header no longer says production is unchanged (#143 was merged and deployed on 2026-10-21, v102 and v104); every row of [section 5](#pending) is labelled **done** (with date and source), **pending** or **unconfirmed** (no record; check on Ziggy), and rows were added for #784, #792, the yse\_test Django 4.2 packages and the CasJobs rotation; the callouts at the top and sections 2 and 3 carry a status line. New section [Freeze period (from 2026-10-31)](#freeze): #792 pending with David, no develop promotions until then, no Ziggy shell access for now, and the steps that wait for access.
 * 2026-10-31 v116, **nothing to run** (no migration, no package). Spectrum upload form on the transient page ([#900](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/900), [#901](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/901), [#902](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/902)): required fields are marked and checked in the browser before the file is sent; the date line says whether a date is set and that it is read as UT, with a "Now (UT)" button; after a failed upload the form opens again with the entered values (the file must be chosen again). New static file `spectrum-upload.js` (collectstatic runs in the deploy).
 * 2026-10-31 v115, **nothing to run** (no migration, no package). Quicklook spectra are drawn like good ones on the spectrum plots, solid and in full colour, with " (quicklook)" in the legend ([#903](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/903)); spectra with any other excluding data-quality bit are still drawn dashed and muted as " (flagged)".
