@@ -117,6 +117,35 @@ def pixel_counts(spectrum_ids: Iterable[int], *, host: bool = False) -> Dict[int
     return out
 
 
+def wavelength_ranges(spectrum_ids: Iterable[int], *, host: bool = False) -> Dict[int, Tuple[float, float]]:
+    """``{spectrum id: (min, max wavelength)}`` from either storage, without unpacking arrays."""
+    from django.db.models import Max, Min
+
+    ids = list(spectrum_ids)
+    arrays_model, rows_model = _models(host)
+    out = {sid: (lo, hi) for sid, lo, hi in arrays_model.objects.filter(spectrum_id__in=ids)
+           .values_list('spectrum_id', 'wavelength_min', 'wavelength_max')}
+    rest = [i for i in ids if i not in out]
+    if rest:
+        out.update((row['spectrum_id'], (row['lo'], row['hi'])) for row in rows_model.objects.filter(
+            spectrum_id__in=rest).values('spectrum_id').annotate(lo=Min('wavelength'), hi=Max('wavelength')))
+    return out
+
+
+def with_flux_errors(spectrum_ids: Iterable[int], *, host: bool = False) -> set:
+    """The ids among ``spectrum_ids`` whose pixels have flux errors, from either storage (an arrays row wins)."""
+    ids = list(spectrum_ids)
+    arrays_model, rows_model = _models(host)
+    in_arrays = set(arrays_model.objects.filter(spectrum_id__in=ids).values_list('spectrum_id', flat=True))
+    out = set(arrays_model.objects.filter(spectrum_id__in=ids, flux_err__isnull=False)
+              .values_list('spectrum_id', flat=True))
+    rest = [i for i in ids if i not in in_arrays]
+    if rest:
+        out.update(rows_model.objects.filter(spectrum_id__in=rest, flux_err__isnull=False)
+                   .values_list('spectrum_id', flat=True).distinct())
+    return out
+
+
 def discard(spectrum_ids: Iterable[int], *, host: bool = False) -> int:
     """Delete the arrays rows of these spectra (when their pixels are being rewritten as rows), so stale
     arrays never win over the new rows. Returns the number deleted."""
