@@ -7,7 +7,7 @@
 		return;
 	}
 	document.body.appendChild(modal);  // above the page layout, so the backdrop never covers it
-	var body =document.getElementById("yse-access-editor-body");
+	var body = document.getElementById("yse-access-editor-body");
 	var title = document.getElementById("yse-access-editor-title");
 	document.addEventListener("click", function (event) {
 		var button = event.target.closest ? event.target.closest(".yse-access-edit") : null;

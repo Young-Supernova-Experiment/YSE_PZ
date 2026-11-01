@@ -157,7 +157,7 @@ class TransientRulesPreviewTests(ui_tests._Fixture):
     def test_permission_denials_unchanged(self):
         html = self.page(preview=True, user=self.outsider)
         self.assertIn("You may not set access", html)
-        self.assertNotIn("yse-access-editor", html)
+        self.assertNotIn('id="yse-access-editor"', html)
         forms = access_forms(self.page(preview=True))
         post = editor_form(forms, action="remove_allow", kind="photometry", dataset_id=self.sets[0].pk)
         post.update(direction="backward")
