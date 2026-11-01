@@ -14,6 +14,7 @@
 	{% endif %}
 	<div class="row">
 		<div class="col-lg-9 col-12">
+			{% if ui_preview %}{% include "YSE_App/access_transient_rules_v2.html" %}{% else %}
 			{% if not phot_sets and not spectra %}
 			<div class="box box-default box-solid"><div class="box-body">
 				<p class="mb-0 text-muted">You may not set access for any of this object's data. Only the data's PIs and their deputies, the program's PI or deputies, and administrators can.</p>
@@ -143,6 +144,7 @@
 				</div>
 			</div>
 			{% endif %}
+			{% endif %}
 		</div>
 		<div class="col-lg-3 col-12">
 			{% include "YSE_App/access_help.html" %}
@@ -154,4 +156,5 @@
 {% block scripts %}
 {{ block.super }}
 {% include "YSE_App/access_direction_script.html" %}
+{% if ui_preview %}{% include "YSE_App/access_editor_script.html" %}{% endif %}
 {% endblock %}
