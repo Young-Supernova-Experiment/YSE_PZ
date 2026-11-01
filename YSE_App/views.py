@@ -227,6 +227,15 @@ def _dashboard_section_tuple(request, title, statusname, status_by_name):
 
 @login_required
 def dashboard(request):
+    from YSE_App import dashboard_preview
+
+    if dashboard_preview.preview_enabled(request):
+        # Tabbed layout for UI preview users (#859); everyone else gets the sections below.
+        return dashboard_preview.dashboard(request, {
+            'broker_stale_heartbeats': _broker_stale_heartbeats(),
+            'dashboard_per_page': dashboard_per_page(request),
+            'dashboard_per_page_choices': DASHBOARD_PER_PAGE_CHOICES,
+        })
     status_names = [name for _, name in _DASHBOARD_STATUS_SECTIONS]
     status_by_name = {
         s.name: s
@@ -283,6 +292,9 @@ def _broker_stale_heartbeats():
 @login_required
 def dashboard_section(request, status_key):
     """AJAX fragment for one main-dashboard status bucket."""
+    from YSE_App import dashboard_preview
+
+    preview = dashboard_preview.preview_enabled(request)
     status_by_name = {
         s.name: s
         for s in TransientStatus.objects.filter(
@@ -291,6 +303,8 @@ def dashboard_section(request, status_key):
     }
     for title, statusname in _DASHBOARD_STATUS_SECTIONS:
         if statusname.lower() == status_key.lower() or statusname == status_key:
+            if preview:
+                return dashboard_preview.section(request, statusname, status_by_name)
             row = _dashboard_section_tuple(request, title, statusname, status_by_name)
             return render(
                 request,
