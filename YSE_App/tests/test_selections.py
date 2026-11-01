@@ -25,7 +25,7 @@ from YSE_App.tests.fixtures_minimal import (
 )
 from YSE_App.tests.test_transient_search import SearchFixture
 
-selection_migration = importlib.import_module("YSE_App.migrations.0064_selection_fk_on_delete")
+selection_migration = importlib.import_module("YSE_App.migrations.0066_selection_fk_on_delete")
 PREVIEW_COOKIE = "yse-ui-preview"
 
 
@@ -480,7 +480,7 @@ def _delete_known_children(parent_table, parent_id):
 
 
 class RawDeleteTests(TestCase):
-    """develop's deletes, as raw SQL, after migration 0064: MySQL cascades or nulls Selection rows."""
+    """develop's deletes, as raw SQL, after migration 0066: MySQL cascades or nulls Selection rows."""
 
     def setUp(self):
         if connection.vendor != "mysql":

@@ -9,7 +9,7 @@ slug. It is the shared object that dashboards, downloads, plots, alerts and shar
 - Its rows are compiled **for the viewing user**, every time it is used. Data access stays per
   point, so a Selection never shows anyone a transient, point or spectrum they could not see anyway.
 
-## Model: `YSE_App.models.Selection` (table `YSE_App_selection`, migrations 0063 and 0064)
+## Model: `YSE_App.models.Selection` (table `YSE_App_selection`, migrations 0065 and 0066)
 
 | Field | Meaning |
 |---|---|

@@ -1,6 +1,6 @@
 """MySQL ON DELETE on the foreign keys of ``YSE_App_selection`` (#841), as 0062 does for 0056-0061.
 
-0063 created the table. Its foreign keys point at ``auth_user``, ``auth_group``, ``explorer_query``
+0065 created the table. Its foreign keys point at ``auth_user``, ``auth_group``, ``explorer_query``
 and ``YSE_App_userquery``, which develop deletes from on the shared database without knowing this
 table. Each MySQL constraint gets the model's rule (``YSE_App.common.fk_on_delete``). No row or
 column of any table changes.
@@ -31,10 +31,10 @@ class Migration(migrations.Migration):
     atomic = False
 
     dependencies = [
-        ("YSE_App", "0063_selection"),
+        ("YSE_App", "0065_selection"),
     ]
 
     operations = [
-        # shared-db-safe: only sets the ON DELETE rule of the foreign keys of YSE_App_selection (created by 0063), which develop's code never reads or writes; no row or column of any other table changes (#841, as 0062)
+        # shared-db-safe: only sets the ON DELETE rule of the foreign keys of YSE_App_selection (created by 0065), which develop's code never reads or writes; no row or column of any other table changes (#841, as 0062)
         migrations.RunPython(forwards, backwards),
     ]

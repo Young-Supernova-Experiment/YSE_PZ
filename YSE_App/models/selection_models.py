@@ -17,7 +17,7 @@ The criteria come from one of these ``kind`` values:
 Existing ``UserQuery`` rows and panels are never changed.
 
 Every foreign key to a table develop knows carries the matching MySQL ``ON DELETE``
-(migration 0064, ``YSE_App.common.fk_on_delete``), so develop's deletes on the shared
+(migration 0066, ``YSE_App.common.fk_on_delete``), so develop's deletes on the shared
 database keep working.
 """
 

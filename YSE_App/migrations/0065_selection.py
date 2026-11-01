@@ -1,7 +1,7 @@
 """Selections (#841): one new table, ``YSE_App_selection``.
 
 Additive only; develop's code never reads or writes it. Its foreign keys to develop's tables get
-their MySQL ``ON DELETE`` rules in the next migration (0064): Django adds the plain constraints
+their MySQL ``ON DELETE`` rules in the next migration (0066): Django adds the plain constraints
 of a CreateModel only at the end of the migration, so they cannot be changed in this one.
 """
 
@@ -15,7 +15,7 @@ import YSE_App.models.fields
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("YSE_App", "0062_shared_db_fk_on_delete"),
+        ("YSE_App", "0064_fit_tables_fk_on_delete"),
         ("auth", "0012_alter_user_first_name_max_length"),
         ("explorer", "0010_sql_required"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
