@@ -274,7 +274,7 @@ class ReadableHeaderTests(ExportsApiFixture):
     def test_snana_header_uses_readable_labels(self):
         r = self.client.get(reverse("download_photometry", args=[self.t1.slug]))
         self.assertEqual(r.status_code, 200)
-        text = r.content.decode()
+        text = b"".join(r.streaming_content).decode()  # streamed (#929)
         # old upper-case keys are kept for existing parsers
         self.assertIn("# NAME: %s" % self.t1.name, text)
         for key in ("RA", "DEC", "REDSHIFT", "MW_EBV", "NON_DETECT_DATE", "NON_DETECT_LIMIT",
