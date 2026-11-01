@@ -1,0 +1,97 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+{% load render_table from django_tables2 %}
+{% comment %}A Selection's results (#841, UI preview only): the search table, list stepping (#850), Observable tonight (#854).{% endcomment %}
+
+{% block content_header %}
+    <h1>
+        {{ selection.name }}
+        <small>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% endif %}</small>
+    </h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'selection_list' %}">Selections</a></li>
+      <li class="breadcrumb-item active">{{ selection.name }}</li>
+    </ol>
+{% endblock %}
+
+{% block styles %}
+<style>
+  .yse-search-chip { display: inline-block; margin: 0 .35rem .35rem 0; padding: .15rem .5rem; border-radius: 1rem; font-size: .85rem; background: rgba(60,141,188,.15); border: 1px solid rgba(60,141,188,.5); }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if messages %}
+<div id="selection-messages">
+  {% for message in messages %}<div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags|default:'info' }}{% endif %} py-2">{{ message }}</div>{% endfor %}
+</div>
+{% endif %}
+
+<div class="box" id="selection-summary">
+  <div class="box-body">
+    <p class="mb-1" id="selection-criteria">
+      {% for label, value in criteria %}<span class="yse-search-chip mr-2"><strong>{{ label }}</strong>: {{ value }}</span>{% endfor %}
+    </p>
+    <p class="mb-2 small text-muted">
+      {{ selection.get_kind_display }} · shared with {{ selection.get_visibility_display|lower }}{% if selection.team %} ({{ selection.team.name }}){% endif %}
+      · owner {{ owner }} · changed <span title="{{ selection.modified_date|date:'Y-m-d H:i' }} UTC">{{ selection.modified_date|date:'Y-m-d' }}</span>
+      {% if selection.description %}<br>{{ selection.description }}{% endif %}
+    </p>
+    <div class="form-inline">
+      {% if search_url %}<a class="btn btn-outline-secondary btn-sm mr-2" id="selection-open-search" href="{{ search_url }}">Open in search</a>{% endif %}
+      <a class="btn btn-outline-secondary btn-sm mr-2" id="selection-api-link" href="{{ api_url }}">API</a>
+      {% if can_edit %}
+      <button type="button" class="btn btn-outline-secondary btn-sm mr-2" id="selection-edit-toggle" aria-expanded="false" aria-controls="selection-edit">Edit</button>
+      {% endif %}
+      {% if can_delete %}
+      <form class="d-inline" id="selection-delete-form" action="{% url 'selection_delete' selection.slug %}" method="post">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
+      </form>
+      {% endif %}
+    </div>
+    {% if can_edit %}
+    <div id="selection-edit" class="mt-2" hidden>
+      {% include 'YSE_App/selections/edit_form.html' with selection=selection next='detail' %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="box" id="selection-results">
+  <div class="box-header with-border"><h3 class="box-title">Results</h3></div>
+  <div class="box-body">
+    {% if error %}
+    <div class="alert alert-warning py-2" role="alert" id="selection-error">{{ error }}</div>
+    {% else %}
+    {% load observable_tonight %}
+    {% observable_tonight_control id_selector=".search-select-row" scope="#selection-results" blocked=obs_blocked %}
+    {# links into a transient keep this Selection (#850): source "sel", the slug as the list tab #}
+    <div data-yse-list-source="sel" data-yse-list-tab="{{ selection.slug }}" data-yse-list-query="{{ list_query }}">
+    {% render_table table %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="text/javascript">
+$(function() {
+  $('#selection-edit-toggle').on('click', function() {
+    var box = $('#selection-edit');
+    var open = box.prop('hidden');
+    box.prop('hidden', !open);
+    $(this).attr('aria-expanded', open ? 'true' : 'false');
+  });
+  $('#selection-delete-form').on('submit', function(event) {
+    if (!window.confirm('Delete this Selection? Its transients are not touched.')) { event.preventDefault(); }
+  });
+  $('.yse-selection-visibility').on('change', function() {
+    $(this).closest('form').find('.yse-selection-team').prop('hidden', $(this).val() === 'me');
+  }).trigger('change');
+});
+</script>
+<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+{% endblock %}

@@ -2,9 +2,9 @@
 
 A list page adds its context to the links into the transient page:
 
-* ``ls``: the list source, one of :data:`SOURCES` (``dash``, ``search``, ``tag``);
+* ``ls``: the list source, one of :data:`SOURCES` (``dash``, ``search``, ``tag``, ``sel``);
 * ``lq``: the list page's own query string (filters, sort, page), unchanged;
-* ``lt``: the dashboard tab (``dash`` only).
+* ``lt``: the dashboard tab (``dash``), or the Selection's slug (``sel``, #841).
 
 The transient page rebuilds that list with the list's own filter and sort, for the
 viewing user, and reads only a window around the current object: the list page
@@ -24,7 +24,7 @@ from django.utils.http import urlencode
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ('dash', 'search', 'tag')
+SOURCES = ('dash', 'search', 'tag', 'sel')
 MAX_QUERY_LENGTH = 2000
 MAX_LABEL_LENGTH = 160
 
@@ -164,7 +164,28 @@ def _tag(request, transient, query, tab):
             'label': label, 'back_url': back, 'page_param': None}
 
 
-_BUILDERS = {'dash': _dash, 'search': _search, 'tag': _tag}
+def _selection(request, transient, query, slug):
+    """A Selection's results page (#841): the same table, rebuilt for the viewing user."""
+    from YSE_App.models import Selection
+    from YSE_App.selection_views import selection_table
+    from YSE_App.services.selections import can_view
+
+    selection = Selection.objects.filter(slug=slug).first()
+    if selection is None or not can_view(request.user, selection):
+        return None
+    sub = _sub_request(request, query)
+    table, _count = selection_table(sub, selection)
+    window = table_window(table, transient.pk)
+    if window is None:
+        return None
+    back = reverse('selection_detail', kwargs={'slug': selection.slug})
+    if query:
+        back = '%s?%s' % (back, query)
+    return dict(window, label='Selection · %s' % selection.name, back_url=back,
+                page_param=table.prefixed_page_field)
+
+
+_BUILDERS = {'dash': _dash, 'search': _search, 'tag': _tag, 'sel': _selection}
 
 
 def parse_list_params(get):
@@ -176,7 +197,7 @@ def parse_list_params(get):
     if len(query) > MAX_QUERY_LENGTH or any(ch in query for ch in '#\r\n'):
         return None
     tab = get.get('lt', '').lower()
-    if source == 'dash' and not tab:
+    if source in ('dash', 'sel') and not tab:
         return None
     return source, query.lstrip('?'), tab
 
