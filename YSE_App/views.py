@@ -2097,10 +2097,16 @@ def transient_detail(request, slug):
         from YSE_App.sharing_views import report_dialog_context
 
         context.update(report_dialog_context(request.user, transient_obj))
-        
-        return render(request,
-            'YSE_App/transient_detail.html',
-            context)
+
+        # Preview layout (#856, #851) only for users with the UI preview on.
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        template_name = (
+            'YSE_App/transient_detail_v2.html'
+            if ui_preview_enabled(request)
+            else 'YSE_App/transient_detail.html'
+        )
+        return render(request, template_name, context)
 
     else:
         raise Http404('Transient not found')
