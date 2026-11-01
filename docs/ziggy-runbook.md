@@ -1032,6 +1032,27 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py catalog_instrument
 
 **O7. Send Ryan** `offline-summary.txt`, `instrument-census.txt` and `offline-review/failures.csv` from `<OSC_DIR>/reports/`. They hold only public catalogue data. Keep `<OSC_DIR>`: every later step reads it.
 
+<a id="saved-queries-data-quality"></a>
+### Saved queries that use the dropped `data_quality_id` column (2026-10-31, #939): when Ryan asks
+
+**What this is.** Migration 0002 replaced the `data_quality_id` column on photometry and spectra with a join table. Saved Explorer queries written before that (43 in the docker seed data, several pinned to personal dashboards) fail with `Unknown column 'pd2.data_quality_id'` on a migrated database. `manage.py rewrite_data_quality_queries` rewrites them to the join-table form that returns the same rows. Nothing runs on deploy. It changes `explorer_query` rows, which yse\_test and yse\_experimental share, so run it only when Ryan asks.
+
+**Q1. Dry run** (writes nothing):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py rewrite_data_quality_queries
+```
+**Expected:** a `REWRITE <id> <title>` line and a diff for each query that uses the column, then `N saved queries to rewrite: ...` and `Dry run — no changes made`. `REVIEW` lines name queries that use the column in a form the command does not rewrite; they are left alone. If the first line says the table `still has the data_quality_id column`, this database is not migrated and nothing needs doing: stop and tell Ryan.
+
+**Q2. Apply:**
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py rewrite_data_quality_queries --apply
+```
+**Expected:** `Previous SQL saved to <backup.json>` (keep the file), `Updated N saved queries.`, and a `Revert with:` line. Running it again prints `Nothing to change.` Send Ryan the `REVIEW` lines, if any.
+
+**Undo:** `<EXP_PYTHON> manage.py rewrite_data_quality_queries --revert <backup.json> --apply`.
+
+**Production:** only after production has migration 0002, and only when Ryan asks: the same two steps with `<PROD_PYTHON>` in the production checkout.
+
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
 
@@ -3698,6 +3719,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-10-31 v115, **nothing required; when Ryan asks: rewrite saved queries** (no migration, no package). Saved Explorer queries that still use the dropped `data_quality_id` column ([#939](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/939)): the 43 in the docker seed data and `docs/example_queries.rst` now use the `..._data_quality` join table. The copies in the deployed databases are rewritten by `manage.py rewrite_data_quality_queries` (dry run by default, `--apply` keeps a JSON backup, `--revert` undoes); see the section [Saved queries that use the dropped data_quality_id column](#saved-queries-data-quality).
 * 2026-10-30 v114, **nothing required** (the deploy applies the migration; no new package). Duplicate clean-up of photometry and spectra ([#890](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/890)): migration `0061_duplicate_data_decision` creates one new table only (safe on the shared `YSE_test` database). The new command `manage.py clean_duplicate_data` finds repeat uploads and our own data that came back from TNS, and flags all but one copy REJECTED; see docs/duplicate-cleanup.md. **Do not run it with `--apply` (or `--revert --apply`) on any stack until Ryan asks.** A dry run reads only, if Ryan asks for one: `cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py clean_duplicate_data --quiet --max 1000`; **expected:** first line `Using database YSE_test on ...`, last lines `Dry run: 1000 transients, ...` and `continue with --after <ID>`.
 * 2026-10-30 v113, **nothing to run; one check before promoting** (the deploy applies data migration `0060_fill_account_names`; no package). Names and email for every account: accounts with empty given and family names get them from the profile's full name when it is unambiguous (two plain words, or three where one of the first two is an initial; optional re-run: `<PYTHON> manage.py fill_account_names --dry-run`, which prints counts only); signup asks for given name(s) and family name (stored on the account's first and last name), and the onboarding gate now requires both names and a confirmed email address from **every** account. On their next page view, existing users without them are sent to `/settings/email/` (a confirmation link is emailed when `SELF_SIGNUP_EMAIL_VERIFICATION` is on) or to `/profile/edit/`. Scripts and API clients (Basic/Token auth) are not affected. **Check:** email delivery works on the stack (send yourself a confirmation from `/settings/email/`); if it does not, set `[site_settings] ONBOARDING_EMAIL_REQUIRED: False` (or env `YSE_ONBOARDING_EMAIL=0`) and restart, or users without an address cannot get past the email step.
 * 2026-10-30 v112, **nothing to run** (no migration, no package). Notification links in emails and Slack posts no longer repeat the site prefix (`https://ziggy.ucolick.org/yse/yse/teams/1/` became `.../yse/teams/1/`): links made during a web request already carry `/yse/`, and the base URL ends in it too. Production needs this too; it gets there through `develop -> master`.
