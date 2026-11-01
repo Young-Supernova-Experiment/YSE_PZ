@@ -1,6 +1,6 @@
 # SQL sweep measurements (synthetic MySQL 8.0.25, 35k transients / 800k photometry rows, 128 MB buffer pool)
 
-before = PK + FK indexes only (production today); after = the eight indexes in migration 0010. Wall time = best of 2 warm runs of the statement itself.
+before = PK + FK indexes only (described as production's schema when this was written on 2026-09-29; production's indexes are **unconfirmed**, not checked on Ziggy, see `docs/ziggy-runbook.md` section 5); after = the eight indexes in migration 0010. Wall time = best of 2 warm runs of the statement itself.
 
 | query | before old ms | before new ms | after old ms | after new ms | rows | identical row set | identical order |
 |---|---|---|---|---|---|---|---|
