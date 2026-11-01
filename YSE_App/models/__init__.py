@@ -57,3 +57,4 @@ from YSE_App.models.catalog_models import (  # noqa: F401
     CatalogSource, TransientCatalogQuantity, TransientPhotDataCatalogInfo, TransientPhotometryCatalogInfo,
     TransientSpectrumCatalogInfo)
 from YSE_App.models.duplicate_models import DuplicateDataDecision  # noqa: F401
+from YSE_App.models.fit_models import BazinFit, SaltFit  # noqa: F401

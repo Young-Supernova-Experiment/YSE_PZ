@@ -30,7 +30,10 @@ RESULT_LABELS = {
     "mag_today": "Magnitude today (mag)",
     "extrapolate_mjd": "Extrapolated to (MJD)",
     "mag_extrapolated": "Extrapolated magnitude (mag)",
+    "first_detection_mjd": "First detection (MJD)",
+    "last_non_detection_mjd": "Last non-detection before it (MJD)",
     # sncosmo / SALT
+    "model_version": "Model version",
     "x0": "x₀",
     "x1": "x₁ (stretch)",
     "c": "c (color)",
@@ -60,3 +63,11 @@ RESULT_LABELS = {
 def analysis_label(key):
     """Readable label with units for a result key; unknown keys are shown as-is."""
     return RESULT_LABELS.get(key, key)
+
+
+@register.filter(name="fit_value")
+def fit_value(value, err=None):
+    """``value +/- err`` with the error's precision (fit-history table, #846); ``-`` when missing."""
+    from YSE_App.analysis.base import format_value
+
+    return format_value(value, err)
