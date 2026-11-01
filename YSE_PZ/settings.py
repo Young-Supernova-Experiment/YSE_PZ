@@ -281,6 +281,9 @@ CRON_CLASSES = [
     # (on by default) and photstat.bazin_extrapolate job (off unless
     # PHOTSTAT_BAZIN_CRON_ENABLED); see the settings below.
     'YSE_App.data_ingest.PhotStat_Jobs.PhotStatRefresh',
+    # Scheduled SALT / Bazin refits (#846): queues one fits.refit_pass job a day;
+    # no-op unless FIT_REFIT_ENABLED (see below).
+    'YSE_App.data_ingest.Fit_Refit.FitRefit',
     # Researcher metrics from SciX (#629): monthly; no-op unless
     # RESEARCHER_METRICS_ENABLED ([research] in settings.ini).
     'YSE_App.data_ingest.Researcher_Metrics.RefreshResearcherMetrics',
@@ -313,6 +316,16 @@ DUPLICATE_REPORT_USERNAMES = config.get('site_settings', 'DUPLICATE_REPORT_USERN
 PHOTSTAT_REFRESH_CRON_MINUTES = config.getint('site_settings', 'PHOTSTAT_REFRESH_CRON_MINUTES', fallback=60)
 PHOTSTAT_REFRESH_LIMIT = config.getint('site_settings', 'PHOTSTAT_REFRESH_LIMIT', fallback=2000)
 PHOTSTAT_BAZIN_LIMIT = config.getint('site_settings', 'PHOTSTAT_BAZIN_LIMIT', fallback=500)
+
+# Scheduled SALT / Bazin refits (#846; YSE_App/services/fit_tables.py). Off by default:
+# [site_settings] FIT_REFIT_ENABLED = True (or env YSE_FIT_REFIT=1) lets the FitRefit cron
+# queue a fits.refit_pass job every FIT_REFIT_CRON_MINUTES (1440), which refits a transient's
+# Bazin / SALT fit when a new detection arrived, or a non-detection within
+# FIT_REFIT_WINDOW_DAYS (7) after the last detection; at most FIT_REFIT_LIMIT per pass.
+FIT_REFIT_ENABLED = _flag('YSE_FIT_REFIT', 'site_settings', 'FIT_REFIT_ENABLED', False)
+FIT_REFIT_CRON_MINUTES = config.getint('site_settings', 'FIT_REFIT_CRON_MINUTES', fallback=1440)
+FIT_REFIT_WINDOW_DAYS = config.getfloat('site_settings', 'FIT_REFIT_WINDOW_DAYS', fallback=7.0)
+FIT_REFIT_LIMIT = config.getint('site_settings', 'FIT_REFIT_LIMIT', fallback=200)
 
 # yse_home "Next Telescope Nights" lists classical observing dates up to this
 # many days ahead (#65). Optional env YSE_HOME_CLASSICAL_DAYS_AHEAD or

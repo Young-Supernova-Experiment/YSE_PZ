@@ -147,8 +147,10 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
     today = _today_mjd()
     bands_used = sorted(set(str(b) for b in data["band"]))
 
+    version = getattr(getattr(model, "source", None), "version", None)
     results = {
         "model": source,
+        "model_version": str(version) if version not in (None, "") else None,
         "z": values.get("z"),
         "z_source": z_source,
         "t0": t0,

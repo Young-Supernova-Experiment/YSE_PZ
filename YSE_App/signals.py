@@ -502,3 +502,9 @@ from django.contrib.auth.signals import user_logged_in  # noqa: E402
 from YSE_App.onboarding import on_user_logged_in  # noqa: E402
 
 user_logged_in.connect(on_user_logged_in, dispatch_uid="yse_research_consent_reminder")
+
+# SALT and Bazin fit tables (#846): a succeeded fit run writes its rows; failures write nothing.
+from YSE_App.models.external_service_models import ExternalServiceRun  # noqa: E402
+from YSE_App.services import fit_tables  # noqa: E402
+
+post_save.connect(fit_tables.on_run_saved, sender=ExternalServiceRun, dispatch_uid="yse_fit_tables_run_saved")
