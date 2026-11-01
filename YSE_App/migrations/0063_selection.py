@@ -1,10 +1,8 @@
-"""Selections (#841): a new table, plus MySQL ON DELETE on its foreign keys to develop's tables.
+"""Selections (#841): one new table, ``YSE_App_selection``.
 
-Additive only: one new table, ``YSE_App_selection``. develop's code never reads or writes it.
-Its foreign keys point at ``auth_user``, ``auth_group``, ``explorer_query`` and
-``YSE_App_userquery``, which develop deletes from on the shared database without knowing this
-table, so the RunPython below gives each MySQL constraint the model's ``ON DELETE`` rule
-(``YSE_App.common.fk_on_delete``, as in 0062). No existing row or column changes.
+Additive only; develop's code never reads or writes it. Its foreign keys to develop's tables get
+their MySQL ``ON DELETE`` rules in the next migration (0064): Django adds the plain constraints
+of a CreateModel only at the end of the migration, so they cannot be changed in this one.
 """
 
 from django.conf import settings
@@ -12,29 +10,9 @@ from django.db import migrations, models
 import django.db.models.deletion
 
 import YSE_App.models.fields
-from YSE_App.common import fk_on_delete
-
-CASCADE = fk_on_delete.CASCADE
-SET_NULL = fk_on_delete.SET_NULL
-
-# (table, column, referenced table, ON DELETE rule); YSE_App/tests/test_selections.py checks it
-# against the model.
-FOREIGN_KEYS = (
-    ("YSE_App_selection", "owner_id", "auth_user", CASCADE),
-    ("YSE_App_selection", "team_id", "auth_group", SET_NULL),
-    ("YSE_App_selection", "query_id", "explorer_query", SET_NULL),
-    ("YSE_App_selection", "user_query_id", "YSE_App_userquery", SET_NULL),
-    ("YSE_App_selection", "modified_by_id", "auth_user", SET_NULL),
-)
-
-forwards = fk_on_delete.forwards_for(FOREIGN_KEYS)
-backwards = fk_on_delete.backwards_for(FOREIGN_KEYS)
 
 
 class Migration(migrations.Migration):
-
-    # ALTER TABLE in RunPython: MySQL commits DDL implicitly, so no surrounding transaction.
-    atomic = False
 
     dependencies = [
         ("YSE_App", "0062_shared_db_fk_on_delete"),
@@ -85,6 +63,4 @@ class Migration(migrations.Migration):
                 "ordering": ("name", "pk"),
             },
         ),
-        # shared-db-safe: only sets the ON DELETE rule of the foreign keys of the table created just above (YSE_App_selection), which develop's code never reads or writes; no row or column of any other table changes (#841, as 0062)
-        migrations.RunPython(forwards, backwards),
     ]

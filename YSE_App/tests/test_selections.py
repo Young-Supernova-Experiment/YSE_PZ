@@ -25,7 +25,7 @@ from YSE_App.tests.fixtures_minimal import (
 )
 from YSE_App.tests.test_transient_search import SearchFixture
 
-selection_migration = importlib.import_module("YSE_App.migrations.0063_selection")
+selection_migration = importlib.import_module("YSE_App.migrations.0064_selection_fk_on_delete")
 PREVIEW_COOKIE = "yse-ui-preview"
 
 
@@ -461,7 +461,7 @@ class ForeignKeyListTests(SimpleTestCase):
     def test_0062_still_exposes_the_helper_names(self):
         fk_0062 = importlib.import_module("YSE_App.migrations.0062_shared_db_fk_on_delete")
         self.assertIs(fk_0062.current_constraints, fk_on_delete.current_constraints)
-        self.assertTrue(callable(fk_0062.forwards) and callable(fk_0062.backwards))
+        self.assertIs(fk_0062.PLAIN_RULES, fk_on_delete.PLAIN_RULES)
 
 
 def _raw(statement, params):
@@ -480,7 +480,7 @@ def _delete_known_children(parent_table, parent_id):
 
 
 class RawDeleteTests(TestCase):
-    """develop's deletes, as raw SQL, after migration 0063: MySQL cascades or nulls Selection rows."""
+    """develop's deletes, as raw SQL, after migration 0064: MySQL cascades or nulls Selection rows."""
 
     def setUp(self):
         if connection.vendor != "mysql":

@@ -1,25 +1,19 @@
-"""Database-level ``ON DELETE`` for foreign keys of experimental's new tables (#941, #946).
+"""Database-level ON DELETE for foreign keys of tables that develop's code does not know (#941).
 
-``/yse_test/`` runs develop's code on the shared ``YSE_test`` database, and develop does not
-know the tables that experimental's migrations create. Django emulates ``on_delete`` in Python,
-only for the models it knows, and creates the MySQL foreign keys without an ``ON DELETE`` clause
-(that is, RESTRICT). So when develop deletes a row that one of these tables still references,
-MySQL rejects the DELETE (error 1451).
+``/yse_test/`` runs develop's code on the shared ``YSE_test`` database. Django emulates
+``on_delete`` in Python, only for the models it knows, and creates the MySQL foreign keys
+without an ``ON DELETE`` clause (that is, RESTRICT). So when develop deletes a row that a
+table it does not know still references, MySQL rejects the DELETE (error 1451).
 
-A migration that creates such a table (in the same migration or an earlier one) lists its
-foreign keys as
-``(table, column, referenced table, rule)`` and runs::
+A migration that creates such a table lists its foreign keys as
+``(table, column, referenced table, rule)`` and runs ``RunPython(forwards(KEYS), backwards(KEYS))``
+after the ``CreateModel``: the MySQL constraints are re-created so that the database does what
+the model says (``CASCADE`` -> ``ON DELETE CASCADE``, ``SET_NULL`` -> ``ON DELETE SET NULL``).
+Django keeps emulating both, which is harmless. Constraint names are read from
+``information_schema`` at run time and kept; running it again does nothing; on other database
+backends it does nothing. The reverse puts the plain constraints back.
 
-    migrations.RunPython(fk_on_delete.forwards_for(FOREIGN_KEYS),
-                         fk_on_delete.backwards_for(FOREIGN_KEYS))
-
-with ``atomic = False``. The forward re-creates each listed MySQL constraint with the model's
-rule (``CASCADE`` -> ``ON DELETE CASCADE``, ``SET_NULL`` -> ``ON DELETE SET NULL``), keeping its
-name; the reverse puts the plain constraints back. Only the listed constraints change, never a
-row. Running it again does nothing. On other database backends it does nothing.
-
-Moved here from ``0062_shared_db_fk_on_delete`` (which now imports it) so that every
-section 5 migration shares one copy.
+First written inside migration 0062 (#946); moved here when 0063 (#846) needed it too.
 """
 
 import hashlib
@@ -82,13 +76,6 @@ def set_rules(schema_editor, foreign_keys, target):
     if connection.vendor != "mysql":
         return
     q = schema_editor.quote_name
-    # A CreateModel earlier in the same migration leaves its foreign keys in deferred_sql until
-    # the migration ends. Run them now, so the constraints exist before their rules are set
-    # (otherwise the plain constraints would be added afterwards, next to ours).
-    if schema_editor.deferred_sql:
-        for statement in list(schema_editor.deferred_sql):
-            schema_editor.execute(statement)
-        schema_editor.deferred_sql.clear()
     for table, column, ref_table, rule in foreign_keys:
         rule = target(rule)
         if not _table_exists(connection, table):
@@ -113,15 +100,15 @@ def set_rules(schema_editor, foreign_keys, target):
                     cursor.execute("SET SESSION foreign_key_checks = 1")
 
 
-def forwards_for(foreign_keys):
-    """A ``RunPython`` forward that gives ``foreign_keys`` their ON DELETE rules."""
-    def forwards(apps, schema_editor):
+def forwards(foreign_keys):
+    """A ``RunPython`` function that puts the listed ON DELETE rules on the constraints."""
+    def apply(apps, schema_editor):
         set_rules(schema_editor, foreign_keys, lambda rule: rule)
-    return forwards
+    return apply
 
 
-def backwards_for(foreign_keys):
-    """The matching reverse: plain constraints again."""
-    def backwards(apps, schema_editor):
+def backwards(foreign_keys):
+    """The reverse of :func:`forwards`: plain constraints again."""
+    def revert(apps, schema_editor):
         set_rules(schema_editor, foreign_keys, lambda rule: None)
-    return backwards
+    return revert
