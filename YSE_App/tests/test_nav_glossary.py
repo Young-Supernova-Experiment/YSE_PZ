@@ -6,7 +6,8 @@ Synthetic users only. The preview is the per-user cookie from
 
 from django.contrib.auth.models import AnonymousUser, Group
 from django.template import Context, Template
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase
+from django.urls import get_script_prefix, set_script_prefix
 
 from YSE_App.common.ui_preview import PREVIEW_COOKIE
 from YSE_App.tests.fixtures_minimal import create_test_user
@@ -24,13 +25,13 @@ class NavPreviewTests(TestCase):
         cls.member = create_test_user("nav_member", is_staff=False)
         cls.staff = create_test_user("nav_staff", is_staff=True)
 
-    def _get(self, user, path, preview):
+    def _get(self, user, path, preview, **extra):
         client = Client()
         if user is not None:
             client.force_login(user)
         if preview:
             client.cookies[PREVIEW_COOKIE] = "1"
-        response = client.get(path)
+        response = client.get(path, **extra)
         self.assertEqual(response.status_code, 200, path)
         return response.content.decode("utf-8", errors="replace")
 
@@ -49,7 +50,7 @@ class NavPreviewTests(TestCase):
             self.assertIn(cls, html)
         for cls in OLD_GROUPS:
             self.assertNotIn(cls, html)
-        self.assertNotIn("yse-nav-staff", html)
+        self.assertNotIn('class="nav-item yse-nav-staff', html)
         self.assertNotIn('href="/jobs/"', html)
         self.assertNotIn('href="/feeds/"', html)
         self.assertNotIn('href="/service_runs/"', html)
@@ -65,8 +66,8 @@ class NavPreviewTests(TestCase):
 
     def test_preview_on_staff_group_and_menu(self):
         html = self._get(self.staff, "/dashboard/", preview=True)
-        self.assertIn("yse-nav-staff", html)
-        staff_block = html[html.index("yse-nav-staff"):]
+        self.assertIn('class="nav-item yse-nav-staff', html)
+        staff_block = html[html.index('class="nav-item yse-nav-staff'):]
         for href in ('href="/admin/"', 'href="/jobs/"', 'href="/feeds/"',
                      'href="/service_runs/"', 'href="/allocations/"'):
             self.assertIn(href, staff_block)
@@ -93,9 +94,10 @@ class NavPreviewTests(TestCase):
         self.assertNotIn("yse-nav-find", html)
         self.assertGreaterEqual(html.count('href="/acknowledgements/"'), 2)
 
-    @override_settings(FORCE_SCRIPT_NAME="/yse_test/")
     def test_links_keep_script_prefix(self):
-        html = self._get(self.staff, "/dashboard/", preview=True)
+        # The stack's mount point (mod_wsgi SCRIPT_NAME) becomes the script prefix.
+        self.addCleanup(set_script_prefix, get_script_prefix())
+        html = self._get(self.staff, "/dashboard/", preview=True, SCRIPT_NAME="/yse_test")
         for href in ('href="/yse_test/search/"', 'href="/yse_test/data_access/"',
                      'href="/yse_test/glossary/"', 'href="/yse_test/acknowledgements/"',
                      'href="/yse_test/jobs/"'):
