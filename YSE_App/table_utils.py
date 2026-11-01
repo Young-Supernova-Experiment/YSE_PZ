@@ -196,7 +196,7 @@ def _page_visible_stats(record, table, transient_attr, viewer):
 def last_phot_summary(transient_ids, stat_rows=None, user=None):
     """``{transient_id: dict}`` with the Last Det. / Last Obs. values (see above).
 
-    Keys of each dict: ``det_mag``, ``det_band``, ``obs_date``, ``limit``,
+    Keys of each dict: ``det_mag``, ``det_band``, ``det_mjd``, ``obs_date``, ``limit``,
     ``limit_band``. ``stat_rows`` (see :func:`_stat_row`) saves the stat query. At most two queries for any
     number of transients. With ``user`` the newest point's limit is read only
     from photometry that user may see (#607); ``stat_rows`` must then hold the
@@ -225,6 +225,7 @@ def last_phot_summary(transient_ids, stat_rows=None, user=None):
         out[tid] = {
             'det_mag': row['lastphot_det_mag'],
             'det_band': row['lastphot_det_band'],
+            'det_mjd': row['lastphot_det_mjd'],
             'obs_date': row['lastphot_obs_date'],
             'limit': None,
             'limit_band': None,

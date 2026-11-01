@@ -1,0 +1,69 @@
+/* Tabbed main dashboard for UI preview users (#859). */
+.yse-dash2 .yse-dash-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+.yse-dash2 .yse-dash-toolbar .yse-dashboard-per-page {
+  margin-bottom: 0 !important;
+}
+.yse-dash2 .yse-dash-filter .form-group {
+  margin-right: 6px;
+}
+.yse-dash2 .yse-dash-columns {
+  position: relative;
+}
+.yse-dash2 .yse-dash-columns > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.yse-dash2 .yse-dash-columns > summary::-webkit-details-marker {
+  display: none;
+}
+.yse-dash2 .yse-dash-columns-menu {
+  position: absolute;
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 8px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 4px;
+  background: var(--yse-surface, #343a40);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.yse-dash2 .yse-dash-columns-menu label {
+  display: block;
+  margin: 2px 0;
+  font-weight: normal;
+  white-space: nowrap;
+}
+.yse-dash2 .yse-dash-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+.yse-dash2 .yse-dash-bulk select {
+  width: auto;
+}
+.yse-dash2 .yse-dash-tabs .yse-dash-count {
+  margin-left: 4px;
+}
+.yse-dash2 .yse-dash-panel {
+  padding-top: 8px;
+}
+.yse-dash2 .yse-dash-summary-link {
+  margin: 0 0 6px;
+  text-align: right;
+}
+.yse-dash2 td[data-col="select"],
+.yse-dash2 th[data-col="select"] {
+  width: 1%;
+  text-align: center;
+}
+.yse-dash2 .yse-dash-age {
+  white-space: nowrap;
+}
