@@ -1,6 +1,6 @@
 from django.db.models.query import EmptyQuerySet
 from django.shortcuts import render, get_object_or_404
-from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound, HttpResponseForbidden
+from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound, HttpResponseForbidden, StreamingHttpResponse
 from django.conf import settings as djangoSettings
 from django.template import loader
 from django.views import generic
@@ -2154,33 +2154,6 @@ def transient_edit(request, transient_id=None):
     return render(request, 'YSE_App/transient_edit.html', {'form': form})
 
 
-def _finite_or_none(value):
-    value = float(value)
-    return value if np.isfinite(value) else None
-
-
-def _array_pixels_as_specdata(spectrum_id, arrays):
-    """An arrays-stored spectrum (#891) as the per-pixel dicts ``serializers.serialize`` gives for
-    TransientSpecData rows (``model`` / ``pk`` / ``fields``), so ``download_data`` consumers read both
-    alike. There is no row, so ``pk`` is None and the audit fields are absent."""
-    wave, flux, err = arrays
-    out = []
-    for i in range(wave.size):
-        out.append({
-            'model': 'YSE_App.transientspecdata',
-            'pk': None,
-            'fields': {
-                'spectrum': spectrum_id,
-                'wavelength': float(wave[i]),
-                'flux': float(flux[i]),
-                'wavelength_err': None,
-                'flux_err': _finite_or_none(err[i]) if err is not None else None,
-                'pixel_mask': 0,
-            },
-        })
-    return out
-
-
 from wsgiref.util import FileWrapper
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2194,47 +2167,21 @@ def download_data(request, slug):
     else:
         user = request.user
         
+    # Streamed (#929): the body is built one set / point / spectrum at a time and is byte-for-byte
+    # the JSON this view used to return. Access is decided by the same per-point and per-spectrum calls.
+    from YSE_App.services import download_stream
+
     transient = Transient.objects.filter(slug=slug)
-    data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
-
-    if transient[0].host:
-        host = Host.objects.filter(id=transient[0].host.id)
-        data[transient[0].name]['host'] = json.loads(serializers.serialize("json", host, use_natural_foreign_keys=True))
-
-
-    # Get photometry by user & transient
-    authorized_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id)
-    if len(authorized_phot):
-        data[transient[0].name]['photometry'] = json.loads(serializers.serialize("json", authorized_phot,use_natural_foreign_keys=True))
-
-        # Get data points
-        for p,pd in zip(authorized_phot,range(len(data[transient[0].name]['photometry']))):
-            photdata = PhotometryService.GetAuthorizedTransientPhotData_ByPhotometry(user, p.id, includeBadData=True)
-            data[transient[0].name]['photometry'][pd]['data'] = json.loads(serializers.serialize("json", photdata, use_natural_foreign_keys=True))
-
-
-    # Get spectra by user & transient
-    authorized_spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient[0].id, includeBadData=True)
-    if len(authorized_spectra):
-        data[transient[0].name]['spectra'] = json.loads(serializers.serialize("json", authorized_spectra, use_natural_foreign_keys=True))
-
-        # Spectra stored as arrays (#891) have no pixel rows: their 'data' list has the same
-        # per-pixel shape as serialized TransientSpecData rows, with pk None and the pixel fields only.
-        from YSE_App.common import spectrum_arrays
+    transient_id = transient[0].id  # a missing slug fails here, as before, before any byte is sent
+    authorized_phot = list(PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient_id))
+    authorized_spectra = list(SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient_id, includeBadData=True))
+    array_ids = set()
+    if authorized_spectra:
         array_ids = set(TransientSpectrumArrays.objects.filter(
             spectrum_id__in=[s.id for s in authorized_spectra]).values_list('spectrum_id', flat=True))
-        stored_arrays = spectrum_arrays.arrays_for(array_ids)
-        for s,sd in zip(authorized_spectra,range(len(data[transient[0].name]['spectra']))):
-            if s.id in stored_arrays:
-                data[transient[0].name]['spectra'][sd]['data'] = _array_pixels_as_specdata(s.id, stored_arrays[s.id])
-                continue
-            specdata = SpectraService.GetAuthorizedTransientSpecData_BySpectrum(user, s.id, includeBadData=True)
-            if specdata:
-                data[transient[0].name]['spectra'][sd]['data'] = \
-                    json.loads(serializers.serialize("json", specdata, use_natural_foreign_keys=True))
 
-    response = JsonResponse(data)
+    chunks = download_stream.data_json_chunks(user, transient, authorized_phot, authorized_spectra, array_ids)
+    response = StreamingHttpResponse(download_stream.buffered(chunks), content_type='application/json')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_data.json'%slug
     return response
 
@@ -2320,91 +2267,23 @@ def download_photometry(request, slug):
         user = request.user
 
         
-    content = ""
-        
+    # Streamed (#929): same text as before, written one point at a time; the per-point service call
+    # decides which points of each visible set are included.
+    from YSE_App.services import download_stream
+
     transient = Transient.objects.filter(slug=slug)
-    data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
-    content += snana_header_comment_lines(data[transient[0].name]['transient'][0]['fields'])
-            
-    content += "\n"
-    content += "VARLIST:  MJD        FLT  FLUXCAL   FLUXCALERR    MAG     MAGERR     MAGSYS   TELESCOPE    INSTRUMENT   DQ\n"
-    linefmt =  "OBS:      %.3f  %s  %.3f  %.3f  %.3f  %.3f  %s  %s  %s  %s\n"
+    transient_fields = download_stream.serialized(transient)[0]['fields']
+    header = snana_header_comment_lines(transient_fields)
 
-    
-    # Get photometry by user & transient
-    authorized_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id)
-    if len(authorized_phot):
-        data[transient[0].name]['photometry'] = json.loads(serializers.serialize("json", authorized_phot,use_natural_foreign_keys=True))
+    authorized_phot = list(PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id))
+    phot_sets = []
+    for p, head in zip(authorized_phot, download_stream.serialized(authorized_phot)):
+        telescope = head['fields']['instrument'].split(' - ')[0]
+        instrument = head['fields']['instrument'].split(' - ')[1]
+        phot_sets.append((p.id, telescope.replace(' ','_'), instrument.replace(' ','_')))
 
-        # Get data points
-        for p,pd in zip(authorized_phot,range(len(data[transient[0].name]['photometry']))):
-
-            telescope = data[transient[0].name]['photometry'][pd]['fields']['instrument'].split(' - ')[0]
-            instrument = data[transient[0].name]['photometry'][pd]['fields']['instrument'].split(' - ')[1]
-            telescope = telescope.replace(' ','_')
-            instrument = instrument.replace(' ','_')
-            
-            photdata = PhotometryService.GetAuthorizedTransientPhotData_ByPhotometry(user, p.id, includeBadData=True).order_by('obs_date')
-            data[transient[0].name]['photometry'][pd]['data'] = json.loads(serializers.serialize("json", photdata, use_natural_foreign_keys=True))
-
-            for d in data[transient[0].name]['photometry'][pd]['data']:
-                mjd = date_to_mjd(d['fields']['obs_date'])
-                if not len(d['fields']['data_quality']):
-                    data_quality = None
-                else:
-                    data_quality = ','.join(d['fields']['data_quality'])
-                if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
-                    if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
-                    else: flux_err = 0
-                    
-                    flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                    flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                    mag = -2.5*np.log10(flux)+27.5
-                    mag_err = 2.5/np.log(10)*flux_err/flux
-
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-                    
-                elif not d['fields']['flux'] and d['fields']['mag']:
-                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                    else: mag_err = 0
-                    
-                    flux = 10**(-0.4*(d['fields']['mag']-27.5))
-                    flux_err = 0.4*np.log(10)*flux*mag_err
-                    
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-                    
-                elif d['fields']['flux'] and d['fields']['flux_zero_point'] and d['fields']['mag']:
-                    if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
-                    else: flux_err = 0
-                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                    else: mag_err = 0
-                    
-                    flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                    flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-
-                elif d['fields']['flux'] and d['fields']['mag']:
-                    # if somebody didn't provide a ZPT, we can still work with this
-                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                    else: mag_err = 0
-                    
-                    flux = 10**(-0.4*(d['fields']['mag']-27.5))
-                    flux_err = 0.4*np.log(10)*flux*mag_err
-                    
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-                    
-                else:
-                    continue
-
-    content += "# END: \n"
-                
-    response = HttpResponse(content, content_type='text/plain')
+    chunks = download_stream.snana_chunks(user, header, phot_sets)
+    response = StreamingHttpResponse(download_stream.buffered(chunks), content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_data.snana.txt'%slug
 
     return response

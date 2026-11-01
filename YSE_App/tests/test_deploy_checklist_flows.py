@@ -313,7 +313,7 @@ class DeployChecklistFlowTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response["Content-Type"].startswith("text/plain"))
-        body = response.content.decode()
+        body = b"".join(response.streaming_content).decode()  # streamed (#929)
         self.assertIn("VARLIST:", body)
         n_obs = sum(1 for line in body.splitlines() if line.startswith("OBS:"))
         self.assertEqual(n_obs, 6)
@@ -323,9 +323,10 @@ class DeployChecklistFlowTests(TestCase):
         on a small object so a pathological regression still fails fast."""
         started = time.monotonic()
         response = self.client.get(reverse("download_data", kwargs={"slug": self.transient.slug}))
+        body = b"".join(response.streaming_content)  # streamed (#929): the work happens here
         elapsed = time.monotonic() - started
         self.assertEqual(response.status_code, 200)
-        data = json.loads(response.content)
+        data = json.loads(body)
         bundle = data[self.transient.name]
         self.assertEqual(set(bundle), {"transient", "host", "photometry", "spectra"})
         self.assertGreaterEqual(len(bundle["photometry"]), 1)

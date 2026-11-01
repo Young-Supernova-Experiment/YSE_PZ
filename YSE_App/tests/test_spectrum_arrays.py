@@ -2,6 +2,7 @@
 through it, and the ``convert_spectra_to_arrays`` command. Synthetic data only; no external services."""
 
 import io
+import json
 import zipfile
 
 import numpy as np
@@ -152,7 +153,7 @@ class DownloadTests(TestCase):
     def test_download_data_json_from_arrays(self):
         r = self.client.get(reverse("download_data", args=[self.transient.slug]))
         self.assertEqual(r.status_code, 200)
-        spectra = r.json()[self.transient.name]["spectra"]
+        spectra = json.loads(b"".join(r.streaming_content))[self.transient.name]["spectra"]  # streamed (#929)
         self.assertEqual(len(spectra), 1)
         data = spectra[0]["data"]
         self.assertEqual([d["fields"]["wavelength"] for d in data], [4000.0, 5000.0])

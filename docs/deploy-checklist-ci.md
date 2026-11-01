@@ -40,7 +40,7 @@ All new modules live in `YSE_App/tests/`:
 | Ingesting YSE observation records | covered | `DeployChecklistFlowTests.test_survey_obs_schedule_and_ingest_observation_record` (`/add_yse_survey_obs/`, the path `yse_obs.bash` → `YSE_observations.SurveyObs` posts to); the IMAP side of `SurveyObs` is stubbed in `test_cron_smoke` |
 | SALT fit | partial | `DeployChecklistFlowTests.test_salt2_plot_endpoints_without_fit_return_200` (`salt2fit=0` branch). The fit (`salt2fit=1`) needs the SALT3 model download via sncosmo plus multi-band data in `bandpassdict`; **manual**. Note: the fit has no error handling, so a failed fit is a 500 — Ryan's "salt fit broken?" is plausible and a try/except around `sncosmo.fit_lc` is a follow-up. |
 | Download data: photometry | covered | `DeployChecklistFlowTests.test_download_photometry_snana_text` |
-| Download data: all data | partial | `DeployChecklistFlowTests.test_download_data_json_bundle_within_ceiling` (200 + JSON shape + 20 s ceiling on a 6-point object). The prod timeout is data-volume dependent; **manual** on a large object, or raise a follow-up to stream/paginate. |
+| Download data: all data | partial | `DeployChecklistFlowTests.test_download_data_json_bundle_within_ceiling` (200 + JSON shape + 20 s ceiling on a 6-point object). Since #929 `download_data` and `download_photometry` stream their output (one set, point or spectrum at a time); `test_download_streaming` checks the bytes equal the old in-memory output. A large object on prod is still **manual**. |
 | Comments | covered | `test_phase2_comments.Phase2CommentTests` (AJAX add, non-AJAX add, fragment, API list/create, Slack signature/outbound) |
 
 ## Specific pages (checked against prod by hand)
@@ -146,7 +146,7 @@ output, not failures):
 - On-call, survey-field and survey-obs *form* POSTs: their choice fields are built
   at import time from DB rows, so they only work in a process started against a
   populated DB. Making those querysets lazy would let CI cover them.
-- `download_data` on a large object (prod timeout): CI keeps a 20 s ceiling on a
+- `download_data` on a large object: streamed since #929; CI keeps a 20 s ceiling on a
   small object only.
 - Nightly `mysqldump` backup and backup cleanup scripts; the bash cron wrappers
   themselves (not in the repo).
