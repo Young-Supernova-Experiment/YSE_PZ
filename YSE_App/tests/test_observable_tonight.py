@@ -322,14 +322,15 @@ class ShortlistPageTests(ObservableTonightBase):
         response = self.client_for(self.owner, preview=False).get(reverse("followup"))
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "yse-obs-tonight")
-        self.assertNotContains(response, "data-transient-id")
+        # Favourite stars carry data-transient-id already; the rows must not.
+        self.assertNotRegex(response.content.decode(), r"<tr\s[^>]*data-transient-id")
         self.assertNotContains(response, "observable-tonight.js")
 
     def test_followup_list_preview_on(self):
         self._followup()
         response = self.client_for(self.owner).get(reverse("followup"))
         self.assertContains(response, self.CONTROL)
-        self.assertContains(response, 'data-transient-id="%d"' % self.listed[0].pk)
+        self.assertRegex(response.content.decode(), r'<tr\s[^>]*data-transient-id="%d"' % self.listed[0].pk)
         self.assertContains(response, 'data-id-selector="tr[data-transient-id]"')
         self.assertContains(response, "observable-tonight.js?v=obs-tonight-1")
 
