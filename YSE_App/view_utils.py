@@ -22,6 +22,7 @@ from .data import PhotometryService, SpectraService, ObservingResourceService
 from .serializers import *
 from .common.bandpassdict import bandpassdict
 from .common.filter_display import (
+    SPECTRUM_COLORS,
     band_display_color,
     display_filter_label,
     plot_legend_label,
@@ -1154,6 +1155,30 @@ def _add_legend_grid(ax, legend_items, plot_width):
     return height
 
 
+# Upper limits (#860): a hollow triangle at the limit and a stem of this many
+# magnitudes below it, so a limit reads as a downward arrow.
+ULIM_ARROW_MAG = 0.3
+
+
+def _draw_upper_limits(ax, source, color):
+    """Upper-limit glyphs of one series; returns ``(hover renderer, other renderers)``.
+
+    A hollow inverted triangle at each limit with a short stem below it (#860),
+    so limits do not look like detections.
+    """
+    head = ax.inverted_triangle(
+        'x', 'y', source=source, size=7, line_color=color, fill_color=color, fill_alpha=0.0,
+        line_width=1.5, muted_alpha=0.2,
+    )
+    xs = list(source.data['x'])
+    ys = list(source.data['y'])
+    stem = ax.segment(
+        x0=xs, y0=ys, x1=xs, y1=[y + ULIM_ARROW_MAG for y in ys],
+        line_color=color, line_width=1.5, muted_alpha=0.2,
+    )
+    return head, [stem]
+
+
 @login_required
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
@@ -1164,7 +1189,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_summary_v2_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_summary_v3_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{_requested_plot_width(request, 500)}' + ('_salt' if salt2 else '')
         )
         cached_html = cache.get(cache_key)
@@ -1486,7 +1511,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_detail_v7_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_detail_v8_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
             + (f'_salt{salt_run.pk if salt_run is not None else 0}' if salt2 else '')
         )
@@ -1634,16 +1659,18 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ax.add_tools(g1_hover)
 
         p_ulim = None
+        p_ulim_extra = []
         if iUlim.any():
             # same size as the detections (asterisk series use 20 px for the
             # thin marker; a 20 px triangle would swamp the plot)
-            p_ulim = ax.inverted_triangle('x','y',source=_detail_source(iUlim, ulim_mags),
-                                     color=color,size=7,muted_alpha=0.2)
+            p_ulim, p_ulim_extra = _draw_upper_limits(
+                ax, _detail_source(iUlim, ulim_mags), color,
+            )
             g1_hover = HoverTool(renderers=[p_ulim],
                                  tooltips=TOOLTIPS,toggleable=False)
             ax.add_tools(g1_hover)
         p_err = _detail_err(iPlot, color=color, muted_alpha=0.2)
-        _link_series_visibility(p_det, [p_err, p_ulim])
+        _link_series_visibility(p_det, [p_err, p_ulim] + p_ulim_extra)
 
         iPlotFlag = iPlotAll & flagged
         iUlimFlag = iUlimAll & flagged
@@ -1689,6 +1716,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
+    # the limit arrows reach ULIM_ARROW_MAG below the limit (#860)
+    upperlimmag = upperlimmag + ULIM_ARROW_MAG
     if len(mjds[disc_points == 1]):
         limmjd = np.min(mjds[disc_points == 1])-30
         ax.x_range=Range1d(limmjd,x_end)
@@ -2155,7 +2184,7 @@ def spectrumplot(request, transient_id):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'specplot_v3_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+            f'specplot_v4_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -2181,7 +2210,7 @@ def spectrumplot(request, transient_id):
     
     # Prepare plot
     ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width', y_range=(-0.15, len(spectra) + 0.15))
-    colors = itertools.cycle(palette)
+    colors = itertools.cycle(SPECTRUM_COLORS)
     legend_items = []
     
     for spec, color, offset in zip(spectra, colors, offsets):
@@ -2216,7 +2245,7 @@ def spectrumplot_summary(request, transient_id):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'specsummary_v2_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+            f'specsummary_v3_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -2249,7 +2278,7 @@ def spectrumplot_summary(request, transient_id):
     ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width',
                 y_range=(-0.15, len(spectra) + 0.15))
 
-    colors = itertools.cycle(palette)
+    colors = itertools.cycle(SPECTRUM_COLORS)
     legend_it = [None] * len(spectra)
     for spec, color, offset in zip(spectra, colors, offsets):
         norm_flux = _normalized_plot_flux(spec['flux'], offset)
