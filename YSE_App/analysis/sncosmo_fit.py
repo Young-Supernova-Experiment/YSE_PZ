@@ -80,6 +80,19 @@ def _data_table(rows: List[Dict]):
                  names=["mjd", "band", "flux", "fluxerr", "zp", "zpsys"])
 
 
+def _atlas_note(skipped_rows: List[Dict]) -> str:
+    """Why ATLAS c/o points were skipped, when this sncosmo has no atlasc / atlaso (#963)."""
+    from YSE_App.common import bandpassdict as bpd
+
+    if bpd.ATLAS_AVAILABLE:
+        return ""
+    for r in skipped_rows:
+        key = "Band: %s - %s" % (r.get("instrument"), r.get("band"))
+        if bpd.ALL_BANDPASSES.get(key) in ("atlasc", "atlaso"):
+            return bpd.ATLAS_UNAVAILABLE_HINT
+    return ""
+
+
 def run(payload: Dict, params: Dict) -> AnalysisResult:
     import sncosmo
 
@@ -92,9 +105,13 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
     mw_extinction = param(params, "mw_extinction", True, bool)
 
     rows = [r for r in detections(payload) if r.get("sncosmo_band") and r.get("flux") and r.get("flux_err")]
+    skipped_rows = [r for r in detections(payload) if not r.get("sncosmo_band")]
+    skipped = sorted({"%s %s" % (r.get("instrument"), r.get("band")) for r in skipped_rows})
+    atlas_note = _atlas_note(skipped_rows)
     if len(rows) < MIN_POINTS:
-        skipped = sorted({"%s %s" % (r.get("instrument"), r.get("band")) for r in detections(payload) if not r.get("sncosmo_band")})
         hint = (" Bands without an sncosmo bandpass in bandpassdict: %s." % ", ".join(skipped)) if skipped else ""
+        if atlas_note:
+            hint += " " + atlas_note
         raise AnalysisError("%d usable detection(s) with a known bandpass; at least %d are needed.%s"
                             % (len(rows), MIN_POINTS, hint))
 
@@ -163,6 +180,10 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
         "bands": bands_used,
         "mwebv": float(mwebv) if mwebv is not None else None,
     }
+    if skipped:
+        results["bands_skipped"] = skipped
+    if atlas_note:
+        results["note"] = atlas_note
     rest = rest_frame_phase(results["phase_today"], results["z"])
     if rest is not None:
         results["phase_today_rest"] = rest

@@ -5,8 +5,10 @@ Pins:
 * every ATLAS cyan / orange / c / o key in ``bandpassdict`` maps to sncosmo's
   ``atlasc`` / ``atlaso``, never to an SDSS or Bessell curve; ATLAS w has no
   entry, so fits skip it with the "no bandpass" hint;
-* the pinned sncosmo registers ``atlasc`` / ``atlaso`` (checked in the loader
-  metadata, nothing is downloaded);
+* sncosmo registers ``atlasc`` / ``atlaso`` only from 2.8 (requirements.txt
+  pins 2.8.0, the CI image's lock has 2.5.0): with an older sncosmo the ATLAS
+  keys are dropped, so the bands are skipped with a clear note, never fitted
+  with SDSS curves; with 2.8+ the loader metadata lists them (no download);
 * a SALT-style fit on synthetic ATLAS c / o points fits in ``atlasc`` /
   ``atlaso`` (stand-in curves are registered under those names for the test
   and removed afterwards, so nothing is downloaded);
@@ -27,12 +29,17 @@ from django.test import SimpleTestCase, TestCase
 
 from YSE_App.analysis import bazin_fit, sncosmo_fit
 from YSE_App.analysis.base import AnalysisError
-from YSE_App.common.bandpassdict import bandpassdict
+from unittest import mock
+
+from YSE_App.common import bandpassdict as bpd
+from YSE_App.common.bandpassdict import ALL_BANDPASSES, bandpassdict, build_bandpassdict
 from YSE_App.models import Instrument, Observatory, PhotometricBand, Telescope, TransientPhotData, TransientPhotometry
 from YSE_App.services import analysis_payload, analysis_services as svc, bazin
 from YSE_App.templatetags.analysis_extras import analysis_label
 from YSE_App.tests.fixtures_minimal import audit_fields, create_minimal_transient, create_test_user
-from YSE_App.tests.test_analysis_services import SYNTH_SOURCE, _register_synthetic_sncosmo, seed_bazin_lightcurve
+from YSE_App.tests.test_analysis_services import (
+    SYNTH_SOURCE, _register_synthetic_sncosmo, seed_bazin_lightcurve, seed_sncosmo_lightcurve,
+)
 
 ATLAS_BAND_NAMES = {"c": "atlasc", "o": "atlaso", "cyan": "atlasc", "orange": "atlaso",
                     "cyan-ATLAS": "atlasc", "orange-ATLAS": "atlaso"}
@@ -47,7 +54,7 @@ def _split(key):
 class AtlasBandpassDictTests(SimpleTestCase):
     def test_every_atlas_cyan_orange_key_maps_to_the_atlas_bandpass(self):
         seen = 0
-        for key, value in bandpassdict.items():
+        for key, value in ALL_BANDPASSES.items():
             inst, band = _split(key)
             is_atlas = "ATLAS" in band or inst.startswith("ATLAS") or (inst == "ACAM1" and band in ("cyan", "orange"))
             if is_atlas and band in ATLAS_BAND_NAMES:
@@ -56,13 +63,13 @@ class AtlasBandpassDictTests(SimpleTestCase):
         self.assertGreaterEqual(seen, 20)
 
     def test_no_atlas_key_uses_an_sdss_or_bessell_curve(self):
-        for key, value in bandpassdict.items():
+        for key, value in list(ALL_BANDPASSES.items()) + list(build_bandpassdict(False).items()):
             inst, band = _split(key)
             if "ATLAS" in key or inst == "ACAM1":
                 self.assertFalse(value.startswith(("sdss", "bessell")), "%s -> %s" % (key, value))
 
     def test_atlas_w_has_no_bandpass(self):
-        for key in bandpassdict:
+        for key in ALL_BANDPASSES:
             inst, band = _split(key)
             if inst.startswith("ATLAS") or inst == "ACAM1":
                 self.assertNotIn(band, ("w", "wide", "w-ATLAS", "wide-ATLAS"), key)
@@ -79,15 +86,34 @@ class AtlasBandpassDictTests(SimpleTestCase):
             # non-ATLAS entries are unchanged
             ("GPC1", "r", "sdssr"), ("ZTF-Cam", "g", "sdssg"), ("LSSTCam", "i", "lssti"),
         ]
-        for inst, band, expected in cases:
-            self.assertEqual(analysis_payload.sncosmo_band_name(inst, band), expected, (inst, band))
+        with mock.patch.dict(bandpassdict, ALL_BANDPASSES):
+            for inst, band, expected in cases:
+                self.assertEqual(analysis_payload.sncosmo_band_name(inst, band), expected, (inst, band))
 
-    def test_pinned_sncosmo_registers_the_atlas_bandpasses(self):
+    def test_without_atlas_curves_the_atlas_keys_are_dropped(self):
+        reduced = build_bandpassdict(False)
+        self.assertNotIn("atlasc", reduced.values())
+        self.assertNotIn("atlaso", reduced.values())
+        self.assertFalse([k for k in reduced if "ATLAS" in k or k.startswith("Band: ACAM1 - ")])
+        self.assertEqual(reduced["Band: GPC1 - r"], "sdssr")
+        with mock.patch.dict(bandpassdict, reduced, clear=True):
+            self.assertIsNone(analysis_payload.sncosmo_band_name("ATLAS-05", "o"))
+            self.assertIsNone(analysis_payload.sncosmo_band_name("ACAM1", "cyan-ATLAS"))
+
+    def test_version_gate(self):
+        self.assertTrue(bpd.atlas_bandpasses_available("2.8.0"))
+        self.assertTrue(bpd.atlas_bandpasses_available("2.10.1"))
+        self.assertTrue(bpd.atlas_bandpasses_available("3.0.0rc1"))
+        self.assertFalse(bpd.atlas_bandpasses_available("2.5.0"))
+        self.assertFalse(bpd.atlas_bandpasses_available("2.7.9"))
+        self.assertEqual(bandpassdict, build_bandpassdict(bpd.ATLAS_AVAILABLE))
+
+    def test_installed_sncosmo_matches_the_gate(self):
         from sncosmo.bandpasses import _BANDPASSES
 
         names = {m["name"] for m in _BANDPASSES.get_loaders_metadata()}
-        self.assertIn("atlasc", names)
-        self.assertIn("atlaso", names)
+        self.assertEqual("atlasc" in names, bpd.ATLAS_AVAILABLE)
+        self.assertEqual("atlaso" in names, bpd.ATLAS_AVAILABLE)
 
 
 class _StandInAtlasBandpasses:
@@ -118,6 +144,10 @@ class _StandInAtlasBandpasses:
 
 class AtlasSaltFitTests(TestCase):
     def setUp(self):
+        # Exercise the sncosmo >= 2.8 mapping whatever the CI image has; stand-in curves avoid downloads.
+        for patcher in (mock.patch.dict(bandpassdict, ALL_BANDPASSES), mock.patch.object(bpd, "ATLAS_AVAILABLE", True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.user = create_test_user("atlas_fit_staff", is_superuser=True)
         self.transient = create_minimal_transient(self.user, name="2026atl", obs_group_name="atlas-fit-group")
         self.transient.redshift = 0.03
@@ -166,6 +196,31 @@ class AtlasSaltFitTests(TestCase):
         r = result.results
         self.assertEqual(r["bands"], ["atlasc", "atlaso"])
         self.assertLess(abs(r["t0"] - t0), 1.0, r)
+        self.assertEqual(r["bands_skipped"], ["ATLAS-05 w"])
+        self.assertNotIn("note", r)
+
+    def test_old_sncosmo_skips_atlas_with_a_note(self):
+        with _StandInAtlasBandpasses():
+            self._seed()
+            seed_sncosmo_lightcurve(self.user, self.transient)
+            with mock.patch.dict(bandpassdict, build_bandpassdict(False), clear=True), \
+                    mock.patch.object(bpd, "ATLAS_AVAILABLE", False):
+                payload = analysis_payload.build_payload(self.transient, self.user, ["photometry", "redshift"])
+                r = sncosmo_fit.run(payload, {"source": SYNTH_SOURCE, "mw_extinction": False}).results
+        self.assertEqual(r["bands"], ["sdssg", "sdssi", "sdssr"])
+        self.assertEqual(r["bands_skipped"], ["ATLAS-05 c", "ATLAS-05 o", "ATLAS-05 w"])
+        self.assertIn("sncosmo >= 2.8", r["note"])
+
+    def test_old_sncosmo_atlas_only_fails_with_the_note(self):
+        with _StandInAtlasBandpasses():
+            self._seed()
+            with mock.patch.dict(bandpassdict, build_bandpassdict(False), clear=True), \
+                    mock.patch.object(bpd, "ATLAS_AVAILABLE", False):
+                payload = analysis_payload.build_payload(self.transient, self.user, ["photometry", "redshift"])
+                with self.assertRaises(AnalysisError) as ctx:
+                    sncosmo_fit.run(payload, {"source": SYNTH_SOURCE})
+        self.assertIn("ATLAS-05 c", str(ctx.exception))
+        self.assertIn("sncosmo >= 2.8", str(ctx.exception))
 
     def test_only_w_points_fail_with_the_no_bandpass_hint(self):
         with _StandInAtlasBandpasses():

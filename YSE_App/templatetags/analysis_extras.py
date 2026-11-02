@@ -41,6 +41,8 @@ RESULT_LABELS = {
     "mB": "m_B (mag)",
     "amplitude": "Amplitude",
     "mwebv": "E(B−V)_MW (mag)",
+    "bands_skipped": "Bands skipped (no sncosmo bandpass)",
+    "note": "Note",
     # NGSF
     "best_type": "Best type",
     "best_template": "Best template",

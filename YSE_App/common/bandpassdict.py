@@ -110,12 +110,44 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: LSSTCam - y': 'lssty'}
 #				'Band: Gaia-Photometric - Other-'}
 
-# ATLAS c and o have their own sncosmo bandpasses ('atlasc' / 'atlaso',
-# registered by the pinned sncosmo); never substitute SDSS curves for them
-# (#963). The TNS ingest stores ATLAS units ATLAS-01 .. ATLAS-08 with short
-# band names c / o; ATLAS w is deliberately absent.
+# ATLAS c and o have their own sncosmo bandpasses, 'atlasc' / 'atlaso', which
+# sncosmo registers from 2.8.0 on (requirements.txt pins 2.8.0; the CI image's
+# lock still has 2.5.0). Never substitute SDSS curves for them (#963). The TNS
+# ingest stores ATLAS units ATLAS-01 .. ATLAS-08 with short band names c / o;
+# ATLAS w has no standard sncosmo bandpass and is deliberately absent.
 ATLAS_BANDPASSES = {'c': 'atlasc', 'o': 'atlaso', 'cyan-ATLAS': 'atlasc', 'orange-ATLAS': 'atlaso'}
+ATLAS_MIN_SNCOSMO = (2, 8)
+ATLAS_UNAVAILABLE_HINT = ("ATLAS c/o need sncosmo >= 2.8 (bandpasses atlasc / atlaso); "
+						  "they are skipped rather than fitted with SDSS curves.")
 for _unit in range(1, 9):
 	for _name, _bandpass in ATLAS_BANDPASSES.items():
 		bandpassdict['Band: ATLAS-%02d - %s' % (_unit, _name)] = _bandpass
 del _unit, _name, _bandpass
+
+ALL_BANDPASSES = dict(bandpassdict)  # every mapping, whether or not this sncosmo has the curve
+
+
+def atlas_bandpasses_available(version=None):
+	"""True when the installed sncosmo (or ``version``) registers atlasc / atlaso; never imports sncosmo."""
+	if version is None:
+		try:
+			from importlib.metadata import version as _dist_version
+			version = _dist_version('sncosmo')
+		except Exception:
+			return False
+	parts = []
+	for piece in str(version).split('.')[:2]:
+		digits = ''.join(ch for ch in piece if ch.isdigit())
+		parts.append(int(digits) if digits else 0)
+	return tuple(parts) >= ATLAS_MIN_SNCOSMO
+
+
+def build_bandpassdict(atlas_available):
+	"""The mapping fits use: ATLAS keys are dropped (so the band is skipped) when sncosmo lacks the curves."""
+	if atlas_available:
+		return dict(ALL_BANDPASSES)
+	return {k: v for k, v in ALL_BANDPASSES.items() if v not in ('atlasc', 'atlaso')}
+
+
+ATLAS_AVAILABLE = atlas_bandpasses_available()
+bandpassdict = build_bandpassdict(ATLAS_AVAILABLE)
