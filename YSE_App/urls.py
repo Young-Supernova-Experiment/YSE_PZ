@@ -19,6 +19,7 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
+from YSE_App import download_views
 from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
@@ -257,6 +258,14 @@ urlpatterns = [
     re_path(r'^search/save/$', views.save_search, name='save_search'),
     re_path(r'^search/bulk/$', views.search_bulk_action, name='search_bulk_action'),
     re_path(r'^search/export/$', views.search_export_csv, name='search_export_csv'),
+    # Download -> Spectra / Photometry with options (#848); UI preview only.
+    re_path(r'^search/download/spectra/$', download_views.search_download_spectra, name='search_download_spectra'),
+    re_path(r'^search/download/photometry/$', download_views.search_download_photometry,
+            name='search_download_photometry'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/download/spectra/$', download_views.selection_download_spectra,
+            name='selection_download_spectra'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/download/photometry/$',
+            download_views.selection_download_photometry, name='selection_download_photometry'),
     # Selections (#841): saved criteria shared by owner, team or all YSE; pages are UI preview only.
     re_path(r'^combined-list/$', combined_list_views.combined_list, name='combined_list'),
     re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),

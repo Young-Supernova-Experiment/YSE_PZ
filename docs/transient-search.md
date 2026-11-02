@@ -59,6 +59,7 @@ URL is the whole state of a search, so it can be pasted into Slack.
 | | `has_host`, `host_redshift_min`, `host_redshift_max` | host presence and redshift |
 | | `has_hst`, `has_jwst`, `has_chandra` | archive coverage flags on the transient (`true` = known to have data, `false` = known not to; never looked up matches neither). `has_jwst` is set by the detail page's JWST lookup (#383, `docs/archive-tabs.md`) |
 | | `visible_to_group` | photometry or spectra shared with that collaboration group; non-staff may only ask about groups they belong to (anything else matches nothing) |
+| spectra (#848; form group shown with the UI preview) | `spec_phase_min`, `spec_phase_max`, `spec_phase_ref` | has a spectrum you may see whose phase (days) is in the range under the reference (`bazin_rest`, `bazin_obs`, `salt_t0`, `discovery`; empty: the default Bazin rule). See `docs/spectral-phase.md` |
 | ordering | `ordering` | `name`, `ra`, `dec`, `disc_date`, `created_date`, `modified_date`, `redshift`, `best_redshift`, `mw_ebv`, `peak_mag`, `peak_mjd`, `last_det_mag`, `last_det_mjd`, `first_det_mjd`, `num_det`, `rise_rate`, `decay_rate`, `deepest_limit`, `separation` (cone only), `gal_b`; prefix `-` for descending; a primary-key tie-breaker is always appended |
 
 Photometry filters read the stat row, so a transient without one (no unflagged points, or the

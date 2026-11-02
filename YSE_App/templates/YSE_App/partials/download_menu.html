@@ -1,0 +1,108 @@
+{% comment %}Download -> Spectra / Photometry with options (#848; UI preview only). Context: ``download_menu`` from
+download_views.download_menu_context. GET forms: they read data, they change nothing.{% endcomment %}
+<div class="dropdown d-inline-block float-right mr-2" id="download-menu">
+  <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" id="download-menu-button"
+          data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+    <i class="fa fa-download" aria-hidden="true"></i> Download
+  </button>
+  <div class="dropdown-menu dropdown-menu-right" aria-labelledby="download-menu-button">
+    <a class="dropdown-item" href="#" id="download-menu-spectra" data-toggle="modal" data-target="#download-spectra-modal">Spectra&hellip;</a>
+    <a class="dropdown-item" href="#" id="download-menu-photometry" data-toggle="modal" data-target="#download-photometry-modal">Photometry&hellip;</a>
+  </div>
+</div>
+
+<div class="modal fade" id="download-spectra-modal" tabindex="-1" role="dialog" aria-labelledby="download-spectra-title" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <form class="modal-content" id="download-spectra-form" action="{{ download_menu.spectra_url }}" method="get">
+      {% if download_menu.params %}<input type="hidden" name="params" value="{{ download_menu.params }}">{% endif %}
+      <div class="modal-header">
+        <h5 class="modal-title" id="download-spectra-title">Download spectra</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">A zip with one CSV per spectrum you may see and a manifest (phase, reference and frame, redshift, instrument, S/N). At most {{ download_menu.cap }} transients.</p>
+        <div class="form-group">
+          <label for="download-spectra-ref">Phase reference</label>
+          <select class="form-control form-control-sm" id="download-spectra-ref" name="phase_ref">
+            {% for key, label in download_menu.references %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group col">
+            <label for="download-spectra-phase-min">Phase from (days)</label>
+            <input type="number" step="any" class="form-control form-control-sm" id="download-spectra-phase-min" name="phase_min">
+          </div>
+          <div class="form-group col">
+            <label for="download-spectra-phase-max">Phase to (days)</label>
+            <input type="number" step="any" class="form-control form-control-sm" id="download-spectra-phase-max" name="phase_max">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="download-spectra-instrument">Instruments (none chosen: all)</label>
+          <select multiple class="form-control form-control-sm" id="download-spectra-instrument" name="instrument" size="5">
+            {% for name in download_menu.instruments %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="download-spectra-snr">Minimum median S/N</label>
+          <input type="number" step="any" min="0" class="form-control form-control-sm" id="download-spectra-snr" name="snr_min">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary btn-sm" id="download-spectra-submit">Download zip</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal fade" id="download-photometry-modal" tabindex="-1" role="dialog" aria-labelledby="download-photometry-title" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <form class="modal-content" id="download-photometry-form" action="{{ download_menu.photometry_url }}" method="get">
+      {% if download_menu.params %}<input type="hidden" name="params" value="{{ download_menu.params }}">{% endif %}
+      <div class="modal-header">
+        <h5 class="modal-title" id="download-photometry-title">Download photometry</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">A zip with one CSV per transient (the bulk photometry format) of the points you may see. At most {{ download_menu.cap }} transients.</p>
+        <div class="form-row">
+          <div class="form-group col">
+            <label for="download-phot-mjd-min">MJD from</label>
+            <input type="number" step="any" class="form-control form-control-sm" id="download-phot-mjd-min" name="mjd_min">
+          </div>
+          <div class="form-group col">
+            <label for="download-phot-mjd-max">MJD to</label>
+            <input type="number" step="any" class="form-control form-control-sm" id="download-phot-mjd-max" name="mjd_max">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="download-phot-ref">Phase reference</label>
+          <select class="form-control form-control-sm" id="download-phot-ref" name="phase_ref">
+            {% for key, label in download_menu.references %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group col">
+            <label for="download-phot-phase-min">Phase from (days)</label>
+            <input type="number" step="any" class="form-control form-control-sm" id="download-phot-phase-min" name="phase_min">
+          </div>
+          <div class="form-group col">
+            <label for="download-phot-phase-max">Phase to (days)</label>
+            <input type="number" step="any" class="form-control form-control-sm" id="download-phot-phase-max" name="phase_max">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="download-phot-bands">Bands (comma-separated, empty: all)</label>
+          <input type="text" class="form-control form-control-sm" id="download-phot-bands" name="band" placeholder="g, r, o">
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="download-phot-exclude-flagged" name="exclude_flagged" value="1">
+          <label class="form-check-label" for="download-phot-exclude-flagged">Leave out points with data-quality flags</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary btn-sm" id="download-photometry-submit">Download zip</button>
+      </div>
+    </form>
+  </div>
+</div>

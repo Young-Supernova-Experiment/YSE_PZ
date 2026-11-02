@@ -8,6 +8,7 @@ and each spectrum's pixels come from the same service calls as before.
 """
 
 import json
+import zipfile
 
 import numpy as np
 from django.core import serializers
@@ -215,3 +216,41 @@ def snana_chunks(user, header, phot_sets):
             if line is not None:
                 yield line
     yield "# END: \n"
+
+
+class _ZipSink:
+    """A write-only, unseekable file for ``zipfile``: collects bytes until :meth:`take` hands them out."""
+
+    def __init__(self):
+        self._parts = []
+
+    def write(self, data):
+        self._parts.append(bytes(data))
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def take(self):
+        out = b"".join(self._parts)
+        self._parts = []
+        return out
+
+
+def zip_stream(entries):
+    """A zip archive of ``entries`` (``(name, text or bytes)`` pairs, read lazily), yielded as bytes.
+
+    Each member is compressed and sent as soon as it is produced, so only one member is in memory
+    at a time (#848; the zip counterpart of the streamed JSON / SNANA bodies above). ``zipfile``
+    writes the central directory at the end.
+    """
+    sink = _ZipSink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in entries:
+            archive.writestr(name, content)
+            chunk = sink.take()
+            if chunk:
+                yield chunk
+    chunk = sink.take()
+    if chunk:
+        yield chunk

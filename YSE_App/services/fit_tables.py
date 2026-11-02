@@ -210,9 +210,15 @@ def on_run_saved(sender, instance, created=False, update_fields=None, raw=False,
     if update_fields is not None and "status" not in update_fields:
         return
     try:
-        record_run(instance)
+        written = record_run(instance)
     except Exception:  # noqa: BLE001 - the run itself has succeeded; the rows can be backfilled
         log.exception("fit tables: could not record run %s", instance.pk)
+        return
+    if written:
+        # New fit rows move the reference epochs: recompute the spectra's phases (#848; never raises).
+        from YSE_App.services.spectral_phase import on_fits_recorded
+
+        on_fits_recorded(instance.transient_id)
 
 
 # ------------------------------------------------------------------ defaults

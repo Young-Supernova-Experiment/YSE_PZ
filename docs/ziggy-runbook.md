@@ -18,7 +18,7 @@ A living checklist for David Jones, in the order things should happen. It replac
   - the **unconfirmed** production rows of section 5: `SECRET_KEY` and `[secrets] credentials_key`, the 3.10 / 3.21-3.23 / 3.26 mirrors, `rewrite_dashboard_queries`, the `AntaresLSST` crontab line, the #784 pull, the Slack events check;
   - the per-database backfill of the [visibility policy](#transient-visibility) (#607) and the one command per database for the viewer-scoped dashboard queries (#720);
   - the [TNS re-sync](#tns-resync) crontab line to remove, the `run_jobs` crontab line (#431), the [staff visibility](#staff-visibility) script-account check, and the [CasJobs rotation](#casjobs-credential) (#626).
-- **When Ryan asks** (do not start these during the freeze): [enable access rules on yse\_experimental](#enable-access-rules), [Open Supernova Catalog step 1](#osc-step1), the [spectra-as-arrays](#spectrum-arrays) test conversion, `clean_duplicate_data` (changelog v114), the [fit-table backfill and scheduled refits](#fit-tables), and the research export ([research consent](#research-consent)).
+- **When Ryan asks** (do not start these during the freeze): [enable access rules on yse\_experimental](#enable-access-rules), [Open Supernova Catalog step 1](#osc-step1), the [spectra-as-arrays](#spectrum-arrays) test conversion, `clean_duplicate_data` (changelog v114), the [fit-table backfill and scheduled refits](#fit-tables), the [spectral-phase backfill](#spectral-phase), and the research export ([research consent](#research-consent)).
 
 **Done:** [#335](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/335) merged to `develop` (5da66de) and deployed green to yse\_test at 18:01 UTC; migrations `0010_dashboard_indexes` (18 min) through 0029 (#341 PhotStat 18:43 UTC to #386 broker streams) already applied on the shared `YSE_test` database, nothing on yse\_test to run for them; [#143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) (develop to master) is conflict-free with 8/8 checks green and its body carries all 66 `Fixes` lines. (2026-09-29 state; #143 was merged and deployed on 2026-10-21, see the status paragraph below.)
 
@@ -1091,6 +1091,21 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_fit_table
 FIT_REFIT_ENABLED = True
 ```
 The `FitRefit` cron (already in `CRON_CLASSES`) then queues one `fits.refit_pass` job a day; the job runner must be running. Optional keys: `FIT_REFIT_CRON_MINUTES` (1440), `FIT_REFIT_WINDOW_DAYS` (7), `FIT_REFIT_LIMIT` (200). `PHOTSTAT_BAZIN_CRON_ENABLED` stays as it is. **Undo:** remove the line and restart.
+
+<a id="spectral-phase"></a>
+### Computed spectral phase (2026-11-02, #848): migration applied by the deploy; backfill when Ryan asks
+
+**What this is.** Migrations `0069_spectrum_phase` and `0070_spectrum_phase_fk_on_delete` create one new table, `YSE_App_spectrumphase` (each spectrum's phase under the Bazin peak, SALT t0 and discovery), with MySQL `ON DELETE CASCADE` on its foreign keys to spectra and transients. From then on a saved spectrum and every Bazin / SALT fit that writes fit rows update the table. The search filter and the Download menu are UI preview only. Nothing else runs on deploy; no settings line, no cron. Details: `docs/spectral-phase.md`.
+
+**P1. Backfill existing spectra (when Ryan asks; best after the [fit-table backfill](#fit-tables)).** Dry run first (writes nothing):
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_spectral_phases
+```
+**Expected:** `dry run: N transient(s) with M spectrum(s); K phase row(s) stored now. ...`. Then:
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_spectral_phases --apply
+```
+**Expected:** `N transient(s) with spectra: R phase row(s) written, 0 error(s)`. It replaces each transient's rows, so running it again is safe (and refreshes phases after redshift or discovery-date edits).
 
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
@@ -3771,6 +3786,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-11-02 v121, **nothing required; when Ryan asks: spectral-phase backfill** (the deploy applies the migration; no new package). Computed spectral phase ([#848](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/848)): migrations `0069_spectrum_phase` and `0070_spectrum_phase_fk_on_delete` create one new table (`YSE_App_spectrumphase`) with `ON DELETE CASCADE` on its foreign keys to spectra and transients, safe on the shared `YSE_test` database. New spectra and new fits fill it; `manage.py backfill_spectral_phases --apply` fills it for existing spectra ([steps](#spectral-phase)). The search filter and Download -> Spectra / Photometry are UI preview only.
 * 2026-11-01 v120, **nothing required; when Ryan asks: fit-table backfill and scheduled refits** (the deploy applies the migration; no new package). SALT and Bazin fit tables ([#846](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/846)): migrations `0063_fit_tables` and `0064_fit_tables_fk_on_delete` create two new tables (`YSE_App_bazinfit`, `YSE_App_saltfit`) with `ON DELETE CASCADE` on their foreign keys to transients and runs, so develop's deletes on the shared `YSE_test` database still succeed. Every succeeded Bazin / SALT run writes its rows. `manage.py backfill_fit_tables` (dry run by default, `--apply`) and the scheduled refits (`FIT_REFIT_ENABLED`, default False; new `FitRefit` cron is a no-op while it is off) are in the section [SALT and Bazin fit tables](#fit-tables). The helper of 0062 moved to `YSE_App/common/fk_on_delete.py`.
 * 2026-11-01 v119, **nothing required** (the deploy applies the migration; no new package). Deletes on `/yse_test/` no longer fail on rows that only experimental knows about ([#941](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/941)): migration `0062_shared_db_fk_on_delete` runs automatically on the yse\_experimental deploy and changes only foreign-key constraints on the experimental-only tables created by 0056-0061 (spectrum arrays, catalogue tables, team deputies, duplicate decisions). They get MySQL `ON DELETE CASCADE` (or `ON DELETE SET NULL` for the duplicate decisions' `kept_*` columns), as their models declare, so a spectrum, host, transient, user or group deleted through develop's code takes these rows with it instead of failing with error 1451. No row, column or develop table changes; constraint names are kept. The PROTECT audit columns (`created_by`, `modified_by`) of the catalogue tables are unchanged.
 * 2026-10-31 v118, **nothing required; when Ryan asks: rewrite saved queries** (no migration, no package). Saved Explorer queries that still use the dropped `data_quality_id` column ([#939](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/939)): the 43 in the docker seed data and `docs/example_queries.rst` now use the `..._data_quality` join table. The copies in the deployed databases are rewritten by `manage.py rewrite_data_quality_queries` (dry run by default, `--apply` keeps a JSON backup, `--revert` undoes); see the section [Saved queries that use the dropped data_quality_id column](#saved-queries-data-quality).
