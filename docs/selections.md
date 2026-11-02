@@ -66,4 +66,10 @@ database keep working.
 - `GET /api/selections/<slug>/`: one Selection. It never includes SQL text.
 - `GET /api/selections/<slug>/transients/`: the matching transients for you (`id, name, slug, ra, dec`), with `limit` / `offset`.
 
+## Downloads (#848, UI preview only)
+
+A Selection's page has **Download -> Spectra / Photometry** with phase, instrument, S/N, date, band and
+quality options (`docs/spectral-phase.md`). The search filters `spec_phase_min` / `spec_phase_max` /
+`spec_phase_ref` work in search Selections like every other filter.
+
 Server steps: none.

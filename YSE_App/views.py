@@ -2304,6 +2304,26 @@ def spectrum_header_comment_lines(spectrum):
     return ''.join(lines)
 
 
+def spectrum_csv_name(transient_name, spectrum):
+    """File name of one spectrum in a spectra zip: ``<transient>-<instrument>-<YYYY-MM-DD>.csv``."""
+    return '%s-%s-%s.csv' % (transient_name, spectrum.instrument.name, spectrum.obs_date.isoformat().split('T')[0])
+
+
+def spectrum_csv_content(spectrum, arrays):
+    """One spectrum's CSV in the spectra zip: header comment lines, then ``wavelength,flux,fluxerr`` rows.
+
+    ``arrays`` is ``(wavelength, flux, flux_err or None)`` from ``spectrum_arrays.arrays_for``. A pixel
+    without a usable error (none, zero or NaN) gets -99.
+    """
+    wave, flux, err = arrays
+    lines = [spectrum_header_comment_lines(spectrum), "\n", "wavelength,flux,fluxerr\n"]
+    linefmt = "%.3f,%8.5e,%8.5e\n"
+    for i in range(wave.size):
+        e = err[i] if err is not None else np.nan
+        lines.append(linefmt % (wave[i], flux[i], e if (np.isfinite(e) and e) else -99))
+    return "".join(lines)
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def download_photometry(request, slug):
@@ -2338,14 +2358,25 @@ def download_photometry(request, slug):
 
     return response
 
-def bulk_photometry_zip_response(user, transients):
-    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284)."""
+def bulk_photometry_zip_response(user, transients, options=None):
+    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284).
+
+    ``options`` (``services.download_options.PhotometryOptions``, #848) narrows the points: date or
+    phase range, bands, data-quality flags. Without it the output is as before.
+    """
     s = BytesIO()
     archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
     skipped = []  # (transient name, MJD, band, reason) for README.txt (#809)
+    if options is not None and not options.active:
+        options = None
+    n_left_out = 0
     for transient in transients:
         
         content = ""
+        epoch = None
+        if options is not None and options.phase_range:
+            from YSE_App.services.download_options import transient_reference
+            epoch = transient_reference(transient, options.reference)
 
         data = {transient.name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
         data[transient.name]['transient'] = json.loads(serializers.serialize("json", Transient.objects.filter(name=transient.name), use_natural_foreign_keys=True))
@@ -2380,6 +2411,12 @@ def bulk_photometry_zip_response(user, transients):
                     mjd = date_to_mjd(d['fields']['obs_date'])
                     # Data-quality flags by name; ";" because the file is comma-separated.
                     data_quality = ';'.join(str(q) for q in (d['fields'].get('data_quality') or []))
+                    if options is not None:
+                        from YSE_App.services.spectral_phase import phase_days
+                        phase = phase_days(mjd, epoch[0], epoch[1]) if epoch is not None else None
+                        if not options.keeps(mjd, d['fields']['band'].split(' - ')[-1], data_quality, phase):
+                            n_left_out += 1
+                            continue
                     if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
                         if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
                         else: flux_err = 0
@@ -2438,6 +2475,9 @@ def bulk_photometry_zip_response(user, transients):
     ]
     for name, mjd, band, reason in skipped:
         readme.append('%s  MJD %.3f  %s  %s' % (name, mjd, band, reason))
+    if options is not None:
+        readme += ['', 'Download options (points outside them are left out: %d)' % n_left_out]
+        readme += ['  ' + line for line in options.describe()]
     archive.writestr('README.txt', '\n'.join(readme) + '\n')
     archive.close()
     response = HttpResponse(s.getvalue(), content_type='application/x-zip-compressed')
@@ -2526,27 +2566,8 @@ def download_spectra(request, slug):
         pixels = spectrum_arrays.arrays_for([s.id for s in authorized_spectra])
 
         for s in authorized_spectra:
-            content = ""
-            data = {}
-            #data['spectra'] = json.loads(serializers.serialize("json", s, use_natural_foreign_keys=True))
-            #import pdb; pdb.set_trace()
-            content += spectrum_header_comment_lines(s)
-            
             if s.id in pixels:
-                wave, flux, err = pixels[s.id]
-                content += "\n"
-                content += "wavelength,flux,fluxerr\n"
-                linefmt =  "%.3f,%8.5e,%8.5e\n"
-
-                for i in range(wave.size):
-                    # no (or zero / NaN) error -> -99, as before
-                    e = err[i] if err is not None else np.nan
-                    if np.isfinite(e) and e:
-                        content += linefmt%(wave[i],flux[i],e)
-                    else:
-                        content += linefmt%(wave[i],flux[i],-99)
-
-                archive.writestr('%s-%s-%s.csv'%(transient.name,s.instrument.name,s.obs_date.isoformat().split('T')[0]),content)
+                archive.writestr(spectrum_csv_name(transient.name, s), spectrum_csv_content(s, pixels[s.id]))
 
     archive.close()
     response = HttpResponse(st.getvalue(), content_type='application/x-zip-compressed')
@@ -2870,11 +2891,16 @@ class SearchResultsView(TemplateView):
         filterset, table, per_page = build_search_table(self.request, params)
         cone = filterset.cone
 
-        visible = {name for _, names in FIELD_GROUPS for name in names}
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        preview = ui_preview_enabled(self.request)
+        # The spectral-phase filters (#848) are part of the new layout preview.
+        shown_groups = [(title, names) for title, names in FIELD_GROUPS if preview or title not in PREVIEW_FIELD_GROUPS]
+        visible = {name for _, names in shown_groups for name in names}
         form = filterset.form
         groups = []
         counts = filterset.group_counts()
-        for title, names in FIELD_GROUPS:
+        for title, names in shown_groups:
             groups.append({
                 'title': title,
                 'key': title.lower(),
@@ -2920,7 +2946,17 @@ class SearchResultsView(TemplateView):
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         context['obs_tonight'] = self._obs_tonight_context(filterset, context['result_count'])
         context['selection_save'] = self._selection_save_context(filterset)
+        context['download_menu'] = self._download_menu_context(params, preview)
         return context
+
+    def _download_menu_context(self, params, preview):
+        """Download -> Spectra / Photometry (#848) for preview users: the search's own parameters."""
+        if not preview:
+            return None
+        from YSE_App.download_views import download_menu_context
+
+        return download_menu_context(reverse('search_download_spectra'), reverse('search_download_photometry'),
+                                     self._bulk_params(params))
 
     def _selection_save_context(self, filterset):
         """"Save as Selection" (#841) for preview users: teams to share with, name suggestion, last error."""
@@ -3027,6 +3063,8 @@ def save_search(request):
     return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
 
 SEARCH_BULK_MAX_ROWS = 5000
+# Filter groups of the search form shown only with the UI preview on (#848).
+PREVIEW_FIELD_GROUPS = ('Spectra',)
 SEARCH_BULK_PHOTOMETRY_MAX_ROWS = 300
 SEARCH_EXPORT_MAX_ROWS = 50000
 _SEARCH_STATE_KEYS = ('page', 'saved_query', 'saved_user_query', 'save_error', 'bulk_result', 'selection_error')

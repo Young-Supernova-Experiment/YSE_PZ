@@ -536,6 +536,15 @@ def _names(model, label, filter_class=None, **kwargs):
     )
 
 
+# References of the spectral-phase filter (#848); left empty, the default rule applies (Bazin peak,
+# rest frame; observer frame without a redshift).
+SPEC_PHASE_REFERENCE_CHOICES = (
+    ('bazin_rest', 'Bazin peak, rest frame'),
+    ('bazin_obs', 'Bazin peak, observer frame'),
+    ('salt_t0', 'SALT t0, rest frame'),
+    ('discovery', 'Days since discovery'),
+)
+
 # Field groups the search page renders (the legacy API-only names stay out).
 FIELD_GROUPS = (
     ('Names', ('name_contains', 'alias', 'name', 'has_tns_name')),
@@ -554,6 +563,7 @@ FIELD_GROUPS = (
                    'has_spectrum', 'has_followup', 'followup_status', 'has_comment',
                    'has_host', 'host_redshift_min', 'host_redshift_max', 'visible_to_group',
                    'favorites', 'has_interest', 'has_hst', 'has_jwst', 'has_chandra')),
+    ('Spectra', ('spec_phase_min', 'spec_phase_max', 'spec_phase_ref')),
     ('Annotations', ('annotation_origin', 'annotation_key', 'annotation_value_eq', 'annotation_value_min',
                      'annotation_value_max', 'annotation_column')),
 )
@@ -663,6 +673,12 @@ class TransientSearchFilterSet(django_filters.FilterSet):
     host_redshift_max = _num('host__redshift', 'lte', 'Host redshift at most')
     visible_to_group = django_filters.CharFilter(method='filter_visible_to_group', label='Data visible to group')
 
+    # --- spectral phase (#848; SpectrumPhase rows of spectra the user may see) ---------
+    spec_phase_min = django_filters.NumberFilter(method='noop', label='Spectrum phase at least (days)')
+    spec_phase_max = django_filters.NumberFilter(method='noop', label='Spectrum phase at most (days)')
+    spec_phase_ref = django_filters.ChoiceFilter(method='noop', label='Phase reference',
+                                                 choices=SPEC_PHASE_REFERENCE_CHOICES, empty_label='Default (Bazin peak)')
+
     # --- favorites (#323) and paper interests (#290) -----------------------
     favorites = _bool('filter_favorites', 'My favorites only')
     has_interest = _bool('filter_has_interest', 'Has open paper interest')
@@ -734,6 +750,7 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         if 'best_redshift' in wanted:
             queryset = annotate_best_redshift(queryset)
         queryset = self._filter_annotations(queryset, cleaned)
+        queryset = self._filter_spec_phase(queryset, cleaned)
         column = self.annotation_column_spec
         if column is not None:
             queryset = annotate_annotation_column(queryset, column[0], column[1], getattr(self.request, 'user', None))
@@ -943,6 +960,21 @@ class TransientSearchFilterSet(django_filters.FilterSet):
         spectra = _rows_visible_to(TransientSpectrum.objects.filter(transient_id=OuterRef('pk')), self._user())
         return qs.filter(Exists(spectra)) if value else qs.exclude(Exists(spectra))
 
+    def _filter_spec_phase(self, qs, cleaned):
+        """Transients with a spectrum the user may see whose phase under the reference is in range (#848).
+
+        Only applied when a bound is given; the reference alone selects nothing.
+        """
+        from YSE_App.services.spectral_phase import REF_DEFAULT, spectra_in_phase_range
+
+        low, high = cleaned.get('spec_phase_min'), cleaned.get('spec_phase_max')
+        if low is None and high is None:
+            return qs
+        reference = cleaned.get('spec_phase_ref') or REF_DEFAULT
+        spectra = spectra_in_phase_range(TransientSpectrum.objects.filter(transient_id=OuterRef('pk')),
+                                         reference, low, high)
+        return qs.filter(Exists(_rows_visible_to(spectra, self._user())))
+
     def filter_has_followup(self, qs, name, value):
         if value is None:
             return qs
@@ -1101,6 +1133,12 @@ FILTER_HELP = {
     'has_hst': 'true: known to have HST data; false: known not to.',
     'has_jwst': 'true: known to have JWST data; false: known not to.',
     'has_chandra': 'true: known to have Chandra data; false: known not to.',
+    'spec_phase_min': 'Has a spectrum you may see with phase (days) at least this under spec_phase_ref.',
+    'spec_phase_max': 'Has a spectrum you may see with phase (days) at most this under spec_phase_ref.',
+    'spec_phase_ref': ('Reference epoch of spec_phase_min/max: bazin_rest, bazin_obs, salt_t0 (rest frame) or '
+                       'discovery (days since discovery). Omitted: the default, the Bazin peak in the rest frame '
+                       '(observer frame without a redshift). Bazin phases exist only when the peak is not before '
+                       'the last non-detection.'),
     'annotation_origin': 'Annotation origin to filter on ("legacy" reads the Transient columns).',
     'annotation_key': 'Annotation key within the origin.',
     'annotation_value_eq': 'Annotation value equals this.',
