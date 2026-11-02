@@ -15,7 +15,8 @@ with its parameters, errors, covariance and plots stored on the run:
 * only bands ``common.bandpassdict`` maps to an sncosmo bandpass are used.
 
 Results: every fitted parameter with its error, ``chi2`` / ``ndof``,
-``t0`` (peak MJD), ``phase_today``, the bands used and, for SALT models,
+``t0`` (peak MJD), ``phase_today`` (observer-frame days since ``t0``) and
+``phase_today_rest`` (the same divided by ``1 + z``), the bands used and, for SALT models,
 ``mB`` (``10.635 - 2.5 log10 x0``, as the Summary tab shows). Plots: the
 light curve with the model per band and a Gaussian corner-style plot of the
 fitted parameters from the covariance. Files: ``fit_result.json`` (parameters,
@@ -37,6 +38,7 @@ import numpy as np
 from YSE_App.analysis.base import (
     AnalysisError, AnalysisResult, band_colors, clean_json, figure_png, format_value, new_figure, param,
 )
+from YSE_App.analysis.bazin_fit import rest_frame_phase
 from YSE_App.services import bazin
 from YSE_App.services.analysis_payload import detections
 
@@ -161,6 +163,9 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
         "bands": bands_used,
         "mwebv": float(mwebv) if mwebv is not None else None,
     }
+    rest = rest_frame_phase(results["phase_today"], results["z"])
+    if rest is not None:
+        results["phase_today_rest"] = rest
     if results["chi2"] is not None and results["ndof"]:
         results["reduced_chi2"] = results["chi2"] / results["ndof"]
     for name in vparams:

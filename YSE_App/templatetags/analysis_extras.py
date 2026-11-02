@@ -19,7 +19,8 @@ RESULT_LABELS = {
     "ndof": "Degrees of freedom",
     "reduced_chi2": "χ²/dof",
     "t0": "t₀ (MJD)",
-    "phase_today": "Phase today (days)",
+    "phase_today": "Phase today (observer-frame days)",
+    "phase_today_rest": "Phase today (rest-frame days)",
     "z": "Redshift z",
     "z_source": "Redshift source",
     # Bazin
