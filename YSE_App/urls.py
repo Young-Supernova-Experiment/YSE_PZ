@@ -24,6 +24,7 @@ from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import selection_views
+from YSE_App import combined_list_views
 from YSE_App.common import ui_preview as ui_preview_views
 from YSE_App import signup_views
 from YSE_App import access_views
@@ -257,6 +258,7 @@ urlpatterns = [
     re_path(r'^search/bulk/$', views.search_bulk_action, name='search_bulk_action'),
     re_path(r'^search/export/$', views.search_export_csv, name='search_export_csv'),
     # Selections (#841): saved criteria shared by owner, team or all YSE; pages are UI preview only.
+    re_path(r'^combined-list/$', combined_list_views.combined_list, name='combined_list'),
     re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),
     re_path(r'^selections/save/$', selection_views.selection_save, name='selection_save'),
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/$', selection_views.selection_detail, name='selection_detail'),
