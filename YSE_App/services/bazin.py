@@ -75,7 +75,7 @@ GRID_STEP_DAYS = 0.5
 # Fit results are cached per (transient, photometry token); the token changes
 # whenever a detection is added or edited, so the timeout only bounds growth.
 FIT_CACHE_TIMEOUT = 7 * 24 * 3600
-FIT_CACHE_VERSION = 'v2'  # v2: joint wavelength-correlated fit (#336)
+FIT_CACHE_VERSION = 'v3'  # v2: joint wavelength-correlated fit (#336); v3: ATLAS c/o wavelengths
 
 _MJD_EPOCH = datetime.datetime(1858, 11, 17, tzinfo=datetime.timezone.utc)
 _LN10_OVER_2P5 = 0.4 * math.log(10.0)

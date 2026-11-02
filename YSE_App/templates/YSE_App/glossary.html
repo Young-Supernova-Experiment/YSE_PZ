@@ -47,9 +47,10 @@
       <p>A machine-learning score from the survey or broker pipeline, from 0 to 1, for how likely a detection is a real
         astrophysical source (near 1) rather than an artefact such as a bad subtraction, a cosmic ray or a bad pixel
         (near 0).</p>
-      <p class="mb-0">The transient's <em>real_bogus_score</em> keeps the score from its ingest. On <em>Broker Candidates</em>
-        the <em>RB</em> column is the broker's score (ZTF <em>rb</em>, or the deep-learning <em>drb</em> when there is no
-        <em>rb</em>). Scores from different surveys are not on the same scale, so compare them only within one survey.</p>
+      <p class="mb-0">The transient's <em>real_bogus_score</em> keeps the score from its ingest; for Pan-STARRS objects
+        this is the QUB score, which also runs from 0 to 1. On <em>Broker Candidates</em> the <em>RB</em> column is the
+        broker's score (ZTF <em>rb</em>, or the deep-learning <em>drb</em> when there is no <em>rb</em>). Each survey
+        trains its own classifier, so compare scores within one survey.</p>
     </div>
   </div>
 
@@ -92,6 +93,8 @@
     <div class="card-header"><h2 class="card-title">Magnitude systems</h2></div>
     <div class="card-body">
       <p>Magnitudes are logarithmic and brighter is smaller: 5 magnitudes is a factor of 100 in flux.</p>
+      <p>Most data on the site are AB magnitudes. Each point stores its own magnitude system (<em>mag_sys</em>), and
+        that stored system is the one shown with the point.</p>
       <dl class="mb-0">
         <dt>AB</dt>
         <dd>Zero point set by a flat spectrum of 3631 Jy. Survey photometry (Pan-STARRS, ZTF, ATLAS, Rubin) is in AB.
@@ -112,10 +115,12 @@
         <dt>Days since discovery</dt>
         <dd>Today minus the discovery date (the follow-up and planning tables).</dd>
         <dt>SALT3 phase</dt>
-        <dd>Days from <em>t0</em>, the fitted time of B-band maximum, in the observer frame.</dd>
+        <dd>Days from <em>t0</em>, the fitted time of B-band maximum, in the rest frame (observer-frame days divided
+          by 1&nbsp;+&nbsp;<em>z</em>).</dd>
         <dt>Spectrum phase</dt>
-        <dd>The phase stored with a spectrum when it was uploaded. Its reference is whatever the uploader used, usually
-          maximum light; "&mdash;" means none was recorded.</dd>
+        <dd>The phase stored with a spectrum when it was uploaded. It is usually relative to the time of maximum light;
+          in some cases it is relative to discovery or to the time of first light. "&mdash;" means none was
+          recorded.</dd>
       </dl>
     </div>
   </div>

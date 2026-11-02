@@ -1189,7 +1189,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_summary_v3_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_summary_v4_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{_requested_plot_width(request, 500)}' + ('_salt' if salt2 else '')
         )
         cached_html = cache.get(cache_key)
@@ -1511,7 +1511,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_detail_v8_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_detail_v9_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
             + (f'_salt{salt_run.pk if salt_run is not None else 0}' if salt2 else '')
         )
