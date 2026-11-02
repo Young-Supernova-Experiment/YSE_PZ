@@ -54,7 +54,7 @@ database keep working.
 
 ## Pages (UI preview only; 404 otherwise)
 
-- **Save as Selection** on Transient Search (`POST selections/save/`).
+- **Save as Selection** on Transient Search (`POST selections/save/`). Facet choices (#842) are ordinary search parameters, so they are saved too.
 - **My Selections** (`selections/`): mine, my teams', all-YSE. Rename, re-share and delete where allowed.
 - **A Selection's results** (`selections/<slug>/`): the search table, with:
   - list stepping into the transient page (#850; `ls=sel`, `lt=<slug>`, `lq=` the page/sort);

@@ -1,0 +1,12 @@
+{# Facet sidebar with live counts (#842), UI preview only. #}
+<nav class="box yse-facets" id="search-facets" aria-labelledby="search-facets-title">
+  <div class="box-header with-border">
+    <h2 class="box-title" id="search-facets-title">Refine</h2>
+  </div>
+  <div class="box-body">
+    {# Slot for the rule builder (#843): it renders here, above the facets. #}
+    <div id="search-rule-builder-slot" data-yse-slot="rule-builder" hidden></div>
+    <p class="text-muted small mb-2">Counts are for the rows this search lists now. Pick a value to narrow it; pick it again to undo.</p>
+    <div id="search-facets-body" aria-live="polite">{% include 'YSE_App/search/_facet_list.html' %}</div>
+  </div>
+</nav>

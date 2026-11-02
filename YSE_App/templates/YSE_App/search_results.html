@@ -7,7 +7,7 @@
 {% block content_header %}
     <h1>
         Transient Search
-        <small>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% endif %}</small>
+        <small{% if ui_preview %} id="search-result-count"{% endif %}>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% endif %}</small>
     </h1>
     <ol class="breadcrumb">
       <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
@@ -27,9 +27,15 @@
   .yse-search-chip a { margin-left: .35rem; text-decoration: none; }
   .yse-search-actions .form-group { margin-right: .75rem; }
 </style>
+{% if ui_preview %}<link rel="stylesheet" href="{% static 'YSE_App/search-facets.css' %}?v=search-facets-1">{% endif %}
 {% endblock %}
 
 {% block content %}
+{% if ui_preview %}{# facet sidebar with live counts (#842) #}
+<div class="row" id="search-preview-layout">
+<aside class="col-lg-3" id="search-facets-col">{% include 'YSE_App/search/facets.html' %}</aside>
+<div class="col-lg-9" id="search-main">
+{% endif %}
 <div class="box" id="search-filters">
   <div class="box-body">
     <form id="transient-search-form" class="yse-search-form" action="{% url 'search' %}" method="get">
@@ -45,36 +51,7 @@
       {% endif %}
 
       <div class="accordion" id="search-filter-groups">
-        {% for group in filter_groups %}
-        <div class="card yse-search-group" id="search-group-{{ group.key }}">
-          <div class="card-header">
-            <button class="btn btn-link" type="button" data-toggle="collapse" data-target="#search-group-{{ group.key }}-body"
-                    aria-expanded="{% if group.active or forloop.first and not active_chips %}true{% else %}false{% endif %}"
-                    aria-controls="search-group-{{ group.key }}-body">
-              <i class="fa fa-caret-down" aria-hidden="true"></i> {{ group.title }}
-              {% if group.active %}<span class="badge badge-primary">{{ group.active }}</span>{% endif %}
-            </button>
-          </div>
-          <div id="search-group-{{ group.key }}-body" class="collapse{% if group.active or forloop.first and not active_chips %} show{% endif %}"
-               data-parent="#search-filter-groups-never">
-            <div class="card-body">
-              <div class="form-row">
-                {% for field in group.fields %}
-                <div class="form-group col-sm-6 col-md-3 col-xl-2">
-                  <label for="{{ field.id_for_label }}"{% if field.help_text %} title="{{ field.help_text }}"{% endif %}>{{ field.label }}</label>{% glossary_help_for_field field.name field.label %}
-                  {% if field.field.widget.input_type == 'select' %}
-                    {% render_field field class+="form-control form-control-sm" %}
-                  {% else %}
-                    {% render_field field class+="form-control form-control-sm" %}
-                  {% endif %}
-                  {% if field.help_text %}<small id="{{ field.id_for_label }}-help" class="form-text text-muted yse-search-help">{{ field.help_text }}</small>{% endif %}
-                </div>
-                {% endfor %}
-              </div>
-            </div>
-          </div>
-        </div>
-        {% endfor %}
+        {% include 'YSE_App/search/_filter_groups.html' %}
       </div>
 
       <div class="form-inline yse-search-actions mt-2">
@@ -111,17 +88,11 @@
     <div class="alert alert-danger mt-2 py-2" role="alert" id="selection-save-error">{{ selection_save.error }}</div>
     {% endif %}
 
-    {% if active_chips %}
-    <div class="mt-2" id="search-active-filters">
-      {% for chip in active_chips %}
-      <span class="yse-search-chip"><strong>{{ chip.label }}</strong>: {{ chip.value }}<a href="{{ chip.remove_url }}" title="Remove this filter" aria-label="Remove {{ chip.label }}">&times;</a></span>
-      {% endfor %}
-    </div>
-    {% endif %}
+    {% if ui_preview %}<div id="search-chips-slot">{% endif %}{% include 'YSE_App/search/_chips.html' %}{% if ui_preview %}</div>{% endif %}
   </div>
 </div>
 
-<div class="box" id="search-results">
+<div class="box" id="search-results"{% if ui_preview %} data-obs-blocked="{{ obs_tonight.blocked }}"{% endif %}>
   <div class="box-header with-border">
     <h3 class="box-title">Results{% if cone %} within {{ cone.2|floatformat:1 }}&Prime; of {{ cone.0|floatformat:5 }}, {{ cone.1|floatformat:5 }}{% endif %}</h3>
     <a class="btn btn-outline-secondary btn-sm float-right" id="search-export-csv" href="{{ export_url }}" title="Download every row of this search you may see as CSV"><i class="fa fa-download" aria-hidden="true"></i> CSV</a>
@@ -159,7 +130,7 @@
       </div>
       <button type="submit" class="btn btn-primary btn-sm" id="search-bulk-submit">Apply</button>
     </form>
-    {% if ui_preview %}<div data-yse-list-source="search">{% endif %}{# links into a transient keep this search (#850) #}
+    {% if ui_preview %}<div data-yse-list-source="search" id="search-results-table">{% endif %}{# links into a transient keep this search (#850) #}
     {% render_table table %}
     {% if ui_preview %}</div>{% endif %}
   </div>
@@ -243,6 +214,9 @@
   </div>
 </div>
 {% endif %}
+{% if ui_preview %}</div>{# #search-main #}
+</div>{# #search-preview-layout #}
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -288,7 +262,7 @@ $(function() {
   function transientStatusChangeErr() {
     alert("Transient Status may not have changed -- please use YSE Admin and contact the site admins.");
   }
-  $('.transientStatusChange').on('click', function(event) {
+  $(document).on('click', '.transientStatusChange', function(event) {
     event.preventDefault();
     var status_id = $(this).attr('data-status_id');
     var transient_id = $(this).attr('transient_id');
@@ -319,5 +293,6 @@ $(function() {
   });
 });
 </script>
-{% if ui_preview %}<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>{% endif %}
+{% if ui_preview %}<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+<script src="{% static 'YSE_App/search-facets.js' %}?v=search-facets-1"></script>{% endif %}
 {% endblock %}
