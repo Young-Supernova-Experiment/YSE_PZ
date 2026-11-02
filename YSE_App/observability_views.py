@@ -8,7 +8,7 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 from YSE_App.models import Transient
 from YSE_App.services import observability as svc
@@ -219,3 +219,42 @@ def observable_tonight_data(request):
     payload = dict(tonight.shortlist_visibility(targets, telescope, night, round(airmass, 2)))
     payload["date"] = night.isoformat()
     return JsonResponse(payload)
+
+
+def default_site_for(user):
+    """The user's saved "Observable tonight" site, if it still has coordinates (#959), else None."""
+    from YSE_App.services.groups import preferences_for
+
+    pref = preferences_for(user)
+    site_id = getattr(pref, "observing_default_site_id", None) if pref is not None else None
+    if not site_id:
+        return None
+    return svc.telescopes_with_coordinates().filter(pk=site_id).first()
+
+
+@login_required
+@require_POST
+def observable_tonight_default_site(request):
+    """Save (``site=<telescope id>``) or clear (``site=``) the user's default site (#959), preview users only."""
+    from django.http import Http404
+
+    from YSE_App.common.ui_preview import ui_preview_enabled
+    from YSE_App.models import UserPreference
+    from YSE_App.services.groups import forget_preferences
+
+    if not ui_preview_enabled(request):
+        raise Http404("Observable tonight is part of the UI preview.")
+    site = (request.POST.get("site") or "").strip()
+    telescope = None
+    if site:
+        telescope = svc.telescopes_with_coordinates().filter(pk=int(site)).first() if site.isdigit() else None
+        if telescope is None:
+            return JsonResponse({"error": "Choose a telescope with known coordinates."}, status=400)
+    pref, _created = UserPreference.objects.get_or_create(user=request.user)
+    pref.observing_default_site = telescope
+    pref.save(update_fields=["observing_default_site", "updated_at"])
+    forget_preferences(request.user)
+    return JsonResponse({
+        "default_site": telescope.pk if telescope else None,
+        "name": telescope.name if telescope else "",
+    })

@@ -147,6 +147,22 @@ class GlossaryTests(TestCase):
         self.assertIn("<code>51</code> REJECTED", html)
         self.assertIn("<code>23</code> BAD_SUBTRACTION", html)
 
+    def test_confirmed_definitions(self):
+        # Ryan's answers to the questions left open by #952 (#958).
+        client = Client()
+        client.force_login(self.user)
+        html = " ".join(client.get("/glossary/").content.decode("utf-8").split())
+        self.assertIn("Someone has looked at it (it is no longer New) but did not mark it Interesting or request "
+                      "follow-up, and did not want to ignore it yet.", html)
+        self.assertIn("this is the QUB score, which also runs from 0 to 1", html)
+        self.assertIn("Most data on the site are AB magnitudes.", html)
+        self.assertIn("that stored system is the one shown with the point", html)
+        self.assertIn("in the rest frame", html)
+        self.assertNotIn("observer frame", html)
+        self.assertIn("usually relative to the time of maximum light; in some cases it is relative to discovery or "
+                      "to the time of first light", html)
+        self.assertNotIn("whatever the uploader used", html)
+
     def test_anonymous_redirected_to_login(self):
         response = Client().get("/glossary/")
         self.assertEqual(response.status_code, 302)

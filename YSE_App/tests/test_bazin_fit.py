@@ -294,6 +294,9 @@ class BazinJointFitTests(TestCase):
         self.assertEqual(band_effective_wavelength("g"), 4770.0)
         self.assertEqual(band_effective_wavelength("r-ZTF"), 6440.0)
         self.assertEqual(band_effective_wavelength("orange-ATLAS"), 6790.0)
+        # ATLAS bands stored as c / o get the ATLAS wavelengths, not the default
+        self.assertEqual(band_effective_wavelength("c"), 5330.0)
+        self.assertEqual(band_effective_wavelength("o"), 6790.0)
         self.assertEqual(band_effective_wavelength("y-LSST"), 9710.0)
         self.assertEqual(band_effective_wavelength("UVW2"), 2030.0)
         self.assertEqual(band_effective_wavelength("r-bazin-db"), 6230.0)  # family fallback
