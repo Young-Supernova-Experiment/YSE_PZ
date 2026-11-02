@@ -168,9 +168,11 @@ class PlotColourTests(TestCase):
                 colours = _series_colours(self._doc(view))
                 self.assertEqual(colours['PS1 g'], AUDIT_PALETTE['g'])
                 self.assertEqual(colours['PS1 r'], AUDIT_PALETTE['r'])
-                # ATLAS c and o keep their g / r legend labels but have their own colours
-                self.assertEqual(colours['ATLAS g'], AUDIT_PALETTE['c'])
-                self.assertEqual(colours['ATLAS r'], AUDIT_PALETTE['o'])
+                # ATLAS c and o are bands of their own: own labels, own colours
+                self.assertEqual(colours['ATLAS c'], AUDIT_PALETTE['c'])
+                self.assertEqual(colours['ATLAS o'], AUDIT_PALETTE['o'])
+                self.assertNotIn('ATLAS g', colours)
+                self.assertNotIn('ATLAS r', colours)
                 self.assertEqual(colours['Swift UVW2'], AUDIT_PALETTE['UVW2'])
 
     def test_upper_limits_are_hollow_triangles_with_a_downward_stem(self):

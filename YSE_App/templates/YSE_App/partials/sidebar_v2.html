@@ -39,6 +39,14 @@ Every link is built with the url tag, so it keeps the stack's script prefix.
 </li>
 
 <li class="nav-header yse-nav-v2 yse-nav-observe">Observe</li>
+{% if user.is_authenticated %}
+<li class="nav-item">
+	<a href="{% url 'combined_list' %}" class="nav-link{% if url_name == 'combined_list' %} active{% endif %}">
+		<i class="nav-icon fa fa-list-ul"></i>
+		<p>Combined candidate list</p>
+	</a>
+</li>
+{% endif %}
 <li class="nav-item">
 	<a href="{% url 'followup' %}" class="nav-link{% if url_name == 'followup' %} active{% endif %}">
 		<i class="nav-icon fa fa-binoculars"></i>

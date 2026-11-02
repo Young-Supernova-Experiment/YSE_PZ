@@ -508,3 +508,10 @@ from YSE_App.models.external_service_models import ExternalServiceRun  # noqa: E
 from YSE_App.services import fit_tables  # noqa: E402
 
 post_save.connect(fit_tables.on_run_saved, sender=ExternalServiceRun, dispatch_uid="yse_fit_tables_run_saved")
+
+# Computed spectral phase (#848): a saved spectrum gets its phase rows; fits recompute them in
+# fit_tables.on_run_saved.
+from YSE_App.services import spectral_phase  # noqa: E402
+
+post_save.connect(spectral_phase.on_spectrum_saved, sender=TransientSpectrum,
+                  dispatch_uid="yse_spectral_phase_spectrum_saved")

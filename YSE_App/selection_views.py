@@ -22,6 +22,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django_tables2 import RequestConfig
 
 from YSE_App.common.ui_preview import ui_preview_enabled
+from YSE_App.download_views import download_menu_context
 from YSE_App.models import Selection
 from YSE_App.services import selections as svc
 
@@ -185,6 +186,10 @@ def selection_detail(request, slug):
         'api_url': reverse('selection-detail', kwargs={'slug': selection.slug}),
         'visibility_choices': Selection.VISIBILITY_CHOICES,
         'teams': svc.team_choices(request.user),
+        # Download -> Spectra / Photometry (#848); this page is preview-only already.
+        'download_menu': download_menu_context(
+            reverse('selection_download_spectra', kwargs={'slug': selection.slug}),
+            reverse('selection_download_photometry', kwargs={'slug': selection.slug})),
     })
 
 

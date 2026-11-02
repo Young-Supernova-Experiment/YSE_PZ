@@ -60,8 +60,11 @@ FILTER_ALIASES = {
     'g-ptf': 'g',
     'g-sm': 'g',
     'g-sm-skymapper': 'g',
-    'cyan': 'g',
-    'cyan-atlas': 'g',
+    # ATLAS cyan and orange are their own bands, c and o, never g or r.
+    'c': 'c',
+    'c-atlas': 'c',
+    'cyan': 'c',
+    'cyan-atlas': 'c',
     'r': 'r',
     'rp': 'r',
     'r-ztf': 'r',
@@ -70,8 +73,10 @@ FILTER_ALIASES = {
     'r-ptf': 'r',
     'r-cousins': 'r',
     'r-sm-skymapper': 'r',
-    'orange': 'r',
-    'orange-atlas': 'r',
+    'o': 'o',
+    'o-atlas': 'o',
+    'orange': 'o',
+    'orange-atlas': 'o',
     'i': 'i',
     'ip': 'i',
     'i-ztf': 'i',
@@ -100,7 +105,7 @@ FILTER_ALIASES = {
     'lssty': 'y',
 }
 
-_BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
+_BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'c', 'r', 'o', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
 
 # Effective wavelengths (Angstrom) for the joint Bazin fit (#225 follow-up):
 # the wavelength-correlated prior ties the light-curve shape of bands that
@@ -110,7 +115,7 @@ _BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up'
 FILTER_EFFECTIVE_WAVELENGTH_AA = {
     # canonical families (fallback per normalize_filter_name key)
     'u': 3560.0, 'B': 4380.0, 'V': 5450.0, 'g': 4770.0, 'r': 6230.0, 'i': 7630.0, 'z': 9050.0, 'y': 9620.0,
-    'w': 6080.0,
+    'w': 6080.0, 'c': 5330.0, 'o': 6790.0,
     # Johnson / Cousins
     'u-johnson': 3660.0, 'b-johnson': 4380.0, 'v-johnson': 5450.0, 'r-cousins': 6410.0, 'i-cousins': 7980.0,
     # SDSS / Sloan-like (LCOGT up/gp/rp/ip/zp)
@@ -121,7 +126,8 @@ FILTER_EFFECTIVE_WAVELENGTH_AA = {
     # ZTF
     'g-ztf': 4810.0, 'r-ztf': 6440.0, 'i-ztf': 7980.0,
     # ATLAS cyan / orange
-    'cyan': 5330.0, 'cyan-atlas': 5330.0, 'orange': 6790.0, 'orange-atlas': 6790.0,
+    'cyan': 5330.0, 'cyan-atlas': 5330.0, 'c-atlas': 5330.0,
+    'orange': 6790.0, 'orange-atlas': 6790.0, 'o-atlas': 6790.0,
     # Rubin / LSST
     'u-lsst': 3670.0, 'g-lsst': 4830.0, 'r-lsst': 6220.0, 'i-lsst': 7550.0, 'z-lsst': 8690.0, 'y-lsst': 9710.0,
     'lsstu': 3670.0, 'lsstg': 4830.0, 'lsstr': 6220.0, 'lssti': 7550.0, 'lsstz': 8690.0, 'lssty': 9710.0,
@@ -237,16 +243,19 @@ _FALLBACK_COLORS = ('#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3d
 
 
 def normalize_filter_name(band_name: str | None) -> str | None:
-    """Map a band name (e.g. r-ZTF, r-WFT, g-Sloan) to a canonical uBVgrizy key."""
+    """Map a band name (e.g. r-ZTF, r-WFT, g-Sloan) to a canonical uBVgrizy key.
+
+    ATLAS cyan and orange map to their own keys, ``c`` and ``o``.
+    """
     if not band_name:
         return None
     lower = band_name.strip().lower()
     if lower in FILTER_ALIASES:
         return FILTER_ALIASES[lower]
     if 'cyan' in lower:
-        return 'g'
+        return 'c'
     if 'orange' in lower:
-        return 'r'
+        return 'o'
     base = lower.split('-')[0]
     if base in _BASE_FILTER_KEYS:
         return FILTER_ALIASES.get(base, base)
@@ -272,8 +281,9 @@ def band_effective_wavelength(band_name: str | None) -> float:
     return DEFAULT_EFFECTIVE_WAVELENGTH_AA
 
 
-# Colour aliases beyond normalize_filter_name (#860): ATLAS c and o get their
-# own colours (their legend label stays g / r), as do the Swift UV bands and J/H/K.
+# Colour aliases beyond normalize_filter_name (#860): the Swift UV bands and
+# J/H/K get their own colours.  ATLAS c and o are canonical filters of their own
+# (legend labels c / o); their entries here only keep the lookup explicit.
 FILTER_COLOR_ALIASES = {
     'cyan': 'c', 'cyan-atlas': 'c',
     'orange': 'o', 'orange-atlas': 'o',
@@ -391,9 +401,9 @@ def filter_color_groups_for_display() -> list[dict]:
         'B': ['B', 'B-Johnson'],
         'V': ['V', 'V-Johnson', 'V-crts'],
         'g': ['g', 'g-ZTF', 'g-WFT', 'g-Sloan', 'g-PTF', 'g-LSST'],
-        'c': ['cyan-ATLAS'],
+        'c': ['c', 'cyan-ATLAS'],
         'r': ['r', 'r-ZTF', 'r-WFT', 'r-Sloan', 'R-Cousins', 'r-LSST'],
-        'o': ['orange-ATLAS'],
+        'o': ['o', 'orange-ATLAS'],
         'i': ['i', 'i-ZTF', 'i-Sloan', 'I-Cousins', 'ip'],
         'z': ['z', 'z-Sloan', 'zp'],
         'y': ['y', 'y-PS1'],

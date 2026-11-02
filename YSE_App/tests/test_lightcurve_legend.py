@@ -197,7 +197,7 @@ ABOM_COLUMNS = [
     ["Swope u", "Swope B", "Swope V"],
     ["LSST u", "LSST g", "LSST y"],
     ["ZTF g", "ZTF r", "ZTF i"],
-    ["ATLAS g", "ATLAS r"],
+    ["ATLAS c", "ATLAS o"],
     ["Swift UVW2", "Swift UVM2", "Swift UVW1", "Swift u", "Swift B", "Swift V"],
     ["Thacher J", "Thacher H"],
     ["today (61312)"],
@@ -384,7 +384,7 @@ class LightcurveLegendRenderTests(TestCase):
                     ["PS1 g", "PS1 w", "PS1 r", "PS1 i", "PS1 z", "PS1 y"],
                     ["Swope u", "Swope B", "Swope V"],
                     ["ZTF g", "ZTF r", "ZTF i"],
-                    ["ATLAS g", "ATLAS r"],
+                    ["ATLAS c", "ATLAS o"],
                 ],
                 [["Thacher J", "Thacher H"], [labels[-1]]],
             ],
@@ -441,7 +441,7 @@ class LightcurveLegendRenderTests(TestCase):
             ["PS1 g", "PS1 w", "PS1 r", "PS1 i", "PS1 z", "PS1 y"],
             ["Swope u", "Swope B", "Swope V"],
             ["ZTF g", "ZTF r", "ZTF i"],
-            ["ATLAS g", "ATLAS r"],
+            ["ATLAS c", "ATLAS o"],
             ["Thacher J", "Thacher H"],
         ])
         self.assertEqual(len(columns[-1]), 1)
@@ -453,7 +453,7 @@ class LightcurveLegendRenderTests(TestCase):
         self.assertEqual(len(blocks), 1)
         self.assertEqual(
             first_row(blocks)[:-1],
-            ["PS1 g", "DECam g", "Swope u", "LSST u", "ZTF g", "ATLAS g", "Swift UVW2", "Thacher J"],
+            ["PS1 g", "DECam g", "Swope u", "LSST u", "ZTF g", "ATLAS c", "Swift UVW2", "Thacher J"],
         )
         columns = legend_columns(blocks)
         self.assertEqual(columns[1], ["DECam g", "DECam r", "DECam i", "DECam z"])
@@ -474,7 +474,7 @@ class LightcurveLegendRenderTests(TestCase):
         blocks = legend_blocks(doc)
         self.assertEqual(len(blocks), 1)
         row = first_row(blocks)
-        self.assertEqual(row[5:8], ["ATLAS g", "Swift UVW2", "Thacher J"])
+        self.assertEqual(row[5:8], ["ATLAS c", "Swift UVW2", "Thacher J"])
         self.assertTrue(row[8].startswith("today ("))
         columns = blocks[0]["columns"]
         self.assertEqual([column["x"] for column in columns], [0, 72, 162, 248, 325, 393, 479, 583, 678])
@@ -487,7 +487,7 @@ class LightcurveLegendRenderTests(TestCase):
         blocks = legend_blocks(self._doc("lightcurveplot_detail", self.all_groups, width=400))
         self.assertEqual([len(block["columns"]) for block in blocks], [3, 3, 3])
         self.assertEqual(first_row(blocks), ["PS1 g", "DECam g", "Swope u"])
-        self.assertEqual([column["labels"][0] for column in blocks[1]["columns"]], ["LSST u", "ZTF g", "ATLAS g"])
+        self.assertEqual([column["labels"][0] for column in blocks[1]["columns"]], ["LSST u", "ZTF g", "ATLAS c"])
         self.assertEqual([column["labels"][0] for column in blocks[2]["columns"]][:2], ["Swift UVW2", "Thacher J"])
         # every block is as deep as its deepest column: PS1 (6), LSST / ZTF (3), Swift (6)
         self.assertEqual(
@@ -500,7 +500,7 @@ class LightcurveLegendRenderTests(TestCase):
         subset = self._doc("lightcurveplot_detail", self.subset, width=1000)
         full_labels = legend_series(legend_blocks(full))[:-1]
         subset_labels = legend_series(legend_blocks(subset))[:-1]
-        self.assertEqual(subset_labels, ["PS1 g", "PS1 z", "ZTF g", "ZTF r", "ATLAS r"])
+        self.assertEqual(subset_labels, ["PS1 g", "PS1 z", "ZTF g", "ZTF r", "ATLAS o"])
         self.assertEqual(
             subset_labels, [label for label in full_labels if label in subset_labels]
         )
@@ -564,8 +564,8 @@ class LightcurveLegendRenderTests(TestCase):
         # flux: 5 instruments + today at 400 px -> Thacher and today wrap (4 + 2);
         # summary: no today entry, 500 px fits all 5 instruments in one block.
         for view, first_labels, expected_blocks, n_columns, base_height in (
-            ("lightcurveplot_flux", ["PS1 g", "Swope u", "ZTF g", "ATLAS g"], [4, 2], 6, 200),
-            ("lightcurveplot_summary", ["PS1 g", "Swope u", "ZTF g", "ATLAS g", "Thacher J"], [5], 5, None),
+            ("lightcurveplot_flux", ["PS1 g", "Swope u", "ZTF g", "ATLAS c"], [4, 2], 6, 200),
+            ("lightcurveplot_summary", ["PS1 g", "Swope u", "ZTF g", "ATLAS c", "Thacher J"], [5], 5, None),
         ):
             with self.subTest(view=view):
                 doc = self._doc(view)

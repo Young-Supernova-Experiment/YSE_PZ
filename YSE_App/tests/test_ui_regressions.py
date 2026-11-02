@@ -47,10 +47,21 @@ class FilterDisplayTests(TestCase):
         self.assertEqual(telescope_display_symbol('ZTF-Cam'), 'diamond')
         self.assertEqual(telescope_display_symbol('Unknown'), 'triangle')
 
-    def test_atlas_cyan_keeps_the_g_label_but_has_its_own_colour(self):
-        # #860: the legend still reads "ATLAS g"; the colour is c, not g
-        self.assertEqual(normalize_filter_name('cyan-ATLAS'), 'g')
+    def test_atlas_cyan_and_orange_are_c_and_o(self):
+        # There is no ATLAS g or r: cyan is c, orange is o, in label and colour.
+        for name in ('cyan-ATLAS', 'cyan', 'c', 'C', 'c-ATLAS', 'cyan-ATLAS-forced'):
+            with self.subTest(name=name):
+                self.assertEqual(normalize_filter_name(name), 'c')
+                self.assertEqual(display_filter_label(name), 'c')
+        for name in ('orange-ATLAS', 'orange', 'o', 'O', 'o-ATLAS', 'orange-ATLAS-forced'):
+            with self.subTest(name=name):
+                self.assertEqual(normalize_filter_name(name), 'o')
+                self.assertEqual(display_filter_label(name), 'o')
         self.assertEqual(band_display_color('cyan-ATLAS', None), '#2890a1')
+        self.assertEqual(band_display_color('c', None), '#2890a1')
+        self.assertEqual(band_display_color('o', None), '#dd703d')
+        self.assertEqual(
+            plot_legend_label('orange-ATLAS', instrument_name='ACAM1', telescope_name='ATLAS'), 'ATLAS o')
 
     def test_display_filter_label_shortens_instrument_suffix(self):
         self.assertEqual(display_filter_label('r-ZTF'), 'r')

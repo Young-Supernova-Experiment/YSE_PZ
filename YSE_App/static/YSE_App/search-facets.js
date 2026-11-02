@@ -37,6 +37,13 @@
     $('#search-save-form input[name="params"]').val(d.save_params);
     $('#search-save-title').val(d.save_title);
     $('#search-save-sql').text(d.save_sql || '(not available)');
+    // Download -> Spectra / Photometry (#848): the forms carry the search as "params"
+    $('#download-spectra-form, #download-photometry-form').each(function () {
+      var $input = $(this).find('input[name="params"]');
+      if (!d.download_params) { $input.remove(); return; }
+      if (!$input.length) { $input = $('<input type="hidden" name="params">').prependTo(this); }
+      $input.val(d.download_params);
+    });
     $('#search-api-link').attr('href', d.api_url);
     $('#search-export-csv').attr('href', d.export_url);
     $('#search-bulk-result, #search-saved, #search-save-error, #selection-save-error, #search-errors').remove();

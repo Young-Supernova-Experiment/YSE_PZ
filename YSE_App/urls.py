@@ -19,11 +19,13 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
+from YSE_App import download_views
 from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import selection_views
+from YSE_App import combined_list_views
 from YSE_App.common import ui_preview as ui_preview_views
 from YSE_App import signup_views
 from YSE_App import access_views
@@ -256,7 +258,16 @@ urlpatterns = [
     re_path(r'^search/save/$', views.save_search, name='save_search'),
     re_path(r'^search/bulk/$', views.search_bulk_action, name='search_bulk_action'),
     re_path(r'^search/export/$', views.search_export_csv, name='search_export_csv'),
+    # Download -> Spectra / Photometry with options (#848); UI preview only.
+    re_path(r'^search/download/spectra/$', download_views.search_download_spectra, name='search_download_spectra'),
+    re_path(r'^search/download/photometry/$', download_views.search_download_photometry,
+            name='search_download_photometry'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/download/spectra/$', download_views.selection_download_spectra,
+            name='selection_download_spectra'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/download/photometry/$',
+            download_views.selection_download_photometry, name='selection_download_photometry'),
     # Selections (#841): saved criteria shared by owner, team or all YSE; pages are UI preview only.
+    re_path(r'^combined-list/$', combined_list_views.combined_list, name='combined_list'),
     re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),
     re_path(r'^selections/save/$', selection_views.selection_save, name='selection_save'),
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/$', selection_views.selection_detail, name='selection_detail'),
@@ -285,6 +296,8 @@ urlpatterns = [
     re_path(r'^observability/(?P<transient_id>[0-9]+)/data/$', observability_views.observability_data, name='observability_data'),
     # "Observable tonight" on a shortlist, preview users only (#854).
     re_path(r'^observable-tonight/$', observability_views.observable_tonight_data, name='observable_tonight_data'),
+    re_path(r'^observable-tonight/default-site/$', observability_views.observable_tonight_default_site,
+            name='observable_tonight_default_site'),
     re_path(r'^lightcurveplot_detail/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_detail, name='lightcurveplot_detail'),
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),

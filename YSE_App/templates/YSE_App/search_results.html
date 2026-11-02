@@ -27,7 +27,7 @@
   .yse-search-chip a { margin-left: .35rem; text-decoration: none; }
   .yse-search-actions .form-group { margin-right: .75rem; }
 </style>
-{% if ui_preview %}<link rel="stylesheet" href="{% static 'YSE_App/search-facets.css' %}?v=search-facets-1">{% endif %}
+{% if ui_preview %}<link rel="stylesheet" href="{% static 'YSE_App/search-facets.css' %}?v=search-facets-2">{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -96,6 +96,7 @@
   <div class="box-header with-border">
     <h3 class="box-title">Results{% if cone %} within {{ cone.2|floatformat:1 }}&Prime; of {{ cone.0|floatformat:5 }}, {{ cone.1|floatformat:5 }}{% endif %}</h3>
     <a class="btn btn-outline-secondary btn-sm float-right" id="search-export-csv" href="{{ export_url }}" title="Download every row of this search you may see as CSV"><i class="fa fa-download" aria-hidden="true"></i> CSV</a>
+    {% if download_menu %}{% include 'YSE_App/partials/download_menu.html' %}{% endif %}
   </div>
   <div class="box-body">
     {% if bulk_result %}
@@ -294,5 +295,5 @@ $(function() {
 });
 </script>
 {% if ui_preview %}<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
-<script src="{% static 'YSE_App/search-facets.js' %}?v=search-facets-1"></script>{% endif %}
+<script src="{% static 'YSE_App/search-facets.js' %}?v=search-facets-2"></script>{% endif %}
 {% endblock %}

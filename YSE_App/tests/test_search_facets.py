@@ -300,3 +300,51 @@ class FacetDisplayTests(FacetFixture):
         self.assertIsNone(sf.facet_counts(fs, self.member, QueryDict("ra=10"), use_cache=False))
         self.assertEqual(sf.build_facets(None, QueryDict()), [])
         self.assertTrue(Transient.objects.exists())
+
+
+class FacetWithSpectralPhaseTests(FacetFixture):
+    """The facets next to the spectral-phase filters and Download menus (#848)."""
+
+    PHASE = "spec_phase_min=-5&spec_phase_max=40&spec_phase_ref=discovery"
+
+    def test_spectra_filter_group_renders_for_preview_users_only(self):
+        html = _client(self.member, True).get("/search/").content.decode()
+        self.assertIn('id="search-group-spectra"', html)
+        self.assertIn('name="spec_phase_min"', html)
+        off = _client(self.member, False).get("/search/").content.decode()
+        self.assertNotIn('id="search-group-spectra"', off)
+        data = _client(self.member, True).get("/search/?status=New", HTTP_X_YSE_PARTIAL="search").json()
+        self.assertIn('id="search-group-spectra"', data["groups_html"])
+        self.assertIn('name="spec_phase_ref"', data["groups_html"])
+
+    def test_download_menus_get_the_new_search_params(self):
+        html = _client(self.member, True).get("/search/").content.decode()
+        self.assertIn('id="download-spectra-form"', html)
+        self.assertIn('id="download-photometry-form"', html)
+        data = _client(self.member, True).get("/search/?status=New&page=2", HTTP_X_YSE_PARTIAL="search").json()
+        self.assertEqual(QueryDict(data["download_params"]).getlist("status"), ["New"])
+        self.assertNotIn("page", QueryDict(data["download_params"]))
+        self.assertEqual(data["download_params"], data["bulk_params"])
+
+    def test_phase_params_survive_facet_clicks(self):
+        params = QueryDict(self.PHASE, mutable=True)
+        clicked = sf.facet_toggle_params(params, "status", "New")
+        for key in ("spec_phase_min", "spec_phase_max", "spec_phase_ref"):
+            self.assertEqual(clicked.get(key), params.get(key), key)
+        bucket = sf.facet_toggle_params(params, "peak_mag", "mag_18_19")
+        self.assertEqual(bucket.get("spec_phase_ref"), "discovery")
+        data = _client(self.member, True).get("/search/?" + self.PHASE, HTTP_X_YSE_PARTIAL="search").json()
+        self.assertIn("spec_phase_ref=discovery", data["facets_html"])
+        self.assertIn("spec_phase_ref=discovery", data["download_params"])
+
+    def test_phase_params_survive_save_as_selection(self):
+        client = _client(self.member, True)
+        data = client.get("/search/?status=New&" + self.PHASE, HTTP_X_YSE_PARTIAL="search").json()
+        response = client.post(reverse("selection_save"), {"name": "Facet phase pick", "visibility": "me",
+                                                           "params": data["bulk_params"]})
+        self.assertEqual(response.status_code, 302)
+        saved = QueryDict(Selection.objects.get(name="Facet phase pick").search_params)
+        self.assertEqual(saved.get("spec_phase_ref"), "discovery")
+        self.assertEqual(saved.get("spec_phase_min"), "-5")
+        self.assertEqual(saved.get("spec_phase_max"), "40")
+        self.assertEqual(saved.getlist("status"), ["New"])
