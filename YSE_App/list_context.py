@@ -2,7 +2,8 @@
 
 A list page adds its context to the links into the transient page:
 
-* ``ls``: the list source, one of :data:`SOURCES` (``dash``, ``search``, ``tag``, ``sel``);
+* ``ls``: the list source, one of :data:`SOURCES` (``dash``, ``search``, ``tag``, ``sel``,
+  ``comb`` for the combined candidate list of #849);
 * ``lq``: the list page's own query string (filters, sort, page), unchanged;
 * ``lt``: the dashboard tab (``dash``), or the Selection's slug (``sel``, #841).
 
@@ -24,7 +25,7 @@ from django.utils.http import urlencode
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ('dash', 'search', 'tag', 'sel')
+SOURCES = ('dash', 'search', 'tag', 'sel', 'comb')
 MAX_QUERY_LENGTH = 2000
 MAX_LABEL_LENGTH = 160
 
@@ -185,7 +186,30 @@ def _selection(request, transient, query, slug):
                 page_param=table.prefixed_page_field)
 
 
-_BUILDERS = {'dash': _dash, 'search': _search, 'tag': _tag, 'sel': _selection}
+def _combined(request, transient, query, tab):
+    """The combined candidate list (#849), rebuilt from its sources for the viewing user.
+
+    The follow-up comment default names the sources that brought this object in.
+    """
+    from YSE_App.combined_list_views import combined_table
+    from YSE_App.services.combined_list import reasons_for, reasons_text
+
+    sub = _sub_request(request, query)
+    table, sources, _choice = combined_table(sub)
+    window = table_window(table, transient.pk)
+    if window is None:
+        return None
+    why = reasons_text(reasons_for(sources, [transient.pk]).get(transient.pk))
+    back = reverse('combined_list')
+    if query:
+        back = '%s?%s' % (back, query)
+    info = dict(window, label='Combined candidate list', back_url=back, page_param=table.prefixed_page_field)
+    if why:
+        info['comment'] = 'In list: Combined candidate list (why: %s)' % why
+    return info
+
+
+_BUILDERS = {'dash': _dash, 'search': _search, 'tag': _tag, 'sel': _selection, 'comb': _combined}
 
 
 def parse_list_params(get):
@@ -234,5 +258,5 @@ def list_step_context(request, transient):
         'prev_url': step_url(info['prev']),
         'next_url': step_url(info['next']),
         'back_url': info['back_url'],
-        'default_comment': 'In list: %s' % label,
+        'default_comment': info.get('comment') or 'In list: %s' % label,
     }
