@@ -170,7 +170,12 @@ class FacetCostTests(FacetFixture):
             # one GROUP BY per value facet plus one aggregate for every range bucket;
             # anything else is the viewer's group lookup for the visible stat values
             self.assertEqual(len(counting), len(sf.FACETS) + 1, sqls)
-            self.assertLessEqual(len(sqls), len(sf.FACETS) + 4, sqls)
+            # the rest are small per-viewer lookups (groups, access rules), never a scan of the transients
+            others = [s for s in sqls if s not in counting]
+            self.assertLessEqual(len(others), 6, others)
+            for s in others:
+                self.assertNotIn("FROM `YSE_App_transient`", s)
+                self.assertNotIn('FROM "YSE_App_transient"', s)
             self.assertEqual(len(cached.captured_queries), 0)
             for q in ctx.captured_queries:
                 self.assertNotIn("transientphotdata", q["sql"].lower())
