@@ -210,10 +210,12 @@ def _value_counts(qs, facet):
 
 def _range_counts(qs, user):
     """``{bucket key: count}`` for every range facet, in one aggregate statement."""
-    from YSE_App.filters.transient_search import annotate_best_redshift, visible_stat_lookups
+    from YSE_App.filters.transient_search import annotate_best_redshift
+    from YSE_App.services.photstat_visibility import annotate_stat_fields
 
     qs = qs.order_by()
-    qs, names = visible_stat_lookups(qs, user, ['peak_mag'])
+    # selected (annotate), not alias(): the aggregate may wrap the rows in a subquery
+    qs, names = annotate_stat_fields(qs, user, ['peak_mag'])
     qs = annotate_best_redshift(qs)
     names = dict(names, best_redshift='best_redshift')
     aggregates = {}
