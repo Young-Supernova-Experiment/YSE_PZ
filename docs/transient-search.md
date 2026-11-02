@@ -263,6 +263,43 @@ filter's `help_text`), which DRF's schema view lists next to the query parameter
 filter has no description. The schema stays DRF's built-in `get_schema_view`; moving to drf-spectacular
 belongs with the Django 5.2 upgrade (#601).
 
+## Facet sidebar with live counts (#842, UI preview only)
+
+With the UI preview switch on, the page gets a "Refine" sidebar (`YSE_App/services/search_facets.py`,
+templates under `YSE_App/templates/YSE_App/search/`). Each facet lists values with the number of rows the
+search lists now that the value would keep:
+
+| facet | parameter it sets | counted by |
+|---|---|---|
+| Status | `status` | `GROUP BY` status name |
+| Class (spectroscopic) | `spec_class` | `GROUP BY` best spectroscopic class |
+| Tags | `tags` (any of) | `GROUP BY` tag on the tag link table, over the matching ids |
+| Survey / telescope group | `obs_group` | `GROUP BY` observation group |
+| Internal survey | `internal_survey` | `GROUP BY` internal survey |
+| Peak magnitude | `peak_mag_min` / `peak_mag_max` | conditional counts on the stored `TransientPhotStat` peak the viewer may see |
+| Redshift | `redshift_min` / `redshift_max`, `has_redshift=false` | conditional counts on the best redshift (`redshift_sql`) |
+| Discovered | `days_since_disc_max` | conditional counts on `disc_date` (the filter's own database-side "now") |
+
+- **Same parameters as the form.** A facet value is a link to the same search with one parameter added or
+  removed, so URLs, "Save as SQL query" and "Save as Selection" (#841) keep the facet state.
+- **Counts are over the filtered, listed rows.** They run on the search's own queryset, which already applies
+  `filter_listed_transients` (#607), so a transient the viewer may not see listed is never counted; the
+  magnitude buckets read the stat value the viewer may see (#607), never hidden photometry.
+- **Cost.** Five `GROUP BY` statements plus one aggregate for all range buckets: six statements whatever the
+  number of rows, none on the raw photometry table. They are cached for `SEARCH_FACET_CACHE_SECONDS`
+  (Django setting, default 60; no settings.ini line needed) per viewer and normalised filter string
+  (paging, sorting and ordering left out).
+- **Buckets use the filters' inclusive bounds**, so a bucket's count is exactly what clicking it returns; a value
+  on an edge (a peak of exactly 19.0) counts in both neighbouring buckets.
+- **Partial reload.** `static/YSE_App/search-facets.js` (jQuery) fetches the clicked URL with the header
+  `X-YSE-Partial: search`; the view answers with JSON fragments (facets, filter groups, chips, results table)
+  and the new hidden `params` of the bulk, Save-as-SQL and Save-as-Selection forms. Without JavaScript the links
+  load the page. Responses carry `Vary: X-YSE-Partial`; the JSON is never cached.
+- **Rule builder (#843)** renders into `#search-rule-builder-slot` at the top of the sidebar.
+- The preview tag page (#866) links to the tags facet.
+
+With the preview off the page is unchanged.
+
 ## Not in this change (rest of #284)
 
 * Select2 on the multi-selects, together with the tag Select2 of #86.
@@ -274,3 +311,7 @@ belongs with the Django 5.2 upgrade (#601).
 property, one with private photometry and spectra), one test per filter family, a one-query
 assertion per filter, quick-search parsing, page rendering (form, chips, hidden legacy parameters,
 sort / per-page, error display, JS syntax check) and API parity / legacy names / 400s.
+
+`YSE_App/tests/test_search_facets.py`: facet counts equal the rows each value returns (for three viewers),
+hidden transients and hidden photometry never counted, the statement count (six, not growing with rows; zero when
+cached), both preview states of the page, the partial reload, and Save as Selection with facet parameters.

@@ -2819,6 +2819,8 @@ def delete_followup_request(request, request_id):
     return _followup_tab_redirect(slug)
     
 SEARCH_PER_PAGE_CHOICES = (25, 50, 100, 200)
+#: Request header of the facet sidebar's partial reload (#842, UI preview only).
+SEARCH_PARTIAL_HEADER = 'X-YSE-Partial'
 
 
 def search_results_queryset(user=None):
@@ -2946,6 +2948,7 @@ class SearchResultsView(TemplateView):
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
         context['obs_tonight'] = self._obs_tonight_context(filterset, context['result_count'])
         context['selection_save'] = self._selection_save_context(filterset)
+        context['search_facets'] = self._facets_context(filterset, params)
         context['download_menu'] = self._download_menu_context(params, preview)
         return context
 
@@ -2957,6 +2960,64 @@ class SearchResultsView(TemplateView):
 
         return download_menu_context(reverse('search_download_spectra'), reverse('search_download_photometry'),
                                      self._bulk_params(params))
+
+    def _facets_context(self, filterset, params):
+        """The facet sidebar with live counts (#842), UI preview only; ``None`` otherwise."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+        from YSE_App.services.search_facets import build_facets, facet_counts
+
+        if not ui_preview_enabled(self.request):
+            return None
+        counts = facet_counts(filterset, self.request.user, params)
+        return build_facets(counts, params)
+
+    def get(self, request, *args, **kwargs):
+        """The page; with ``X-YSE-Partial: search`` (preview only) the parts a facet click changes, as JSON."""
+        from django.utils.cache import add_never_cache_headers, patch_vary_headers
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        if not ui_preview_enabled(request):
+            return super().get(request, *args, **kwargs)
+        context = self.get_context_data(**kwargs)
+        if request.headers.get(SEARCH_PARTIAL_HEADER) != 'search':
+            response = self.render_to_response(context)
+            patch_vary_headers(response, (SEARCH_PARTIAL_HEADER,))
+            return response
+        response = JsonResponse(self._partial_payload(request, context))
+        patch_vary_headers(response, (SEARCH_PARTIAL_HEADER,))
+        add_never_cache_headers(response)
+        return response
+
+    @staticmethod
+    def _partial_payload(request, context):
+        """Fragments and values the facet script swaps in without reloading the page (#842)."""
+        from django.template.loader import render_to_string
+
+        def part(name):
+            return render_to_string('YSE_App/search/%s.html' % name, context, request=request)
+
+        count = context.get('result_count')
+        obs = context.get('obs_tonight') or {}
+        return {
+            'facets_html': part('_facet_list'),
+            'groups_html': part('_filter_groups'),
+            'chips_html': part('_chips'),
+            'table_html': part('_table'),
+            'result_count': count,
+            'count_text': '' if count is None else '%d match%s' % (count, '' if count == 1 else 'es'),
+            'select_all_label': 'All %s matches (ignores ticks)' % ('' if count is None else count),
+            'bulk_params': context.get('bulk_params', ''),
+            'save_params': context.get('save_search_params', ''),
+            'save_title': context.get('save_search_title', ''),
+            'save_sql': context.get('save_search_sql') or '',
+            'save_blocked': bool(context.get('save_search_error')),
+            'selection_name': (context.get('selection_save') or {}).get('name', ''),
+            'api_url': context.get('api_url', ''),
+            'export_url': context.get('export_url', ''),
+            'obs_blocked': obs.get('blocked', ''),
+            'download_params': (context.get('download_menu') or {}).get('params', ''),
+            'has_errors': bool(context['filterset'].form.errors),
+        }
 
     def _selection_save_context(self, filterset):
         """"Save as Selection" (#841) for preview users: teams to share with, name suggestion, last error."""

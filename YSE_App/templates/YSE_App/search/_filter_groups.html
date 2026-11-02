@@ -1,0 +1,31 @@
+{% load widget_tweaks %}{% load glossary_extras %}{# The search filter groups (#284); also the facet partial reload (#842). #}
+        {% for group in filter_groups %}
+        <div class="card yse-search-group" id="search-group-{{ group.key }}">
+          <div class="card-header">
+            <button class="btn btn-link" type="button" data-toggle="collapse" data-target="#search-group-{{ group.key }}-body"
+                    aria-expanded="{% if group.active or forloop.first and not active_chips %}true{% else %}false{% endif %}"
+                    aria-controls="search-group-{{ group.key }}-body">
+              <i class="fa fa-caret-down" aria-hidden="true"></i> {{ group.title }}
+              {% if group.active %}<span class="badge badge-primary">{{ group.active }}</span>{% endif %}
+            </button>
+          </div>
+          <div id="search-group-{{ group.key }}-body" class="collapse{% if group.active or forloop.first and not active_chips %} show{% endif %}"
+               data-parent="#search-filter-groups-never">
+            <div class="card-body">
+              <div class="form-row">
+                {% for field in group.fields %}
+                <div class="form-group col-sm-6 col-md-3 col-xl-2">
+                  <label for="{{ field.id_for_label }}"{% if field.help_text %} title="{{ field.help_text }}"{% endif %}>{{ field.label }}</label>{% glossary_help_for_field field.name field.label %}
+                  {% if field.field.widget.input_type == 'select' %}
+                    {% render_field field class+="form-control form-control-sm" %}
+                  {% else %}
+                    {% render_field field class+="form-control form-control-sm" %}
+                  {% endif %}
+                  {% if field.help_text %}<small id="{{ field.id_for_label }}-help" class="form-text text-muted yse-search-help">{{ field.help_text }}</small>{% endif %}
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
