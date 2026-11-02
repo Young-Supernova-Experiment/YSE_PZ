@@ -18,7 +18,7 @@ Bazin rows are written only when the peak is no earlier than the last non-detect
 (``BazinFit.peak_after_last_non_detection`` is not False). ``is_default`` marks the default
 reference of a spectrum: ``bazin_rest``, or ``bazin_obs`` when there is no redshift.
 
-Both foreign keys carry database-level ``ON DELETE CASCADE`` (migration 0068), so deletes by
+Both foreign keys carry database-level ``ON DELETE CASCADE`` (migration 0070), so deletes by
 code that does not know this table still work.
 """
 

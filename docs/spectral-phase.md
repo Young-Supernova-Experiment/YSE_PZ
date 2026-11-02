@@ -17,11 +17,11 @@ and Download -> Spectra puts it in a manifest. There is no separate spectra sear
 (`BazinFit.peak_after_last_non_detection` is not False; unknown counts as valid). Otherwise the spectrum has no
 `bazin_*` row and no default phase.
 
-## Storage: `YSE_App.models.SpectrumPhase` (table `YSE_App_spectrumphase`, migrations 0067 and 0068)
+## Storage: `YSE_App.models.SpectrumPhase` (table `YSE_App_spectrumphase`, migrations 0069 and 0070)
 
 One row per spectrum and reference: `phase` (days), `frame`, `redshift` (used for the rest frame), `reference_mjd`,
 `spectrum_mjd`, `is_default`. Both foreign keys (`spectrum`, `transient`) carry MySQL `ON DELETE CASCADE`
-(0068, through `YSE_App/common/fk_on_delete.py`), so develop's deletes on the shared database still work.
+(0070, through `YSE_App/common/fk_on_delete.py`), so develop's deletes on the shared database still work.
 
 Rows are rewritten (`YSE_App/services/spectral_phase.py`):
 

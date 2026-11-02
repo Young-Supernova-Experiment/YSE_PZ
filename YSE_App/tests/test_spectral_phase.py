@@ -45,7 +45,7 @@ from YSE_App.tests.fixtures_minimal import (
 )
 from YSE_App.tests.test_fit_tables import bazin_result, salt_result
 
-phase_migration = importlib.import_module("YSE_App.migrations.0068_spectrum_phase_fk_on_delete")
+phase_migration = importlib.import_module("YSE_App.migrations.0070_spectrum_phase_fk_on_delete")
 PREVIEW_COOKIE = "yse-ui-preview"
 MJD0 = datetime.datetime(1858, 11, 17, tzinfo=datetime.timezone.utc)
 

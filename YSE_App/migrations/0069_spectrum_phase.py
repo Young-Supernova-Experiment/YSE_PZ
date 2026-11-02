@@ -2,7 +2,7 @@
 
 One new table only: no existing table, column or row changes. Its foreign keys to
 ``YSE_App_transientspectrum`` and ``YSE_App_transient`` (tables develop knows) get database-level
-``ON DELETE CASCADE`` in 0068 (``YSE_App/common/fk_on_delete.py``), so develop's deletes of a
+``ON DELETE CASCADE`` in 0070 (``YSE_App/common/fk_on_delete.py``), so develop's deletes of a
 spectrum or a transient on the shared database still succeed. Nothing is filled here:
 ``manage.py backfill_spectral_phases --apply`` writes rows for existing spectra.
 """
@@ -14,7 +14,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('YSE_App', '0066_selection_fk_on_delete'),
+        ('YSE_App', '0068_userpreference_default_site_on_delete'),
     ]
 
     operations = [
