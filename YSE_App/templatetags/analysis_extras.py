@@ -19,7 +19,8 @@ RESULT_LABELS = {
     "ndof": "Degrees of freedom",
     "reduced_chi2": "χ²/dof",
     "t0": "t₀ (MJD)",
-    "phase_today": "Phase today (days)",
+    "phase_today": "Phase today (observer-frame days)",
+    "phase_today_rest": "Phase today (rest-frame days)",
     "z": "Redshift z",
     "z_source": "Redshift source",
     # Bazin
@@ -40,6 +41,8 @@ RESULT_LABELS = {
     "mB": "m_B (mag)",
     "amplitude": "Amplitude",
     "mwebv": "E(B−V)_MW (mag)",
+    "bands_skipped": "Bands skipped (no sncosmo bandpass)",
+    "note": "Note",
     # NGSF
     "best_type": "Best type",
     "best_template": "Best template",
