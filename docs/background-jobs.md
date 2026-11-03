@@ -184,7 +184,7 @@ a row, pre-marked read, so it never shows as unread.
 |---|---|---|---|---|
 | Comment mentions | `comment_mention` | on | on | on |
 | Follow-up requests and status | `followup_request`, `followup_status` | on | on | on |
-| Alerts | `alert`, `upload_error` | on | on | on |
+| Alerts | `alert`, `upload_error`, `candidate`, `selection_alert` | on | on | on |
 | Favorite transients | `favorite_activity` (batched, see `favorites-and-notifications.md`) | on | on | on |
 | System and jobs | `system`, `job_result` and any other kind | on | off | off |
 
@@ -203,6 +203,7 @@ Every application email goes through `notify()` (issue #320 / #69):
 | new `TransientFollowup` (classical, ToO or queued resource) | `followup_request` | `UserTelescopeToFollow` followers of the telescope, not the requester | `YSE_App.services.followup_notices` (post_save receiver in `followup_models.py`) |
 | K2 transient alert (`alert.SendTransientAlert`) | `alert` | every active user except `admin` (SMS to on-call users unchanged) | `YSE_App.common.alert` |
 | data-upload failure in `data_utils` (`add_transient`, survey/GW/host uploads) | `upload_error` | the uploading account | `YSE_App.data_utils._notify_upload_failure` |
+| alert on a Selection (#844; off unless `SELECTION_ALERTS_ENABLED`) | `selection_alert` | the alert's owner, or every member of a team its owner owns (or that team's Slack channel, job `selection_alerts.slack`) | `YSE_App.services.selection_alerts` (job `selection_alerts.run`) |
 
 The comment author is never notified about their own comment. The HTML
 bodies of the old emails are kept; the plain-text part is new. Comments are

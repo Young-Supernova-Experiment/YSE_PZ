@@ -59,4 +59,5 @@ from YSE_App.models.catalog_models import (  # noqa: F401
 from YSE_App.models.duplicate_models import DuplicateDataDecision  # noqa: F401
 from YSE_App.models.fit_models import BazinFit, SaltFit  # noqa: F401
 from YSE_App.models.selection_models import Selection  # noqa: F401
+from YSE_App.models.selection_alert_models import SelectionAlert, SelectionAlertSnapshot  # noqa: F401
 from YSE_App.models.spectral_phase_models import SpectrumPhase  # noqa: F401
