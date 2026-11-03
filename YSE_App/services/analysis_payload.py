@@ -20,6 +20,9 @@ Shape (every key present, empty when not requested)::
       "params": {...}            # the run's request parameters
     }
 
+A run with ``params["selection"]`` (a subset fit, #847) gets only the selected points
+among those the user may see; see :mod:`YSE_App.services.fit_subset`.
+
 Fluxes are on the 27.5 zero point used by the light-curve plots and the
 Bazin fit (``services.bazin.FLUX_ZERO_POINT``); when a row has only a
 magnitude the flux is derived from it. Rows without a magnitude but with a
@@ -105,19 +108,30 @@ def transient_section(transient) -> Dict:
     }
 
 
-def photometry_rows(user, transient) -> List[Dict]:
-    """Every photometry point the user may see, oldest first."""
+def photometry_rows(user, transient, selection: Optional[Dict] = None) -> List[Dict]:
+    """Every photometry point the user may see, oldest first.
+
+    With ``selection`` (a canonical subset from :mod:`YSE_App.services.fit_subset`, #847),
+    only those of them it selects: the subset is applied after the access check, so it can
+    only ever narrow what the user may see.
+    """
     from YSE_App.data import PhotometryService
+    from YSE_App.services.fit_subset import point_matches
 
     rows = (
         PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(user, transient.pk, includeBadData=True)
-        .select_related("band", "band__instrument", "mag_sys")
+        .select_related("band", "band__instrument", "band__instrument__telescope", "mag_sys")
         .order_by("obs_date")
     )
     out = []
     for p in rows:
         band = p.band
         instrument = band.instrument.name if band.instrument_id else ""
+        if selection:
+            telescope = band.instrument.telescope.name if band.instrument_id and band.instrument.telescope_id else ""
+            if not point_matches(selection, mjd=mjd_of(p.obs_date), band=band.name, telescope=telescope,
+                                 mask=p.quality_mask):
+                continue
         mag = _finite(p.mag)
         mag_err = _finite(p.mag_err)
         flux = _finite(p.flux)
@@ -244,7 +258,9 @@ def build_payload(transient, user, input_spec=None, params=None) -> Dict:
         "params": dict(params or {}),
     }
     if want_all or "photometry" in spec:
-        payload["photometry"] = photometry_rows(user, transient)
+        from YSE_App.services.fit_subset import selection_from_params
+
+        payload["photometry"] = photometry_rows(user, transient, selection_from_params(params))
         payload["photstat"] = photstat_section(transient, user)
     if want_all or "spectra" in spec:
         payload["spectra"] = spectra_rows(user, transient)

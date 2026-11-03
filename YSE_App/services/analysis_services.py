@@ -248,6 +248,17 @@ def coerce_params(profile: AnalysisService, raw: Optional[Dict]) -> Dict:
             errors[name] = str(exc) or "invalid"
             continue
         out[name] = value
+    if "selection" in raw:
+        # A subset fit (#847): stored in its canonical form, so repeating it gives the same points.
+        from YSE_App.services.fit_subset import SelectionError, normalize_selection
+
+        try:
+            selection = normalize_selection(raw.pop("selection"))
+        except SelectionError as exc:
+            errors["selection"] = str(exc)
+        else:
+            if selection is not None:
+                out["selection"] = selection
     for key, value in raw.items():
         if key in ("csrfmiddlewaretoken", "service", "transient"):
             continue

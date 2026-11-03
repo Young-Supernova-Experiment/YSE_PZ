@@ -1,0 +1,51 @@
+{# "Fit part of the data" on the Analysis tab, UI preview only (#847). Context: fit_subset from analysis_views.subset_context. Driven by static/YSE_App/fit-subset.js. #}
+<div class="card card-outline card-secondary" id="fit_subset_card">
+	<div class="card-header"><h3 class="card-title"><i class="fa fa-filter"></i> Fit part of the data</h3></div>
+	<div class="card-body">
+		{% if fit_subset.services %}
+		<form id="fit_subset_form" onsubmit="return false;" data-csrf="{{ csrf_token }}">
+			<p class="text-muted small">Run a Bazin or SALT fit on some of the points you may see, for example to see what was known on a date. The run is listed as a <span class="badge badge-secondary">subset</span> and never supplies the default values; the selection is saved with it, so it can be repeated.</p>
+			<div class="form-group form-group-sm">
+				<label class="small" for="fit_subset_service">Fit</label>
+				<select class="form-control form-control-sm" id="fit_subset_service">
+					{% for s in fit_subset.services %}<option value="{{ s.slug }}" data-kind="{{ s.kind }}">{{ s.name }}</option>{% endfor %}
+				</select>
+			</div>
+			<div class="form-group form-group-sm">
+				<label class="small" for="fit_subset_until">Points up to (MJD or UTC YYYYMMDD.ddd)</label>
+				<input class="form-control form-control-sm" type="text" id="fit_subset_until" placeholder="e.g. 60500.5 or 20240715.5" autocomplete="off">
+				<small class="form-text text-muted">Points observed on or before this time. Blank: no date cut.</small>
+			</div>
+			{% if fit_subset.options.bands %}
+			<fieldset class="form-group form-group-sm fit-subset-group" data-key="bands">
+				<legend class="small font-weight-bold mb-1">Only these bands <span class="text-muted font-weight-normal">(none ticked: all)</span></legend>
+				{% for b in fit_subset.options.bands %}
+				<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="fit_subset_band_{{ forloop.counter }}" value="{{ b }}"><label class="form-check-label small" for="fit_subset_band_{{ forloop.counter }}">{{ b }}</label></div>
+				{% endfor %}
+			</fieldset>
+			{% endif %}
+			{% if fit_subset.options.telescopes %}
+			<fieldset class="form-group form-group-sm fit-subset-group" data-key="telescopes">
+				<legend class="small font-weight-bold mb-1">Only these telescopes <span class="text-muted font-weight-normal">(none ticked: all)</span></legend>
+				{% for t in fit_subset.options.telescopes %}
+				<div class="form-check"><input class="form-check-input" type="checkbox" id="fit_subset_tel_{{ forloop.counter }}" value="{{ t }}"><label class="form-check-label small" for="fit_subset_tel_{{ forloop.counter }}">{{ t }}</label></div>
+				{% endfor %}
+			</fieldset>
+			{% endif %}
+			{% if fit_subset.options.quality %}
+			<fieldset class="form-group form-group-sm fit-subset-group" data-key="quality">
+				<legend class="small font-weight-bold mb-1">Only these quality levels <span class="text-muted font-weight-normal">(none ticked: all)</span></legend>
+				{% for key, label in fit_subset.options.quality %}
+				<div class="form-check"><input class="form-check-input" type="checkbox" id="fit_subset_q_{{ key }}" value="{{ key }}"><label class="form-check-label small" for="fit_subset_q_{{ key }}">{{ label }}</label></div>
+				{% endfor %}
+				<small class="form-text text-muted">Points flagged as bad stay out unless the fit's own settings include them, as in a full fit.</small>
+			</fieldset>
+			{% endif %}
+			<button type="button" class="btn btn-sm btn-secondary" id="fit_subset_run_btn"><i class="fa fa-play"></i> Run subset fit</button>
+			<span class="text-danger small" id="fit_subset_error" aria-live="polite"></span>
+		</form>
+		{% else %}
+		<p class="text-muted small mb-0">No Bazin or SALT fit service is enabled for your groups.</p>
+		{% endif %}
+	</div>
+</div>

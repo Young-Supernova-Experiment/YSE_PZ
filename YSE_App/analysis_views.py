@@ -28,7 +28,7 @@ from YSE_App.models import AnalysisResultFile, AnalysisService, ExternalService,
 from YSE_App.services import analysis_services as svc
 from YSE_App.services import external_services as runs
 from YSE_App.common.ui_preview import ui_preview_enabled
-from YSE_App.services import fit_status, fit_tables
+from YSE_App.services import fit_status, fit_subset, fit_tables
 from YSE_App.services.visibility import filter_transients_by_user_access
 
 POLL_SECONDS = 4
@@ -89,13 +89,16 @@ def analysis_tab_context(request, transient):
         qs = qs.filter(created_by=request.user)
     run_rows = [_run_entry(r, request.user) for r in qs[:50]]
     fit_history = None
+    subset = None
     if ui_preview_enabled(request):
         # Preview only (#846): every Bazin / SALT fit of the runs this user may see.
         fit_history = fit_tables.history(transient.pk, run_ids=qs.prefetch_related(None).values_list("pk", flat=True))
         if not (fit_history["bazin"] or fit_history["salt"]):
             fit_history = None
+        subset = subset_context(request.user, transient, services, fit_history)
     return {
         "fit_history": fit_history,
+        "fit_subset": subset,
         "transient": transient,
         "analysis_sees_data": sees_data,
         "analysis_services": services,
@@ -108,6 +111,44 @@ def analysis_tab_context(request, transient):
               "runner_kind": s["runner_kind"]} for s in services],
             default=str,
         )),
+    }
+
+
+def subset_context(user, transient, services, fit_history) -> dict:
+    """The "fit part of the data" form and the history's subset lines (#847, UI preview only).
+
+    The form offers the Bazin / SALT services the user may run and the bands, telescopes and
+    quality levels of the points they may see. Each subset entry of ``fit_history`` gets a
+    one-line ``selection_summary`` and, when the user may run its service, ``repeat``: the
+    service and the run's parameters, which the "Repeat this fit" button posts unchanged.
+    """
+    fit_services = []
+    for s in services:
+        profile = s["profile"]
+        if profile.runner_kind != AnalysisService.RUNNER_INPROCESS:
+            continue
+        kind = fit_tables.runner_kind(profile.runner_path)
+        if kind is not None:
+            fit_services.append({"slug": s["slug"], "name": s["name"], "kind": kind, "cap": s["cap"]})
+    runnable = {s["slug"] for s in fit_services}
+
+    def decorate(entry, run, selection):
+        entry["selection_summary"] = fit_subset.summary(selection) if selection else ""
+        entry["repeat"] = None
+        if selection and run is not None and run.service.slug in runnable:
+            entry["repeat"] = {"service": run.service.slug,
+                               "params_json": json.dumps(svc.run_params(run), sort_keys=True, default=str)}
+
+    if fit_history:
+        for entry in fit_history["bazin"]:
+            first = entry["rows"][0]
+            decorate(entry, entry["run"], first.selection if first.is_subset else None)
+        for entry in fit_history["salt"]:
+            row = entry["row"]
+            decorate(entry, row.run, row.selection if row.is_subset else None)
+    return {
+        "services": fit_services,
+        "options": fit_subset.options(user, transient),
     }
 
 

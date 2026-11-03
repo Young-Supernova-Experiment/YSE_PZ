@@ -36,6 +36,7 @@
 					{% endif %}
 				</div>
 			</div>
+			{% if ui_preview and fit_subset %}{% include "YSE_App/transient_detail/fit_subset_form_v2.html" %}{% endif %}
 		</div>
 		<div class="col-md-8">
 			<table class="table table-bordered table-condensed table-sm" id="tbl_analysis_runs">

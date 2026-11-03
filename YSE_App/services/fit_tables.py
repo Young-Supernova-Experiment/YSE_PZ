@@ -214,8 +214,9 @@ def on_run_saved(sender, instance, created=False, update_fields=None, raw=False,
     except Exception:  # noqa: BLE001 - the run itself has succeeded; the rows can be backfilled
         log.exception("fit tables: could not record run %s", instance.pk)
         return
-    if written:
+    if written and selection_of(instance) is None:
         # New fit rows move the reference epochs: recompute the spectra's phases (#848; never raises).
+        # A subset run (#847) never supplies the epochs, so it leaves the phases alone.
         from YSE_App.services.spectral_phase import on_fits_recorded
 
         on_fits_recorded(instance.transient_id)
@@ -274,8 +275,10 @@ def history(transient_id: int, run_ids: Optional[Iterable[int]] = None) -> Dict[
     ``run_ids`` limits it to runs the viewer may see. The newest non-subset row of each table
     is marked ``current``.
     """
-    bazin_qs = BazinFit.objects.filter(transient_id=transient_id).select_related("run", "run__created_by")
-    salt_qs = SaltFit.objects.filter(transient_id=transient_id).select_related("run", "run__created_by")
+    bazin_qs = BazinFit.objects.filter(transient_id=transient_id).select_related("run", "run__created_by",
+                                                                                 "run__service")
+    salt_qs = SaltFit.objects.filter(transient_id=transient_id).select_related("run", "run__created_by",
+                                                                               "run__service")
     if run_ids is not None:
         ids = list(run_ids)
         bazin_qs = bazin_qs.filter(run_id__in=ids)
