@@ -39,8 +39,8 @@
 								<td>{{ i.group.name|default:"-" }}</td>
 								<td>{{ i.role_label }}</td>
 								<td><span class="badge {% if i.status == 'published' %}badge-success{% elif i.status == 'withdrawn' %}badge-light{% elif i.status == 'submitted' %}badge-info{% elif i.status == 'in_progress' %}badge-primary{% else %}badge-secondary{% endif %}">{{ i.status_label }}</span></td>
-								<td><small>{{ i.created_date|date:"Y-m-d" }}</small></td>
-								<td><small>{{ i.modified_date|date:"Y-m-d H:i" }}</small></td>
+								<td><small>{{ i.created_date|utcdate }}</small></td>
+								<td><small>{{ i.modified_date|utcdate }}</small></td>
 								<td class="text-nowrap">
 									<form method="post" action="{% url 'interest_status' i.id %}" class="form-inline d-inline">
 										{% csrf_token %}

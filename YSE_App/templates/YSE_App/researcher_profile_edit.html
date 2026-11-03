@@ -34,6 +34,8 @@
 				<div class="box box-default box-solid">
 					<div class="box-header with-border"><strong>About you</strong></div>
 					<div class="box-body">
+						{% include 'YSE_App/partials/profile_field.html' with field=form.first_name req='all' %}
+						{% include 'YSE_App/partials/profile_field.html' with field=form.last_name req='all' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.full_name req='all' %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.preferred_name %}
 						{% include 'YSE_App/partials/profile_field.html' with field=form.author_name_format %}

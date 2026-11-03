@@ -1,0 +1,41 @@
+{% load static %}{% comment %}"Observable tonight from <site>" for a shortlist (#854, UI preview only). Rendered by {% observable_tonight_control %}.{% endcomment %}
+<link rel="stylesheet" href="{% static 'YSE_App/observable-tonight.css' %}?v=obs-tonight-2">
+{% if blocked %}
+<p class="yse-obs-tonight yse-obs-tonight-blocked text-muted small" data-obs-blocked="1">
+  <i class="fa fa-moon-o" aria-hidden="true"></i> Observable tonight: {{ blocked }}
+</p>
+{% elif not telescopes %}
+<p class="yse-obs-tonight yse-obs-tonight-blocked text-muted small" data-obs-blocked="1">
+  <i class="fa fa-moon-o" aria-hidden="true"></i> Observable tonight: no telescope has coordinates yet.
+</p>
+{% else %}
+<div class="yse-obs-tonight form-inline" role="group" aria-label="Observable tonight"
+     data-url="{% url 'observable_tonight_data' %}"
+     data-id-selector="{{ id_selector }}"
+     data-scope="{{ scope }}"
+     data-watch="{{ watch }}"
+     data-max="{{ max_objects }}"
+     data-default-url="{% url 'observable_tonight_default_site' %}"
+     data-default-site="{{ default_site_id }}"
+     data-csrf="{{ csrf_token }}">
+  <label class="yse-obs-label">
+    <i class="fa fa-moon-o" aria-hidden="true"></i> Observable tonight from
+    <select class="form-control input-sm form-control-sm yse-obs-site">
+      {% for telescope in telescopes %}<option value="{{ telescope.pk }}"{% if telescope.pk == default_site_id %} selected{% endif %}>{{ telescope.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="button" class="btn btn-link btn-sm yse-obs-make-default"{% if default_site_id %} hidden{% endif %}>Make this my default</button>
+  <span class="yse-obs-default-note small text-muted"{% if not default_site_id %} hidden{% endif %}>your default site</span>
+  <label class="yse-obs-label">airmass &le;
+    <input type="number" class="form-control input-sm form-control-sm yse-obs-airmass" value="{{ default_airmass }}"
+           min="{{ min_airmass }}" max="{{ max_airmass }}" step="0.1">
+  </label>
+  <button type="button" class="btn btn-default btn-sm yse-obs-show">Show</button>
+  <button type="button" class="btn btn-link btn-sm yse-obs-clear" hidden>Clear</button>
+  <span class="yse-obs-status small" aria-live="polite"></span>
+  <small class="text-muted yse-obs-help">For the objects listed on this page only (at most {{ max_objects }}): when each is
+    above the airmass limit during astronomical night, its minimum airmass and the moon distance. Times are UTC.
+    Nothing is hidden.</small>
+</div>
+<script src="{% static 'YSE_App/observable-tonight.js' %}?v=obs-tonight-2" defer></script>
+{% endif %}

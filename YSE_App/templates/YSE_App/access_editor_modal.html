@@ -1,0 +1,16 @@
+{% comment %}The one row editor of the access pages in the preview layout (#863). Each table row has an "Edit"
+button (class yse-access-edit, data-editor = the id of a <template> holding that row's forms, data-title). The
+button copies the row's forms into this modal, so they post the same fields to the same endpoints as the
+current layout's per-row forms. Include the markup in the content block and access_editor_script.html in the
+scripts block.{% endcomment %}
+<div class="modal fade" id="yse-access-editor" tabindex="-1" role="dialog" aria-labelledby="yse-access-editor-title" aria-hidden="true">
+	<div class="modal-dialog" role="document">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="yse-access-editor-title">Edit</h5>
+				<button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+			</div>
+			<div class="modal-body" id="yse-access-editor-body"></div>
+		</div>
+	</div>
+</div>

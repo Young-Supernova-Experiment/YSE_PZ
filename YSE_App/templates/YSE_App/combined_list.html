@@ -1,0 +1,114 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+{% load render_table from django_tables2 %}
+{% comment %}Combined candidate list (#849, UI preview only): the union of the chosen sources, each object once,
+with "Why it's here". Stores nothing: the sources are in the URL, and the browser remembers the last choice.{% endcomment %}
+
+{% block content_header %}
+    <h1>
+        Combined candidate list
+        <small>{{ result_count }} object{{ result_count|pluralize }}</small>
+    </h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item active">Combined candidate list</li>
+    </ol>
+{% endblock %}
+
+{% block styles %}
+<style>
+  .yse-comb-sources fieldset { margin-bottom: .75rem; }
+  .yse-comb-sources legend { font-size: 1rem; font-weight: 600; margin-bottom: .25rem; }
+  .yse-comb-sources .yse-comb-options { max-height: 10rem; overflow-y: auto; }
+  .yse-comb-chip { display: inline-block; margin: 0 .35rem .35rem 0; padding: .15rem .5rem; border-radius: 1rem; font-size: .85rem; background: rgba(60,141,188,.15); border: 1px solid rgba(60,141,188,.5); }
+  .yse-comb-chip.yse-comb-error { background: rgba(243,156,18,.15); border-color: rgba(243,156,18,.6); }
+  .yse-comb-why { font-size: .85rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="box" id="combined-sources" data-yse-storage-key="yse-combined-list:{{ user.pk }}"
+     data-yse-choice="{{ choice_query }}" data-yse-explicit="{% if choice.explicit %}1{% else %}0{% endif %}">
+  <div class="box-header with-border"><h3 class="box-title">Sources</h3></div>
+  <div class="box-body">
+    <p class="small text-muted mb-2">
+      This list stores nothing and hides nothing: it is every object the chosen sources bring in, each once.
+      Come back to it for another telescope, program or more targets. Your browser remembers the sources you chose.
+    </p>
+    <p id="combined-source-chips" class="mb-2">
+      {% for source in sources %}
+      <span class="yse-comb-chip{% if source.error %} yse-comb-error{% endif %}" data-source="{{ source.key }}">{{ source.label }}{% if source.error %}: {{ source.error }}{% endif %}</span>
+      {% empty %}<span class="text-muted">No source chosen.</span>
+      {% endfor %}
+    </p>
+    <button type="button" class="btn btn-outline-secondary btn-sm" id="combined-sources-toggle" aria-expanded="false" aria-controls="combined-sources-form">Choose sources</button>
+    <a class="btn btn-link btn-sm" id="combined-defaults" href="{% url 'combined_list' %}?src=default">Use the defaults</a>
+    <form id="combined-sources-form" class="yse-comb-sources mt-2" method="get" action="{% url 'combined_list' %}" hidden>
+      <input type="hidden" name="src" value="1">
+      <div class="row">
+        <div class="col-md-4">
+          <fieldset>
+            <legend>Selections</legend>
+            <div class="yse-comb-options">
+            {% for selection in selections %}
+              <div class="form-check"><label class="form-check-label"><input class="form-check-input" type="checkbox" name="sel" value="{{ selection.slug }}"{% if selection.slug in choice.selections %} checked{% endif %}> {{ selection.name }}</label></div>
+            {% empty %}<p class="small text-muted">No Selections yet. Save one from Transient search.</p>
+            {% endfor %}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>My dashboard queries</legend>
+            <div class="yse-comb-options">
+            {% for pk, title in panels %}
+              <div class="form-check"><label class="form-check-label"><input class="form-check-input" type="checkbox" name="uq" value="{{ pk }}"{% if pk in choice.user_queries %} checked{% endif %}> {{ title }}</label></div>
+            {% empty %}<p class="small text-muted">No queries on My dashboard.</p>
+            {% endfor %}
+            </div>
+          </fieldset>
+        </div>
+        <div class="col-md-4">
+          <fieldset>
+            <legend><label for="combined-tags" class="mb-0">Tags</label></legend>
+            <select id="combined-tags" name="tag" multiple size="6" class="form-control form-control-sm">
+              {% for tag in tags %}<option value="{{ tag.pk }}"{% if tag.pk in choice.tags %} selected{% endif %}>{{ tag.name }}</option>{% endfor %}
+            </select>
+            <small class="text-muted">Ctrl/Cmd-click to choose several.</small>
+          </fieldset>
+        </div>
+        <div class="col-md-4">
+          <fieldset>
+            <legend>Recent follow-up requests</legend>
+            <label for="combined-nights">Requested in the last</label>
+            <input id="combined-nights" type="number" name="nights" min="0" max="{{ max_nights }}" value="{{ choice.nights }}" class="form-control form-control-sm d-inline-block" style="width:5rem">
+            nights <small class="text-muted">(0 = off)</small>
+          </fieldset>
+          <fieldset>
+            <legend>TNS</legend>
+            <div class="form-check"><label class="form-check-label"><input class="form-check-input" type="checkbox" name="tns" value="1"{% if choice.tns %} checked{% endif %}>
+              TNS objects brighter than {{ tns_mag }} mag in the last {{ tns_days }} days that no other source brings in</label></div>
+          </fieldset>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Show the list</button>
+    </form>
+  </div>
+</div>
+
+<div class="box" id="combined-results">
+  <div class="box-header with-border"><h3 class="box-title">Candidates</h3></div>
+  <div class="box-body">
+    {% load observable_tonight %}
+    {% observable_tonight_control id_selector=".search-select-row" scope="#combined-results" blocked=obs_blocked %}
+    {% load repeat_followup %}<div class="mb-2">{% repeat_followup_control id_selector=".search-select-row" scope="#combined-results" %}</div>
+    {# links into a transient keep this list (#850): source "comb", the sources and page in the list query #}
+    <div data-yse-list-source="comb" data-yse-list-query="{{ list_query }}">
+    {% render_table table %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'YSE_App/combined-list.js' %}?v=combined-list-1"></script>
+<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+{% endblock %}

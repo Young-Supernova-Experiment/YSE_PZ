@@ -22,6 +22,7 @@ from .data import PhotometryService, SpectraService, ObservingResourceService
 from .serializers import *
 from .common.bandpassdict import bandpassdict
 from .common.filter_display import (
+    SPECTRUM_COLORS,
     band_display_color,
     display_filter_label,
     plot_legend_label,
@@ -43,8 +44,9 @@ from .common.legend_layout import (
     legend_label_width_px,
     requested_plot_width,
 )
-from .common.quality_mask import is_legacy_flagged
+from .common.quality_mask import LEGACY_EXCLUDE, SpecFlag, is_legacy_flagged
 from .common.utilities import date_to_mjd
+from .common.utc_dates import utc_day
 from .services.visibility import group_access_plot_cache_token
 from .services import bazin as bazin_fits
 from .services import phot_points
@@ -246,6 +248,9 @@ FLAGGED_LEGEND_COLOR = "#7f7f7f"
 FLAGGED_LINE_ALPHA = 0.8
 FLAGGED_MUTED_ALPHA = 0.15
 FLAGGED_SPECTRUM_SUFFIX = " (flagged)"
+# Quicklook spectra (#903) are most uploads: drawn like good ones, solid and in full colour, and
+# named in the legend. Only spectra with another excluding bit are drawn as flagged.
+QUICKLOOK_SPECTRUM_SUFFIX = " (quicklook)"
 
 
 def _draw_bazin_fits(ax, series, today):
@@ -340,6 +345,17 @@ def _spectrum_flagged(spectrum):
     return is_legacy_flagged(getattr(spectrum, 'quality_mask', 0), 'TransientSpectrum')
 
 
+def _spectrum_display(spectrum):
+    """How the spectrum plots draw a TransientSpectrum: ``''`` (good), ``'quicklook'`` or ``'flagged'``.
+
+    Quicklook alone is not drawn as flagged (#903): it is how most spectra are uploaded.
+    """
+    excluded = int(getattr(spectrum, 'quality_mask', 0) or 0) & LEGACY_EXCLUDE['TransientSpectrum']
+    if not excluded:
+        return ''
+    return 'quicklook' if excluded == int(SpecFlag.QUICKLOOK) else 'flagged'
+
+
 def _downsample_phot_rows_for_display(phot_rows, max_points=MAX_LC_DISPLAY_POINTS):
     if len(phot_rows) <= max_points:
         return phot_rows
@@ -367,17 +383,23 @@ def _transient_phot_cache_token(transient_id):
 
 
 def _transient_spectrum_cache_token(transient_id):
-    from django.db.models import Count, Max
+    from django.db.models import Count, Max, Sum
 
+    # Spectra stored as arrays (#492): writing, replacing or deleting an arrays row changes the token
+    # too. The arrays row is one-to-one with its spectrum, so joining it in costs no extra query and
+    # does not multiply the counts.
     spec_agg = TransientSpectrum.objects.filter(
         transient_id=transient_id,
-    ).aggregate(latest=Max('modified_date'), n=Count('id'))
+    ).aggregate(latest=Max('modified_date'), n=Count('id'), arr_latest=Max('arrays__modified_date'),
+                arr_n=Count('arrays__spectrum_id'), arr_px=Sum('arrays__n_pixels'))
     data_agg = TransientSpecData.objects.filter(
         spectrum__transient_id=transient_id,
     ).aggregate(latest=Max('modified_date'), n=Count('id'))
     spec_latest = spec_agg['latest'].isoformat() if spec_agg['latest'] else 'none'
     data_latest = data_agg['latest'].isoformat() if data_agg['latest'] else 'none'
-    return f"s{spec_agg['n']}:{spec_latest}:d{data_agg['n']}:{data_latest}"
+    arr_latest = spec_agg['arr_latest'].isoformat() if spec_agg['arr_latest'] else 'none'
+    return (f"s{spec_agg['n']}:{spec_latest}:d{data_agg['n']}:{data_latest}"
+            f":a{spec_agg['arr_n']}:{spec_agg['arr_px'] or 0}:{arr_latest}")
 
 
 def _cached_plot_http_response(cache_key, html):
@@ -909,16 +931,33 @@ def view_yse_fields(request):
 
 
 @login_required
-def salt2plot(request, transient_id, salt2fit):
+def salt3plot(request, transient_id, salt3fit):
 
-    response = lightcurveplot_detail(request,transient_id,salt2=int(salt2fit))
+    response = lightcurveplot_detail(request,transient_id,salt2=int(salt3fit))
     return response
 
 @login_required
-def salt2fluxplot(request, transient_id, salt2fit):
+def salt3fluxplot(request, transient_id, salt3fit):
 
-    response = lightcurveplot_flux(request,transient_id,salt2=int(salt2fit))
+    response = lightcurveplot_flux(request,transient_id,salt2=int(salt3fit))
     return response
+
+def _redirect_to_salt3(request, route_name, transient_id, fit):
+    """Permanent redirect from an old ``salt2*`` URL to its SALT3 name, keeping the query string."""
+    from django.shortcuts import redirect
+    url = reverse(route_name, args=[transient_id, fit])
+    query = request.META.get('QUERY_STRING')
+    if query:
+        url = '%s?%s' % (url, query)
+    return redirect(url, permanent=True)
+
+@login_required
+def salt2plot_redirect(request, transient_id, salt2fit):
+    return _redirect_to_salt3(request, 'salt3plot', transient_id, salt2fit)
+
+@login_required
+def salt2fluxplot_redirect(request, transient_id, salt2fit):
+    return _redirect_to_salt3(request, 'salt3fluxplot', transient_id, salt2fit)
 
 @login_required
 def bazinplot(request, transient_id, bazinfit):
@@ -1116,6 +1155,30 @@ def _add_legend_grid(ax, legend_items, plot_width):
     return height
 
 
+# Upper limits (#860): a hollow triangle at the limit and a stem of this many
+# magnitudes below it, so a limit reads as a downward arrow.
+ULIM_ARROW_MAG = 0.3
+
+
+def _draw_upper_limits(ax, source, color):
+    """Upper-limit glyphs of one series; returns ``(hover renderer, other renderers)``.
+
+    A hollow inverted triangle at each limit with a short stem below it (#860),
+    so limits do not look like detections.
+    """
+    head = ax.inverted_triangle(
+        'x', 'y', source=source, size=7, line_color=color, fill_color=color, fill_alpha=0.0,
+        line_width=1.5, muted_alpha=0.2,
+    )
+    xs = list(source.data['x'])
+    ys = list(source.data['y'])
+    stem = ax.segment(
+        x0=xs, y0=ys, x1=xs, y1=[y + ULIM_ARROW_MAG for y in ys],
+        line_color=color, line_width=1.5, muted_alpha=0.2,
+    )
+    return head, [stem]
+
+
 @login_required
 def lightcurveplot_summary(request, transient_id, salt2=False):
     _load_heavy_plot_stack()
@@ -1126,7 +1189,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_summary_v2_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_summary_v4_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{_requested_plot_width(request, 500)}' + ('_salt' if salt2 else '')
         )
         cached_html = cache.get(cache_key)
@@ -1191,7 +1254,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
 
     # Convert observation dates to MJD
     mjd = date_to_mjd(obs_date)
-    obs_date_str = [p["obs_date"].strftime("%m/%d/%Y") for p in phot_values]
+    obs_date_str = [utc_day(p["obs_date"]) for p in phot_values]
 
     # Initialize plot
     colorlist = ['#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9']
@@ -1199,7 +1262,7 @@ def lightcurveplot_summary(request, transient_id, salt2=False):
         ("mag", "$y"),
         ("telescope", "@telescope"),
         ("filter", "@filter"),
-        ("date", "@date"),
+        ("date (UTC)", "@date"),
         ("dq", "@data_quality"),
         ("magsys", "@magsys"),
     ]
@@ -1448,7 +1511,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'lc_detail_v7_{transient_id}_{_transient_phot_cache_token(transient_id)}'
+            f'lc_detail_v9_{transient_id}_{_transient_phot_cache_token(transient_id)}'
             f'_{user_key}_w{plot_width}' + ('_bazin' if bazin else '')
             + (f'_salt{salt_run.pk if salt_run is not None else 0}' if salt2 else '')
         )
@@ -1485,7 +1548,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     mags = np.array([p.mag for p in phot_rows], dtype=object)
     mag_errs = np.array([p.mag_err for p in phot_rows], dtype=object)
     disc_points = np.array([p.discovery_point for p in phot_rows], dtype=bool)
-    obs_dates_str = np.array([p.obs_date.strftime('%m/%d/%Y') for p in phot_rows])
+    obs_dates_str = np.array([utc_day(p.obs_date) for p in phot_rows])
     mjds = date_to_mjd(np.array([p.obs_date for p in phot_rows]))
     data_quality = np.array([_phot_data_quality_label(p) for p in phot_rows])
     flagged = np.array([_phot_flagged(p) for p in phot_rows], dtype=bool)
@@ -1513,7 +1576,7 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ('mag','$y'),
         ('telescope','@telescope'),
         ('filter','@filter'),
-        ('date','@date'),
+        ('date (UTC)','@date'),
         ('dq','@data_quality'),
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
@@ -1596,16 +1659,18 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
         ax.add_tools(g1_hover)
 
         p_ulim = None
+        p_ulim_extra = []
         if iUlim.any():
             # same size as the detections (asterisk series use 20 px for the
             # thin marker; a 20 px triangle would swamp the plot)
-            p_ulim = ax.inverted_triangle('x','y',source=_detail_source(iUlim, ulim_mags),
-                                     color=color,size=7,muted_alpha=0.2)
+            p_ulim, p_ulim_extra = _draw_upper_limits(
+                ax, _detail_source(iUlim, ulim_mags), color,
+            )
             g1_hover = HoverTool(renderers=[p_ulim],
                                  tooltips=TOOLTIPS,toggleable=False)
             ax.add_tools(g1_hover)
         p_err = _detail_err(iPlot, color=color, muted_alpha=0.2)
-        _link_series_visibility(p_det, [p_err, p_ulim])
+        _link_series_visibility(p_det, [p_err, p_ulim] + p_ulim_extra)
 
         iPlotFlag = iPlotAll & flagged
         iUlimFlag = iUlimAll & flagged
@@ -1651,6 +1716,8 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
 
     ax.xaxis.axis_label = 'MJD'
     ax.yaxis.axis_label = 'Mag'
+    # the limit arrows reach ULIM_ARROW_MAG below the limit (#860)
+    upperlimmag = upperlimmag + ULIM_ARROW_MAG
     if len(mjds[disc_points == 1]):
         limmjd = np.min(mjds[disc_points == 1])-30
         ax.x_range=Range1d(limmjd,x_end)
@@ -1764,7 +1831,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 limmjd = dbmjd-30
                 
             mjd = np.append(mjd,[dbmjd])
-            date = np.append(date,[p.obs_date.strftime('%m/%d/%Y')])
+            date = np.append(date,[utc_day(p.obs_date)])
             mag = np.append(mag,[p.mag])
             if p.mag_sys is None: magsys = np.append(magsys,['None'])
             else: magsys = np.append(magsys,[p.mag_sys])
@@ -1811,7 +1878,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 
         elif p.flux and p.flux_zero_point and p.flux + 3*p.flux_err > 0:
             upperlimmjd = np.append(upperlimmjd,[dbmjd])
-            upperlimdate = np.append(upperlimdate,[p.obs_date.strftime('%m/%d/%Y')])
+            upperlimdate = np.append(upperlimdate,[utc_day(p.obs_date)])
             upperlimmag = np.append(upperlimmag,[-2.5*np.log10(p.flux + 3*p.flux_err) + p.flux_zero_point])
             upperlimbandstr = np.append(upperlimbandstr,str(p.band))
             upperlimband = np.append(upperlimband,p.band)
@@ -1832,7 +1899,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
 
     if transient.non_detect_limit and transient.non_detect_band:
         upperlimmjd = np.append(upperlimmjd,[date_to_mjd(transient.non_detect_date)])
-        upperlimdate = np.append(upperlimdate,[transient.non_detect_date.strftime('%m/%d/%Y')])
+        upperlimdate = np.append(upperlimdate,[utc_day(transient.non_detect_date)])
         upperlimmag = np.append(upperlimmag,transient.non_detect_limit)
         upperlimmagsys = np.append(upperlimmagsys,'None')
         upperlimbandstr = np.append(upperlimbandstr,str(transient.non_detect_band))
@@ -1859,7 +1926,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
         ('mag','$y'),
         ('telescope','@telescope'),
         ('filter','@filter'),
-        ('date','@date'),
+        ('date (UTC)','@date'),
         ('dq','@data_quality'),
         ('magsys','@magsys')]
     ax=figure(plot_width=240,plot_height=240,sizing_mode='scale_width')#,tooltips=TOOLTIPS)#'stretch_both')
@@ -2028,33 +2095,20 @@ def _spectrum_plot_empty_message(n_spectra_without_points):
 
 
 def _spec_points_by_spectrum(spectrum_ids):
-    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra, in one query.
+    """``{spectrum_id: (wave, flux)}`` numpy arrays for the given spectra.
 
-    Spectra are stored one TransientSpecData row per pixel, so building a model
-    instance per pixel dominated plot time for long spectra (#479). This reads
-    plain ``(spectrum_id, wavelength, flux)`` tuples, in the same (pk) order as
-    the old ``transientspecdata_set`` prefetch, straight into numpy.
+    Reads through ``common.spectrum_arrays.arrays_for`` (#891): one arrays row per
+    spectrum when present, else the per-pixel TransientSpecData rows in one
+    ``values_list`` query (#479), never one model instance per pixel. Pixels come
+    back sorted by wavelength (rows: by wavelength, then pk); spectra without
+    pixels are absent from the dict.
     """
-    spectrum_ids = list(spectrum_ids)
-    if not spectrum_ids:
-        return {}
-    rows = np.array(
-        list(
-            TransientSpecData.objects.filter(spectrum_id__in=spectrum_ids)
-            .order_by('spectrum_id', 'id')
-            .values_list('spectrum_id', 'wavelength', 'flux')
-        ),
-        dtype=float,
-    )
-    if rows.size == 0:
-        return {}
-    ids = rows[:, 0].astype(np.int64)
-    # Rows are ordered by spectrum_id, so each spectrum is one contiguous run.
-    starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]])
-    ends = np.r_[starts[1:], ids.size]
+    from .common import spectrum_arrays
+
     return {
-        int(ids[a]): (rows[a:b, 1], rows[a:b, 2])
-        for a, b in zip(starts, ends)
+        sid: (wave, flux)
+        for sid, (wave, flux, _err) in spectrum_arrays.arrays_for(spectrum_ids, with_errors=False).items()
+        if wave.size
     }
 
 
@@ -2067,7 +2121,8 @@ def _spectra_for_plot(dbspectra):
     than a traceback (#343). Each spectrum is resampled to at most
     ``MAX_SPEC_DISPLAY_PIXELS`` points. Points are read with one ``values_list``
     query for all spectra (#479), not one ORM object per pixel. A flagged
-    spectrum (#84) carries ``flagged`` and a " (flagged)" legend label.
+    spectrum (#84) carries ``flagged`` and a " (flagged)" legend label; a Quicklook
+    one only a " (quicklook)" label (#903).
     """
     spectra = []
     n_without_points = 0
@@ -2088,14 +2143,15 @@ def _spectra_for_plot(dbspectra):
         wave_interp = np.linspace(np.min(wave), np.max(wave), n_display)
         flux_interp = np.interp(wave_interp, wave, flux)
 
-        flagged = _spectrum_flagged(spectrum)
-        label = f'{spectrum.instrument.name} - {spectrum.obs_date.strftime("%Y-%m-%d")}'
+        display = _spectrum_display(spectrum)
+        label = f'{spectrum.instrument.name} - {utc_day(spectrum.obs_date)}'
+        suffix = {'flagged': FLAGGED_SPECTRUM_SUFFIX, 'quicklook': QUICKLOOK_SPECTRUM_SUFFIX}.get(display, '')
         spectra.append({
             'wave': wave_interp,
             'flux': flux_interp,
             'mjd': date_to_mjd(spectrum.obs_date.isoformat().split('+')[0]),
-            'label': label + (FLAGGED_SPECTRUM_SUFFIX if flagged else ''),
-            'flagged': flagged,
+            'label': label + suffix,
+            'flagged': display == 'flagged',
         })
     return spectra, n_without_points
 
@@ -2128,7 +2184,7 @@ def spectrumplot(request, transient_id):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'specplot_v3_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+            f'specplot_v4_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -2154,7 +2210,7 @@ def spectrumplot(request, transient_id):
     
     # Prepare plot
     ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width', y_range=(-0.15, len(spectra) + 0.15))
-    colors = itertools.cycle(palette)
+    colors = itertools.cycle(SPECTRUM_COLORS)
     legend_items = []
     
     for spec, color, offset in zip(spectra, colors, offsets):
@@ -2189,7 +2245,7 @@ def spectrumplot_summary(request, transient_id):
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
-            f'specsummary_v2_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
+            f'specsummary_v3_{transient_id}_{_transient_spectrum_cache_token(transient_id)}_{user_key}'
         )
         cached_html = cache.get(cache_key)
         if cached_html is not None:
@@ -2222,7 +2278,7 @@ def spectrumplot_summary(request, transient_id):
     ax = figure(plot_width=240, plot_height=240, sizing_mode='stretch_width',
                 y_range=(-0.15, len(spectra) + 0.15))
 
-    colors = itertools.cycle(palette)
+    colors = itertools.cycle(SPECTRUM_COLORS)
     legend_it = [None] * len(spectra)
     for spec, color, offset in zip(spectra, colors, offsets):
         norm_flux = _normalized_plot_flux(spec['flux'], offset)
@@ -2313,7 +2369,7 @@ def spectrumplotsingle(request, transient_id, spec_id):
     # Step plot centred on each pixel, so individual pixels are visible.
     ax.step(np.sort(wave),np.array(flux)[np.argsort(wave)],mode='center',color='black')
         
-    ax.title.text = "%s, %s, %s, Phase: %s, DQ: %s"%(transient.name,spectrum.obs_date.strftime('%m/%d/%Y'),spectrum.instrument,spectrum.spec_phase,','.join([d.name for d in spectrum.data_quality.all()]))
+    ax.title.text = "%s, %s, %s, Phase: %s, DQ: %s"%(transient.name,utc_day(spectrum.obs_date),spectrum.instrument,spectrum.spec_phase,','.join([d.name for d in spectrum.data_quality.all()]))
     ax.xaxis.axis_label = r'Wavelength (Angstrom)'
     ax.yaxis.axis_label = 'Flux'
     g = file_html(ax,CDN,"my plot")

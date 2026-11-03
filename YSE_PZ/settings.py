@@ -281,6 +281,9 @@ CRON_CLASSES = [
     # (on by default) and photstat.bazin_extrapolate job (off unless
     # PHOTSTAT_BAZIN_CRON_ENABLED); see the settings below.
     'YSE_App.data_ingest.PhotStat_Jobs.PhotStatRefresh',
+    # Scheduled SALT / Bazin refits (#846): queues one fits.refit_pass job a day;
+    # no-op unless FIT_REFIT_ENABLED (see below).
+    'YSE_App.data_ingest.Fit_Refit.FitRefit',
     # Researcher metrics from SciX (#629): monthly; no-op unless
     # RESEARCHER_METRICS_ENABLED ([research] in settings.ini).
     'YSE_App.data_ingest.Researcher_Metrics.RefreshResearcherMetrics',
@@ -313,6 +316,16 @@ DUPLICATE_REPORT_USERNAMES = config.get('site_settings', 'DUPLICATE_REPORT_USERN
 PHOTSTAT_REFRESH_CRON_MINUTES = config.getint('site_settings', 'PHOTSTAT_REFRESH_CRON_MINUTES', fallback=60)
 PHOTSTAT_REFRESH_LIMIT = config.getint('site_settings', 'PHOTSTAT_REFRESH_LIMIT', fallback=2000)
 PHOTSTAT_BAZIN_LIMIT = config.getint('site_settings', 'PHOTSTAT_BAZIN_LIMIT', fallback=500)
+
+# Scheduled SALT / Bazin refits (#846; YSE_App/services/fit_tables.py). Off by default:
+# [site_settings] FIT_REFIT_ENABLED = True (or env YSE_FIT_REFIT=1) lets the FitRefit cron
+# queue a fits.refit_pass job every FIT_REFIT_CRON_MINUTES (1440), which refits a transient's
+# Bazin / SALT fit when a new detection arrived, or a non-detection within
+# FIT_REFIT_WINDOW_DAYS (7) after the last detection; at most FIT_REFIT_LIMIT per pass.
+FIT_REFIT_ENABLED = _flag('YSE_FIT_REFIT', 'site_settings', 'FIT_REFIT_ENABLED', False)
+FIT_REFIT_CRON_MINUTES = config.getint('site_settings', 'FIT_REFIT_CRON_MINUTES', fallback=1440)
+FIT_REFIT_WINDOW_DAYS = config.getfloat('site_settings', 'FIT_REFIT_WINDOW_DAYS', fallback=7.0)
+FIT_REFIT_LIMIT = config.getint('site_settings', 'FIT_REFIT_LIMIT', fallback=200)
 
 # yse_home "Next Telescope Nights" lists classical observing dates up to this
 # many days ahead (#65). Optional env YSE_HOME_CLASSICAL_DAYS_AHEAD or
@@ -421,7 +434,11 @@ TEMPLATES = [
                 'YSE_App.context_processors.feedback',
                 # csrf_cookie_name for inline scripts (per-stack CSRF_COOKIE_NAME, #637).
                 'YSE_App.context_processors.csrf_cookie_name',
+                # ui_preview for the per-user Tier 2 layout preview (#947).
+                'YSE_App.context_processors.ui_preview',
             ],
+            # utcdate / status_label filters on every template without {% load %} (#807, #831).
+            'builtins': ['YSE_App.templatetags.display_extras'],
         },
     },
 ]
@@ -673,6 +690,10 @@ EXPLORER_QUERY_MAX_EXECUTION_MS = int(
 # extra table or view names (for example a view of derived values).
 PAGE_QUERY_TABLE_POLICY = _str_setting(
     'YSE_PAGE_QUERY_TABLE_POLICY', 'site_settings', 'PAGE_QUERY_TABLE_POLICY', 'enforce').strip().lower()
+# Spectrum pixels (#492): new uploads are stored as arrays; 'rows' writes per-pixel rows again
+# (rollback switch). Reading handles both. See docs/spectrum-arrays.md.
+SPECTRUM_PIXEL_STORAGE = _str_setting(
+    'YSE_SPECTRUM_PIXEL_STORAGE', 'site_settings', 'SPECTRUM_PIXEL_STORAGE', 'arrays').strip().lower()
 PAGE_QUERY_EXTRA_ALLOWED_TABLES = _str_setting(
     'YSE_PAGE_QUERY_EXTRA_ALLOWED_TABLES', 'site_settings', 'PAGE_QUERY_EXTRA_ALLOWED_TABLES', '')
 
@@ -793,6 +814,11 @@ DATA_SERVICE_READER_USERNAMES = sorted(set(API_SERVICE_USERNAMES) | {
 # staff otherwise (see issue #102). Dashboard SQL is post-filtered separately.
 EXPLORER_RESTRICTED_ACCESS = _authz_flag('YSE_EXPLORER_RESTRICTED_ACCESS', 'EXPLORER_RESTRICTED_ACCESS')
 EXPLORER_ACCESS_GROUP = config.get('site_settings', 'EXPLORER_ACCESS_GROUP', fallback='explorer_users')
+
+# Per-user UI preview switch (#947). Users opt in from the user menu; optional
+# [site_settings] UI_PREVIEW_DEFAULT = True (or env YSE_UI_PREVIEW_DEFAULT=1) shows
+# the preview to every signed-in user. Default off.
+UI_PREVIEW_DEFAULT = _flag('YSE_UI_PREVIEW_DEFAULT', 'site_settings', 'UI_PREVIEW_DEFAULT', False)
 
 # Feedback button (#443). Off by default: YSE_FEEDBACK_ENABLED=1 or
 # [site_settings] FEEDBACK_ENABLED = True shows the navbar button and accepts
@@ -1356,6 +1382,11 @@ SELF_SIGNUP_MIN_FILL_SECONDS = config.getint('site_settings', 'SELF_SIGNUP_MIN_F
 SELF_SIGNUP_CLIENT_IP_HEADER = config.get('site_settings', 'SELF_SIGNUP_CLIENT_IP_HEADER', fallback='').strip()
 GROUP_REQUEST_PURGE_DAYS = config.getint('groups', 'REQUEST_PURGE_DAYS', fallback=90) if config.has_section('groups') else 90
 GROUP_REQUESTS_PER_USER_PER_DAY = config.getint('groups', 'REQUESTS_PER_USER_PER_DAY', fallback=10) if config.has_section('groups') else 10
+# Membership requests are open site-wide unless [groups] REQUESTS_ENABLED = False (independent
+# of self-signup); each team's owners or deputies can still switch requests off for their team.
+GROUP_REQUESTS_ENABLED = config.getboolean('groups', 'REQUESTS_ENABLED', fallback=True) if config.has_section('groups') else True
+# Members shown per page on a team's page.
+GROUP_MEMBERS_PER_PAGE = config.getint('groups', 'MEMBERS_PER_PAGE', fallback=50) if config.has_section('groups') else 50
 
 # ---------------------------------------------------------------------------
 # Alert brokers (YSE_App.brokers; issues #272, #276). All keys optional, under
@@ -1550,6 +1581,14 @@ ONBOARDING_GATE_ENABLED = (
     _onboarding_env not in ('0', 'false', 'no', 'off') if _onboarding_env
     else config.getboolean('site_settings', 'ONBOARDING_GATE_ENABLED', fallback=True)
 )
+# Part of the gate: a confirmed email address on the account (sent to /settings/email/
+# first). [site_settings] ONBOARDING_EMAIL_REQUIRED: False (or env
+# YSE_ONBOARDING_EMAIL=0) turns this step off, e.g. while email delivery is broken.
+_onboarding_email_env = os.environ.get('YSE_ONBOARDING_EMAIL', '').strip().lower()
+ONBOARDING_EMAIL_REQUIRED = (
+    _onboarding_email_env not in ('0', 'false', 'no', 'off') if _onboarding_email_env
+    else config.getboolean('site_settings', 'ONBOARDING_EMAIL_REQUIRED', fallback=True)
+)
 # Research teams (#445, #440). System groups are never owned, joined by invitation or
 # managed on /teams/; staff manage their membership in the admin. Groups holding model
 # permissions, and groups ticked "is system" in the admin, count as system too.
@@ -1570,6 +1609,17 @@ GROUP_INVITE_DEFAULT_DAYS = config.getint('groups', 'INVITE_DEFAULT_DAYS', fallb
 GROUP_INVITE_MAX_DAYS = config.getint('groups', 'INVITE_MAX_DAYS', fallback=60) if config.has_section('groups') else 60
 GROUP_INVITE_MAX_USES_LIMIT = config.getint('groups', 'INVITE_MAX_USES_LIMIT', fallback=50) if config.has_section('groups') else 50
 GROUP_INVITE_PURGE_DAYS = config.getint('groups', 'INVITE_PURGE_DAYS', fallback=90) if config.has_section('groups') else 90
+# Team creation by any onboarded user, and owners adding existing users directly.
+# Throttles: active teams a user owns, creations per user per day, creations site-wide
+# per hour, direct adds per owner per day. Staff skip the per-user creation limits.
+# 0 turns a limit off; [groups] CREATE_ENABLED = False turns creation off.
+GROUP_CREATE_ENABLED = config.getboolean('groups', 'CREATE_ENABLED', fallback=True) if config.has_section('groups') else True
+GROUP_CREATE_MAX_OWNED = config.getint('groups', 'CREATE_MAX_OWNED', fallback=5) if config.has_section('groups') else 5
+GROUP_CREATES_PER_USER_PER_DAY = config.getint('groups', 'CREATES_PER_USER_PER_DAY', fallback=2) if config.has_section('groups') else 2
+GROUP_CREATES_PER_HOUR = config.getint('groups', 'CREATES_PER_HOUR', fallback=20) if config.has_section('groups') else 20
+GROUP_ADDS_PER_OWNER_PER_DAY = config.getint('groups', 'ADDS_PER_OWNER_PER_DAY', fallback=50) if config.has_section('groups') else 50
+# Teams chosen on the signup form (held until onboarding is done): at most this many.
+GROUP_SIGNUP_MAX_REQUESTS = config.getint('groups', 'SIGNUP_MAX_REQUESTS', fallback=5) if config.has_section('groups') else 5
 
 # Research PUBLIC key for the encrypted profile fields. env YSE_RESEARCH_PUBLIC_KEY
 # (PEM text or a path) or [research] public_key_path. The private key is never

@@ -74,7 +74,7 @@ EXPECTED_BASIC_AUTH_NAMES = {
     "add_yse_survey_fields", "add_gw_candidate", "add_transient_phot", "add_transient_spec",
     "get_host", "get_rising_transients_box", "get_new_transients_box", "box_search",
     "query_api", "change_status_for_query", "download_data", "download_spectra",
-    "download_photometry", "download_bulk_photometry", "upload_spectrum", "add_survey_obs",
+    "download_photometry", "download_bulk_photometry", "download_bulk_photometry_by_id", "upload_spectrum", "add_survey_obs",
 }
 
 EXPECTED_PUBLIC_NAMESPACES = {"admin", "rest_framework"}

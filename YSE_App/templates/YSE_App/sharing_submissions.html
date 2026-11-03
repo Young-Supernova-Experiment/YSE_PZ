@@ -75,8 +75,8 @@
 							<td>{% if sub.tns_name %}<a href="{{ sub.tns_object_url }}" target="_blank" rel="noopener noreferrer">{{ sub.tns_name }}</a>{% else %}-{% endif %}</td>
 							<td>{% if sub.external_id %}<code>{{ sub.external_id }}</code>{% else %}-{% endif %}</td>
 							<td>{{ sub.created_by.username }}</td>
-							<td class="text-nowrap">{{ sub.created_date|date:"Y-m-d H:i" }}</td>
-							<td class="text-nowrap">{% if sub.finished_at %}{{ sub.finished_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+							<td class="text-nowrap">{{ sub.created_date|utcdate }}</td>
+							<td class="text-nowrap">{% if sub.finished_at %}{{ sub.finished_at|utcdate }}{% else %}-{% endif %}</td>
 							<td class="small text-danger">{{ sub.error_summary }}</td>
 							<td>
 								{% if sub.can_retry %}

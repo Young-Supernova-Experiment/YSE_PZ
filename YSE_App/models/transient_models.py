@@ -173,6 +173,11 @@ class Transient(BaseModel):
 	def archive_flags(self):
 		return [(label, getattr(self, field)) for label, field in self.ARCHIVE_FLAG_FIELDS]
 
+	@property
+	def known_archive_flags(self):
+		"""Only the archive flags that have a value (True or False); unknown ones are omitted."""
+		return [(label, flag) for label, flag in self.archive_flags if flag is not None]
+
 	def save(self, *args, **kwargs):
 		"""Keep gal_l / gal_b in step with ra / dec (also when update_fields names one of them)."""
 		update_fields = kwargs.get('update_fields')
@@ -186,10 +191,10 @@ class Transient(BaseModel):
 		return GetSexigesimalString(self.ra, self.dec)
 
 	def RADecimalString(self):
-		return '%.7f'%(self.ra)
+		return '%.5f'%(self.ra)  # degrees, 5 decimals (#832)
 
 	def DecDecimalString(self):
-		return '%.7f'%(self.dec)
+		return '%.5f'%(self.dec)
 
 	def Separation(self):
 		if not self.host_id:
@@ -260,8 +265,10 @@ class Transient(BaseModel):
 		return first_line(self.summary)
 
 	def disc_date_string(self):
-		date_format = '%m/%d/%Y'
-		return self.disc_date.strftime(date_format)
+		"""Discovery date as YYYYMMDD.ddd UTC (#807)."""
+		from YSE_App.common.utc_dates import utc_day
+
+		return utc_day(self.disc_date)
 
 	def disc_mag(self):
 
@@ -291,7 +298,7 @@ class Transient(BaseModel):
 			return None
 
 	def recent_magdate(self):
-		date_format = '%m/%d/%Y'
+		from YSE_App.common.utc_dates import utc_day
 
 		transient_query = Q(transient=self.id)
 		all_phot = yse_models.TransientPhotometry.objects.filter(transient_query)
@@ -300,7 +307,7 @@ class Transient(BaseModel):
 		recent_mag = yse_models.TransientPhotData.objects.filter(legacy_good('TransientPhotData')).filter(phot_data_query).order_by('-obs_date')
 
 		if len(recent_mag):
-			return '%s'%(recent_mag[0].obs_date.strftime(date_format))
+			return utc_day(recent_mag[0].obs_date)  # YYYYMMDD.ddd UTC (#807)
 		else:
 			return None
 

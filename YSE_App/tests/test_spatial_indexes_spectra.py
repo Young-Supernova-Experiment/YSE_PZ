@@ -86,12 +86,13 @@ class SpectrumPointsValuesListTests(TestCase):
         ])
         return spectrum
 
-    def test_points_grouped_per_spectrum_in_one_query(self):
+    def test_points_grouped_per_spectrum_one_query_per_storage(self):
         transient = create_minimal_transient(self.user, name="2026specvlgroup")
         a = self._spectrum_with_points(transient, 5)
         b = self._spectrum_with_points(transient, 3)
         empty = attach_synthetic_spectrum(self.user, transient)
-        with self.assertNumQueries(1):
+        # One query per storage (#492): arrays rows, then pixel rows for the spectra without one.
+        with self.assertNumQueries(2):
             points = view_utils._spec_points_by_spectrum([a.id, b.id, empty.id])
         self.assertEqual(set(points), {a.id, b.id})
         wave, flux = points[a.id]

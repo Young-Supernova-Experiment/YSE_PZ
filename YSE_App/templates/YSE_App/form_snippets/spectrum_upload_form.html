@@ -2,11 +2,12 @@
 
 {% block content %}
 
-	<div class="box box-primary box-solid collapsed-box">
+	{# Required fields are marked and checked before uploading (#901, static/YSE_App/spectrum-upload.js); after a failed upload the box opens with the entered values (#902). #}
+	<div class="box box-primary box-solid{% if not spectrum_upload_retry %} collapsed-box{% endif %}">
 		<div class="box-header with-border">
 			<button id="upload_spectrum_btn" type="button" class="btn btn-box-tool" data-widget="collapse" style="height: 30px;"><h3 class="box-title">Upload Spectrum</h3></button>
 			<div class="box-tools float-right">
-				<button id="upload_spectrum_btn" type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa fa-plus"></i></button>
+				<button id="upload_spectrum_btn" type="button" class="btn btn-box-tool" data-widget="collapse"><i class="fa {% if spectrum_upload_retry %}fa-minus{% else %}fa-plus{% endif %}"></i></button>
 			</div>
 		</div>
 		<div class="box-body">
@@ -15,67 +16,78 @@
 				{% for hidden_field in form.hidden_fields %}
 					{{ hidden_field }}
 				{% endfor %}
-				<input type='hidden' name='ra' value={{transient.ra}} required_id="id_ra"/>
-				<input type='hidden' name='dec' value={{transient.dec}} required_id="id_dec"/>
-				<input type='hidden' name='transient' value={{transient.id}} required_id="id_transient"/>
+				<input type='hidden' name='ra' value="{{transient.ra}}"/>
+				<input type='hidden' name='dec' value="{{transient.dec}}"/>
+				<input type='hidden' name='transient' value="{{transient.id}}"/>
+				<div class="col-12">
+					<p class="text-muted small">Fields marked <span class="text-danger">*</span> are required.</p>
+				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label for="{{ form.filename.id_for_label }}">Filename</label>
-						<input type="file" name="filename" required_id="{{ form.filename.id_for_label }}" />
+						<label for="{{ form.filename.id_for_label }}">Filename <span class="text-danger" title="required">*</span></label>
+						<input type="file" name="filename" id="{{ form.filename.id_for_label }}" required />
+						{% if spectrum_upload_retry %}<div class="text-warning small" id="upload_spectrum_file_again">Choose the file again: browsers do not keep it after a failed upload.</div>{% endif %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Instrument</label>
-						{% render_field form.instrument class+="form-control select2" %}
+						<label for="{{ form.instrument.id_for_label }}">Instrument <span class="text-danger" title="required">*</span></label>
+						{% render_field form.instrument class+="form-control" required="required" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Obs. Group</label>
-						{% render_field form.obs_group class+="form-control select2" %}
+						<label for="{{ form.obs_group.id_for_label }}">Obs. Group <span class="text-danger" title="required">*</span></label>
+						{% render_field form.obs_group class+="form-control" required="required" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Phase</label>
+						<label for="{{ form.spec_phase.id_for_label }}">Phase (days)</label>
 						{% render_field form.spec_phase class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label>Data Quality</label>
+						<label for="{{ form.data_quality.id_for_label }}">Data Quality</label>
 						{% render_field form.data_quality class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-6">
 					<div class="form-group">
-						<label for="{{ form.obs_date.id_for_label }}">Date Obs. (UT)</label>
-						<input type="datetime-local" class="form-control float-right" id="obs_date" name="obs_date" required_id="id_obs_date">
+						<label for="obs_date">Date Obs. (UT) <span class="text-danger" title="required">*</span></label>
+						{# An empty datetime-local can still show a date in some browsers (#900): the line below says whether a value is set. #}
+						<div class="input-group">
+							<input type="datetime-local" class="form-control" id="obs_date" name="obs_date" step="1" value="{{ form.obs_date.value|default_if_none:'' }}" aria-describedby="obs_date_help obs_date_status" required>
+							<div class="input-group-append"><button type="button" class="btn btn-default" id="obs_date_now">Now (UT)</button></div>
+						</div>
+						<div class="small" id="obs_date_status" aria-live="polite">{% if form.obs_date.value %}Will be saved as {{ form.obs_date.value }} UT{% else %}<span class="text-danger">Not set</span>{% endif %}</div>
+						<div class="text-muted small" id="obs_date_help">Read as UT, whatever your computer's time zone. Pick or type the date and time; opening the calendar alone does not set it.</div>
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>Permissions</label>
+						<label for="{{ form.permissions.id_for_label }}">Permissions</label>
 						{% render_field form.permissions class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>PI(s) <span class="text-muted small">(optional; shown by name on the data tables)</span></label>
-						{% render_field form.pis class+="form-control select2" %}
+						<label for="{{ form.pis.id_for_label }}">PI(s) <span class="text-muted small">(optional; shown by name on the data tables)</span></label>
+						{% render_field form.pis class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
 					<div class="form-group">
-						<label>Reference <span class="text-muted small">(optional; ADS bibcode for literature data)</span></label>
+						<label for="{{ form.reference.id_for_label }}">Reference <span class="text-muted small">(optional; ADS bibcode for literature data)</span></label>
 						{% render_field form.reference class+="form-control" %}
 					</div>
 				</div>
 				<div class="col-12">
+					<div class="alert alert-danger" id="upload_spectrum_check" role="alert" style="display: none;"></div>
 					<div class="form-group">
 						<br>
-						<button type="submit" class="btn btn-block btn-primary btn-lg">Submit</button>
+						<button type="submit" class="btn btn-block btn-primary btn-lg">Upload spectrum</button>
 					</div>
 				</div>
 			</form>

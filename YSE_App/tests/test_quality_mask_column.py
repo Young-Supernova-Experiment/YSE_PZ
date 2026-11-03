@@ -21,6 +21,7 @@ from django.db.models import Q
 from django.test import TestCase
 from django.utils import timezone
 
+from YSE_App.common.utc_dates import utc_day
 from YSE_App.common import quality_mask_sync
 from YSE_App.common.quality_mask import (
     PHOT_LEGACY_EXCLUDE,
@@ -418,7 +419,7 @@ class ReaderEquivalenceTests(Fixture):
                 .filter(mag__isnull=False).order_by('-obs_date').first())
         self.assertNotEqual(good.pk, self.points[7].pk)
         self.assertEqual(self.transient.recent_mag(), '%.2f' % good.mag)
-        self.assertEqual(self.transient.recent_magdate(), good.obs_date.strftime('%m/%d/%Y'))
+        self.assertEqual(self.transient.recent_magdate(), utc_day(good.obs_date))
 
     def test_photstat_flags_match(self):
         points = photstat.points_by_transient([self.transient.pk])[self.transient.pk]

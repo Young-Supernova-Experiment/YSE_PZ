@@ -30,7 +30,7 @@ from YSE_App.tests.fixtures_minimal import attach_synthetic_photometry, create_m
 
 seed_migration = importlib.import_module("YSE_App.migrations.0034_seed_group_profiles")
 
-GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
+GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, ONBOARDING_EMAIL_REQUIRED=False, RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
 VALID_ORCID = "0000-0002-1825-0097"  # ORCID's documented example iD (fictitious researcher)
 
 
@@ -480,7 +480,7 @@ class InviteGateFlowTests(GroupTestBase):
         self.assertTrue(resp["Location"].startswith(reverse("researcher_profile_edit")))
 
         resp = self.client.post(reverse("researcher_profile_edit"), {
-            "full_name": "Synthetic Newcomer", "institution": "Example University", "department": "Physics",
+            "first_name": "Synthetic", "last_name": "Person", "full_name": "Synthetic Newcomer", "institution": "Example University", "department": "Physics",
             "career_level": "tenured", "orcid": VALID_ORCID, "next": reverse("group_invite_accept"),
         })
         self.assertRedirects(resp, reverse("group_invite_accept"), fetch_redirect_response=False)

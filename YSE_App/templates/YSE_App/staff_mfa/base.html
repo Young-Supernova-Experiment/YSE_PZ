@@ -9,19 +9,31 @@
   <meta name="referrer" content="no-referrer">
   <script>
   (function () {
+    // An explicit choice ("yse-theme-choice", set only by the toggle) wins; otherwise
+    // follow the OS setting (#821). The old "yse-theme" key was written on every page
+    // load, so only a legacy "light" counts as a choice (it is copied to the new key).
+    var t = null;
     try {
-      var t = localStorage.getItem("yse-theme") || "dark";
-      var dark = t !== "light";
-      document.documentElement.setAttribute("data-yse-theme", dark ? "dark" : "light");
-      document.documentElement.classList.toggle("dark-mode", dark);
-    } catch (e) {
-      document.documentElement.setAttribute("data-yse-theme", "dark");
+      t = localStorage.getItem("yse-theme-choice");
+      if (t !== "light" && t !== "dark") {
+        t = null;
+        if (localStorage.getItem("yse-theme") === "light") {
+          t = "light";
+          localStorage.setItem("yse-theme-choice", "light");
+        }
+      }
+    } catch (e) {}
+    if (!t) {
+      t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
     }
+    var dark = t !== "light";
+    document.documentElement.setAttribute("data-yse-theme", dark ? "dark" : "light");
+    document.documentElement.classList.toggle("dark-mode", dark);
   })();
   </script>
   <link rel="shortcut icon" type="image/png" href="{% static 'YSE_App/favicon.ico' %}"/>
   <link rel="stylesheet" href="{% static 'YSE_App/vendor/bootstrap-4.6/css/bootstrap.min.css' %}">
-  <link rel="stylesheet" href="{% static 'YSE_App/yse-theme.css' %}">
+  <link rel="stylesheet" href="{% static 'YSE_App/yse-theme.css' %}?v=chrome-nav-1">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <style>
     .yse-mfa-qr svg { display: block; margin: 0 auto; max-width: 100%; height: auto; background: #fff; }
@@ -38,6 +50,6 @@
     <button type="submit" class="btn btn-link p-0">Sign out</button>
   </form>
 </div>
-<script src="{% static 'YSE_App/yse-chrome.js' %}"></script>
+<script src="{% static 'YSE_App/yse-chrome.js' %}?v=chrome-nav-1"></script>
 </body>
 </html>

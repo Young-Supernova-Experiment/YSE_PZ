@@ -10,18 +10,35 @@ from __future__ import annotations
 
 import re
 
-# Swope / PS1 uBVgrizy palette (matches YSE_App_photometricband seed values).
+# Band colours (#860, UX audit 2026-10-25): conventional hues in shades that
+# are at least 3:1 on white (z is black) and stay apart under colour-vision
+# deficiency.  ATLAS c and o, the Swift UV bands and J/H/K have their own
+# colours.  Keys are the colour keys of ``filter_color_key``.
 FILTER_COLORS = {
-    'u': '#ff7f0e',
-    'B': '#1f77b4',
-    'V': '#8FBC8F',
-    'g': '#008000',
-    'r': '#DC143C',
-    'i': '#8c465b',
-    'z': '#800080',
-    'y': '#C9A227',
-    'w': '#EBBE0C',
+    'UVW2': '#f61f80',
+    'UVM2': '#8158ca',
+    'UVW1': '#a07dce',
+    'u': '#643380',
+    'B': '#2d6dee',
+    'V': '#576602',
+    'g': '#28763d',
+    'c': '#2890a1',
+    'r': '#d44e46',
+    'o': '#dd703d',
+    'i': '#b58214',
+    'w': '#7b787d',
+    'z': '#000000',
+    'y': '#684121',
+    'J': '#223163',
+    'H': '#62475a',
+    'K': '#1e5845',
 }
+
+# Okabe-Ito colours for several spectra on one plot (#860), in the order they
+# are used; its yellow is left out (too pale on white).
+SPECTRUM_COLORS = (
+    '#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00', '#56B4E9', '#000000',
+)
 
 # Lowercase alias -> canonical filter key in FILTER_COLORS.
 FILTER_ALIASES = {
@@ -43,8 +60,11 @@ FILTER_ALIASES = {
     'g-ptf': 'g',
     'g-sm': 'g',
     'g-sm-skymapper': 'g',
-    'cyan': 'g',
-    'cyan-atlas': 'g',
+    # ATLAS cyan and orange are their own bands, c and o, never g or r.
+    'c': 'c',
+    'c-atlas': 'c',
+    'cyan': 'c',
+    'cyan-atlas': 'c',
     'r': 'r',
     'rp': 'r',
     'r-ztf': 'r',
@@ -53,8 +73,10 @@ FILTER_ALIASES = {
     'r-ptf': 'r',
     'r-cousins': 'r',
     'r-sm-skymapper': 'r',
-    'orange': 'r',
-    'orange-atlas': 'r',
+    'o': 'o',
+    'o-atlas': 'o',
+    'orange': 'o',
+    'orange-atlas': 'o',
     'i': 'i',
     'ip': 'i',
     'i-ztf': 'i',
@@ -83,7 +105,7 @@ FILTER_ALIASES = {
     'lssty': 'y',
 }
 
-_BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
+_BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'c', 'r', 'o', 'i', 'z', 'y', 'w', 'up', 'gp', 'rp', 'ip', 'zp'})
 
 # Effective wavelengths (Angstrom) for the joint Bazin fit (#225 follow-up):
 # the wavelength-correlated prior ties the light-curve shape of bands that
@@ -93,7 +115,7 @@ _BASE_FILTER_KEYS = frozenset({'u', 'b', 'v', 'g', 'r', 'i', 'z', 'y', 'w', 'up'
 FILTER_EFFECTIVE_WAVELENGTH_AA = {
     # canonical families (fallback per normalize_filter_name key)
     'u': 3560.0, 'B': 4380.0, 'V': 5450.0, 'g': 4770.0, 'r': 6230.0, 'i': 7630.0, 'z': 9050.0, 'y': 9620.0,
-    'w': 6080.0,
+    'w': 6080.0, 'c': 5330.0, 'o': 6790.0,
     # Johnson / Cousins
     'u-johnson': 3660.0, 'b-johnson': 4380.0, 'v-johnson': 5450.0, 'r-cousins': 6410.0, 'i-cousins': 7980.0,
     # SDSS / Sloan-like (LCOGT up/gp/rp/ip/zp)
@@ -104,7 +126,8 @@ FILTER_EFFECTIVE_WAVELENGTH_AA = {
     # ZTF
     'g-ztf': 4810.0, 'r-ztf': 6440.0, 'i-ztf': 7980.0,
     # ATLAS cyan / orange
-    'cyan': 5330.0, 'cyan-atlas': 5330.0, 'orange': 6790.0, 'orange-atlas': 6790.0,
+    'cyan': 5330.0, 'cyan-atlas': 5330.0, 'c-atlas': 5330.0,
+    'orange': 6790.0, 'orange-atlas': 6790.0, 'o-atlas': 6790.0,
     # Rubin / LSST
     'u-lsst': 3670.0, 'g-lsst': 4830.0, 'r-lsst': 6220.0, 'i-lsst': 7550.0, 'z-lsst': 8690.0, 'y-lsst': 9710.0,
     'lsstu': 3670.0, 'lsstg': 4830.0, 'lsstr': 6220.0, 'lssti': 7550.0, 'lsstz': 8690.0, 'lssty': 9710.0,
@@ -220,16 +243,19 @@ _FALLBACK_COLORS = ('#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3d
 
 
 def normalize_filter_name(band_name: str | None) -> str | None:
-    """Map a band name (e.g. r-ZTF, r-WFT, g-Sloan) to a canonical uBVgrizy key."""
+    """Map a band name (e.g. r-ZTF, r-WFT, g-Sloan) to a canonical uBVgrizy key.
+
+    ATLAS cyan and orange map to their own keys, ``c`` and ``o``.
+    """
     if not band_name:
         return None
     lower = band_name.strip().lower()
     if lower in FILTER_ALIASES:
         return FILTER_ALIASES[lower]
     if 'cyan' in lower:
-        return 'g'
+        return 'c'
     if 'orange' in lower:
-        return 'r'
+        return 'o'
     base = lower.split('-')[0]
     if base in _BASE_FILTER_KEYS:
         return FILTER_ALIASES.get(base, base)
@@ -255,16 +281,49 @@ def band_effective_wavelength(band_name: str | None) -> float:
     return DEFAULT_EFFECTIVE_WAVELENGTH_AA
 
 
+# Colour aliases beyond normalize_filter_name (#860): the Swift UV bands and
+# J/H/K get their own colours.  ATLAS c and o are canonical filters of their own
+# (legend labels c / o); their entries here only keep the lookup explicit.
+FILTER_COLOR_ALIASES = {
+    'cyan': 'c', 'cyan-atlas': 'c',
+    'orange': 'o', 'orange-atlas': 'o',
+    'uvw2': 'UVW2', 'uvw2-uvot': 'UVW2',
+    'uvm2': 'UVM2', 'uvm2-uvot': 'UVM2',
+    'uvw1': 'UVW1', 'uvw1-uvot': 'UVW1',
+    'u-uvot': 'u', 'b-uvot': 'B', 'v-uvot': 'V',
+    'j': 'J', 'h': 'H', 'k': 'K', 'ks': 'K',
+}
+# Substrings for names the aliases miss (e.g. cyan-ATLAS-forced, UVW2-Swift).
+_COLOR_SUBSTRING_KEYS = (('uvw2', 'UVW2'), ('uvm2', 'UVM2'), ('uvw1', 'UVW1'), ('cyan', 'c'), ('orange', 'o'))
+
+
+def filter_color_key(band_name: str | None) -> str | None:
+    """Key of ``band_name`` in ``FILTER_COLORS``, or None for a band without a fixed colour."""
+    if not band_name:
+        return None
+    lower = band_name.strip().lower()
+    if lower in FILTER_COLOR_ALIASES:
+        return FILTER_COLOR_ALIASES[lower]
+    for needle, key in _COLOR_SUBSTRING_KEYS:
+        if needle in lower:
+            return key
+    base = lower.split('-')[0]
+    if base in ('j', 'h', 'k', 'ks'):
+        return FILTER_COLOR_ALIASES[base]
+    canonical = normalize_filter_name(band_name)
+    return canonical if canonical in FILTER_COLORS else None
+
+
 def band_display_color(
     band_name: str | None,
     disp_color: str | None = None,
     *,
     fallback_index: int = 0,
 ) -> str:
-    """Resolve plot color: canonical filter family first, then DB value, then palette."""
-    canonical = normalize_filter_name(band_name)
-    if canonical and canonical in FILTER_COLORS:
-        return FILTER_COLORS[canonical]
+    """Resolve plot color: the band's colour family first, then DB value, then palette."""
+    key = filter_color_key(band_name)
+    if key:
+        return FILTER_COLORS[key]
     if disp_color and disp_color != 'None':
         return disp_color
     if band_name:
@@ -335,15 +394,23 @@ def filter_color_groups_for_display() -> list[dict]:
     """Human-readable color groups for docs / chat (filter family -> example names)."""
     groups = []
     examples = {
-        'u': ['u', 'u-PS1', 'up (Sinistro)'],
+        'UVW2': ['UVW2'],
+        'UVM2': ['UVM2'],
+        'UVW1': ['UVW1'],
+        'u': ['u', 'U', 'u-PS1', 'up (Sinistro)'],
         'B': ['B', 'B-Johnson'],
         'V': ['V', 'V-Johnson', 'V-crts'],
-        'g': ['g', 'g-ZTF', 'g-WFT', 'g-Sloan', 'g-PTF', 'g-LSST', 'cyan-ATLAS'],
-        'r': ['r', 'r-ZTF', 'r-WFT', 'r-Sloan', 'R-Cousins', 'r-LSST', 'orange-ATLAS'],
+        'g': ['g', 'g-ZTF', 'g-WFT', 'g-Sloan', 'g-PTF', 'g-LSST'],
+        'c': ['c', 'cyan-ATLAS'],
+        'r': ['r', 'r-ZTF', 'r-WFT', 'r-Sloan', 'R-Cousins', 'r-LSST'],
+        'o': ['o', 'orange-ATLAS'],
         'i': ['i', 'i-ZTF', 'i-Sloan', 'I-Cousins', 'ip'],
         'z': ['z', 'z-Sloan', 'zp'],
         'y': ['y', 'y-PS1'],
         'w': ['w', 'w-PS1'],
+        'J': ['J'],
+        'H': ['H'],
+        'K': ['K', 'Ks'],
     }
     for key, color in FILTER_COLORS.items():
         groups.append({
@@ -362,3 +429,18 @@ def telescope_symbol_groups_for_display() -> list[dict]:
     seen = {sym: ', '.join(labels) for sym, labels in seen.items()}
     seen.setdefault('triangle', 'other telescopes (default)')
     return [{'symbol': sym, 'telescopes': desc} for sym, desc in seen.items()]
+
+
+def relative_luminance(hex_color: str) -> float:
+    """WCAG 2 relative luminance of a ``#rrggbb`` colour."""
+    value = hex_color.lstrip('#')
+    channels = [int(value[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(color_a: str, color_b: str = '#ffffff') -> float:
+    """WCAG 2 contrast ratio of two ``#rrggbb`` colours (default: against white)."""
+    la, lb = relative_luminance(color_a), relative_luminance(color_b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)

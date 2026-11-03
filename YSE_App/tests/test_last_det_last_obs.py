@@ -27,6 +27,7 @@ from YSE_App.models import (
     TransientPhotometry,
     TransientPhotStat,
 )
+from YSE_App.common.utc_dates import utc_day, utc_day_html
 from YSE_App.services import phot_points
 from YSE_App.services.photstat import recompute_many
 from YSE_App.table_utils import (
@@ -113,12 +114,12 @@ class LastDetLastObsTests(TestCase):
 
     @staticmethod
     def _date(days):
-        return _day(days).strftime('%m/%d/%Y')
+        return utc_day_html(_day(days))  # YYYYMMDD.ddd with the MJD on hover (#807)
 
     def test_column_labels(self):
         table = TransientTable(self._qs())
         self.assertEqual(table.columns['recent_mag'].header, 'Last Det.')
-        self.assertEqual(table.columns['recent_magdate'].header, 'Last Obs.')
+        self.assertEqual(table.columns['recent_magdate'].header, 'Last Obs. (UTC)')
 
     def test_newest_point_is_a_detection(self):
         self.assertEqual(self._cells()['2026ldlo-det'], ('18.50 g', self._date(2)))
@@ -145,7 +146,7 @@ class LastDetLastObsTests(TestCase):
         for t in self.all:
             stat = TransientPhotStat.objects.select_related('last_detected_band').get(transient=t)
             last_det, last_obs = self._cells()[t.name]
-            self.assertTrue(last_obs.startswith(stat.last_obs_date.strftime('%m/%d/%Y')))
+            self.assertIn('>%s</span>' % utc_day(stat.last_obs_date), last_obs)
             if stat.last_detected_mag is not None:
                 self.assertTrue(last_det.startswith('%.2f ' % stat.last_detected_mag))
 

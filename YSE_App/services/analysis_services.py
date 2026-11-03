@@ -248,6 +248,17 @@ def coerce_params(profile: AnalysisService, raw: Optional[Dict]) -> Dict:
             errors[name] = str(exc) or "invalid"
             continue
         out[name] = value
+    if "selection" in raw:
+        # A subset fit (#847): stored in its canonical form, so repeating it gives the same points.
+        from YSE_App.services.fit_subset import SelectionError, normalize_selection
+
+        try:
+            selection = normalize_selection(raw.pop("selection"))
+        except SelectionError as exc:
+            errors["selection"] = str(exc)
+        else:
+            if selection is not None:
+                out["selection"] = selection
     for key, value in raw.items():
         if key in ("csrfmiddlewaretoken", "service", "transient"):
             continue
@@ -502,4 +513,9 @@ def result_rows(run: ExternalServiceRun) -> List[Tuple[str, str]]:
             rows.append((key, "-" if value is None else str(value)))
         else:
             rows.append((key, format_value(value, result.get(key + "_err"))))
+    # The rest-frame phase is the default phase, so it goes before the observer-frame one (#964).
+    keys = [k for k, _v in rows]
+    if "phase_today_rest" in keys and "phase_today" in keys:
+        rest = rows.pop(keys.index("phase_today_rest"))
+        rows.insert(keys.index("phase_today"), rest)
     return rows

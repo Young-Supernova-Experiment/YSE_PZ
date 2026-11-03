@@ -114,6 +114,7 @@ def row_rules() -> Dict[str, RowRule]:
         _rule(m.TransientSpectrum, 'id', 'visible_transient_spectra'),
         *_through_rules(m.TransientSpectrum, 'visible_transient_spectra'),
         _rule(m.TransientSpecData, 'spectrum_id', 'visible_transient_spectra'),
+        _rule(m.TransientSpectrumArrays, 'spectrum_id', 'visible_transient_spectra'),  # pixels as arrays (#891)
 
         _rule(m.Host, None, None, masks=[_mask('best_spec_id', 'visible_host_spectra', m.HostSpectrum)]),
         _rule(m.HostPhotometry, 'id', 'visible_host_photometry'),
@@ -124,6 +125,7 @@ def row_rules() -> Dict[str, RowRule]:
         _rule(m.HostSpectrum, 'id', 'visible_host_spectra'),
         *_through_rules(m.HostSpectrum, 'visible_host_spectra'),
         _rule(m.HostSpecData, 'spectrum_id', 'visible_host_spectra'),
+        _rule(m.HostSpectrumArrays, 'spectrum_id', 'visible_host_spectra'),  # pixels as arrays (#891)
 
         _rule(m.TransientPhotStat, 'id', 'visible_photstat'),
         _rule(m.TransientPhotStatScope, 'id', 'visible_photstat_scopes'),

@@ -105,9 +105,11 @@ def _via_allocation(transient, user: User) -> Optional[Outcome]:
         return None
     existing = fr.open_request_for(allocation, transient)
     if existing is not None:
-        return Outcome("refused", "error: a ZTF forced-photometry request is already %s (submitted %s)" % (
+        from YSE_App.common.utc_dates import utc_day
+
+        return Outcome("refused", "error: a ZTF forced-photometry request is already %s (submitted %s UTC)" % (
             existing.get_state_display().lower(),
-            (existing.submitted_at or existing.created_date).strftime("%Y-%m-%d %H:%M UT")), via="allocation")
+            utc_day(existing.submitted_at or existing.created_date)), via="allocation")
     try:
         req = fr.submit_request(allocation, transient, user, {})
     except (FacilityValidationError, fr.FacilityRequestError) as exc:

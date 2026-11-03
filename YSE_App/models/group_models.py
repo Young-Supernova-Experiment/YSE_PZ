@@ -1,7 +1,9 @@
 """Research-team profiles, invitation links and per-user picker preferences (#445, #440).
 
 * ``GroupProfile``: one per ``auth.Group``. Owners (assigned by staff in the Django admin, as
-  data), a description, an ``is_active`` flag (inactive groups are hidden from pickers and
+  data, or the creator of a team made on /teams/), deputies (members an owner appoints; they
+  manage the team like an owner but cannot appoint deputies), whether the team accepts
+  membership requests, a description, an ``is_active`` flag (inactive groups are hidden from pickers and
   default audiences but keep all their data and access) and an ``is_system`` flag (permission
   groups such as ``api_writers`` and the Public group: never owned, joined or invited to).
 * ``GroupInvitation``: an invite link. Only the SHA-256 of its random token is stored, so the
@@ -9,7 +11,9 @@
   default: single-use) and can be revoked. No email address is stored.
 * ``GroupInvitationUse``: who used an invitation and when (one row per user).
 * ``GroupMembershipRequest``: a signed-in user asks to join a team (#448); the team's owners
-  (or staff) approve or deny it. System groups cannot be requested.
+  (or staff) approve or deny it. System groups cannot be requested. Requests made on the
+  signup form are ``held`` until the new user has finished onboarding (agreement and
+  profile): owners are told, and can approve, only once it is released.
 * ``UserPreference``: groups a user hides from pickers, default audiences for comments and
   follow-up requests, and the default for the comment "Public" box.
 
@@ -31,6 +35,18 @@ class GroupProfile(models.Model):
         User, blank=True, related_name="owned_group_profiles",
         help_text="Owners can invite people to the group, see its members and remove members. "
                   "System groups cannot have owners.",
+    )
+    deputies = models.ManyToManyField(
+        User, blank=True, related_name="deputy_group_profiles",
+        help_text="Members an owner appoints to manage the team: approve requests, add, invite and remove "
+                  "members. Only owners and staff appoint or remove deputies.",
+    )
+    # Nullable so INSERTs from code without the column (develop, shared DB) still work.
+    # NULL and True: the team takes requests (when it has an owner or deputy); False: it does not.
+    accepts_requests = models.BooleanField(
+        null=True, blank=True, default=None,
+        help_text="Signed-in users can ask to join; owners and deputies decide. Off: invitations and "
+                  "direct adds only.",
     )
     description = models.TextField(blank=True, default="")
     is_active = models.BooleanField(
@@ -129,6 +145,12 @@ class UserPreference(models.Model):
     followup_default_groups = models.ManyToManyField(Group, blank=True, related_name="followup_default_for_preferences")
     # None = the site default (not public).
     comment_default_public = models.BooleanField(null=True, blank=True)
+    # "Observable tonight" default site (#959). Nullable, and ON DELETE SET NULL in MySQL too
+    # (migrations 0067 and 0068), because develop's code on the shared database does not know the column.
+    observing_default_site = models.ForeignKey(
+        "YSE_App.Telescope", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+        help_text="Site that Observable tonight starts from for this user.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -159,6 +181,11 @@ class GroupMembershipRequest(models.Model):
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     decided_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     decided_at = models.DateTimeField(null=True, blank=True)
+    # Nullable so INSERTs from code without the column (develop, shared DB) still work;
+    # NULL and False both mean "not held".
+    held = models.BooleanField(
+        null=True, blank=True, default=None,
+        help_text="Made on the signup form; owners see it once the user has finished onboarding.")
 
     class Meta:
         ordering = ("-created_at", "-id")

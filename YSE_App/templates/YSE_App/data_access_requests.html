@@ -46,12 +46,12 @@
 								<td><small>{{ r.message|default:"-" }}</small></td>
 								<td>
 									<span class="badge {% if r.status == 'accepted' %}badge-success{% elif r.status == 'declined' %}badge-secondary{% elif r.status == 'revoked' %}badge-dark{% else %}badge-info{% endif %}">{{ r.status_label }}</span>
-									{% if r.decided_by %}<br><small class="text-muted">by {{ r.decided_by.username }}{% if r.decided_as %} ({{ r.decided_as_label }}){% endif %} {{ r.decided_at|date:"Y-m-d H:i" }}</small>{% endif %}
+									{% if r.decided_by %}<br><small class="text-muted">by {{ r.decided_by.username }}{% if r.decided_as %} ({{ r.decided_as_label }}){% endif %} {{ r.decided_at|utcdate }} UTC</small>{% endif %}
 									{% if r.note %}<br><small>&ldquo;{{ r.note }}&rdquo;</small>{% endif %}
 									{% if r.status == 'accepted' %}<br><small class="text-muted">{{ r.granted_count }} dataset{{ r.granted_count|pluralize }} shared</small>{% endif %}
-									{% if r.status == 'revoked' %}<br><small class="text-muted">{% if r.revoked_by %}by {{ r.revoked_by.username }} {% endif %}{{ r.revoked_at|date:"Y-m-d H:i" }}, {% if r.revoke_direction == 'backwards' %}backwards{% else %}going forward{% endif %}</small>{% endif %}
+									{% if r.status == 'revoked' %}<br><small class="text-muted">{% if r.revoked_by %}by {{ r.revoked_by.username }} {% endif %}{{ r.revoked_at|utcdate }} UTC, {% if r.revoke_direction == 'backwards' %}backwards{% else %}going forward{% endif %}</small>{% endif %}
 								</td>
-								<td><small>{{ r.created_date|date:"Y-m-d H:i" }}</small></td>
+								<td><small>{{ r.created_date|utcdate }}</small></td>
 								{% if box == 'inbox' %}
 								<td class="text-nowrap">
 									{% if r.no_named_decider %}<div class="small text-warning yse-dar-no-pi">No PI assigned: only administrators can decide.</div>{% endif %}

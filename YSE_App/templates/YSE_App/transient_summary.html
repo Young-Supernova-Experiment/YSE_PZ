@@ -6,6 +6,8 @@
 {% load bootstrap3 %}
 {% load el_pagination_tags %}
 
+{% block page_title %}YSE | PZ: Summary View{% endblock %}
+
 {% block styles %}
   <!-- include Aladin Lite CSS file in the head section of your page -->
   <link rel="stylesheet" href="//aladin.u-strasbg.fr/AladinLite/api/v2/latest/aladin.min.css" />
@@ -16,8 +18,7 @@
 
 {% block content_header %}
     <h1>
-        Young Supernova Experiment
-        <small>Dashboard</small>
+        Summary View
     </h1>
     <ol class="breadcrumb">
         <li><i class="fa fa-dashboard"></i> Home</li>

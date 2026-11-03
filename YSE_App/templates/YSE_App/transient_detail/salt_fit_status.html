@@ -13,7 +13,7 @@ yseFitStatus driver (transient_detail.html), which polls while a run is active.
     <strong>SALT3 fit:</strong>
     {% if salt_fit %}
         {% for key, value in salt_fit.values %}<span class="text-nowrap"><em>{{ key }}</em> = {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}
-        <span class="text-muted">&mdash; {{ salt_fit.result.model|default:"salt3" }}, {{ salt_fit.when|date:"Y-m-d H:i" }} UTC{% if salt_fit.user %} by {{ salt_fit.user }}{% endif %}</span>
+        <span class="text-muted">&mdash; {{ salt_fit.result.model|default:"salt3" }}, {{ salt_fit.when|utcdate }} UTC{% if salt_fit.user %} by {{ salt_fit.user }}{% endif %}</span>
         <a href="#analysis_tab" class="yse-fit-analysis-link" title="Every run, with plots and files, on the Analysis tab">details</a>
     {% elif not salt_service.registered %}
         <span class="text-muted">not available on this server{% if user.is_staff %} &mdash; register it with <code>manage.py register_analysis_service --builtin sncosmo_fit</code>{% endif %}.</span>

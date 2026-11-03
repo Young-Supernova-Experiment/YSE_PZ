@@ -24,6 +24,7 @@ from django.views.decorators.http import require_POST
 
 from YSE_App.models import (SharingService, SharingSubmission, Transient, TransientClass, TransientPhotometry,
                             TransientSpectrum)
+from YSE_App.common.utc_dates import utc_day
 from YSE_App.models.sharing_models import AutoPublisher
 from YSE_App.services import autopublish_optin as optin_service
 from YSE_App.sharing import tns
@@ -248,7 +249,7 @@ def report_dialog_context(user, transient):
             "id": s.pk, "name": s.name, "testing": s.testing, "default_coauthors": s.default_coauthors,
             "default_remarks": s.default_remarks, "group": s.tns_group_name or s.tns_group_id,
         } for s in services],
-        "sharing_spectra": [{"id": sp.pk, "label": "%s %s" % (sp.instrument.name, sp.obs_date.strftime("%Y-%m-%d %H:%M"))}
+        "sharing_spectra": [{"id": sp.pk, "label": "%s %s" % (sp.instrument.name, utc_day(sp.obs_date))}
                             for sp in spectra],
         "sharing_classes": list(TransientClass.objects.order_by("name").values_list("name", flat=True)),
         "sharing_default_class": transient.best_spec_class.name if transient.best_spec_class_id else "",

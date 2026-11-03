@@ -49,12 +49,26 @@ def runs_of_runner(transient, runner_path: str):
         .select_related("service", "created_by").order_by("-created_date", "-pk"))
 
 
+#: How many of the newest runs :func:`_first_full_run` looks through for one that is not a subset.
+FULL_RUN_SCAN = 200
+
+
+def _first_full_run(qs) -> Optional[ExternalServiceRun]:
+    """The newest run in ``qs`` that is not a subset fit (#847): subsets never stand for the fit."""
+    from YSE_App.services.fit_tables import selection_of
+
+    for run in qs[:FULL_RUN_SCAN]:
+        if selection_of(run) is None:
+            return run
+    return None
+
+
 def latest_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
-    return runs_of_runner(transient, runner_path).first()
+    return _first_full_run(runs_of_runner(transient, runner_path))
 
 
 def latest_successful_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
-    return runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED).first()
+    return _first_full_run(runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED))
 
 
 def active_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
@@ -65,7 +79,8 @@ def active_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
 # --- the stored SALT fit --------------------------------------------------------------------
 
 def stored_salt_fit(transient, user=None) -> Optional[ExternalServiceRun]:
-    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit.
+    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit
+    that is not a subset fit (#847).
 
     With ``user``: ``None`` when some of the transient's photometry is hidden
     from that user (#607). The stored fit was made from the photometry its

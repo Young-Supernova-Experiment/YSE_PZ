@@ -350,7 +350,9 @@ def announce_spectrum(spectrum_id: int) -> List[Notification]:
     text = "new spectrum" + (" from %s" % instrument.name if instrument is not None else "")
     obs_date = getattr(spectrum, "obs_date", None)
     if obs_date:
-        text += " (observed %s)" % obs_date.strftime("%Y-%m-%d")
+        from YSE_App.common.utc_dates import utc_day
+
+        text += " (observed %s)" % utc_day(obs_date)  # YYYYMMDD.ddd UTC (#807)
     return record_activity(spectrum.transient, "spectrum", text, actor=actor, recipients=viewers)
 
 

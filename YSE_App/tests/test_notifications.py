@@ -134,6 +134,32 @@ class NotifyServiceTests(TestCase):
         self.assertEqual(svc.absolute_url("https://x/y"), "https://x/y")
         self.assertEqual(svc.absolute_url(""), "")
 
+    def test_absolute_url_does_not_double_the_script_prefix(self):
+        """reverse() under /yse/ gives /yse/teams/1/; the base URL already ends in /yse/."""
+        self.assertEqual(svc.absolute_url("/yse/teams/1/"), "https://ziggy.example/yse/teams/1/")
+        self.assertEqual(svc.absolute_url("/yse"), "https://ziggy.example/yse/")
+        self.assertEqual(svc.absolute_url("teams/1/"), "https://ziggy.example/yse/teams/1/")
+        # Only a whole path segment counts: /yse_home/ is a page of the site.
+        self.assertEqual(svc.absolute_url("/yse_home/"), "https://ziggy.example/yse/yse_home/")
+        with override_settings(NOTIFICATION_BASE_URL="https://ziggy.example/"):
+            self.assertEqual(svc.absolute_url("/yse/teams/1/"), "https://ziggy.example/yse/teams/1/")
+
+    def test_email_link_under_a_script_prefix(self):
+        from django.urls import get_script_prefix, set_script_prefix
+        old = get_script_prefix()
+        set_script_prefix("/yse/")
+        self.addCleanup(set_script_prefix, old)
+        from django.contrib.auth.models import Group
+        team = Group.objects.create(name="notif-synthetic-team")
+        url = reverse("team_detail", args=[team.pk])
+        self.assertEqual(url, "/yse/teams/%d/" % team.pk)  # as stored during a web request
+        notify([self.alice], "synthetic team request", url=url, kind="team_request")
+        run_pass()
+        self.assertTrue(mail.outbox)
+        body = mail.outbox[-1].body
+        self.assertIn("https://ziggy.example/yse/teams/%d/" % team.pk, body)
+        self.assertNotIn("/yse/yse/", body)
+
     def test_transient_link_and_mark_all_read(self):
         t = create_minimal_transient(self.alice, name="notif-sn")
         rows = notify([self.alice], "with transient", transient=t)

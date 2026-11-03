@@ -1,0 +1,28 @@
+{# "Submit to facility" form (#300); included by facility_request_form.html and the preview follow-up tab (#857). #}
+		{% if facility_allocations %}
+		<form id="facility_request_form" action="{% url 'transient_facility_submit' transient.id %}" method="post" autocomplete="off">
+			{% csrf_token %}
+			<div class="row">
+				<div class="col-md-6 col-12">
+					<div class="form-group">
+						<label for="facility_allocation">Allocation</label>
+						<select class="form-control" id="facility_allocation" name="allocation">
+							{% for opt in facility_allocations %}
+							<option value="{{ opt.allocation.id }}" data-schema='{{ opt.schema_json|escape }}' data-facility="{{ opt.facility.slug }}" data-hours="{{ opt.hours_remaining }}">{{ opt.allocation.name }} &mdash; {{ opt.allocation.telescope.name }} ({{ opt.facility.name }}, {{ opt.hours_remaining|floatformat:1 }} h left)</option>
+							{% endfor %}
+						</select>
+					</div>
+				</div>
+			</div>
+			<div class="row" id="facility_fields"></div>
+			<div class="row">
+				<div class="col-12">
+					<div class="text-danger small" id="facility_request_error" hidden></div>
+					<button type="submit" class="btn btn-primary" id="facility_submit_btn">Submit request</button>
+					<span class="text-muted small ml-2">The request is queued and sent by the job runner; its state appears below.</span>
+				</div>
+			</div>
+		</form>
+		{% else %}
+		<p class="text-muted mb-0">No active allocation with a facility API is open to you.{% if user.is_staff %} <a href="{% url 'allocations' %}">Manage allocations</a>.{% endif %}</p>
+		{% endif %}

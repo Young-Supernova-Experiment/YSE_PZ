@@ -294,6 +294,9 @@ class BazinJointFitTests(TestCase):
         self.assertEqual(band_effective_wavelength("g"), 4770.0)
         self.assertEqual(band_effective_wavelength("r-ZTF"), 6440.0)
         self.assertEqual(band_effective_wavelength("orange-ATLAS"), 6790.0)
+        # ATLAS bands stored as c / o get the ATLAS wavelengths, not the default
+        self.assertEqual(band_effective_wavelength("c"), 5330.0)
+        self.assertEqual(band_effective_wavelength("o"), 6790.0)
         self.assertEqual(band_effective_wavelength("y-LSST"), 9710.0)
         self.assertEqual(band_effective_wavelength("UVW2"), 2030.0)
         self.assertEqual(band_effective_wavelength("r-bazin-db"), 6230.0)  # family fallback
@@ -534,8 +537,8 @@ class BazinPlotViewTests(TestCase):
         refs = {ref["id"]: ref for ref in doc["roots"]["references"]}
         callbacks = [ref for ref in refs.values() if ref["type"] == "CustomJS"]
         followers = sum(len(cb["attributes"]["args"]["followers"]) for cb in callbacks)
-        # error bars + upper limit from the plot, solid + dashed fit from the overlay
-        self.assertEqual(followers, 4)
+        # error bars + upper limit + its arrow stem (#860) from the plot, solid + dashed fit from the overlay
+        self.assertEqual(followers, 5)
 
     def test_too_few_points_notes_unavailable_fit(self):
         with mock.patch.dict("os.environ", {"YSE_PLOT_HTML_CACHE": "0"}):

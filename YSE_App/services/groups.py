@@ -20,18 +20,35 @@ Pickers
 Invitations
     ``create_invitation`` returns the raw token once; only its SHA-256 is stored.
     ``accept_invitation`` locks the invitation row, so the use limit holds under concurrency.
+
+Deputies
+    Owners (and staff) appoint deputies from the team's members. A deputy manages the team
+    like an owner (requests, adding, inviting and removing members, team details) but cannot
+    appoint or remove deputies, or remove another deputy. Leaving or being removed from the
+    team ends deputy status. ``managers_of`` (owners and deputies) receive team notices.
+
+Creating teams and adding members
+    Any onboarded user can ``create_team``; they become its owner and first member.
+    Throttles (``[groups]`` settings, cache counters): active teams owned per user,
+    creations per user per day, creations site-wide per hour. Staff skip the per-user
+    limits. Owners can ``add_member`` an existing user by exact username or email (no
+    directory), at most ``GROUP_ADDS_PER_OWNER_PER_DAY`` a day; the person must have
+    accepted the User Agreement, as with invitations. Members who are not owners can
+    ``leave_team``.
 """
 
 from __future__ import annotations
 
 import datetime
 import hashlib
+import re
 import secrets
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
 from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.db import IntegrityError, transaction
+from django.core.cache import cache
 from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.utils import timezone
 
@@ -48,6 +65,15 @@ KIND_FOLLOWUP = "followup"
 
 class InvitationError(Exception):
     """An invitation cannot be created or used; ``str(exc)`` is safe to show the user."""
+
+
+class TeamError(InvitationError):
+    """A team cannot be created, joined or left; ``str(exc)`` is safe to show the user."""
+
+
+TEAM_NAME_MIN = 3
+TEAM_NAME_MAX = 80
+TEAM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()&+'-]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +106,26 @@ def invite_max_uses_limit() -> int:
 
 def invite_purge_days() -> int:
     return int(getattr(settings, "GROUP_INVITE_PURGE_DAYS", 90))
+
+
+def create_enabled() -> bool:
+    return bool(getattr(settings, "GROUP_CREATE_ENABLED", True))
+
+
+def create_max_owned() -> int:
+    return int(getattr(settings, "GROUP_CREATE_MAX_OWNED", 5))
+
+
+def creates_per_user_per_day() -> int:
+    return int(getattr(settings, "GROUP_CREATES_PER_USER_PER_DAY", 2))
+
+
+def creates_per_hour() -> int:
+    return int(getattr(settings, "GROUP_CREATES_PER_HOUR", 20))
+
+
+def adds_per_owner_per_day() -> int:
+    return int(getattr(settings, "GROUP_ADDS_PER_OWNER_PER_DAY", 50))
 
 
 # ---------------------------------------------------------------------------
@@ -189,11 +235,25 @@ def is_owner(user: User, group: Group) -> bool:
     return GroupProfile.objects.filter(group=group, owners=user).exists()
 
 
+def is_deputy(user: User, group: Group) -> bool:
+    if not user.is_authenticated:
+        return False
+    # Only while still a member: removal elsewhere (the admin) ends the role too.
+    return GroupProfile.objects.filter(group=group, deputies=user, group__user=user).exists()
+
+
 def can_manage(user: User, group: Group) -> bool:
-    """Owners and staff manage a team; nobody manages a system group here."""
+    """Owners, deputies and staff manage a team; nobody manages a system group here."""
     if not user.is_authenticated or not user.is_active:
         return False
     if is_system_group(group):
+        return False
+    return bool(user.is_staff or user.is_superuser or is_owner(user, group) or is_deputy(user, group))
+
+
+def can_appoint_deputies(user: User, group: Group) -> bool:
+    """Owners and staff (not deputies) appoint and remove deputies."""
+    if not user.is_authenticated or not user.is_active or is_system_group(group):
         return False
     return bool(user.is_staff or user.is_superuser or is_owner(user, group))
 
@@ -205,13 +265,51 @@ def owners_of(group: Group) -> List[User]:
     return list(profile.owners.filter(is_active=True).order_by("username"))
 
 
+def deputies_of(group: Group) -> List[User]:
+    profile = GroupProfile.objects.filter(group=group).first()
+    if profile is None:
+        return []
+    return list(profile.deputies.filter(is_active=True).order_by("username"))
+
+
+def managers_of(group: Group) -> List[User]:
+    """Owners, then deputies (active, no duplicates)."""
+    seen, out = set(), []
+    for user in owners_of(group) + deputies_of(group):
+        if user.pk not in seen:
+            seen.add(user.pk)
+            out.append(user)
+    return out
+
+
+def set_deputy(actor: User, group: Group, member: User, appoint: bool) -> None:
+    """Appoint ``member`` (a member who is not an owner) as a deputy, or remove them as one."""
+    if not can_appoint_deputies(actor, group):
+        raise PermissionError("Only the team's owners and staff can appoint deputies.")
+    profile = profile_for(group)
+    if not appoint:
+        if profile.deputies.filter(pk=member.pk).exists():
+            profile.deputies.remove(member)
+            _notify_user(member, "You are no longer a deputy of %s." % group.name, group)
+        return
+    if is_owner(member, group):
+        raise TeamError("%s is already an owner of %s." % (display_name(member), group.name))
+    if not member.is_active or not member.groups.filter(pk=group.pk).exists():
+        raise TeamError("Only members of %s can be deputies." % group.name)
+    if profile.deputies.filter(pk=member.pk).exists():
+        return
+    profile.deputies.add(member)
+    _notify_user(member, "%s made you a deputy of %s: you can now approve requests and manage its members."
+                 % (display_name(actor), group.name), group)
+
+
 def teams_for(user: User) -> List[Group]:
     """Non-system groups the user belongs to or owns (staff: every non-system group)."""
     system = system_group_ids(user)
     if user.is_staff or user.is_superuser:
         qs = Group.objects.all()
     else:
-        qs = Group.objects.filter(Q(user=user) | Q(group_profile__owners=user))
+        qs = Group.objects.filter(Q(user=user) | Q(group_profile__owners=user) | Q(group_profile__deputies=user))
     return [g for g in qs.distinct().select_related("group_profile").order_by("name") if g.id not in system]
 
 
@@ -220,8 +318,155 @@ def remove_member(actor: User, group: Group, member: User) -> None:
         raise PermissionError("You cannot manage this group.")
     if is_owner(member, group):
         raise InvitationError("Owners are changed by staff in the admin; remove the owner there first.")
+    if is_deputy(member, group) and not can_appoint_deputies(actor, group):
+        raise TeamError("Only owners can remove a deputy.")
     member.groups.remove(group)
+    GroupProfile.deputies.through.objects.filter(groupprofile__group=group, user=member).delete()
     _notify_owners(group, "%s was removed from %s." % (display_name(member), group.name), exclude=[actor])
+
+
+# ---------------------------------------------------------------------------
+# creating teams, adding members, leaving
+
+
+def _count(key: str) -> int:
+    return int(cache.get(key) or 0)
+
+
+def _bump(key: str, ttl: int) -> None:
+    cache.add(key, 0, ttl)
+    try:
+        cache.incr(key)
+    except ValueError:  # evicted between add and incr
+        cache.set(key, 1, ttl)
+
+
+def _create_user_key(user: User) -> str:
+    return "yse:teamcreate:%s:%s" % (user.pk, timezone.now().strftime("%Y%m%d"))
+
+
+def _create_site_key() -> str:
+    return "yse:teamcreate:site:%s" % timezone.now().strftime("%Y%m%d%H")
+
+
+def _add_key(user: User) -> str:
+    return "yse:teamadd:%s:%s" % (user.pk, timezone.now().strftime("%Y%m%d"))
+
+
+def owned_team_count(user: User) -> int:
+    return GroupProfile.objects.filter(owners=user, is_active=True, is_system=False).count()
+
+
+def clean_team_name(name: str) -> str:
+    """Collapse whitespace and check the name; raises ``TeamError``."""
+    name = " ".join((name or "").split())
+    if len(name) < TEAM_NAME_MIN or len(name) > TEAM_NAME_MAX:
+        raise TeamError("A team name has %d to %d characters." % (TEAM_NAME_MIN, TEAM_NAME_MAX))
+    if not TEAM_NAME_RE.match(name):
+        raise TeamError("Use letters, digits, spaces and . _ ( ) & + ' - only, starting with a letter or digit.")
+    reserved = {n.lower() for n in system_group_names()} | {PUBLIC_COLLABORATION_GROUP_NAME.lower()}
+    if name.lower() in reserved or Group.objects.filter(name__iexact=name).exists():
+        raise TeamError("A group with that name already exists.")
+    return name
+
+
+def create_problem(user: User) -> Optional[str]:
+    """Why ``user`` cannot create a team now, or None (the limits, not the name)."""
+    if not create_enabled():
+        return "Creating teams is turned off on this site."
+    if not getattr(user, "is_authenticated", False) or not user.is_active:
+        return "Sign in to create a team."
+    staff = user.is_staff or user.is_superuser
+    if not staff:
+        limit = create_max_owned()
+        if limit > 0 and owned_team_count(user) >= limit:
+            return "You already own %d active teams, the most allowed." % limit
+        limit = creates_per_user_per_day()
+        if limit > 0 and _count(_create_user_key(user)) >= limit:
+            return "You have created too many teams today; try again tomorrow."
+    limit = creates_per_hour()
+    if limit > 0 and _count(_create_site_key()) >= limit:
+        return "Too many teams were created in the last hour; please try again later."
+    return None
+
+
+def create_team(user: User, name: str, description: str = "") -> Group:
+    """Create a team owned by ``user``, who is also its first member."""
+    problem = create_problem(user)
+    if problem:
+        raise TeamError(problem)
+    name = clean_team_name(name)
+    try:
+        with transaction.atomic():
+            group = Group.objects.create(name=name)
+            profile = profile_for(group)  # usually made by the post_save signal
+            profile.description = (description or "").strip()
+            profile.save(update_fields=["description", "updated_at"])
+            profile.owners.add(user)
+            user.groups.add(group)
+    except IntegrityError:
+        raise TeamError("A group with that name already exists.")
+    _bump(_create_user_key(user), 86400)
+    _bump(_create_site_key(), 3600)
+    forget_preferences(user)
+    return group
+
+
+def find_user(identifier: str) -> Optional[User]:
+    """An active user by exact username, or by email address when it names only one account."""
+    identifier = (identifier or "").strip()
+    if not identifier:
+        return None
+    user = User.objects.filter(username__iexact=identifier, is_active=True).first()
+    if user is None and "@" in identifier:
+        matches = list(User.objects.filter(email__iexact=identifier, is_active=True)[:2])
+        if len(matches) > 1:
+            raise TeamError("More than one account uses that address; enter the username instead.")
+        user = matches[0] if matches else None
+    return user
+
+
+def add_member(actor: User, group: Group, identifier: str) -> User:
+    """Add an existing user to the team directly (owners and staff)."""
+    if not can_manage(actor, group):
+        raise PermissionError("Only the group's owners and staff can add members.")
+    limit = adds_per_owner_per_day()
+    if limit > 0 and _count(_add_key(actor)) >= limit:
+        raise TeamError("You have added too many people today; try again tomorrow.")
+    member = find_user(identifier)
+    if member is None:
+        raise TeamError("No active account has that username or email address.")
+    if member.groups.filter(pk=group.pk).exists():
+        raise TeamError("%s is already a member of %s." % (display_name(member), group.name))
+    from YSE_App import onboarding
+    if not onboarding.is_onboarded(member):
+        raise TeamError("%s has not accepted the User Agreement and completed their profile yet; "
+                        "send them an invitation link instead." % display_name(member))
+    from YSE_App.models.group_models import GroupMembershipRequest
+    with transaction.atomic():
+        member.groups.add(group)
+        GroupMembershipRequest.objects.filter(
+            user=member, group=group, status=GroupMembershipRequest.STATUS_PENDING).update(
+            status=GroupMembershipRequest.STATUS_APPROVED, decided_by=actor, decided_at=timezone.now(), held=None)
+    _bump(_add_key(actor), 86400)
+    _notify_user(member, "%s added you to %s." % (display_name(actor), group.name), group)
+    _notify_owners(group, "%s added %s to %s." % (display_name(actor), display_name(member), group.name),
+                   exclude=[actor, member])
+    return member
+
+
+def leave_team(user: User, group: Group) -> None:
+    """A member who is not an owner leaves a team."""
+    if is_system_group(group):
+        raise TeamError("This group cannot be left here.")
+    if not user.groups.filter(pk=group.pk).exists():
+        raise TeamError("You are not a member of %s." % group.name)
+    if is_owner(user, group):
+        raise TeamError("Owners cannot leave their team; ask staff to change the owners first.")
+    user.groups.remove(group)
+    GroupProfile.deputies.through.objects.filter(groupprofile__group=group, user=user).delete()
+    forget_preferences(user)
+    _notify_owners(group, "%s left %s." % (display_name(user), group.name), exclude=[user])
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +590,8 @@ def display_name(user: User) -> str:
 
 
 def _notify_owners(group: Group, text: str, exclude: Iterable[User] = ()) -> None:
-    owners = owners_of(group)
+    """Tell the team's managers (owners and deputies)."""
+    owners = managers_of(group)
     if not owners:
         return
     try:
@@ -357,6 +603,18 @@ def _notify_owners(group: Group, text: str, exclude: Iterable[User] = ()) -> Non
     except Exception:  # noqa: BLE001 - membership changes never fail on notification delivery
         import logging
         logging.getLogger(__name__).exception("team owner notification failed")
+
+
+def _notify_user(user: User, text: str, group: Group) -> None:
+    try:
+        from django.urls import reverse
+
+        from YSE_App.services.notify import notify
+        notify([user], text, url=reverse("team_detail", args=[group.pk]), kind="team_request",
+               subject="Team membership: %s" % group.name)
+    except Exception:  # noqa: BLE001 - membership changes never fail on notification delivery
+        import logging
+        logging.getLogger(__name__).exception("team member notification failed")
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from __future__ import annotations
 import datetime
 import logging
 from typing import Iterable, List, Optional
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -66,12 +67,24 @@ def base_url() -> str:
 
 
 def absolute_url(url: str) -> str:
-    """Make a stored (usually site-relative) notification URL absolute for email/Slack."""
+    """Make a stored (usually site-relative) notification URL absolute for email/Slack.
+
+    URLs made with ``reverse()`` during a web request already carry the site's script
+    prefix (``/yse/teams/1/`` under ``https://ziggy.ucolick.org/yse/``), while the base URL
+    ends in that prefix too; the prefix is dropped from the path so it is not doubled.
+    Paths without it (``/transient_detail/<slug>/``, or ``reverse()`` outside a request)
+    are joined as before.
+    """
     if not url:
         return ""
     if url.startswith(("http://", "https://")):
         return url
-    return base_url() + url.lstrip("/")
+    base = base_url()
+    prefix = urlsplit(base).path  # "/" or "/yse/", always with a trailing slash
+    path = "/" + url.lstrip("/")
+    if prefix != "/" and (path == prefix.rstrip("/") or path.startswith(prefix)):
+        path = path[len(prefix) - 1:]
+    return base + path.lstrip("/")
 
 
 def email_enabled() -> bool:

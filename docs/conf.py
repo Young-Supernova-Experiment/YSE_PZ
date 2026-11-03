@@ -34,7 +34,8 @@ extensions = ['sphinx.ext.autodoc',
               'sphinx.ext.autosummary',
               'sphinx.ext.intersphinx',
               'sphinx.ext.inheritance_diagram',
-              'sphinx.ext.mathjax'] #,
+              'sphinx.ext.mathjax',
+              'myst_parser'] #,
 #             'sphinx.ext.linkcode',
 #              'sphinx_gallery.gen_gallery']
 
@@ -44,7 +45,32 @@ templates_path = ['_templates']
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'perf']
+
+# This documentation is published publicly. Markdown pages are published only
+# if they are listed here (an allowlist); every other docs/**/*.md file, at any
+# depth, is excluded at build time, so new Markdown files default to
+# unpublished. Before adding a page, check that it has no server paths, host
+# names, ports, account names, admin or deploy commands, security details,
+# personal names or internal planning notes.
+# NOTE: docs/_static is copied verbatim into the published site; never place
+# anything private there.
+PUBLIC_MARKDOWN_PAGES = [
+    'archive-tabs',
+    'observability',
+]
+
+_docs_dir = os.path.dirname(os.path.abspath(__file__))
+for _root, _dirs, _files in os.walk(_docs_dir):
+    # Skip only the top-level build output directory (exact path), for speed.
+    if _root == _docs_dir:
+        _dirs[:] = [d for d in _dirs if d != '_build']
+    for _name in _files:
+        if not _name.endswith('.md'):
+            continue
+        _rel = os.path.relpath(os.path.join(_root, _name), _docs_dir).replace(os.sep, '/')
+        if _rel[:-3] not in PUBLIC_MARKDOWN_PAGES:
+            exclude_patterns.append(_rel)
 
 pygments_style = 'sphinx'
 

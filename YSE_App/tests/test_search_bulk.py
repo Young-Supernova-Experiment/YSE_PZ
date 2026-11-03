@@ -137,11 +137,12 @@ class SearchBulkTests(SearchFixture):
         resp = self.client.post(self.url, {'action': 'photometry', 'transient_id': self._ids('2026pub', '2026sea')})
         self.assertEqual(resp.status_code, 200)
         names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
-        self.assertEqual(sorted(names), ['2026pub.csv', '2026sea.csv'])
+        self.assertIn('README.txt', names)
+        self.assertEqual(sorted(n for n in names if n != 'README.txt'), ['2026pub.csv', '2026sea.csv'])
         hidden = _hidden_transient(self)
         self.client.force_login(self.outsider)
         resp = self.client.post(self.url, {'action': 'photometry', 'transient_id': [str(hidden.pk)]})
-        self.assertEqual(zipfile.ZipFile(io.BytesIO(resp.content)).namelist(), [])
+        self.assertEqual(zipfile.ZipFile(io.BytesIO(resp.content)).namelist(), ['README.txt'])
 
     def test_page_offers_the_bulk_form_and_csv_link(self):
         html = self.client.get('/search/?status=New&bulk_result=Done+it').content.decode()

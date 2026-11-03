@@ -1,5 +1,6 @@
 {% extends 'YSE_App/base.html' %}
 {% load static %}
+{% load glossary_extras %}
 
 {% block content %}
 <section class="content-header">
@@ -51,7 +52,7 @@
 							<div class="form-group col-6"><label for="cand-mag-min">Mag &ge;</label><input class="form-control form-control-sm" id="cand-mag-min" name="mag_min" type="number" step="0.1" value="{{ active.mag_min }}"></div>
 							<div class="form-group col-6"><label for="cand-mag-max">Mag &le;</label><input class="form-control form-control-sm" id="cand-mag-max" name="mag_max" type="number" step="0.1" value="{{ active.mag_max }}"></div>
 						</div>
-						<div class="form-group"><label for="cand-rb-min">Real/bogus &ge;</label><input class="form-control form-control-sm" id="cand-rb-min" name="rb_min" type="number" step="0.05" min="0" max="1" value="{{ active.rb_min }}"></div>
+						<div class="form-group"><label for="cand-rb-min">Real/bogus &ge;</label>{% glossary_help 'real-bogus' 'real/bogus' %}<input class="form-control form-control-sm" id="cand-rb-min" name="rb_min" type="number" step="0.05" min="0" max="1" value="{{ active.rb_min }}"></div>
 						<div class="form-group"><label for="cand-q">Name / class</label><input class="form-control form-control-sm" id="cand-q" name="q" type="text" value="{{ active.q }}" placeholder="ZTF25..., SN candidate"></div>
 						<div class="form-group">
 							<label for="cand-sort">Sort by</label>
@@ -92,7 +93,7 @@
 				<div class="box-body table-responsive p-0">
 					<table class="table table-sm table-hover mb-0 yse-candidates-table">
 						<thead>
-							<tr><th>Object</th><th>Broker</th><th>Position</th><th>Last det.</th><th>Mag</th><th>RB</th><th>Class</th><th>Filters</th><th>Cutouts</th><th>Status</th><th></th></tr>
+							<tr><th>Object</th><th>Broker</th><th>Position</th><th>Last det.{% glossary_help 'mjd' 'MJD' %}</th><th>Mag{% glossary_help 'magnitudes' 'magnitude' %}</th><th>RB{% glossary_help 'real-bogus' 'RB' %}</th><th>Class</th><th>Filters</th><th>Cutouts</th><th>Status</th><th></th></tr>
 						</thead>
 						<tbody>
 						{% for row in rows %}{% with c=row.c %}
@@ -121,7 +122,7 @@
 									{% csrf_token %}
 									<input type="hidden" name="next" value="{{ request.get_full_path }}">
 									<select name="status" class="form-control form-control-sm d-inline-block w-auto" title="status of the saved transient">
-										{% for s in transient_statuses %}<option value="{{ s }}"{% if s == 'New' %} selected{% endif %}>{{ s }}</option>{% endfor %}
+										{% for s in transient_statuses %}<option value="{{ s }}"{% if s == 'New' %} selected{% endif %} title="{{ s|status_title }}">{{ s|status_label }}</option>{% endfor %}
 									</select>
 									<button type="submit" class="btn btn-sm btn-success" title="Create or link a YSE-PZ transient">Save</button>
 								</form>

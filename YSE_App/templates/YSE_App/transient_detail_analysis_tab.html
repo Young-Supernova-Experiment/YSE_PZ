@@ -1,4 +1,4 @@
-{# Analysis tab body (#314): loaded into #analysis_container; the page's JS (transient_detail.html) drives the form, polling and actions. #}
+{% load analysis_extras %}{# Analysis tab body (#314): loaded into #analysis_container; the page's JS (transient_detail.html) drives the form, polling and actions. #}
 {# clear:both keeps the flex .row below the floated tab headers of the AdminLTE nav. #}
 <div class="yse-analysis-tab" id="yse_analysis_tab_body" style="clear: both;"
      data-run-url="{% url 'transient_analysis_run' transient.id %}"
@@ -31,11 +31,12 @@
 						<span class="text-danger small" id="analysis_run_error"></span>
 					</form>
 					{% else %}
-					<p class="text-muted">No analysis service is enabled for your groups. Staff register services with
-						<code>manage.py register_analysis_service</code> (see <em>docs/analysis-services.md</em>).</p>
+					<p class="text-muted">No analysis service is enabled for your groups.{% if user.is_staff %} Staff register services with
+						<code>manage.py register_analysis_service</code> (see <em>docs/analysis-services.md</em>).{% endif %}</p>
 					{% endif %}
 				</div>
 			</div>
+			{% if ui_preview and fit_subset %}{% include "YSE_App/transient_detail/fit_subset_form_v2.html" %}{% endif %}
 		</div>
 		<div class="col-md-8">
 			<table class="table table-bordered table-condensed table-sm" id="tbl_analysis_runs">
@@ -44,7 +45,7 @@
 						<th>Service</th>
 						<th>Status</th>
 						<th>Requested by</th>
-						<th>Started</th>
+						<th>Started (UTC)</th>
 						<th>Duration</th>
 						<th>Results</th>
 						<th></th>
@@ -58,11 +59,11 @@
 						<td><span class="badge badge-{% if r.status == 'succeeded' %}success{% elif r.status == 'failed' %}danger{% elif r.status == 'cancelled' %}secondary{% elif r.status == 'running' %}info{% else %}warning{% endif %} analysis-status">{{ r.get_status_display }}</span>
 							{% if not r.is_finished %}<i class="fa fa-spinner fa-spin text-muted"></i>{% endif %}</td>
 						<td>{{ r.created_by.username }}</td>
-						<td title="requested {{ r.created_date|date:'Y-m-d H:i:s' }} UTC">{{ r.started_at|date:"Y-m-d H:i"|default:"-" }}</td>
+						<td title="requested {{ r.created_date|utcdate_text }} UTC">{{ r.started_at|utcdate|default:"-" }}</td>
 						<td>{% if r.duration %}{{ r.duration.total_seconds|floatformat:1 }} s{% else %}-{% endif %}</td>
 						<td class="small">
 							{% if r.status == 'failed' %}<span class="text-danger">{{ r.error|truncatechars:120 }}</span>
-							{% else %}{% for key, value in row.summary %}<span class="text-nowrap"><strong>{{ key }}</strong> {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
+							{% else %}{% for key, value in row.summary %}<span class="text-nowrap"><strong title="{{ key }}">{{ key|analysis_label }}</strong> {{ value }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
 						</td>
 						<td class="text-nowrap analysis-run-actions">
 							{% if row.can_manage %}
@@ -84,7 +85,7 @@
 	<div class="card card-outline {% if r.status == 'succeeded' %}card-success{% else %}card-danger{% endif %} analysis-result-card" id="analysis_run_{{ r.uuid }}" data-run-uuid="{{ r.uuid }}">
 		<div class="card-header">
 			<h3 class="card-title">{{ r.service.name }}
-				<small class="text-muted">&mdash; {{ r.created_by.username }}, {{ r.finished_at|date:"Y-m-d H:i" }} UTC{% if row.summary_text %} &mdash; {{ row.summary_text }}{% endif %}</small></h3>
+				<small class="text-muted">&mdash; {{ r.created_by.username }}, {{ r.finished_at|utcdate }} UTC{% if row.summary_text %} &mdash; {{ row.summary_text }}{% endif %}</small></h3>
 			<div class="card-tools"><button type="button" class="btn btn-tool" data-card-widget="collapse"><i class="fa fa-minus"></i></button></div>
 		</div>
 		<div class="card-body">
@@ -105,7 +106,7 @@
 					{% if row.rows %}
 					<table class="table table-sm table-condensed analysis-results-table">
 						<tbody>
-							{% for key, value in row.rows %}<tr><th class="small">{{ key }}</th><td class="small">{{ value }}</td></tr>{% endfor %}
+							{% for key, value in row.rows %}<tr><th class="small" title="{{ key }}">{{ key|analysis_label }}</th><td class="small">{{ value }}</td></tr>{% endfor %}
 						</tbody>
 					</table>
 					{% endif %}
@@ -125,4 +126,5 @@
 		</div>
 	</div>
 	{% endif %}{% endwith %}{% endfor %}
+	{% if ui_preview and fit_history %}{% include "YSE_App/transient_detail/fit_history_v2.html" %}{% endif %}
 </div>

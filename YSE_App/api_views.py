@@ -15,6 +15,7 @@ from .data import PhotometryService, SpectraService, ObservingResourceService
 from YSE_App.services.visibility import filter_listed_transients, filter_transients_by_user_access
 from YSE_App.services.visibility import user_sees_everything as _sees_all_data  # service readers only (#706)
 from YSE_App.filters.transient_search import TransientSearchFilterSet
+from YSE_App.serializers.selection_serializers import SelectionSerializer
 
 from django_filters.rest_framework import DjangoFilterBackend,filters
 import django_filters
@@ -345,9 +346,122 @@ class PhotStatBatchMixin:
             super().perform_update(serializer)
 
 
+def _mjd_to_aware_datetime(mjd, param='obs_mjd'):
+    """UTC datetime for an MJD value (used by the ``obs_mjd__gte`` / ``__lte`` API filters).
+
+    An MJD that is not a finite number or lies outside the representable date range is a
+    client error (HTTP 400), not a server error.
+    """
+    import datetime as _dt
+    import math
+    from astropy.time import Time
+    from rest_framework.exceptions import ValidationError
+    try:
+        value = float(mjd)
+        if not math.isfinite(value):
+            raise ValueError('not finite')
+        return Time(value, format='mjd', scale='utc').to_datetime(timezone=_dt.timezone.utc)
+    except Exception:  # ValueError/OverflowError and astropy/erfa range errors
+        raise ValidationError({param: ['Enter an MJD within the supported date range.']})
+
+
+class _TransientDataFilterSet(django_filters.FilterSet):
+    """Shared filters of the transient photometry / spectra API lists (#811).
+
+    Subclasses set ``transient_path`` (ORM path to the transient) and
+    ``date_path`` (ORM path to the observation date) and add ``spec_phase`` filters
+    where they apply. Without filter parameters the queryset is unchanged.
+    """
+    transient_path = None
+    date_path = None
+
+    transient = django_filters.NumberFilter(method='filter_transient')
+    transient__name = django_filters.CharFilter(method='filter_transient_name')
+    obs_date__gte = django_filters.IsoDateTimeFilter(method='filter_obs_date_gte')
+    obs_date__lte = django_filters.IsoDateTimeFilter(method='filter_obs_date_lte')
+    obs_mjd__gte = django_filters.NumberFilter(method='filter_obs_mjd_gte')
+    obs_mjd__lte = django_filters.NumberFilter(method='filter_obs_mjd_lte')
+
+    def filter_transient(self, queryset, name, value):
+        return queryset.filter(**{self.transient_path: value})
+
+    def filter_transient_name(self, queryset, name, value):
+        return queryset.filter(**{self.transient_path + '__name': value})
+
+    def _date(self, queryset, lookup, value):
+        return queryset.filter(**{'%s__%s' % (self.date_path, lookup): value})
+
+    def filter_obs_date_gte(self, queryset, name, value):
+        return self._date(queryset, 'gte', value)
+
+    def filter_obs_date_lte(self, queryset, name, value):
+        return self._date(queryset, 'lte', value)
+
+    def filter_obs_mjd_gte(self, queryset, name, value):
+        return self._date(queryset, 'gte', _mjd_to_aware_datetime(value, name))
+
+    def filter_obs_mjd_lte(self, queryset, name, value):
+        return self._date(queryset, 'lte', _mjd_to_aware_datetime(value, name))
+
+
+class TransientPhotometryFilterSet(_TransientDataFilterSet):
+    """A header matches a date range when any of its points that the user may see does.
+
+    Only the per-point authorized points are considered, so a point hidden from the
+    user never makes its header match.
+    """
+    transient_path = 'transient'
+
+    def _date(self, queryset, lookup, value):
+        user = getattr(self.request, 'user', None)
+        points = PhotometryService.GetAuthorizedTransientPhotData_ByUser(user).filter(
+            **{'obs_date__%s' % lookup: value})
+        return queryset.filter(pk__in=points.values('photometry_id'))
+
+
+class TransientPhotDataFilterSet(_TransientDataFilterSet):
+    transient_path = 'photometry__transient'
+    date_path = 'obs_date'
+
+
+class TransientSpectrumFilterSet(_TransientDataFilterSet):
+    transient_path = 'transient'
+    date_path = 'obs_date'
+    spec_phase_path = 'spec_phase'
+    spec_phase__gte = django_filters.NumberFilter(method='filter_spec_phase_gte')
+    spec_phase__lte = django_filters.NumberFilter(method='filter_spec_phase_lte')
+
+    def filter_spec_phase_gte(self, queryset, name, value):
+        return queryset.filter(**{self.spec_phase_path + '__gte': value})
+
+    def filter_spec_phase_lte(self, queryset, name, value):
+        return queryset.filter(**{self.spec_phase_path + '__lte': value})
+
+
+class _SpectrumIdFilterMixin(django_filters.FilterSet):
+    """``?spectrum=<id>``: the pixels of one spectrum (#492). Works on pixel rows and on arrays rows
+    (both have a ``spectrum`` field), so array-stored spectra filter the same way."""
+    spectrum = django_filters.NumberFilter(method='filter_spectrum')
+
+    def filter_spectrum(self, queryset, name, value):
+        return queryset.filter(spectrum_id=value)
+
+
+class TransientSpecDataFilterSet(_SpectrumIdFilterMixin, TransientSpectrumFilterSet):
+    transient_path = 'spectrum__transient'
+    date_path = 'spectrum__obs_date'
+    spec_phase_path = 'spectrum__spec_phase'
+
+
+class HostSpecDataFilterSet(_SpectrumIdFilterMixin):
+    pass
+
+
 class TransientPhotometryViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotometrySerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientPhotometryFilterSet
     lookup_field = "id"
 
     def get_queryset(self):
@@ -367,6 +481,8 @@ class HostPhotometryViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
 class TransientPhotDataViewSet(PhotStatBatchMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientPhotDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientPhotDataFilterSet
 
     def get_queryset(self):
         allowed_phot_data = PhotometryService.GetAuthorizedTransientPhotData_ByUser(self.request.user)
@@ -474,6 +590,8 @@ class UserTelescopeToFollowViewSet(custom_viewsets.ListCreateRetrieveUpdateViewS
 class TransientSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpectrumSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientSpectrumFilterSet
     lookup_field = "id"
 
     def get_queryset(self):
@@ -490,17 +608,74 @@ class HostSpectrumViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
         allowed_spec = SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
         return allowed_spec.prefetch_related('groups', 'data_quality')
 
-class TransientSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class _ArrayPixelsMixin:
+    """List / retrieve per-pixel records of spectra stored only as arrays too (#891, #492): see
+    ``YSE_App.services.spectrum_pixel_api`` for what a synthesized record holds. Only spectra the
+    user may see (``authorized_spectra``) are read; their pixels are read-only."""
+    pixel_host = False
+
+    def _pixel_models(self):
+        if self.pixel_host:
+            return HostSpecData, HostSpectrum, HostSpectrumArrays
+        return TransientSpecData, TransientSpectrum, TransientSpectrumArrays
+
+    def authorized_spectra(self):
+        if self.pixel_host:
+            return SpectraService.GetAuthorizedHostSpectrum_ByUser(self.request.user)
+        return SpectraService.GetAuthorizedTransientSpectrum_ByUser(self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        from YSE_App.services import spectrum_pixel_api
+
+        rows_model, spec_model, arrays_model = self._pixel_models()
+        rows = self.filter_queryset(self.get_queryset()).order_by('id')
+        arrays = spectrum_pixel_api.array_only_spectra(arrays_model, rows_model, self.authorized_spectra())
+        if self.filterset_class is not None:
+            arrays = self.filterset_class(request.query_params, queryset=arrays, request=request).qs
+        pixels = spectrum_pixel_api.PixelList(rows, arrays, rows_model=rows_model, spec_model=spec_model,
+                                              arrays_model=arrays_model, host=self.pixel_host)
+        page = self.paginate_queryset(pixels)
+        if page is not None:
+            return self.get_paginated_response(self.get_serializer(page, many=True).data)
+        return Response(self.get_serializer(list(pixels), many=True).data)
+
+    def get_object(self):
+        from rest_framework.exceptions import MethodNotAllowed
+        from YSE_App.services import spectrum_pixel_api
+
+        lookup = self.kwargs.get(self.lookup_url_kwarg or self.lookup_field)
+        if spectrum_pixel_api.decode_pseudo_pixel_id(lookup) is None:
+            return super().get_object()
+        if request_method_is_unsafe(self.request):
+            raise MethodNotAllowed(self.request.method, detail='Pixels of a spectrum stored as arrays are read-only.')
+        rows_model, spec_model, arrays_model = self._pixel_models()
+        obj = spectrum_pixel_api.pseudo_pixel(rows_model, spec_model, arrays_model, self.authorized_spectra(),
+                                              lookup, host=self.pixel_host)
+        if obj is None:
+            raise Http404
+        return obj
+
+
+def request_method_is_unsafe(request):
+    return request.method not in permissions.SAFE_METHODS
+
+
+class TransientSpecDataViewSet(_ArrayPixelsMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientSpecDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = TransientSpecDataFilterSet
 
     def get_queryset(self):
         allowed_spec_data = SpectraService.GetAuthorizedTransientSpecData_ByUser(self.request.user)
         return allowed_spec_data
 
-class HostSpecDataViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
+class HostSpecDataViewSet(_ArrayPixelsMixin, custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = HostSpecDataSerializer
     permission_classes = (permissions.IsAuthenticated,)
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = HostSpecDataFilterSet
+    pixel_host = True
 
     def get_queryset(self):
         allowed_spec_data = SpectraService.GetAuthorizedHostSpecData_ByUser(self.request.user)
@@ -2255,3 +2430,48 @@ class FeedSourceViewSet(viewsets.ReadOnlyModelViewSet):
         job = enqueue_poll(source, created_by=request.user, force=True,
                            dry_run=str((request.data or {}).get("dry_run", "")).lower() in ("1", "true", "yes"))
         return Response({"job_id": job.pk, "source": source.slug, "status": job.status}, status=status.HTTP_202_ACCEPTED)
+
+
+class SelectionViewSet(viewsets.ReadOnlyModelViewSet):
+    """``/api/selections/`` (#841): the Selections the requesting user may view, read-only.
+
+    ``GET /api/selections/<slug>/`` is one Selection (its criteria; never SQL text).
+    ``GET /api/selections/<slug>/transients/`` lists the transients it selects for the
+    requesting user (id, name, slug, ra, dec), paginated with ``limit`` / ``offset`` and in the
+    search page's order. Only rows the user may see listed are returned (#607); a Selection never
+    widens access. ``?kind=`` and ``?visibility=`` narrow the list; ``?mine=true`` keeps the
+    user's own.
+    """
+
+    serializer_class = SelectionSerializer
+
+    permission_classes = (permissions.IsAuthenticated,)
+    lookup_field = 'slug'
+    lookup_value_regex = '[-a-zA-Z0-9_]+'
+
+    def get_queryset(self):
+        from YSE_App.services.selections import visible_selections
+
+        qs = visible_selections(self.request.user).order_by('name', 'pk')
+        params = self.request.query_params
+        if params.get('kind'):
+            qs = qs.filter(kind=params['kind'])
+        if params.get('visibility'):
+            qs = qs.filter(visibility=params['visibility'])
+        if params.get('mine') in ('1', 'true', 'True'):
+            qs = qs.filter(owner=self.request.user)
+        return qs
+
+    @action(detail=True, methods=['get'])
+    def transients(self, request, slug=None):
+        from YSE_App.services.selections import SelectionError, selection_queryset
+
+        selection = self.get_object()
+        try:
+            rows = selection_queryset(selection, request.user).values('id', 'name', 'slug', 'ra', 'dec')
+        except SelectionError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
+        page = self.paginate_queryset(rows)
+        if page is not None:
+            return self.get_paginated_response(list(page))
+        return Response(list(rows))

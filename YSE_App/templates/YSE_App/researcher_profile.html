@@ -56,7 +56,7 @@
 						<dt class="col-sm-4">Time zone</dt><dd class="col-sm-8">{{ profile.time_zone|default:"—" }}</dd>
 						<dt class="col-sm-4">Observing experience</dt><dd class="col-sm-8">{% for i in observing %}{{ i.telescope.name }} / {{ i.name }}{% if not forloop.last %}; {% endif %}{% empty %}—{% endfor %}</dd>
 						<dt class="col-sm-4">Acknowledgment text</dt><dd class="col-sm-8">{{ profile.acknowledgment_text|default:"—"|linebreaksbr }}</dd>
-						<dt class="col-sm-4">Last confirmed</dt><dd class="col-sm-8">{{ profile.profile_confirmed_at|date:"Y-m-d"|default:"never" }}</dd>
+						<dt class="col-sm-4">Last confirmed</dt><dd class="col-sm-8">{% if profile.profile_confirmed_at %}{{ profile.profile_confirmed_at|utcdate }} UTC{% else %}never{% endif %}</dd>
 					</dl>
 				</div>
 			</div>
@@ -67,10 +67,10 @@
 				<div class="box-header with-border"><strong>Research participation (voluntary)</strong></div>
 				<div class="box-body">
 					{% if research_state == 'consented' %}
-					<p class="mb-2">You consented to take part in the research study on {{ research_latest.decided_at|date:"Y-m-d" }}.</p>
+					<p class="mb-2">You consented to take part in the research study on {{ research_latest.decided_at|utcdate }} UTC.</p>
 					<a class="btn btn-sm btn-outline-danger" href="{% url 'research_consent' %}?next={% url 'researcher_profile' %}">Withdraw</a>
 					{% elif research_state == 'declined' or research_state == 'withdrawn' %}
-					<p class="mb-2">You {% if research_state == 'declined' %}declined to take part{% else %}withdrew from the research study{% endif %} on {{ research_latest.decided_at|date:"Y-m-d" }}.</p>
+					<p class="mb-2">You {% if research_state == 'declined' %}declined to take part{% else %}withdrew from the research study{% endif %} on {{ research_latest.decided_at|utcdate }} UTC.</p>
 					<a class="btn btn-sm btn-outline-primary" href="{% url 'research_consent' %}?next={% url 'researcher_profile' %}">Read the form or consent</a>
 					{% else %}
 					<p class="mb-2">You have not answered the research consent form yet. Taking part is optional.</p>
@@ -84,7 +84,7 @@
 			{% endif %}
 			{% if metrics %}
 			<div class="box box-default box-solid">
-				<div class="box-header with-border"><strong>Publication metrics</strong> <span class="text-muted small">({{ metrics.get_source_display }}, {{ metrics.fetched_at|date:"Y-m-d" }})</span></div>
+				<div class="box-header with-border"><strong>Publication metrics</strong> <span class="text-muted small">({{ metrics.get_source_display }}, {{ metrics.fetched_at|utcdate }} UTC)</span></div>
 				<div class="box-body">
 					<dl class="row mb-0">
 						<dt class="col-7">h-index</dt><dd class="col-5">{{ metrics.h_index|default:"—" }}</dd>

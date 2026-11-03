@@ -38,7 +38,8 @@ To include peculiar SNe Ia, the easiest way is to modify the :code:`WHERE` state
    WHERE pd.photometry_id = p.id AND pd.mag < 18 AND
    pd.id = (
          SELECT pd2.id FROM YSE_App_transientphotdata pd2, YSE_App_transientphotometry p2
-         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id AND ISNULL(pd2.data_quality_id) = True
+         WHERE pd2.photometry_id = p2.id AND p2.transient_id = t.id AND NOT EXISTS (
+           SELECT 1 FROM YSE_App_transientphotdata_data_quality dq WHERE dq.transientphotdata_id = pd2.id)
          ORDER BY pd2.obs_date DESC
          LIMIT 1
      )

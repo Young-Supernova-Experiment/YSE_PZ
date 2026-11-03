@@ -1,0 +1,28 @@
+{% comment %}
+Follow-up tab body for the preview layout (#856, #857): existing requests first (with an
+empty state), then facility requests, one "New request" form with a type selector, and
+"Advanced" for resources, tasks and automated spectra. Deferred mode loads the two
+parts through the current page's fragments (followup_requests -> #followup_container,
+followup_rest -> #followup_rest_slot); there is no separate classical-resource slot,
+because that form is in "Advanced".
+{% endcomment %}
+<section id="yse-v2-followup-existing" aria-labelledby="yse-v2-followup-existing-title">
+    <h4 id="yse-v2-followup-existing-title">Existing requests</h4>
+    <div class="row">
+        <div id="followup_container" class="col-12">
+            {% if transient_detail_defer %}
+            <p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Loading follow-up requests…</p>
+            {% else %}
+            {% include "YSE_App/transient_detail/followup_existing_v2.html" %}
+            {% endif %}
+        </div>
+    </div>
+</section>
+<div class="row">
+    <div id="followup_rest_slot" class="col-12">
+        {% if not transient_detail_defer %}
+        <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
+        {% include "YSE_App/transient_detail/followup_new_v2.html" with include_task_form=True %}
+        {% endif %}
+    </div>
+</div>

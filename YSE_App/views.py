@@ -1,13 +1,13 @@
 from django.db.models.query import EmptyQuerySet
 from django.shortcuts import render, get_object_or_404
-from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound, HttpResponseForbidden
+from django.http import HttpResponse, HttpResponseRedirect, Http404, JsonResponse, HttpResponseNotFound, HttpResponseForbidden, StreamingHttpResponse
 from django.conf import settings as djangoSettings
 from django.template import loader
 from django.views import generic
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.urls import reverse, reverse_lazy
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from YSE_App.common.quality_mask import legacy_good
 from rest_framework.renderers import JSONRenderer
 import requests
@@ -19,6 +19,7 @@ from django.db import connection,connections
 from django.shortcuts import redirect
 from django.db.models import Count, Prefetch, Value, Max, Min
 import zipfile
+import numpy as np
 from io import BytesIO
 from YSE_App.yse_utils.yse_pa import yse_pa
 from django.utils.decorators import method_decorator
@@ -57,6 +58,8 @@ from astroplan import moon_illumination
 from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
+from YSE_App.common.status_display import status_label
+from YSE_App.common.ui_preview import ui_preview_enabled
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
 from django.contrib.auth.models import AnonymousUser
 from YSE_App.services.page_query_scope import PageQueryRefused, page_query_cache_suffix, page_query_sql
@@ -157,15 +160,43 @@ def auth_logout(request):
         return render(request, 'YSE_App/logout_confirm.html')
     return render(request, 'YSE_App/index.html')
 
-_DASHBOARD_STATUS_SECTIONS = (
-    ('New Transients', 'New'),
-    ('Followup Requested', 'FollowupRequested'),
-    ('Following', 'Following'),
-    ('Interesting', 'Interesting'),
-    ('Watch', 'Watch'),
-    ('Finished Following', 'FollowupFinished'),
-    ('Needs Template', 'NeedsTemplate'),
+# (heading, status name); headings are the one status display map's labels (#831).
+_DASHBOARD_STATUS_SECTIONS = tuple(
+    (status_label(name), name)
+    for name in ('New', 'FollowupRequested', 'Following', 'Interesting', 'Watch',
+                 'FollowupFinished', 'NeedsTemplate')
 )
+
+
+DASHBOARD_PER_PAGE_CHOICES = (10, 25, 50, 100)
+DASHBOARD_PER_PAGE_DEFAULT = 10
+_DASHBOARD_PER_PAGE_SESSION_KEY = 'dashboard_per_page'
+
+
+def dashboard_per_page(request):
+    """Rows per page for dashboard section tables (#820).
+
+    ``?dash_per_page=N`` (one of DASHBOARD_PER_PAGE_CHOICES) is remembered in the
+    user's session; otherwise the remembered value, otherwise 10.
+    """
+    def _valid(value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+        return value if value in DASHBOARD_PER_PAGE_CHOICES else None
+
+    requested = _valid(request.GET.get('dash_per_page'))
+    session = getattr(request, 'session', None)
+    if requested is not None:
+        if session is not None:
+            session[_DASHBOARD_PER_PAGE_SESSION_KEY] = requested
+        return requested
+    if session is not None:
+        stored = _valid(session.get(_DASHBOARD_PER_PAGE_SESSION_KEY))
+        if stored is not None:
+            return stored
+    return DASHBOARD_PER_PAGE_DEFAULT
 
 
 def _main_dashboard_defer_enabled():
@@ -191,12 +222,21 @@ def _dashboard_section_tuple(request, title, statusname, status_by_name):
         table = NewTransientTable(transientfilter.qs, prefix=statusname.lower())
     else:
         table = TransientTable(transientfilter.qs, prefix=statusname.lower())
-    RequestConfig(request, paginate={'per_page': 10}).configure(table)
+    RequestConfig(request, paginate={'per_page': dashboard_per_page(request)}).configure(table)
     return (table, title, statusname.lower(), transientfilter)
 
 
 @login_required
 def dashboard(request):
+    from YSE_App import dashboard_preview
+
+    if dashboard_preview.preview_enabled(request):
+        # Tabbed layout for UI preview users (#859); everyone else gets the sections below.
+        return dashboard_preview.dashboard(request, {
+            'broker_stale_heartbeats': _broker_stale_heartbeats(),
+            'dashboard_per_page': dashboard_per_page(request),
+            'dashboard_per_page_choices': DASHBOARD_PER_PAGE_CHOICES,
+        })
     status_names = [name for _, name in _DASHBOARD_STATUS_SECTIONS]
     status_by_name = {
         s.name: s
@@ -233,6 +273,8 @@ def dashboard(request):
         'anchor': anchor,
         'main_dashboard_defer': defer,
         'broker_stale_heartbeats': _broker_stale_heartbeats(),
+        'dashboard_per_page': dashboard_per_page(request),
+        'dashboard_per_page_choices': DASHBOARD_PER_PAGE_CHOICES,
     }
 
     return render(request, 'YSE_App/dashboard.html', context)
@@ -251,6 +293,9 @@ def _broker_stale_heartbeats():
 @login_required
 def dashboard_section(request, status_key):
     """AJAX fragment for one main-dashboard status bucket."""
+    from YSE_App import dashboard_preview
+
+    preview = dashboard_preview.preview_enabled(request)
     status_by_name = {
         s.name: s
         for s in TransientStatus.objects.filter(
@@ -259,6 +304,8 @@ def dashboard_section(request, status_key):
     }
     for title, statusname in _DASHBOARD_STATUS_SECTIONS:
         if statusname.lower() == status_key.lower() or statusname == status_key:
+            if preview:
+                return dashboard_preview.section(request, statusname, status_by_name)
             row = _dashboard_section_tuple(request, title, statusname, status_by_name)
             return render(
                 request,
@@ -360,8 +407,17 @@ def _personal_dashboard_defer_enabled():
     return os.environ.get('YSE_PERSONAL_DASHBOARD_DEFER', '1') != '0'
 
 
+def _pd_download_url(q):
+    """Bulk-photometry download link of a dashboard panel: by query id (any title works, #810)."""
+    if q.query_id:
+        return reverse('download_bulk_photometry_by_id', args=[q.query_id])
+    if q.python_query:
+        return reverse('download_bulk_photometry', args=[q.python_query])
+    return ''
+
+
 def _personaldashboard_failed_row(q, title):
-    return (Transient.objects.none(), title, '', None, q.id, 0)
+    return (Transient.objects.none(), title, '', None, q.id, 0, '')
 
 
 def _personaldashboard_sql_query_prefix(query_title):
@@ -388,7 +444,7 @@ def _personaldashboard_configure_table(request, prefix, queryset):
     try:
         transient_filter = TransientFilter(request.GET, request=request, queryset=queryset, prefix=prefix)
         table = TransientTable(transient_filter.qs, prefix=prefix)
-        RequestConfig(request, paginate={'per_page': 10}).configure(table)
+        RequestConfig(request, paginate={'per_page': dashboard_per_page(request)}).configure(table)
         return table, transient_filter
     finally:
         request.GET = saved_get
@@ -452,7 +508,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 table, transient_filter = _personaldashboard_configure_table(
                     request, prefix, empty_qs
                 )
-                return (table, q.query.title, prefix, transient_filter, q.id, 0)
+                return (table, q.query.title, prefix, transient_filter, q.id, 0, _pd_download_url(q))
             pks_by_name = _personaldashboard_visible_pks_by_name(request.user, cached_result)
             section_qs = _personaldashboard_section_queryset(pks_by_name, cached_result)
             prefix = _personaldashboard_sql_query_prefix(q.query.title)
@@ -460,7 +516,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 request, prefix, section_qs
             )
             return (table, q.query.title, prefix, transient_filter, q.id,
-                    _personaldashboard_section_count(pks_by_name, cached_result))
+                    _personaldashboard_section_count(pks_by_name, cached_result), _pd_download_url(q))
         except Exception as e:
             cache.delete(explorer_query_cache_key(q.query.id))
             logger.error(f"Error processing query {q.id}: {e}")
@@ -474,7 +530,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 request.GET, request=request, queryset=transients, prefix=q.python_query
             )
             table = TransientTable(transient_filter.qs, prefix=q.python_query)
-            RequestConfig(request, paginate={'per_page': 10}).configure(table)
+            RequestConfig(request, paginate={'per_page': dashboard_per_page(request)}).configure(table)
             return (
                 table,
                 q.python_query,
@@ -482,6 +538,7 @@ def _personaldashboard_table_for_user_query(request, q):
                 transient_filter,
                 q.id,
                 transients.count(),
+                _pd_download_url(q),
             )
         except Exception as e:
             logger.error(f"Error processing Python query {q.python_query}: {e}")
@@ -522,7 +579,7 @@ def _personaldashboard_build_all_tables(request, queries):
         )
         tables.append(
             (table, q.query.title, prefix, transient_filter, q.id,
-             _personaldashboard_section_count(pks_by_name, transient_names))
+             _personaldashboard_section_count(pks_by_name, transient_names), _pd_download_url(q))
         )
     return tables
 
@@ -534,7 +591,9 @@ def _personaldashboard_context(request, tables, *, personal_dashboard_defer=Fals
         'transient_categories': tables,
         'all_transient_statuses': TransientStatus.objects.order_by('name'),
         'anchor': anchor,
-        'add_dashboard_query_form': AddDashboardQueryForm(),
+        'add_dashboard_query_form': AddDashboardQueryForm(user=request.user),
+        'dashboard_per_page': dashboard_per_page(request),
+        'dashboard_per_page_choices': DASHBOARD_PER_PAGE_CHOICES,
         'add_followup_notice_form': AddFollowupNoticeForm(),
         'followup_notices': UserTelescopeToFollow.objects.filter(
             profile__user=request.user
@@ -560,7 +619,7 @@ def personaldashboard(request):
                     title = q.python_query
                 else:
                     continue
-                tables.append((None, title, '', None, q.id, 0))
+                tables.append((None, title, '', None, q.id, 0, _pd_download_url(q)))
         if timing_enabled():
             log_sections('personaldashboard_shell', timing_sections)
         return render(
@@ -706,8 +765,8 @@ def transient_summary(request,status_or_query_name,
     }
     if transient_followup_form.fields["valid_start"].initial:
         context['followup_initial_dates'] = \
-            (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-             transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))
+            (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+             transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'))
     
     if extra_context is not None:
         context.update(extra_context)
@@ -734,6 +793,11 @@ def followup(request):
     ).distinct():
         telescope_ids.update(pk for pk in ids if pk is not None)
     telescopes = Telescope.objects.filter(pk__in=telescope_ids)
+    # Preview users get "Observable tonight" (#854), which reads each row's transient id.
+    from YSE_App.common.ui_preview import ui_preview_enabled
+    table_kwargs = {}
+    if ui_preview_enabled(request):
+        table_kwargs['row_attrs'] = {'data-transient-id': lambda record: record.transient_id}
 
     table_list = []
     for t in telescopes:
@@ -747,7 +811,7 @@ def followup(request):
         if not followuptransientfilter.qs.exists():
             continue
 
-        followup_table = FollowupTable(followuptransientfilter.qs,prefix=t)
+        followup_table = FollowupTable(followuptransientfilter.qs,prefix=t,**table_kwargs)
         RequestConfig(request, paginate={'per_page': 10}).configure(followup_table)
         table_list += [(t.name,followup_table,t.name.replace(' ','_'),followuptransientfilter.qs,followuptransientfilter)]
 
@@ -763,6 +827,10 @@ def followup(request):
 
 @login_required
 def transient_tags(request):
+    if ui_preview_enabled(request):
+        # #866 preview: a keyboard- and touch-usable picker instead of drag and drop.
+        context = {'all_transient_tags': TransientTag.objects.order_by('name')}
+        return render(request, 'YSE_App/transient_tags_v2.html', context)
     all_transient_tags = TransientTag.objects.all()
     context = {
         'all_transient_tags': all_transient_tags
@@ -776,9 +844,17 @@ def get_transient_tags(request):
     for id in id_str:
         ids.append(int(id))
 
+    # ``match=all`` (#866): transients carrying every chosen tag. Anything else is
+    # today's behaviour, any of the chosen tags.
+    if request.GET.get('match') == 'all' and ids:
+        base = Transient.objects.all()
+        for tag_id in set(ids):
+            base = base.filter(Exists(Transient.tags.through.objects.filter(
+                transient_id=OuterRef('pk'), transienttag_id=tag_id)))
+    else:
+        base = Transient.objects.filter(tags__in=ids).distinct()
     # The listing rule (#607, #760), as on /api/transients/ and the search page.
-    transient_queryset = filter_listed_transients(
-        request.user, Transient.objects.filter(tags__in=ids).distinct())
+    transient_queryset = filter_listed_transients(request.user, base)
     transient_objs = [t for t in transient_queryset]
 
     serializer = TransientSerializer(transient_objs, context={'request': request}, many=True)
@@ -788,11 +864,6 @@ def get_transient_tags(request):
         return_data[i] = data
 
     return JsonResponse(return_data)
-
-@login_required
-def dashboard_example(request):
-    return render(request, 'YSE_App/dashboard_example.html')
-
 
 @register.filter
 def get_item(dictionary, key):
@@ -804,12 +875,12 @@ def calendar(request):
     colors = ['#dd4b39', 
                 '#f39c12', 
                 '#00c0ef', 
-                '#0073b7', 
+                '#6ea8fe', 
                 '#f012be', 
                 '#3c8dbc',
                 '#00a65a',
                 '#d2d6de',
-                '#001f3f']
+                '#9ec5fe']
 
     user_colors = {}
     calendar_users = User.objects.filter(
@@ -832,12 +903,12 @@ def yse_oncall_calendar(request):
     colors = ['#dd4b39', 
               '#f39c12', 
               '#00c0ef', 
-              '#0073b7', 
+              '#6ea8fe', 
               '#f012be', 
               '#3c8dbc',
               '#00a65a',
               '#d2d6de',
-              '#001f3f']
+              '#9ec5fe']
 
     user_colors = {}
     for i, u in enumerate(users): #User.objects.all().exclude(username='admin').order_by()):
@@ -864,12 +935,12 @@ def observing_calendar(request):
     colors = ['#dd4b39', 
                 '#f39c12', 
                 '#00c0ef', 
-                '#0073b7', 
+                '#6ea8fe', 
                 '#f012be', 
                 '#3c8dbc',
                 '#00a65a',
                 '#d2d6de',
-                '#001f3f']
+                '#9ec5fe']
 
     all_dates = (
         GetAuthorizedClassicalObservingDate_ByUser(request.user)
@@ -896,12 +967,12 @@ def too_calendar(request):
     colors = ['#dd4b39', 
               '#f39c12', 
               '#00c0ef', 
-              '#0073b7', 
+              '#6ea8fe', 
               '#f012be', 
               '#3c8dbc',
               '#00a65a',
               '#d2d6de',
-              '#001f3f']
+              '#9ec5fe']
 
     # don't show everything, for speed
     first_calendar_date = (datetime.datetime.utcnow()-datetime.timedelta(60)).replace(tzinfo=pytz.UTC)
@@ -1593,8 +1664,8 @@ def _transient_followup_form_context(request, transient_obj):
     ctx.update(facility_panel_context(request.user, transient_obj))
     if transient_followup_form.fields["valid_start"].initial:
         ctx['followup_initial_dates'] = (
-            transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-            transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'),
+            transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+            transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'),
         )
     return ctx
 
@@ -1603,11 +1674,15 @@ def _transient_followup_form_context(request, transient_obj):
 def transient_detail_followup_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
     followups = _load_transient_followups(transient_id, request.user)
-    return render(
-        request,
-        'YSE_App/transient_detail_followup_boxes.html',
-        {'followups': followups, 'transient': transient_obj},
+    from YSE_App.common.ui_preview import ui_preview_enabled
+
+    # Preview layout (#857): the same boxes, with an empty state that points down to the form.
+    template_name = (
+        'YSE_App/transient_detail/followup_existing_v2.html'
+        if ui_preview_enabled(request)
+        else 'YSE_App/transient_detail_followup_boxes.html'
     )
+    return render(request, template_name, {'followups': followups, 'transient': transient_obj})
 
 
 @login_required
@@ -1625,11 +1700,15 @@ def transient_detail_followup_classical_fragment(request, transient_id):
 def transient_detail_followup_rest_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
     ctx = _transient_followup_form_context(request, transient_obj)
-    return render(
-        request,
-        'YSE_App/transient_detail_followup_rest.html',
-        ctx,
+    from YSE_App.common.ui_preview import ui_preview_enabled
+
+    # Preview layout (#857): facility requests, one "New request" form, then "Advanced".
+    template_name = (
+        'YSE_App/transient_detail/followup_new_v2.html'
+        if ui_preview_enabled(request)
+        else 'YSE_App/transient_detail_followup_rest.html'
     )
+    return render(request, template_name, ctx)
 
 
 def _authorized_transient_spectra(request, transient_id):
@@ -1661,14 +1740,10 @@ def transient_detail_spectra_tab_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
     # PIs (#446) are shown by name on the table: one prefetch query.
     spectra = list(_authorized_transient_spectra(request, transient_id).prefetch_related('pis'))
-    # The plot needs TransientSpecData points, not just a TransientSpectrum
-    # row; show the count so a spectrum without points is visibly unplottable.
-    point_counts = dict(
-        TransientSpecData.objects.filter(spectrum_id__in=[s.id for s in spectra])
-        .values_list('spectrum_id')
-        .annotate(n=Count('id'))
-        .values_list('spectrum_id', 'n')
-    )
+    # The plot needs pixels (arrays row or TransientSpecData rows, #891), not just a
+    # TransientSpectrum row; show the count so a spectrum without points is visibly unplottable.
+    from YSE_App.common import spectrum_arrays
+    point_counts = spectrum_arrays.pixel_counts([s.id for s in spectra])
     for spectrum in spectra:
         spectrum.n_points = point_counts.get(spectrum.id, 0)
     from YSE_App.collaboration_views import data_access_context
@@ -1748,6 +1823,7 @@ def _visible_diff_images(visible_photdata, transient_id):
         'phot_data',
         'phot_data__photometry',
         'phot_data__band',
+        'phot_data__mag_sys',
     )
 
 
@@ -1835,8 +1911,8 @@ def transient_detail(request, slug):
             too_resource_form = followup_form_ctx['too_resource_form']
             automated_spectrum_form = followup_form_ctx['automated_spectrum_form']
 
-        spectrum_upload_form = SpectrumUploadForm()
-        
+        spectrum_upload_form, spectrum_upload_retry = _spectrum_upload_form_for(request, transient_obj)
+
         # Status update properties (one query for all statuses)
         all_transient_statuses = list(TransientStatus.objects.all())
         status_by_name = {s.name: s for s in all_transient_statuses}
@@ -1890,7 +1966,7 @@ def transient_detail(request, slug):
                 request.user, transient_id
             ).filter(
                 mag__isnull=False,
-            ).filter(legacy_good('TransientPhotData')).select_related('band')
+            ).filter(legacy_good('TransientPhotData')).select_related('band', 'mag_sys')
             lastphotdata = good_photdata.order_by('-obs_date').first()
             firstphotdata = view_utils.get_disc_mag_from_photdata(good_photdata)
             allphotdata = None
@@ -1904,6 +1980,7 @@ def transient_detail(request, slug):
                 visible_photdata
                 .select_related(
                     'band',
+                    'mag_sys',
                     'photometry',
                     'photometry__instrument',
                     'photometry__instrument__telescope',
@@ -1930,14 +2007,13 @@ def transient_detail(request, slug):
         )
         
         date = datetime.datetime.now(tz=pytz.utc)
-        date_format='%m/%d/%Y %H:%M:%S'
 
         context = {
             'transient':transient_obj,
             'followups':followups,
             'observing_nights': obsnights,
             'too_resource_list': too_resources.select_related(),
-            'nowtime':date.strftime(date_format),
+            'nowtime':date,  # shown as YYYYMMDD.ddd (#807)
             'transient_followup_form': transient_followup_form,
             'transient_observation_task_form': transient_observation_task_form,
             'transient_comment_form': transient_comment_form,
@@ -1956,6 +2032,7 @@ def transient_detail(request, slug):
             'gw_images': gwimages,
             'has_gw_candidate_tag': has_gw_candidate_tag,
             'spectrum_upload_form':spectrum_upload_form,
+            'spectrum_upload_retry': spectrum_upload_retry,
             'diff_images': diff_images_qs,
             'classical_resource_form':classical_resource_form,
             'too_resource_form':too_resource_form,
@@ -1970,8 +2047,8 @@ def transient_detail(request, slug):
 
         if not defer_detail and transient_followup_form.fields["valid_start"].initial:
             context['followup_initial_dates'] = \
-                (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y HH:MM'),
-                 transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y HH:MM'))           
+                (transient_followup_form.fields["valid_start"].initial.strftime('%m/%d/%Y %H:%M'),
+                 transient_followup_form.fields["valid_stop"].initial.strftime('%m/%d/%Y %H:%M'))           
         
         # Stored photometry statistics (#268): peak, detections, rise/decay.
         # A transient the backfill has not reached yet gets its row computed
@@ -1996,11 +2073,14 @@ def transient_detail(request, slug):
             )
             context['recent_filter'] = lastphotdata.band
             context['recent_magdate'] = lastphotdata.obs_date
+            # Magnitude system as stored on the point (#832); None when not recorded.
+            context['recent_mag_sys'] = lastphotdata.mag_sys
             context['first_mag'] = format_magnitude_with_error(
                 firstphotdata.mag, firstphotdata.mag_err
             )
             context['first_filter'] = firstphotdata.band
             context['first_magdate'] = firstphotdata.obs_date
+            context['first_mag_sys'] = firstphotdata.mag_sys
             if allphotdata is not None:
                 dq = _clean_dq(request.GET.get('dq'))
                 context['allphotdata'] = _apply_dq_filter(allphotdata, dq)
@@ -2057,10 +2137,19 @@ def transient_detail(request, slug):
         from YSE_App.sharing_views import report_dialog_context
 
         context.update(report_dialog_context(request.user, transient_obj))
-        
-        return render(request,
-            'YSE_App/transient_detail.html',
-            context)
+
+        # Preview layout (#856, #851) only for users with the UI preview on.
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        if ui_preview_enabled(request):
+            template_name = 'YSE_App/transient_detail_v2.html'
+            # Opened from a list (#850): "4 of 23", previous/next and back to the list.
+            from YSE_App.list_context import list_step_context
+
+            context['list_step'] = list_step_context(request, transient_obj)
+        else:
+            template_name = 'YSE_App/transient_detail.html'
+        return render(request, template_name, context)
 
     else:
         raise Http404('Transient not found')
@@ -2128,40 +2217,112 @@ def download_data(request, slug):
     else:
         user = request.user
         
+    # Streamed (#929): the body is built one set / point / spectrum at a time and is byte-for-byte
+    # the JSON this view used to return. Access is decided by the same per-point and per-spectrum calls.
+    from YSE_App.services import download_stream
+
     transient = Transient.objects.filter(slug=slug)
-    data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
+    transient_id = transient[0].id  # a missing slug fails here, as before, before any byte is sent
+    authorized_phot = list(PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient_id))
+    authorized_spectra = list(SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient_id, includeBadData=True))
+    array_ids = set()
+    if authorized_spectra:
+        array_ids = set(TransientSpectrumArrays.objects.filter(
+            spectrum_id__in=[s.id for s in authorized_spectra]).values_list('spectrum_id', flat=True))
 
-    if transient[0].host:
-        host = Host.objects.filter(id=transient[0].host.id)
-        data[transient[0].name]['host'] = json.loads(serializers.serialize("json", host, use_natural_foreign_keys=True))
-
-
-    # Get photometry by user & transient
-    authorized_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id)
-    if len(authorized_phot):
-        data[transient[0].name]['photometry'] = json.loads(serializers.serialize("json", authorized_phot,use_natural_foreign_keys=True))
-
-        # Get data points
-        for p,pd in zip(authorized_phot,range(len(data[transient[0].name]['photometry']))):
-            photdata = PhotometryService.GetAuthorizedTransientPhotData_ByPhotometry(user, p.id, includeBadData=True)
-            data[transient[0].name]['photometry'][pd]['data'] = json.loads(serializers.serialize("json", photdata, use_natural_foreign_keys=True))
-
-
-    # Get spectra by user & transient
-    authorized_spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient[0].id, includeBadData=True)
-    if len(authorized_spectra):
-        data[transient[0].name]['spectra'] = json.loads(serializers.serialize("json", authorized_spectra, use_natural_foreign_keys=True))
-
-        for s,sd in zip(authorized_spectra,range(len(data[transient[0].name]['spectra']))):
-            specdata = SpectraService.GetAuthorizedTransientSpecData_BySpectrum(user, s.id, includeBadData=True)
-            if specdata:
-                data[transient[0].name]['spectra'][sd]['data'] = \
-                    json.loads(serializers.serialize("json", specdata, use_natural_foreign_keys=True))
-
-    response = JsonResponse(data)
+    chunks = download_stream.data_json_chunks(user, transient, authorized_phot, authorized_spectra, array_ids)
+    response = StreamingHttpResponse(download_stream.buffered(chunks), content_type='application/json')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_data.json'%slug
     return response
+
+# Legend of the SNANA photometry export header (#813). The header keys stay the upper-case
+# field names older exports used (``# RA: ...``), so existing parsers keep working; the fields
+# exported are those of ``services.visibility.EXPORT_TRANSIENT_HEADER_ALLOWLIST``.
+SNANA_HEADER_LEGEND = {
+    'name': 'transient name',
+    'slug': 'URL name of the transient',
+    'ra': 'right ascension (deg)',
+    'dec': 'declination (deg)',
+    'disc_date': 'discovery date (UTC)',
+    'status': 'transient status',
+    'obs_group': 'observation group',
+    'mw_ebv': 'Milky Way E(B-V) (mag)',
+    'redshift': 'redshift',
+    'redshift_err': 'redshift uncertainty',
+    'redshift_source': 'source of the redshift',
+    'non_detect_date': 'date of the last non-detection (UTC)',
+    'non_detect_limit': 'limiting magnitude of the last non-detection (mag)',
+    'non_detect_band': 'band of the last non-detection',
+    'TNS_spec_class': 'TNS spectroscopic class',
+}
+
+
+def snana_header_comment_lines(fields):
+    """Legend block, then ``# KEY: value`` lines for the transient's exportable metadata.
+
+    Keys and their order are as in older exports (upper-case field names in model order),
+    limited to ``EXPORT_TRANSIENT_HEADER_ALLOWLIST``. Legend lines contain no colon so
+    ``KEY: value`` parsers do not read them as header keys.
+    """
+    from YSE_App.services.visibility import EXPORT_TRANSIENT_HEADER_ALLOWLIST
+
+    keys = [k for k in fields if k in EXPORT_TRANSIENT_HEADER_ALLOWLIST]
+    lines = ['# Header keys (legend)\n']
+    for k in keys:
+        lines.append('#   %s = %s\n' % (k.upper(), SNANA_HEADER_LEGEND.get(k, k.replace('_', ' '))))
+    lines.extend('# %s: %s\n' % (k.upper(), fields[k]) for k in keys)
+    return ''.join(lines)
+
+
+# Readable header of each spectrum CSV in the spectra zip (#813): (attribute, label).
+SPECTRUM_HEADER_FIELDS = (
+    ('obs_date', 'Observation date (UTC)'), ('ra', 'RA (deg)'), ('dec', 'Dec (deg)'),
+    ('spec_phase', 'Phase (days)'), ('redshift', 'Redshift'), ('redshift_err', 'Redshift error'),
+    ('redshift_quality', 'Redshift quality'), ('reference', 'Reference'),
+    ('wavelength_medium', 'Wavelength medium'), ('host_subtraction', 'Host subtraction'),
+    ('quality_mask', 'Quality mask'), ('spectrum_notes', 'Notes'),
+)
+
+
+def spectrum_header_comment_lines(spectrum):
+    """``# Label: value`` lines for one spectrum: instrument, group, flux unit and the fields above (no database ids)."""
+    lines = ['# Instrument: %s\n' % spectrum.instrument.name,
+             '# Observation group: %s\n' % spectrum.obs_group.name]
+    for attr, label in SPECTRUM_HEADER_FIELDS:
+        value = getattr(spectrum, attr, None)
+        if value is None or value == '':
+            continue
+        display = getattr(spectrum, 'get_%s_display' % attr, None)
+        if attr == 'obs_date':
+            from YSE_App.common.utc_dates import utc_day
+            value = utc_day(value)  # YYYYMMDD.ddd (#807)
+        elif display is not None:
+            value = display()  # choice label, e.g. "Vacuum"
+        lines.append('# %s: %s\n' % (label, str(value).replace('\n', ' ')))
+    if spectrum.unit_id is not None:
+        lines.append('# Flux unit: %s\n' % spectrum.unit.name)
+    return ''.join(lines)
+
+
+def spectrum_csv_name(transient_name, spectrum):
+    """File name of one spectrum in a spectra zip: ``<transient>-<instrument>-<YYYY-MM-DD>.csv``."""
+    return '%s-%s-%s.csv' % (transient_name, spectrum.instrument.name, spectrum.obs_date.isoformat().split('T')[0])
+
+
+def spectrum_csv_content(spectrum, arrays):
+    """One spectrum's CSV in the spectra zip: header comment lines, then ``wavelength,flux,fluxerr`` rows.
+
+    ``arrays`` is ``(wavelength, flux, flux_err or None)`` from ``spectrum_arrays.arrays_for``. A pixel
+    without a usable error (none, zero or NaN) gets -99.
+    """
+    wave, flux, err = arrays
+    lines = [spectrum_header_comment_lines(spectrum), "\n", "wavelength,flux,fluxerr\n"]
+    linefmt = "%.3f,%8.5e,%8.5e\n"
+    for i in range(wave.size):
+        e = err[i] if err is not None else np.nan
+        lines.append(linefmt % (wave[i], flux[i], e if (np.isfinite(e) and e) else -99))
+    return "".join(lines)
+
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2176,104 +2337,46 @@ def download_photometry(request, slug):
         user = request.user
 
         
-    content = ""
-        
+    # Streamed (#929): same text as before, written one point at a time; the per-point service call
+    # decides which points of each visible set are included.
+    from YSE_App.services import download_stream
+
     transient = Transient.objects.filter(slug=slug)
-    data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
-    for k in data[transient[0].name]['transient'][0]['fields'].keys():
-        if k not in ['created_by','modified_by','candidate_hosts']:
-            content += "# %s: %s\n"%(k.upper(),data[transient[0].name]['transient'][0]['fields'][k])
-            
-    content += "\n"
-    content += "VARLIST:  MJD        FLT  FLUXCAL   FLUXCALERR    MAG     MAGERR     MAGSYS   TELESCOPE    INSTRUMENT   DQ\n"
-    linefmt =  "OBS:      %.3f  %s  %.3f  %.3f  %.3f  %.3f  %s  %s  %s  %s\n"
+    transient_fields = download_stream.serialized(transient)[0]['fields']
+    header = snana_header_comment_lines(transient_fields)
 
-    
-    # Get photometry by user & transient
-    authorized_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id)
-    if len(authorized_phot):
-        data[transient[0].name]['photometry'] = json.loads(serializers.serialize("json", authorized_phot,use_natural_foreign_keys=True))
+    authorized_phot = list(PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id))
+    phot_sets = []
+    for p, head in zip(authorized_phot, download_stream.serialized(authorized_phot)):
+        telescope = head['fields']['instrument'].split(' - ')[0]
+        instrument = head['fields']['instrument'].split(' - ')[1]
+        phot_sets.append((p.id, telescope.replace(' ','_'), instrument.replace(' ','_')))
 
-        # Get data points
-        for p,pd in zip(authorized_phot,range(len(data[transient[0].name]['photometry']))):
-
-            telescope = data[transient[0].name]['photometry'][pd]['fields']['instrument'].split(' - ')[0]
-            instrument = data[transient[0].name]['photometry'][pd]['fields']['instrument'].split(' - ')[1]
-            telescope = telescope.replace(' ','_')
-            instrument = instrument.replace(' ','_')
-            
-            photdata = PhotometryService.GetAuthorizedTransientPhotData_ByPhotometry(user, p.id, includeBadData=True).order_by('obs_date')
-            data[transient[0].name]['photometry'][pd]['data'] = json.loads(serializers.serialize("json", photdata, use_natural_foreign_keys=True))
-
-            for d in data[transient[0].name]['photometry'][pd]['data']:
-                mjd = date_to_mjd(d['fields']['obs_date'])
-                if not len(d['fields']['data_quality']):
-                    data_quality = None
-                else:
-                    data_quality = ','.join(d['fields']['data_quality'])
-                if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
-                    if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
-                    else: flux_err = 0
-                    
-                    flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                    flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                    mag = -2.5*np.log10(flux)+27.5
-                    mag_err = 2.5/np.log(10)*flux_err/flux
-
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-                    
-                elif not d['fields']['flux'] and d['fields']['mag']:
-                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                    else: mag_err = 0
-                    
-                    flux = 10**(-0.4*(d['fields']['mag']-27.5))
-                    flux_err = 0.4*np.log(10)*flux*mag_err
-                    
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-                    
-                elif d['fields']['flux'] and d['fields']['flux_zero_point'] and d['fields']['mag']:
-                    if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
-                    else: flux_err = 0
-                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                    else: mag_err = 0
-                    
-                    flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                    flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-
-                elif d['fields']['flux'] and d['fields']['mag']:
-                    # if somebody didn't provide a ZPT, we can still work with this
-                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                    else: mag_err = 0
-                    
-                    flux = 10**(-0.4*(d['fields']['mag']-27.5))
-                    flux_err = 0.4*np.log(10)*flux*mag_err
-                    
-                    content += linefmt%(
-                        mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-                    
-                else:
-                    continue
-
-    content += "# END: \n"
-                
-    response = HttpResponse(content, content_type='text/plain')
+    chunks = download_stream.snana_chunks(user, header, phot_sets)
+    response = StreamingHttpResponse(download_stream.buffered(chunks), content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_data.snana.txt'%slug
 
     return response
 
-def bulk_photometry_zip_response(user, transients):
-    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284)."""
+def bulk_photometry_zip_response(user, transients, options=None):
+    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284).
+
+    ``options`` (``services.download_options.PhotometryOptions``, #848) narrows the points: date or
+    phase range, bands, data-quality flags. Without it the output is as before.
+    """
     s = BytesIO()
     archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
+    skipped = []  # (transient name, MJD, band, reason) for README.txt (#809)
+    if options is not None and not options.active:
+        options = None
+    n_left_out = 0
     for transient in transients:
         
         content = ""
+        epoch = None
+        if options is not None and options.phase_range:
+            from YSE_App.services.download_options import transient_reference
+            epoch = transient_reference(transient, options.reference)
 
         data = {transient.name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
         data[transient.name]['transient'] = json.loads(serializers.serialize("json", Transient.objects.filter(name=transient.name), use_natural_foreign_keys=True))
@@ -2286,8 +2389,8 @@ def bulk_photometry_zip_response(user, transients):
             content += "# %s: %s\n"%(k.upper(),header_fields[k])
 
         content += "\n"
-        content += "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT\n"
-        linefmt =  "%.3f,%s,%.3f,%.3f,%.3f,%.3f,%s,%s,%s\n"
+        content += "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT,DQ\n"
+        linefmt =  "%.3f,%s,%.3f,%.3f,%.3f,%.3f,%s,%s,%s,%s\n"
 
 
         # Get photometry by user & transient
@@ -2306,6 +2409,14 @@ def bulk_photometry_zip_response(user, transients):
 
                 for d in data[transient.name]['photometry'][pd]['data']:
                     mjd = date_to_mjd(d['fields']['obs_date'])
+                    # Data-quality flags by name; ";" because the file is comma-separated.
+                    data_quality = ';'.join(str(q) for q in (d['fields'].get('data_quality') or []))
+                    if options is not None:
+                        from YSE_App.services.spectral_phase import phase_days
+                        phase = phase_days(mjd, epoch[0], epoch[1]) if epoch is not None else None
+                        if not options.keeps(mjd, d['fields']['band'].split(' - ')[-1], data_quality, phase):
+                            n_left_out += 1
+                            continue
                     if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
                         if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
                         else: flux_err = 0
@@ -2316,7 +2427,7 @@ def bulk_photometry_zip_response(user, transients):
                         mag_err = 2.5/np.log(10)*flux_err/flux
 
                         content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument)
+                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
                     elif not d['fields']['flux'] and d['fields']['mag']:
                         if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
@@ -2326,7 +2437,7 @@ def bulk_photometry_zip_response(user, transients):
                         flux_err = 0.4*np.log(10)*flux*mag_err
 
                         content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument)
+                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
                     elif d['fields']['flux'] and d['fields']['flux_zero_point'] and d['fields']['mag']:
                         if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
@@ -2338,17 +2449,68 @@ def bulk_photometry_zip_response(user, transients):
                         flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
 
                         content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument)
+                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
                     else:
-                        continue
+                        # Same points as before (#809); the reason says what is missing.
+                        if d['fields']['flux'] and not d['fields']['flux_zero_point']:
+                            if d['fields']['mag']:
+                                reason = 'flux without a flux zero point (magnitude present but not used with flux)'
+                            else:
+                                reason = 'flux without a flux zero point and no magnitude'
+                        else:
+                            reason = 'no flux and no magnitude'
+                        skipped.append((transient.name, mjd, d['fields']['band'].split(' - ')[-1], reason))
 
         archive.writestr('%s.csv'%transient.name,content)
 
+    readme = [
+        'YSE-PZ bulk photometry export',
+        '',
+        'One CSV per transient. Columns: MJD, FLT, FLUXCAL, FLUXCALERR, MAG, MAGERR, MAGSYS, TELESCOPE,',
+        'INSTRUMENT, DQ. FLUXCAL is in units with zero point 27.5. DQ lists the data-quality flags set on',
+        'the point, separated by ";" (empty: none). Flagged points are included, not removed.',
+        '',
+        'Points skipped (no usable flux, or flux without a flux zero point): %d' % len(skipped),
+    ]
+    for name, mjd, band, reason in skipped:
+        readme.append('%s  MJD %.3f  %s  %s' % (name, mjd, band, reason))
+    if options is not None:
+        readme += ['', 'Download options (points outside them are left out: %d)' % n_left_out]
+        readme += ['  ' + line for line in options.describe()]
+    archive.writestr('README.txt', '\n'.join(readme) + '\n')
     archive.close()
     response = HttpResponse(s.getvalue(), content_type='application/x-zip-compressed')
     response['Content-Disposition'] = 'attachment; filename=YSEPZ_transient_photometry.zip'
     return response
+
+def _bulk_photometry_query_transients(user, query):
+    """Transients of a saved Explorer query that ``user`` may list."""
+    try:
+        names = run_explorer_query_cached(query, user=user if user is not None else AnonymousUser())
+    except PageQueryRefused:
+        raise Http404('Invalid Query')
+    transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
+    return filter_listed_transients(user, transients)
+
+
+@csrf_exempt
+@login_or_basic_auth_required
+def download_bulk_photometry_by_id(request, query_id):
+    """Bulk photometry zip of a saved query identified by its id, so any title works (#810)."""
+    if 'HTTP_AUTHORIZATION' in request.META.keys():
+        auth_method, credentials = request.META['HTTP_AUTHORIZATION'].split(' ', 1)
+        credentials = base64.b64decode(credentials.strip()).decode('utf-8')
+        username, password = credentials.split(':', 1)
+        user = auth.authenticate(username=username, password=password)
+    else:
+        user = request.user
+
+    query = Query.objects.filter(pk=query_id).first()
+    if query is None:
+        raise Http404('Invalid Query')
+    return bulk_photometry_zip_response(user, _bulk_photometry_query_transients(user, query))
+
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2365,12 +2527,7 @@ def download_bulk_photometry(request, query_title):
 
     query = Query.objects.filter(title=unquote(query_title))
     if len(query):
-        try:
-            names = run_explorer_query_cached(query[0], user=user if user is not None else AnonymousUser())
-        except PageQueryRefused:
-            raise Http404('Invalid Query')
-        transients = Transient.objects.filter(name__in=names).order_by('-disc_date')
-        transients = filter_listed_transients(user, transients)
+        transients = _bulk_photometry_query_transients(user, query[0])
 
     elif query_title in yse_python_queries.python_query_reg.all:
         transients = yse_python_queries.run_python_query(query_title, user)
@@ -2398,49 +2555,114 @@ def download_spectra(request, slug):
     st = BytesIO()
     archive = zipfile.ZipFile(st, 'w', zipfile.ZIP_DEFLATED)
     authorized_spectra = SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient.id, includeBadData=True)
+    # "Download selected" on the Spectra tab (#812): ?ids=1,2 narrows the authorized set; never widens it.
+    if request.GET.get('ids'):
+        selected_ids = [int(i) for i in request.GET['ids'].split(',') if i.strip().isdigit()]
+        authorized_spectra = authorized_spectra.filter(id__in=selected_ids)
     if len(authorized_spectra):
+        # Pixels from arrays rows or TransientSpecData rows (#891), only for the authorized spectra.
+        from YSE_App.common import spectrum_arrays
+        authorized_spectra = list(authorized_spectra)
+        pixels = spectrum_arrays.arrays_for([s.id for s in authorized_spectra])
 
         for s in authorized_spectra:
-            content = ""
-            data = {}
-            #data['spectra'] = json.loads(serializers.serialize("json", s, use_natural_foreign_keys=True))
-            #import pdb; pdb.set_trace()
-            for k in s.__dict__.keys(): #data['spectra'].keys():
-                if k not in ['_state', 'id', 'created_by_id', 'created_date', 'modified_by_id', 'modified_date']:
-                    content += "# %s: %s\n"%(k.upper(),s.__dict__[k])
-            
-            specdata = SpectraService.GetAuthorizedTransientSpecData_BySpectrum(user, s.id, includeBadData=True)
-            if specdata:
-                content += "\n"
-                content += "wavelength,flux,fluxerr\n"
-                linefmt =  "%.3f,%8.5e,%8.5e\n"
-
-                for sd in specdata.order_by('wavelength'):
-                    if sd.flux_err:
-                        content += linefmt%(sd.wavelength,sd.flux,sd.flux_err)
-                    else:
-                        content += linefmt%(sd.wavelength,sd.flux,-99)
-
-                archive.writestr('%s-%s-%s.csv'%(transient.name,s.instrument.name,s.obs_date.isoformat().split('T')[0]),content)
+            if s.id in pixels:
+                archive.writestr(spectrum_csv_name(transient.name, s), spectrum_csv_content(s, pixels[s.id]))
 
     archive.close()
     response = HttpResponse(st.getvalue(), content_type='application/x-zip-compressed')
     response['Content-Disposition'] = 'attachment; filename=%s_spectra.zip'%transient.name
     return response
 
+def _parse_spectrum_file(uploaded):
+    """``[(wavelength, flux[, flux_err]), ...]`` from an uploaded ASCII spectrum (#898).
+
+    Columns are separated by whitespace or commas; ``#`` lines and blank lines are skipped. Raises
+    ValueError naming the first bad line, before anything is written.
+    """
+    pixels = []
+    for number, raw in enumerate(uploaded, start=1):
+        line = raw.decode('utf-8', errors='replace').strip() if isinstance(raw, bytes) else str(raw).strip()
+        if not line or line.startswith('#'):
+            continue
+        values = [v for v in (line.split(',') if ',' in line else line.split())]
+        values = [v.strip() for v in values if v.strip()]
+        if len(values) not in (2, 3):
+            raise ValueError('line %d has %d columns; expected wavelength, flux and optionally its error'
+                             % (number, len(values)))
+        try:
+            pixels.append(tuple(float(v) for v in values))
+        except ValueError:
+            raise ValueError('line %d is not numbers: %s' % (number, line[:80]))
+    if not pixels:
+        raise ValueError('the file has no data lines')
+    return pixels
+
+
+def _upload_form_errors(form) -> str:
+    parts = []
+    for name, errors in form.errors.items():
+        field = form.fields.get(name)
+        label = (field.label if field is not None and field.label else name.replace('_', ' ')).capitalize()
+        parts.append('%s: %s' % (label, ' '.join(str(e) for e in errors)))
+    return '; '.join(parts)
+
+
+# After a failed upload the entered values (all but the file) come back on the transient page (#902).
+_UPLOAD_RETRY_KEY = 'spectrum_upload_retry'
+_UPLOAD_RETRY_FIELDS = ('instrument', 'obs_group', 'obs_date', 'spec_phase', 'data_quality', 'reference')
+_UPLOAD_RETRY_LISTS = ('permissions', 'pis')
+
+
+def _remember_failed_upload(request, transient_id):
+    """Keep the submitted values in the session for the next view of that transient's page.
+
+    Only for browser sessions: scripts posting with HTTP basic auth get no session row.
+    """
+    if 'HTTP_AUTHORIZATION' in request.META or not request.user.is_authenticated:
+        return
+    values = {name: str(request.POST.get(name) or '')[:512] for name in _UPLOAD_RETRY_FIELDS}
+    for name in _UPLOAD_RETRY_LISTS:
+        values[name] = [str(v)[:512] for v in request.POST.getlist(name)[:200]]
+    # datetime-local only shows YYYY-MM-DDTHH:MM[:SS]; the form also accepts a space separator.
+    values['obs_date'] = values['obs_date'].strip().replace(' ', 'T', 1)
+    request.session[_UPLOAD_RETRY_KEY] = {'transient': transient_id, 'values': values}
+
+
+def _spectrum_upload_form_for(request, transient):
+    """``(form, retried)``: the upload form, filled in again after a failed upload of this transient."""
+    retry = request.session.pop(_UPLOAD_RETRY_KEY, None) if hasattr(request, 'session') else None
+    if isinstance(retry, dict) and retry.get('transient') == transient.id:
+        values = {k: v for k, v in (retry.get('values') or {}).items() if v not in ('', [], None)}
+        return SpectrumUploadForm(initial=values), True
+    return SpectrumUploadForm(), False
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def upload_spectrum(request):
+    """The spectrum upload form of the transient page (summary tab).
+
+    A failed upload goes back to the transient's page with the reason (#898); nothing is written
+    unless the form and the file are both good.
+    """
+    from django.contrib import messages
 
     if request.method == 'POST':
         form = SpectrumUploadForm(request.POST, request.FILES)
+        transient_id = str(request.POST.get('transient') or '')
+        back = Transient.objects.filter(pk=int(transient_id)).first() if transient_id.isdigit() else None
         if form.is_valid():
-            #form.save()
+            try:
+                pixels = _parse_spectrum_file(request.FILES['filename'])
+            except ValueError as exc:
+                form.add_error('filename', str(exc))
+        if form.is_valid():
             transient = Transient.objects.filter(id=form.data['transient'])[0]
             tspec = TransientSpectrum.objects.filter(transient=transient).\
                 filter(instrument=form.data['instrument']).\
                 filter(obs_group=form.data['obs_group']).\
-                filter(obs_date=form.data['obs_date'])
+                filter(obs_date=form.cleaned_data['obs_date'])
 
             # Group-membership and ownership checks (flag-gated, YSE_App.common.authz).
             from YSE_App.common.authz import upload_denial
@@ -2450,7 +2672,7 @@ def upload_spectrum(request):
                 return HttpResponseForbidden(denial)
 
             specdict = {'transient':transient,'ra':form.data['ra'],
-                        'dec':form.data['dec'],'obs_date':form.data['obs_date'],
+                        'dec':form.data['dec'],'obs_date':form.cleaned_data['obs_date'],
                         'obs_group':ObservationGroup.objects.filter(id=form.data['obs_group'])[0],
                         'instrument':Instrument.objects.filter(id=form.data['instrument'])[0],
                         'created_by':request.user,'modified_by':request.user}
@@ -2461,7 +2683,7 @@ def upload_spectrum(request):
             #    specdict['data_quality'] = DataQuality.objects.get(pk=form.data['data_quality'])
             if not len(tspec):
                 tspec = TransientSpectrum.objects.create(**specdict)
-                if form.data['data_quality']:
+                if form.data.get('data_quality'):
                     tspec.data_quality.add(DataQuality.objects.get(pk=form.data['data_quality']))
             else:
                 tspec.update(**specdict)
@@ -2471,7 +2693,7 @@ def upload_spectrum(request):
             from YSE_App.data_utils import apply_upload_reference
             apply_upload_reference(tspec, form.cleaned_data.get('reference'))
 
-            if 'permissions' in form.data.keys() and form.data['permissions']:
+            if form.cleaned_data.get('permissions'):
                 for p in form.cleaned_data['permissions']:
                     tspec.groups.add(Group.objects.filter(name=p)[0])
                 tspec.save()
@@ -2479,51 +2701,18 @@ def upload_spectrum(request):
             # PIs (#446): an upload that names PIs sets them; one that names none keeps any already set.
             if form.cleaned_data.get('pis'):
                 tspec.pis.set(form.cleaned_data['pis'])
-            
-            existingspec = TransientSpecData.objects.filter(spectrum=tspec)
-            if len(existingspec):
-                existingspec.delete()
 
-
-            td = []
-            for line in request.FILES['filename']:
-                line = line.decode('utf-8').replace('\n','')
-                if line.startswith('#'): continue
-                if len(line.split()) == 3:
-                    wavelength,flux,flux_err = line.split()
-                    wavelength,flux,flux_err = float(wavelength),float(flux),float(flux_err)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,flux_err=flux_err,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split()) == 2:
-                    wavelength,flux = line.split()
-                    wavelength,flux = float(wavelength),float(flux)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split(',')) == 3:
-                    wavelength,flux,flux_err = line.split(',')
-                    wavelength,flux,flux_err = float(wavelength),float(flux),float(flux_err)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,flux_err=flux_err,
-                        created_by=request.user,modified_by=request.user)]
-                elif len(line.split(',')) == 2:
-                    wavelength,flux = line.split(',')
-                    wavelength,flux = float(wavelength),float(flux)
-                    td += [TransientSpecData(
-                        spectrum=tspec,wavelength=wavelength,flux=flux,
-                        created_by=request.user,modified_by=request.user)]
-                else:
-                    raise RuntimeError('bad input')
-
-            TransientSpecData.objects.bulk_create(td)
-                
-            return redirect('transient_detail', slug=transient.slug) #HttpResponseRedirect(reverse_lazy('transient_detail',transient.slug))
-    else:
-        form = SpectrumUploadForm()
-    return render(request, 'YSE_App/form_snippets/spectrum_upload_form.html', {
-        'form': form
-    })
+            # replaces any old pixels; stored as arrays (#492)
+            from YSE_App.common import spectrum_arrays
+            n = spectrum_arrays.write_pixels(tspec, pixels, user=request.user)
+            messages.success(request, 'Spectrum uploaded (%d pixels).' % n)
+            return redirect('transient_detail', slug=transient.slug)
+        if back is not None:
+            _remember_failed_upload(request, back.id)
+            messages.error(request, 'Spectrum not uploaded. %s' % _upload_form_errors(form))
+            return redirect('transient_detail', slug=back.slug)
+        return render(request, 'YSE_App/spectrum_upload_page.html', {'errors': _upload_form_errors(form)}, status=400)
+    return render(request, 'YSE_App/spectrum_upload_page.html', {'errors': ''})
 
 @csrf_exempt
 @login_or_basic_auth_required
@@ -2630,6 +2819,8 @@ def delete_followup_request(request, request_id):
     return _followup_tab_redirect(slug)
     
 SEARCH_PER_PAGE_CHOICES = (25, 50, 100, 200)
+#: Request header of the facet sidebar's partial reload (#842, UI preview only).
+SEARCH_PARTIAL_HEADER = 'X-YSE-Partial'
 
 
 def search_results_queryset(user=None):
@@ -2643,6 +2834,41 @@ def search_results_queryset(user=None):
     return annotate_dashboard_transient_fields(
         qs.select_related('best_spec_class').order_by('-disc_date', '-pk')
     )
+
+
+def build_search_table(request, params=None):
+    """``(filterset, table, per_page)`` for the search page: filtered, sorted and paginated from ``request.GET``.
+
+    Shared by the search page and the transient page's list stepping (#850), so both
+    see the same rows in the same order.
+    """
+    from YSE_App.filters.transient_search import TransientSearchFilterSet, quick_search_params
+    from .table_utils import SearchTransientTable
+
+    if params is None:
+        params = quick_search_params(request.GET)
+    filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(request.user),
+                                         request=request)
+    cone = filterset.cone
+
+    try:
+        per_page = int(params.get('per_page', SEARCH_PER_PAGE_CHOICES[0]))
+    except (TypeError, ValueError):
+        per_page = SEARCH_PER_PAGE_CHOICES[0]
+    if per_page not in SEARCH_PER_PAGE_CHOICES:
+        per_page = SEARCH_PER_PAGE_CHOICES[0]
+
+    excluded = () if cone else ('separation',)
+    if not filterset.uses_gal_b:
+        excluded = excluded + ('gal_b',)
+    annotation_column = filterset.annotation_column_spec
+    if annotation_column is None:
+        excluded = excluded + ('annotation_value',)
+    table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
+    if annotation_column is not None:
+        table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
+    RequestConfig(request, paginate={'per_page': per_page}).configure(table)
+    return filterset, table, per_page
 
 
 @method_decorator(login_required, name='dispatch')
@@ -2660,42 +2886,23 @@ class SearchResultsView(TemplateView):
     template_name = 'YSE_App/search_results.html'
 
     def get_context_data(self, **kwargs):
-        from YSE_App.filters.transient_search import (
-            FIELD_GROUPS,
-            TransientSearchFilterSet,
-            quick_search_params,
-        )
-        from .table_utils import SearchTransientTable
+        from YSE_App.filters.transient_search import FIELD_GROUPS, quick_search_params
 
         context = super().get_context_data(**kwargs)
         params = quick_search_params(self.request.GET)
-        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(self.request.user),
-                                             request=self.request)
+        filterset, table, per_page = build_search_table(self.request, params)
         cone = filterset.cone
 
-        try:
-            per_page = int(params.get('per_page', SEARCH_PER_PAGE_CHOICES[0]))
-        except (TypeError, ValueError):
-            per_page = SEARCH_PER_PAGE_CHOICES[0]
-        if per_page not in SEARCH_PER_PAGE_CHOICES:
-            per_page = SEARCH_PER_PAGE_CHOICES[0]
+        from YSE_App.common.ui_preview import ui_preview_enabled
 
-        excluded = () if cone else ('separation',)
-        if not filterset.uses_gal_b:
-            excluded = excluded + ('gal_b',)
-        annotation_column = filterset.annotation_column_spec
-        if annotation_column is None:
-            excluded = excluded + ('annotation_value',)
-        table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
-        if annotation_column is not None:
-            table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
-        RequestConfig(self.request, paginate={'per_page': per_page}).configure(table)
-
-        visible = {name for _, names in FIELD_GROUPS for name in names}
+        preview = ui_preview_enabled(self.request)
+        # The spectral-phase filters (#848) are part of the new layout preview.
+        shown_groups = [(title, names) for title, names in FIELD_GROUPS if preview or title not in PREVIEW_FIELD_GROUPS]
+        visible = {name for _, names in shown_groups for name in names}
         form = filterset.form
         groups = []
         counts = filterset.group_counts()
-        for title, names in FIELD_GROUPS:
+        for title, names in shown_groups:
             groups.append({
                 'title': title,
                 'key': title.lower(),
@@ -2739,7 +2946,120 @@ class SearchResultsView(TemplateView):
         context.update(self._save_search_context(params, filterset))
         # Backwards-compatible name used by older templates/tests.
         context['transient_search_results'] = (table, 'Search Results', 'Search Results', filterset)
+        context['obs_tonight'] = self._obs_tonight_context(filterset, context['result_count'])
+        context['selection_save'] = self._selection_save_context(filterset)
+        context['search_facets'] = self._facets_context(filterset, params)
+        context['rule_builder'] = self._rule_builder_context(params)
+        context['download_menu'] = self._download_menu_context(params, preview)
         return context
+
+    def _download_menu_context(self, params, preview):
+        """Download -> Spectra / Photometry (#848) for preview users: the search's own parameters."""
+        if not preview:
+            return None
+        from YSE_App.download_views import download_menu_context
+
+        return download_menu_context(reverse('search_download_spectra'), reverse('search_download_photometry'),
+                                     self._bulk_params(params))
+
+    def _facets_context(self, filterset, params):
+        """The facet sidebar with live counts (#842), UI preview only; ``None`` otherwise."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+        from YSE_App.services.search_facets import build_facets, facet_counts
+
+        if not ui_preview_enabled(self.request):
+            return None
+        counts = facet_counts(filterset, self.request.user, params)
+        return build_facets(counts, params)
+
+    def _rule_builder_context(self, params):
+        """The rule builder (#843) in the facet sidebar, UI preview only; not for the partial reload."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        if not ui_preview_enabled(self.request) or self.request.headers.get(SEARCH_PARTIAL_HEADER) == 'search':
+            return None
+        from YSE_App.selection_views import rule_builder_context
+
+        return rule_builder_context(self.request, mode='save', search_params=self._bulk_params(params))
+
+    def get(self, request, *args, **kwargs):
+        """The page; with ``X-YSE-Partial: search`` (preview only) the parts a facet click changes, as JSON."""
+        from django.utils.cache import add_never_cache_headers, patch_vary_headers
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        if not ui_preview_enabled(request):
+            return super().get(request, *args, **kwargs)
+        context = self.get_context_data(**kwargs)
+        if request.headers.get(SEARCH_PARTIAL_HEADER) != 'search':
+            response = self.render_to_response(context)
+            patch_vary_headers(response, (SEARCH_PARTIAL_HEADER,))
+            return response
+        response = JsonResponse(self._partial_payload(request, context))
+        patch_vary_headers(response, (SEARCH_PARTIAL_HEADER,))
+        add_never_cache_headers(response)
+        return response
+
+    @staticmethod
+    def _partial_payload(request, context):
+        """Fragments and values the facet script swaps in without reloading the page (#842)."""
+        from django.template.loader import render_to_string
+
+        def part(name):
+            return render_to_string('YSE_App/search/%s.html' % name, context, request=request)
+
+        count = context.get('result_count')
+        obs = context.get('obs_tonight') or {}
+        return {
+            'facets_html': part('_facet_list'),
+            'groups_html': part('_filter_groups'),
+            'chips_html': part('_chips'),
+            'table_html': part('_table'),
+            'result_count': count,
+            'count_text': '' if count is None else '%d match%s' % (count, '' if count == 1 else 'es'),
+            'select_all_label': 'All %s matches (ignores ticks)' % ('' if count is None else count),
+            'bulk_params': context.get('bulk_params', ''),
+            'save_params': context.get('save_search_params', ''),
+            'save_title': context.get('save_search_title', ''),
+            'save_sql': context.get('save_search_sql') or '',
+            'save_blocked': bool(context.get('save_search_error')),
+            'selection_name': (context.get('selection_save') or {}).get('name', ''),
+            'api_url': context.get('api_url', ''),
+            'export_url': context.get('export_url', ''),
+            'obs_blocked': obs.get('blocked', ''),
+            'download_params': (context.get('download_menu') or {}).get('params', ''),
+            'has_errors': bool(context['filterset'].form.errors),
+        }
+
+    def _selection_save_context(self, filterset):
+        """"Save as Selection" (#841) for preview users: teams to share with, name suggestion, last error."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+        from YSE_App.services.search_queries import default_search_title
+        from YSE_App.services.selections import team_choices
+
+        if not ui_preview_enabled(self.request):
+            return None
+        return {
+            'teams': team_choices(self.request.user),
+            'name': default_search_title(filterset) if filterset.is_valid() else '',
+            'error': self.request.GET.get('selection_error') or None,
+        }
+
+    def _obs_tonight_context(self, filterset, result_count):
+        """"Observable tonight" (#854) for preview users: only on a filtered search of at most MAX_OBJECTS."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+        from YSE_App.services.observable_tonight import MAX_OBJECTS
+
+        if not ui_preview_enabled(self.request):
+            return None
+        filters = [name for name, _, _ in filterset.active_filters() if name != 'ordering']
+        if not filters:
+            blocked = 'set at least one filter first. It is a last step on a short list, never the whole database.'
+        elif result_count is not None and result_count > MAX_OBJECTS:
+            blocked = ('this search has %d matches; it works on at most %d. Add filters to narrow it.'
+                       % (result_count, MAX_OBJECTS))
+        else:
+            blocked = ''
+        return {'blocked': blocked}
 
     @staticmethod
     def _bulk_params(params):
@@ -2815,9 +3135,11 @@ def save_search(request):
     return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
 
 SEARCH_BULK_MAX_ROWS = 5000
+# Filter groups of the search form shown only with the UI preview on (#848).
+PREVIEW_FIELD_GROUPS = ('Spectra',)
 SEARCH_BULK_PHOTOMETRY_MAX_ROWS = 300
 SEARCH_EXPORT_MAX_ROWS = 50000
-_SEARCH_STATE_KEYS = ('page', 'saved_query', 'saved_user_query', 'save_error', 'bulk_result')
+_SEARCH_STATE_KEYS = ('page', 'saved_query', 'saved_user_query', 'save_error', 'bulk_result', 'selection_error')
 
 
 def _csv_safe(value):
@@ -2840,7 +3162,8 @@ def _search_bulk_redirect(params, message):
 def search_bulk_action(request):
     """POST from the search page: act on the selected rows, or on every row the search matches (#287, #284).
 
-    Fields: ``action`` (``status``, ``add_tag`` or ``photometry``), ``status_id`` / ``tag_id``
+    Fields: ``action`` (``status``, ``add_tag``, ``photometry``, or for preview users
+    ``repeat_followup``, which shows the review page of #853), ``status_id`` / ``tag_id``
     for the first two, ``params`` (the search's query string) and either one
     ``transient_id`` per ticked row or ``select_all=1`` for every match of
     ``params``. Needs POST and the CSRF token (the global middleware). Only
@@ -2857,7 +3180,11 @@ def search_bulk_action(request):
     for key in _SEARCH_STATE_KEYS:
         params.pop(key, None)
     action = request.POST.get('action', '')
-    if action not in ('status', 'add_tag', 'photometry'):
+    actions = ('status', 'add_tag', 'photometry')
+    if ui_preview_enabled(request):
+        # Repeat follow-up (#853): a review page first, for preview users only.
+        actions += ('repeat_followup',)
+    if action not in actions:
         return _search_bulk_redirect(params, 'Choose an action first.')
 
     status_obj = tag_obj = None
@@ -2873,6 +3200,10 @@ def search_bulk_action(request):
             return _search_bulk_redirect(params, 'Choose a tag first.')
 
     limit = SEARCH_BULK_PHOTOMETRY_MAX_ROWS if action == 'photometry' else SEARCH_BULK_MAX_ROWS
+    if action == 'repeat_followup':
+        from YSE_App import bulk_followup_views
+
+        limit = bulk_followup_views.MAX_OBJECTS
     if request.POST.get('select_all') in ('1', 'true', 'on'):
         filterset = TransientSearchFilterSet(
             quick_search_params(params), queryset=Transient.objects.all(), request=request)
@@ -2890,6 +3221,9 @@ def search_bulk_action(request):
     rows = filter_listed_transients(request.user, Transient.objects.filter(pk__in=pks))
     visible_pks = list(rows.values_list('pk', flat=True))
 
+    if action == 'repeat_followup':
+        # Unlisted ids are counted as skipped there, without their names.
+        return bulk_followup_views.render_review(request, pks, '%s?%s' % (reverse('search'), params.urlencode()))
     if action == 'photometry':
         return bulk_photometry_zip_response(
             request.user, Transient.objects.filter(pk__in=visible_pks).order_by('-disc_date'))
@@ -2897,7 +3231,7 @@ def search_bulk_action(request):
         n_changed = Transient.objects.filter(pk__in=visible_pks).exclude(status=status_obj).update(
             status=status_obj, modified_by=request.user, modified_date=timezone.now())
         return _search_bulk_redirect(
-            params, 'Status set to %s on %d of %d transients.' % (status_obj.name, n_changed, len(visible_pks)))
+            params, 'Status set to %s on %d of %d transients.' % (status_label(status_obj.name), n_changed, len(visible_pks)))
     through = Transient.tags.through
     have = set(through.objects.filter(transienttag_id=tag_obj.pk, transient_id__in=visible_pks)
                .values_list('transient_id', flat=True))
@@ -2946,8 +3280,11 @@ def search_export_csv(request):
     response['Content-Disposition'] = 'attachment; filename="yse_pz_search.csv"'
     writer = csv.writer(response)
     writer.writerow([label for label, _ in columns])
+    from YSE_App.common.utc_dates import utc_day
+
     for row in rows[:SEARCH_EXPORT_MAX_ROWS]:
-        writer.writerow([_csv_safe(v.isoformat() if hasattr(v, 'isoformat') else ('' if v is None else v)) for v in row])
+        # Dates as plain YYYYMMDD.ddd UTC (#807); the MJD columns stay MJD.
+        writer.writerow([_csv_safe(utc_day(v) if hasattr(v, 'isoformat') else ('' if v is None else v)) for v in row])
     if truncated:
         writer.writerow(['# truncated at %d rows; narrow the search' % SEARCH_EXPORT_MAX_ROWS])
     return response

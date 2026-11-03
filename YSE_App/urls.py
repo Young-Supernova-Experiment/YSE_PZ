@@ -19,16 +19,21 @@ from YSE_App.util import submit_to_tns
 from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
+from YSE_App import download_views
 from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
+from YSE_App import selection_views
+from YSE_App import combined_list_views
+from YSE_App import bulk_followup_views
+from YSE_App.common import ui_preview as ui_preview_views
 from YSE_App import signup_views
 from YSE_App import access_views
 from YSE_App import (
     allocation_views, analysis_views, annotation_views, candidate_views, collaboration_views, favorite_views,
     feedback_views,
-    feed_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
+    feed_views, glossary_views, instrument_views, job_views, notification_views, observability_views, sharing_views, summary_views,
 )
 
 # The API root listing and the schema need a signed-in user (or Basic/token auth).
@@ -78,8 +83,9 @@ urlpatterns = [
     re_path(r'^team/$', surveypages.team, name='team'),
     re_path(r'^contact/$', surveypages.contact, name='contact'),
     re_path(r'^acknowledgements/$', surveypages.acknowledgements, name='acknowledgements'),
+    # Glossary of terms used on the transient pages (#862); signed-in users.
+    re_path(r'^glossary/$', glossary_views.glossary, name='glossary'),
     
-    re_path(r'^dashboard_example/$', views.dashboard_example, name='dashboard_example'),
     re_path(r'^transient_edit/$', views.transient_edit, name='transient_edit'),
     re_path(r'^transient_edit/(?P<transient_id>[0-9]+)/$', views.transient_edit, name='transient_edit'),
     re_path(
@@ -253,6 +259,25 @@ urlpatterns = [
     re_path(r'^search/save/$', views.save_search, name='save_search'),
     re_path(r'^search/bulk/$', views.search_bulk_action, name='search_bulk_action'),
     re_path(r'^search/export/$', views.search_export_csv, name='search_export_csv'),
+    # Download -> Spectra / Photometry with options (#848); UI preview only.
+    re_path(r'^search/download/spectra/$', download_views.search_download_spectra, name='search_download_spectra'),
+    re_path(r'^search/download/photometry/$', download_views.search_download_photometry,
+            name='search_download_photometry'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/download/spectra/$', download_views.selection_download_spectra,
+            name='selection_download_spectra'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/download/photometry/$',
+            download_views.selection_download_photometry, name='selection_download_photometry'),
+    # Selections (#841): saved criteria shared by owner, team or all YSE; pages are UI preview only.
+    re_path(r'^combined-list/$', combined_list_views.combined_list, name='combined_list'),
+    re_path(r'^followup/repeat/$', bulk_followup_views.repeat_followup, name='bulk_repeat_followup'),
+    re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),
+    re_path(r'^selections/save/$', selection_views.selection_save, name='selection_save'),
+    re_path(r'^selections/rule-builder/check/$', selection_views.rule_builder_check, name='rule_builder_check'),
+    re_path(r'^selections/rule-builder/save/$', selection_views.rule_builder_save, name='rule_builder_save'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/$', selection_views.selection_detail, name='selection_detail'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/edit/$', selection_views.selection_edit, name='selection_edit'),
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/delete/$', selection_views.selection_delete,
+            name='selection_delete'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',
@@ -260,6 +285,7 @@ urlpatterns = [
     re_path(r'^download_data/(?P<slug>.*)/$', views.download_data, name='download_data'),
     re_path(r'^download_spectra/(?P<slug>.*)/$', views.download_spectra, name='download_spectra'),
     re_path(r'^download_photometry/(?P<slug>.*)/$', views.download_photometry, name='download_photometry'),
+    re_path(r'^download_bulk_photometry/id/(?P<query_id>[0-9]+)/$', views.download_bulk_photometry_by_id, name='download_bulk_photometry_by_id'),
     re_path(r'^download_bulk_photometry/(?P<query_title>[a-zA-Z0-9_-]+)/$', views.download_bulk_photometry, name='download_bulk_photometry'),
     re_path(r'^download_target_list/(?P<telescope>.*)/(?P<obs_date>[a-zA-Z0-9_-]+)/$', views.download_target_list, name='download_target_list'),
     re_path(r'^download_targets_and_finders/(?P<telescope>[a-zA-Z0-9_-]+)/(?P<obs_date>[a-zA-Z0-9_-]+)/$', views.download_targets_and_finders, name='download_targets_and_finders'),
@@ -272,12 +298,19 @@ urlpatterns = [
     # Observability page (#307): every telescope's altitude/airmass curve for one night.
     re_path(r'^observability/(?P<transient_id>[0-9]+)/$', observability_views.observability_page, name='observability'),
     re_path(r'^observability/(?P<transient_id>[0-9]+)/data/$', observability_views.observability_data, name='observability_data'),
+    # "Observable tonight" on a shortlist, preview users only (#854).
+    re_path(r'^observable-tonight/$', observability_views.observable_tonight_data, name='observable_tonight_data'),
+    re_path(r'^observable-tonight/default-site/$', observability_views.observable_tonight_default_site,
+            name='observable_tonight_default_site'),
     re_path(r'^lightcurveplot_detail/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_detail, name='lightcurveplot_detail'),
     re_path(r'^lightcurveplot_flux/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_flux, name='lightcurveplot_flux'),
     re_path(r'^lightcurveplot_summary/(?P<transient_id>[0-9_-]+)/$', view_utils.lightcurveplot_summary, name='lightcurveplot_summary'),
-    re_path(r'^salt2plot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2plot, name='salt2plot'),
+    re_path(r'^salt3plot/(?P<transient_id>[0-9]+)/(?P<salt3fit>[0-1]+)/$', view_utils.salt3plot, name='salt3plot'),
+    # Old SALT2 names (#808): permanent redirects to the SALT3 URLs.
+    re_path(r'^salt2plot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2plot_redirect, name='salt2plot'),
     re_path(r'^bazinplot/(?P<transient_id>[0-9]+)/(?P<bazinfit>[0-1]+)/$', view_utils.bazinplot, name='bazinplot'),
-    re_path(r'^salt2fluxplot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2fluxplot, name='salt2fluxplot'),
+    re_path(r'^salt3fluxplot/(?P<transient_id>[0-9]+)/(?P<salt3fit>[0-1]+)/$', view_utils.salt3fluxplot, name='salt3fluxplot'),
+    re_path(r'^salt2fluxplot/(?P<transient_id>[0-9]+)/(?P<salt2fit>[0-1]+)/$', view_utils.salt2fluxplot_redirect, name='salt2fluxplot'),
     re_path(r'^spectrumplot/(?P<transient_id>[0-9]+)/$', view_utils.spectrumplot, name='spectrumplot'),
     re_path(r'^spectrumplot_summary/(?P<transient_id>[0-9]+)/$', view_utils.spectrumplot_summary, name='spectrumplot_summary'),
     re_path(r'^spectrumplotsingle/(?P<transient_id>[a-zA-Z0-9_-]+)/(?P<spec_id>[a-zA-Z0-9_-]+)/$', view_utils.spectrumplotsingle, name='spectrumplotsingle'),
@@ -394,6 +427,8 @@ urlpatterns = [
             name='researcher_mentorship_decide'),
     # Research teams, invitation links (#445) and user settings (#440)
     re_path(r'^settings/$', group_views.user_settings, name='user_settings'),
+    # Per-user UI preview switch for the Tier 2 layouts (#947)
+    re_path(r'^ui-preview/$', ui_preview_views.ui_preview_switch, name='ui_preview_switch'),
     re_path(r'^teams/$', group_views.team_list, name='team_list'),
     re_path(r'^teams/join/$', group_views.group_invite_accept, name='group_invite_accept'),
     re_path(r'^teams/join/(?P<token>[A-Za-z0-9_-]{20,128})/$', group_views.group_invite_link,
@@ -406,7 +441,12 @@ urlpatterns = [
             group_views.team_invite_revoke, name='team_invite_revoke'),
     re_path(r'^teams/(?P<group_id>[0-9]+)/members/(?P<user_id>[0-9]+)/remove/$',
             group_views.team_member_remove, name='team_member_remove'),
-    # Self-service signup and membership requests (#448); 404 unless SELF_SIGNUP_ENABLED
+    re_path(r'^teams/new/$', group_views.team_create, name='team_create'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/members/add/$', group_views.team_member_add, name='team_member_add'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/leave/$', group_views.team_leave, name='team_leave'),
+    re_path(r'^teams/(?P<group_id>[0-9]+)/members/(?P<user_id>[0-9]+)/deputy/$', group_views.team_deputy,
+            name='team_deputy'),
+    # Self-service signup (#448; 404 unless SELF_SIGNUP_ENABLED) and membership requests (GROUP_REQUESTS_ENABLED)
     re_path(r'^signup/$', signup_views.signup, name='signup'),
     re_path(r'^signup/verify/(?P<token>[A-Za-z0-9_=-]{20,512})/$', signup_views.signup_verify_email,
             name='signup_verify_email'),
@@ -560,6 +600,7 @@ router.register(r'analysisservices', api_views.AnalysisServiceViewSet, basename=
 router.register(r'analysisruns', api_views.AnalysisRunViewSet, basename='analysisrun')
 router.register(r'transientannotations', api_views.TransientAnnotationViewSet, basename='transientannotation')
 router.register(r'feedsources', api_views.FeedSourceViewSet, basename='feedsource')
+router.register(r'selections', api_views.SelectionViewSet, basename='selection')
 
 router.register(r'telescopes', api_views.TelescopeViewSet)
 router.register(r'transients', api_views.TransientViewSet)

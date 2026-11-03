@@ -142,7 +142,8 @@ class UploadPisTests(TestCase):
         self.client.force_login(self.user)
 
     def test_upload_spectrum_form_sets_pis(self):
-        response = self.client.get(reverse("upload_spectrum"))
+        # the form is on the transient page (#898)
+        response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
         self.assertContains(response, 'name="pis"')
         payload = {
             "transient": self.transient.id, "ra": self.transient.ra, "dec": self.transient.dec,

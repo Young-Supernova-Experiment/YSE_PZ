@@ -112,7 +112,8 @@ class UploadReferenceTests(TestCase):
         return payload
 
     def test_spectrum_form_stores_reference(self):
-        response = self.client.get(reverse("upload_spectrum"))
+        # the form is on the transient page (#898)
+        response = self.client.get(reverse("transient_detail", kwargs={"slug": self.transient.slug}))
         self.assertContains(response, 'name="reference"')
         response = self.client.post(reverse("upload_spectrum"), self._form_payload(BIBCODE))
         self.assertEqual(response.status_code, 302, getattr(response, "content", b""))

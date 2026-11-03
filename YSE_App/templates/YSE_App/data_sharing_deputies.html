@@ -27,7 +27,7 @@
 								<td>{{ d.delegate.username }}</td>
 								<td>{% if d.group %}restricted to {{ d.group.name }}{% else %}all of this PI's data{% endif %}</td>
 								<td><small>{{ d.note|default:"-" }}</small></td>
-								<td><small>{{ d.created_date|date:"Y-m-d" }}</small></td>
+								<td><small>{{ d.created_date|utcdate }}</small></td>
 								<td>
 									<form method="post" class="d-inline">
 										{% csrf_token %}

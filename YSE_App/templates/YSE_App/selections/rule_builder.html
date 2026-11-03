@@ -1,0 +1,56 @@
+{% comment %}
+Visual rule builder (#843), UI preview only. Context: builder (selection_views.rule_builder_context).
+Rows are server-rendered; rule-builder.js adds and removes them and posts the tree as JSON.
+The page loads rule-builder.css and rule-builder.js (after jQuery) itself.
+{% endcomment %}
+<section class="yse-rule-builder" id="rule-builder" data-yse-rule-mode="{{ builder.mode }}" data-check-url="{{ builder.check_url }}"
+         data-max-depth="{{ builder.max_depth }}" data-max-rules="{{ builder.max_rules }}" aria-labelledby="rule-builder-title">
+  <h3 class="yse-rule-title" id="rule-builder-title">{% if builder.mode == 'edit' %}Rules{% else %}Rule builder{% endif %}</h3>
+  <p class="small text-muted mb-2" id="rule-builder-help">Combine fields with all (AND) or any (OR); add a group to nest. Magnitudes: smaller is brighter.</p>
+  {% if builder.error %}<div class="alert alert-warning py-1 px-2 small" role="alert" id="rule-builder-load-error">These rules could not be opened: {{ builder.error }}</div>{% endif %}
+  <form class="yse-rule-form" id="rule-builder-form" action="{{ builder.action }}" method="post" aria-describedby="rule-builder-help">
+    {% csrf_token %}
+    <input type="hidden" name="rules" class="yse-rule-json" value="">
+    {% if builder.mode == 'edit' %}<input type="hidden" name="next" value="detail">{% else %}<input type="hidden" name="params" value="{{ builder.search_params }}">{% endif %}
+    <ul class="list-unstyled yse-rule-tree">
+      {% include 'YSE_App/selections/_rule_group.html' with group=builder.tree field_groups=builder.field_groups %}
+    </ul>
+    <div class="yse-rule-tools">
+      <button type="button" class="btn btn-outline-secondary btn-sm yse-rule-count" id="rule-builder-count">Count matches</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm yse-rule-sql-toggle" id="rule-builder-sql" aria-expanded="false" aria-controls="rule-builder-sql-box">View as SQL</button>
+    </div>
+    <div class="yse-rule-status small" id="rule-builder-status" role="status" aria-live="polite"></div>
+    <div class="yse-rule-sql-box" id="rule-builder-sql-box" hidden>
+      <p class="small text-muted mb-1">The query Django sends to the database for these rules (read-only). Values are shown in place for reading; the database receives them as separate parameters, never as SQL. The results table adds its display columns to this query.</p>
+      <pre class="yse-rule-sql" id="rule-builder-sql-text" tabindex="0" aria-label="SQL for these rules"></pre>
+    </div>
+    {% if builder.mode == 'edit' %}
+    <button type="submit" class="btn btn-primary btn-sm" id="rule-builder-submit">Save rules</button>
+    {% else %}
+    <fieldset class="yse-rule-save" id="rule-builder-save">
+      <legend class="yse-rule-save-title">Save as Selection</legend>
+      <label class="small mb-0" for="rule-builder-name">Name</label>
+      <input type="text" class="form-control form-control-sm" id="rule-builder-name" name="name" maxlength="200" required>
+      <label class="small mb-0" for="rule-builder-visibility">Shared with</label>
+      <select class="form-control form-control-sm" id="rule-builder-visibility" name="visibility">
+        <option value="me">Only me</option>
+        {% if builder.teams %}<option value="team">My team</option>{% endif %}
+        <option value="all">All YSE</option>
+      </select>
+      {% if builder.teams %}
+      <div id="rule-builder-team-group" hidden>
+        <label class="small mb-0" for="rule-builder-team">Team</label>
+        <select class="form-control form-control-sm" id="rule-builder-team" name="team" disabled>
+          {% for team in builder.teams %}<option value="{{ team.pk }}">{{ team.name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <button type="submit" class="btn btn-primary btn-sm mt-2" id="rule-builder-submit"><i class="fa fa-bookmark" aria-hidden="true"></i> Save as Selection</button>
+    </fieldset>
+    {% endif %}
+  </form>
+  {# Prototypes the script clones: a new row, a new group, and each field's comparison and value. #}
+  <template class="yse-rule-row-tpl">{% include 'YSE_App/selections/_rule_row.html' with rule=None field_groups=builder.field_groups %}</template>
+  <template class="yse-rule-group-tpl">{% include 'YSE_App/selections/_rule_group.html' with group=builder.new_group field_groups=builder.field_groups %}</template>
+  {% for rf in builder.fields %}<template class="yse-rule-controls-tpl" data-yse-rule-field="{{ rf.key }}">{% include 'YSE_App/selections/_rule_controls.html' with rf=rf rule=None %}</template>{% endfor %}
+</section>
