@@ -41,6 +41,8 @@
     <div class="form-inline">
       {% if search_url %}<a class="btn btn-outline-secondary btn-sm mr-2" id="selection-open-search" href="{{ search_url }}">Open in search</a>{% endif %}
       <a class="btn btn-outline-secondary btn-sm mr-2" id="selection-api-link" href="{{ api_url }}">API</a>
+      <a class="btn btn-outline-primary btn-sm mr-2" id="selection-alert-me" href="{% url 'selection_alert_new' selection.slug %}">Alert me</a>
+      <a class="btn btn-link btn-sm mr-2" id="selection-my-alerts" href="{% url 'selection_alert_list' %}">My alerts</a>
       {% if can_edit %}
       <button type="button" class="btn btn-outline-secondary btn-sm mr-2" id="selection-edit-toggle" aria-expanded="false" aria-controls="selection-edit">Edit</button>
       {% endif %}

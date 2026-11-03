@@ -1,0 +1,66 @@
+{% extends 'YSE_App/base.html' %}
+{% comment %}"My alerts" (#844, UI preview only): the alerts I set on Selections.{% endcomment %}
+
+{% block content_header %}
+    <h1>My alerts <small class="text-muted">on Selections</small></h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'selection_list' %}">Selections</a></li>
+      <li class="breadcrumb-item active">My alerts</li>
+    </ol>
+{% endblock %}
+
+{% block content %}
+{% if messages %}
+<div id="selection-messages">
+  {% for message in messages %}<div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags|default:'info' }}{% endif %} py-2">{{ message }}</div>{% endfor %}
+</div>
+{% endif %}
+
+{% if not enabled %}
+<div class="alert alert-secondary py-2 small" id="selection-alerts-off">
+  Alerts are being tried out: you can set them now, but this site does not send them yet.
+</div>
+{% endif %}
+
+<div class="box" id="selection-alerts">
+  <div class="box-body p-0 table-responsive">
+    {% if alerts %}
+    <table class="table table-sm mb-0">
+      <thead><tr><th scope="col">Selection</th><th scope="col">Tell me when</th><th scope="col">How often</th><th scope="col">Who gets it</th><th scope="col">Last checked</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+      {% for alert in alerts %}
+      <tr data-alert="{{ alert.pk }}">
+        <td><a href="{% url 'selection_detail' alert.selection.slug %}">{{ alert.display_name }}</a>{% if alert.label %} <span class="small text-muted">({{ alert.selection.name }})</span>{% endif %}</td>
+        <td>{{ alert.trigger_labels|join:", " }}</td>
+        <td>{{ alert.get_frequency_display }}</td>
+        <td>{% if alert.target == 'me' %}Me{% elif alert.target == 'team' %}Team {{ alert.team.name }}{% else %}Slack channel of {{ alert.team.name }}{% endif %}</td>
+        <td>{% if alert.last_run_at %}<span title="{{ alert.last_run_at|date:'Y-m-d H:i' }} UTC">{{ alert.last_run_at|date:'Y-m-d H:i' }}</span>{% else %}<span class="text-muted">not yet</span>{% endif %}
+          {% if alert.last_error %}<div class="small text-danger">{{ alert.last_error }}</div>{% endif %}</td>
+        <td class="text-nowrap">
+          <a class="btn btn-outline-secondary btn-sm" href="{% url 'selection_alert_edit' alert.pk %}">Edit</a>
+          <form class="d-inline yse-selection-alert-delete" action="{% url 'selection_alert_delete' alert.pk %}" method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="p-3 mb-0 text-muted" id="selection-alerts-empty">No alerts yet. Open one of <a href="{% url 'selection_list' %}">your Selections</a> and choose <strong>Alert me</strong>.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="text/javascript">
+$(function() {
+  $('.yse-selection-alert-delete').on('submit', function(event) {
+    if (!window.confirm('Delete this alert? The Selection is not touched.')) { event.preventDefault(); }
+  });
+});
+</script>
+{% endblock %}

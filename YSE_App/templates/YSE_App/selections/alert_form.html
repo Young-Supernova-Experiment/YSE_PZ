@@ -1,0 +1,100 @@
+{% extends 'YSE_App/base.html' %}
+{% comment %}"Alert me" on a Selection (#844, UI preview only). The first submit shows the 30-day volume estimate; "Save alert" saves.{% endcomment %}
+
+{% block content_header %}
+    <h1>{% if alert %}Edit alert{% else %}Alert me{% endif %} <small class="text-muted">{{ selection.name }}</small></h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'selection_list' %}">Selections</a></li>
+      <li class="breadcrumb-item"><a href="{% url 'selection_detail' selection.slug %}">{{ selection.name }}</a></li>
+      <li class="breadcrumb-item active">Alert</li>
+    </ol>
+{% endblock %}
+
+{% block content %}
+<div class="box" id="selection-alert-form-box">
+  <div class="box-body">
+    <p class="small text-muted mb-3">
+      An alert checks this Selection regularly, as each recipient sees it: nobody is told about an object, spectrum or
+      measurement they cannot see. Messages use your <a href="{% url 'notification_preferences' %}">notification preferences</a>
+      (group "Alerts"). An object that matches several of your alerts at once is sent once, with every alert it matched.
+    </p>
+    {% if error %}<div class="alert alert-danger py-2" role="alert" id="selection-alert-error">{{ error }}</div>{% endif %}
+    <form method="post" id="selection-alert-form"
+          action="{% if alert %}{% url 'selection_alert_edit' alert.pk %}{% else %}{% url 'selection_alert_new' selection.slug %}{% endif %}">
+      {% csrf_token %}
+      <fieldset class="mb-3">
+        <legend class="h6">Tell me when</legend>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="on_new_match" value="1" id="alert-new-match"{% if form.on_new_match %} checked{% endif %}>
+          <label class="form-check-label" for="alert-new-match">a new object matches</label></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="on_new_spectrum" value="1" id="alert-new-spectrum"{% if form.on_new_spectrum %} checked{% endif %}>
+          <label class="form-check-label" for="alert-new-spectrum">a matching object gets a new spectrum</label></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="on_class_change" value="1" id="alert-class-change"{% if form.on_class_change %} checked{% endif %}>
+          <label class="form-check-label" for="alert-class-change">a matching object's class changes</label></div>
+        <div class="form-check form-inline">
+          <input class="form-check-input" type="checkbox" name="on_mag" value="1" id="alert-mag"{% if form.on_mag %} checked{% endif %}>
+          <label class="form-check-label mr-2" for="alert-mag">its latest detection</label>
+          <label class="sr-only" for="alert-mag-direction">Direction</label>
+          <select class="form-control form-control-sm mr-2" name="mag_direction" id="alert-mag-direction">
+            {% for value, label in direction_choices %}<option value="{{ value }}"{% if form.mag_direction == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+          <label class="sr-only" for="alert-mag-threshold">Magnitude</label>
+          <input class="form-control form-control-sm" style="width: 6rem" type="number" step="0.1" min="-5" max="35"
+                 name="mag_threshold" id="alert-mag-threshold" value="{{ form.mag_threshold }}" placeholder="18.5"> <span class="ml-1">mag</span>
+        </div>
+      </fieldset>
+
+      <fieldset class="mb-3">
+        <legend class="h6">How often</legend>
+        {% for value, label in frequency_choices %}
+        <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="frequency" value="{{ value }}" id="alert-frequency-{{ value }}"{% if form.frequency == value %} checked{% endif %}>
+          <label class="form-check-label" for="alert-frequency-{{ value }}">{{ label }}</label></div>
+        {% endfor %}
+      </fieldset>
+
+      <fieldset class="mb-3">
+        <legend class="h6">Who gets it</legend>
+        <div class="form-check"><input class="form-check-input" type="radio" name="target" value="me" id="alert-target-me"{% if form.target == 'me' %} checked{% endif %}>
+          <label class="form-check-label" for="alert-target-me">Me</label></div>
+        {% if teams %}
+        <div class="form-check"><input class="form-check-input" type="radio" name="target" value="team" id="alert-target-team"{% if form.target == 'team' %} checked{% endif %}>
+          <label class="form-check-label" for="alert-target-team">Everyone in a team I own (each person's own preferences apply)</label></div>
+        <div class="form-check form-inline"><input class="form-check-input" type="radio" name="target" value="slack" id="alert-target-slack"{% if form.target == 'slack' %} checked{% endif %}>
+          <label class="form-check-label mr-2" for="alert-target-slack">The team's Slack channel, id</label>
+          <input class="form-control form-control-sm" style="width: 9rem" type="text" name="slack_channel" maxlength="32" aria-label="Slack channel id"
+                 value="{{ form.slack_channel }}" placeholder="C0123ABCD">
+        </div>
+        <div class="form-inline mt-1">
+          <label class="mr-2" for="alert-team">Team</label>
+          <select class="form-control form-control-sm" name="team" id="alert-team">
+            {% for team in teams %}<option value="{{ team.pk }}"{% if form.team == team.pk|stringformat:'s' %} selected{% endif %}>{{ team.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <p class="small text-muted mb-0">Only a team's owners can alert the whole team. A Slack channel gets only what every member of the team may see.</p>
+        {% endif %}
+      </fieldset>
+
+      <div class="form-group">
+        <label for="alert-label">Name in the messages <span class="text-muted small">(optional)</span></label>
+        <input class="form-control form-control-sm" style="max-width: 24rem" type="text" name="label" id="alert-label" maxlength="120" value="{{ form.label }}" placeholder="{{ selection.name }}">
+      </div>
+
+      {% if estimate %}
+      <div class="alert alert-info py-2" id="selection-alert-estimate" role="status">
+        <strong>In the last {{ estimate.days }} days</strong> this alert would have found {{ estimate.total }} event{{ estimate.total|pluralize }}
+        ({% for label, n in estimate.event_labels %}{{ n }} {{ label }}{% if not forloop.last %}, {% endif %}{% endfor %})
+        among today's {{ estimate.matches }} match{{ estimate.matches|pluralize:"es" }}: about
+        <strong id="selection-alert-estimate-messages">{{ estimate.messages }}</strong> message{{ estimate.messages|pluralize }} ({{ estimate.frequency|lower }}).
+        Counted as you see the Selection now.
+      </div>
+      <input type="hidden" name="confirm" value="1">
+      <button type="submit" class="btn btn-primary btn-sm" id="selection-alert-save">Save alert</button>
+      <button type="submit" class="btn btn-outline-secondary btn-sm" name="confirm" value="0" id="selection-alert-reestimate">Estimate again</button>
+      {% else %}
+      <button type="submit" class="btn btn-primary btn-sm" id="selection-alert-estimate-button">Estimate volume</button>
+      {% endif %}
+      <a class="btn btn-link btn-sm" href="{% url 'selection_detail' selection.slug %}">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -24,7 +24,7 @@ from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
 from YSE_App import group_views
-from YSE_App import selection_views
+from YSE_App import selection_alert_views, selection_views
 from YSE_App import combined_list_views
 from YSE_App import bulk_followup_views
 from YSE_App.common import ui_preview as ui_preview_views
@@ -276,6 +276,14 @@ urlpatterns = [
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/edit/$', selection_views.selection_edit, name='selection_edit'),
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/delete/$', selection_views.selection_delete,
             name='selection_delete'),
+    # Alerts on Selections (#844); UI preview only.
+    re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/alert/$', selection_alert_views.selection_alert_new,
+            name='selection_alert_new'),
+    re_path(r'^selection-alerts/$', selection_alert_views.selection_alert_list, name='selection_alert_list'),
+    re_path(r'^selection-alerts/(?P<pk>[0-9]+)/edit/$', selection_alert_views.selection_alert_edit,
+            name='selection_alert_edit'),
+    re_path(r'^selection-alerts/(?P<pk>[0-9]+)/delete/$', selection_alert_views.selection_alert_delete,
+            name='selection_alert_delete'),
 
     re_path(r'^query_api/(?P<query_name>.*)/$',data_utils.query_api, name='query_api'),
     re_path(r'^change_status_for_query/(?P<query_id>[a-zA-Z0-9_-]+)/(?P<status_id>[a-zA-Z0-9_-]+)$',

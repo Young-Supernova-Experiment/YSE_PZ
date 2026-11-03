@@ -284,6 +284,9 @@ CRON_CLASSES = [
     # Scheduled SALT / Bazin refits (#846): queues one fits.refit_pass job a day;
     # no-op unless FIT_REFIT_ENABLED (see below).
     'YSE_App.data_ingest.Fit_Refit.FitRefit',
+    # Alerts on Selections (#844): queues one selection_alerts.run job every
+    # SELECTION_ALERTS_CRON_MINUTES; no-op unless SELECTION_ALERTS_ENABLED (see below).
+    'YSE_App.data_ingest.Selection_Alerts.SelectionAlerts',
     # Researcher metrics from SciX (#629): monthly; no-op unless
     # RESEARCHER_METRICS_ENABLED ([research] in settings.ini).
     'YSE_App.data_ingest.Researcher_Metrics.RefreshResearcherMetrics',
@@ -326,6 +329,16 @@ FIT_REFIT_ENABLED = _flag('YSE_FIT_REFIT', 'site_settings', 'FIT_REFIT_ENABLED',
 FIT_REFIT_CRON_MINUTES = config.getint('site_settings', 'FIT_REFIT_CRON_MINUTES', fallback=1440)
 FIT_REFIT_WINDOW_DAYS = config.getfloat('site_settings', 'FIT_REFIT_WINDOW_DAYS', fallback=7.0)
 FIT_REFIT_LIMIT = config.getint('site_settings', 'FIT_REFIT_LIMIT', fallback=200)
+
+# Alerts on Selections (#844; YSE_App/services/selection_alerts.py). Off by default:
+# [site_settings] SELECTION_ALERTS_ENABLED = True (or env YSE_SELECTION_ALERTS=1) lets the
+# SelectionAlerts cron queue a selection_alerts.run job every SELECTION_ALERTS_CRON_MINUTES (15).
+# The job compares each alert's Selection, evaluated as each recipient, with the last snapshot and
+# sends through the notification queue. A Selection with more than SELECTION_ALERTS_MAX_MATCHES
+# matches for a recipient is skipped (the alert shows why).
+SELECTION_ALERTS_ENABLED = _flag('YSE_SELECTION_ALERTS', 'site_settings', 'SELECTION_ALERTS_ENABLED', False)
+SELECTION_ALERTS_CRON_MINUTES = config.getint('site_settings', 'SELECTION_ALERTS_CRON_MINUTES', fallback=15)
+SELECTION_ALERTS_MAX_MATCHES = config.getint('site_settings', 'SELECTION_ALERTS_MAX_MATCHES', fallback=2000)
 
 # yse_home "Next Telescope Nights" lists classical observing dates up to this
 # many days ahead (#65). Optional env YSE_HOME_CLASSICAL_DAYS_AHEAD or

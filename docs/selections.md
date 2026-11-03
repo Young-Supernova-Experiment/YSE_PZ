@@ -72,4 +72,38 @@ A Selection's page has **Download -> Spectra / Photometry** with phase, instrume
 quality options (`docs/spectral-phase.md`). The search filters `spec_phase_min` / `spec_phase_max` /
 `spec_phase_ref` work in search Selections like every other filter.
 
-Server steps: none.
+## Alerts (#844, UI preview only; sending off by default)
+
+**Alert me** on a Selection's page sets an alert; **My alerts** (`selection-alerts/`) lists, edits and deletes them.
+Model: `SelectionAlert` and `SelectionAlertSnapshot` (migrations 0071 and 0072; every foreign key carries MySQL
+`ON DELETE CASCADE`). Code: `YSE_App/services/selection_alerts.py`.
+
+- **Triggers:** a new match, a new spectrum, a class change, and/or the latest good detection (any band)
+  becoming brighter than, or fading below, a magnitude.
+- **Recipients:** anyone can alert themselves. Only a team's owners (`GroupProfile.owners`; not deputies, not
+  staff) can alert the whole team (each member, owner and deputy, through their own preferences) or the team's
+  Slack channel (a channel id, posted by the site's Slack app). The service checks this when the alert is saved
+  and again on every run, so an alert stops (with a message on My alerts) when its owner stops owning the team.
+  No address outside YSE-PZ is ever added, so the external-email cap is not touched.
+- **Frequency:** immediately (every pass), or an hourly or daily digest: at most one message per hour or day
+  per alert and recipient. Default: daily.
+- **Delivery:** `notify()` with kind `selection_alert`, in the "Alerts" preference group, so each recipient's
+  in-app / email / Slack switches apply. One message per recipient per pass: an object that matched several
+  alerts is listed once, with the names of all of them.
+- **Access:** the Selection is evaluated as each recipient (`selection_queryset`), and spectra, photometry
+  points and classes are checked for that recipient, per point; a class counts only where the recipient may
+  see the object's data. A Slack channel gets only what every team member may see. An event waiting for a
+  digest is checked again before it is sent and dropped if the object no longer matches or the spectrum or
+  point is no longer visible. A Selection a recipient cannot view sends them nothing.
+- **Volume estimate:** before saving, the form shows what the alert would have found in the last 30 days, as
+  you see the Selection now (objects added, visible spectra added, recorded class changes, threshold
+  crossings), and the number of messages at the chosen frequency. Only "Save alert" after the estimate saves.
+- **The pass:** job kind `selection_alerts.run`, queued by the `SelectionAlerts` cron every
+  `SELECTION_ALERTS_CRON_MINUTES` (15) when `SELECTION_ALERTS_ENABLED` is on (default **off**: the cron and
+  the job do nothing). The first pass after an alert is set only records the baseline. A second pass right
+  after the first sends nothing; comparisons and deliveries lock their rows, so two runners never send an event
+  twice. Selections with more than `SELECTION_ALERTS_MAX_MATCHES` (2000) matches for a recipient are skipped.
+  Slack posts go through the `selection_alerts.slack` job.
+
+Server steps: none (flag off). Turning sending on is in `docs/ziggy-runbook.md`, "Alerts on Selections",
+when Ryan asks.
