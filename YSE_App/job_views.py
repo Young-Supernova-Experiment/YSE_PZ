@@ -32,8 +32,16 @@ def _status_context(limit=RECENT_LIMIT):
 @login_required
 @staff_member_required
 def jobs_status(request):
-    """HTML overview: counts per status, per kind, and the most recent jobs."""
-    return render(request, "YSE_App/jobs_status.html", _status_context())
+    """HTML overview: counts per status, per kind, and the most recent jobs.
+
+    With background exports on (#855), also the viewer's own exports with their download links.
+    """
+    from YSE_App.services import background_exports
+
+    context = _status_context()
+    if background_exports.enabled():
+        context["my_exports"] = background_exports.user_exports(request.user, limit=10)
+    return render(request, "YSE_App/jobs_status.html", context)
 
 
 @login_required

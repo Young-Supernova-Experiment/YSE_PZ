@@ -1,0 +1,35 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<section class="content-header">
+	<h1>Your exports</h1>
+</section>
+
+<section class="content">
+	<div class="box box-default box-solid" id="export-list">
+		<div class="box-body table-responsive p-0">
+			<table class="table table-sm table-hover mb-0">
+				<thead><tr><th>Job</th><th>Data</th><th>Format</th><th>Status</th><th>Requested (UTC)</th><th>Finished (UTC)</th><th>File</th></tr></thead>
+				<tbody>
+				{% for j in exports %}
+				<tr data-status="{{ j.status }}">
+					<td>{{ j.id }}</td>
+					<td>{{ j.export_payload.data }}</td>
+					<td>{{ j.export_payload.format }}</td>
+					<td>{{ j.status }}</td>
+					<td class="text-nowrap">{{ j.created_at|utcdate }}</td>
+					<td class="text-nowrap">{{ j.finished_at|utcdate|default:"" }}</td>
+					<td>{% if j.download_name %}<a href="{% url 'export_download' j.id %}" class="export-download">Download</a>{% elif j.status == 'done' %}<span class="text-muted">deleted after {{ retention_days }} days</span>{% elif j.status == 'failed' %}<span class="text-muted">could not be built</span>{% else %}<span class="text-muted">not ready yet</span>{% endif %}</td>
+				</tr>
+				{% empty %}
+				<tr><td colspan="7" class="text-muted">No exports yet.</td></tr>
+				{% endfor %}
+				</tbody>
+			</table>
+		</div>
+		<div class="box-footer small text-muted">
+			Downloads over the object limit run here in the background. Only you can download your files; they are deleted {{ retention_days }} days after they were written.
+		</div>
+	</div>
+</section>
+{% endblock %}

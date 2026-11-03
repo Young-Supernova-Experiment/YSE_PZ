@@ -25,6 +25,24 @@
 		</div>
 	</div>
 
+	{% if my_exports is not None %}
+	<div class="box box-default box-solid" id="jobs-my-exports">
+		<div class="box-header with-border"><strong>Your exports</strong> <small><a href="{% url 'export_list' %}">all</a></small></div>
+		<div class="box-body p-0">
+			<table class="table table-sm mb-0">
+				<tbody>
+				{% for j in my_exports %}
+				<tr data-status="{{ j.status }}"><td>{{ j.id }}</td><td>{{ j.export_payload.data }} ({{ j.export_payload.format }})</td><td>{{ j.status }}</td>
+					<td>{% if j.download_name %}<a href="{% url 'export_download' j.id %}" class="export-download">Download</a>{% endif %}</td></tr>
+				{% empty %}
+				<tr><td class="text-muted">No exports yet.</td></tr>
+				{% endfor %}
+				</tbody>
+			</table>
+		</div>
+	</div>
+	{% endif %}
+
 	<div class="row">
 		<div class="col-lg-4 col-12">
 			<div class="box box-default box-solid">

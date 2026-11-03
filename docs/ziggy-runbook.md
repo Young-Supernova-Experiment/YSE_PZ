@@ -18,7 +18,7 @@ A living checklist for David Jones, in the order things should happen. It replac
   - the **unconfirmed** production rows of section 5: `SECRET_KEY` and `[secrets] credentials_key`, the 3.10 / 3.21-3.23 / 3.26 mirrors, `rewrite_dashboard_queries`, the `AntaresLSST` crontab line, the #784 pull, the Slack events check;
   - the per-database backfill of the [visibility policy](#transient-visibility) (#607) and the one command per database for the viewer-scoped dashboard queries (#720);
   - the [TNS re-sync](#tns-resync) crontab line to remove, the `run_jobs` crontab line (#431), the [staff visibility](#staff-visibility) script-account check, and the [CasJobs rotation](#casjobs-credential) (#626).
-- **When Ryan asks** (do not start these during the freeze): [enable access rules on yse\_experimental](#enable-access-rules), [Open Supernova Catalog step 1](#osc-step1), the [spectra-as-arrays](#spectrum-arrays) test conversion, `clean_duplicate_data` (changelog v114), the [fit-table backfill and scheduled refits](#fit-tables), the [spectral-phase backfill](#spectral-phase), and the research export ([research consent](#research-consent)).
+- **When Ryan asks** (do not start these during the freeze): [enable access rules on yse\_experimental](#enable-access-rules), [Open Supernova Catalog step 1](#osc-step1), the [spectra-as-arrays](#spectrum-arrays) test conversion, `clean_duplicate_data` (changelog v114), the [fit-table backfill and scheduled refits](#fit-tables), the [spectral-phase backfill](#spectral-phase), [background exports](#background-exports), and the research export ([research consent](#research-consent)).
 
 **Done:** [#335](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/335) merged to `develop` (5da66de) and deployed green to yse\_test at 18:01 UTC; migrations `0010_dashboard_indexes` (18 min) through 0029 (#341 PhotStat 18:43 UTC to #386 broker streams) already applied on the shared `YSE_test` database, nothing on yse\_test to run for them; [#143](https://github.com/Young-Supernova-Experiment/YSE_PZ/pull/143) (develop to master) is conflict-free with 8/8 checks green and its body carries all 66 `Fixes` lines. (2026-09-29 state; #143 was merged and deployed on 2026-10-21, see the status paragraph below.)
 
@@ -1106,6 +1106,36 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_spectral_
 cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_spectral_phases --apply
 ```
 **Expected:** `N transient(s) with spectra: R phase row(s) written, 0 error(s)`. It replaces each transient's rows, so running it again is safe (and refreshes phases after redshift or discovery-date edits).
+
+<a id="background-exports"></a>
+### Background exports with no object cap (2026-11-02, #855): off by default; enable when Ryan asks, after the job runner is confirmed
+
+**What this is.** With `BACKGROUND_EXPORTS_ENABLED` on, a photometry or spectra download of more than 300 transients from a search or a Selection (preview layout) runs as an `exports.build` job instead of being refused. The job builds the file as the requesting user, writes it under `<MEDIA_ROOT>/exports/`, and sends that user an in-app notification with a link to `/jobs/exports/`. Only that user can download it. Files are deleted `EXPORT_RETENTION_DAYS` (default 7) after they are written. No migration, no new package. While the flag is off nothing changes: the caps and messages are the same as before. Docs: [docs/background-exports.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/background-exports.md).
+
+**Needs the job runner.** The `run_jobs` crontab line for the shared `YSE_test` database is **unconfirmed** (see the REQUIRED note on the job runner near the top of this runbook, #431): `/yse_test/jobs/status.json` showed queued jobs and none ever done. Without a runner, an export stays "queued" forever. So confirm the runner first:
+```bash
+cd /data/yse_pz/YSE_PZ_test && /data/yse_pz/yse_test_virtual/bin/python manage.py run_jobs --status
+crontab -l | grep -n "run_jobs\|runcrons"
+```
+**Expected:** the crontab shows a `run_jobs` (or `runcrons`) line for this stack, and `run_jobs --status` shows `done` jobs. If not, install the runner line from that note first.
+
+**E1. Directory (when Ryan asks).** `<MEDIA_ROOT>/exports/` must be writable by whatever runs `run_jobs` and readable by Apache (the download view reads it). It must **not** be served directly by Apache under `/media/`; the access-checked view serves it.
+```bash
+cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> -c "from django.conf import settings; print(settings.MEDIA_ROOT)"
+mkdir -p <MEDIA_ROOT>/exports && sudo chgrp www-data <MEDIA_ROOT>/exports && sudo chmod 2775 <MEDIA_ROOT>/exports
+```
+
+**E2. Turn it on (when Ryan asks; yse\_experimental first).** Add under the existing `[site_settings]` section of that stack's `YSE_PZ/settings.ini` (no second header), then restart Apache:
+```ini
+BACKGROUND_EXPORTS_ENABLED = True
+# optional; Ryan has not decided how long files are kept yet (default 7)
+EXPORT_RETENTION_DAYS = 7
+```
+**Check:** in the preview layout, Download -> Photometry on a search with more than 300 rows says the export runs in the background; `/yse_experimental/jobs/` lists an `exports.build` job as `done` after the next runner pass; the bell shows "Your photometry export ... is ready" and `/yse_experimental/jobs/exports/` has a Download link.
+
+**Large exports and the runner.** The cron pass (`run_jobs --budget 50`) does not stop a job that has started, so one large export can hold that pass for minutes. A `running` job locked longer than `JOB_RUNNER_STALE_MINUTES` (60) is put back on the queue. For exports of many thousands of transients, prefer the systemd worker in [docs/background-jobs.md](https://github.com/Young-Supernova-Experiment/YSE_PZ/blob/experimental/docs/background-jobs.md).
+
+**Retention.** Each export job deletes expired files before it starts. To clean up without new exports: `<EXP_PYTHON> manage.py prune_exports --dry-run`, then without `--dry-run`. **Undo:** remove the line and restart. Files already written are deleted by `prune_exports`.
 
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
@@ -3786,6 +3816,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-11-02 v122, **nothing required; when Ryan asks: background exports** (no migration, no package; server steps: none while the flag is off). Background-job exports with no object cap ([#855](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/855)): with `BACKGROUND_EXPORTS_ENABLED` (default False) a photometry or spectra download over the 300-object cap runs as an `exports.build` job, written under `<MEDIA_ROOT>/exports/`, downloadable only by the requester from `/jobs/exports/`, and deleted after `EXPORT_RETENTION_DAYS` (default 7; not decided yet). It needs the job runner, which is unconfirmed on the test stacks. Steps: [Background exports](#background-exports).
 * 2026-11-02 v121, **nothing required; when Ryan asks: spectral-phase backfill** (the deploy applies the migration; no new package). Computed spectral phase ([#848](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/848)): migrations `0069_spectrum_phase` and `0070_spectrum_phase_fk_on_delete` create one new table (`YSE_App_spectrumphase`) with `ON DELETE CASCADE` on its foreign keys to spectra and transients, safe on the shared `YSE_test` database. New spectra and new fits fill it; `manage.py backfill_spectral_phases --apply` fills it for existing spectra ([steps](#spectral-phase)). The search filter and Download -> Spectra / Photometry are UI preview only.
 * 2026-11-01 v120, **nothing required; when Ryan asks: fit-table backfill and scheduled refits** (the deploy applies the migration; no new package). SALT and Bazin fit tables ([#846](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/846)): migrations `0063_fit_tables` and `0064_fit_tables_fk_on_delete` create two new tables (`YSE_App_bazinfit`, `YSE_App_saltfit`) with `ON DELETE CASCADE` on their foreign keys to transients and runs, so develop's deletes on the shared `YSE_test` database still succeed. Every succeeded Bazin / SALT run writes its rows. `manage.py backfill_fit_tables` (dry run by default, `--apply`) and the scheduled refits (`FIT_REFIT_ENABLED`, default False; new `FitRefit` cron is a no-op while it is off) are in the section [SALT and Bazin fit tables](#fit-tables). The helper of 0062 moved to `YSE_App/common/fk_on_delete.py`.
 * 2026-11-01 v119, **nothing required** (the deploy applies the migration; no new package). Deletes on `/yse_test/` no longer fail on rows that only experimental knows about ([#941](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/941)): migration `0062_shared_db_fk_on_delete` runs automatically on the yse\_experimental deploy and changes only foreign-key constraints on the experimental-only tables created by 0056-0061 (spectrum arrays, catalogue tables, team deputies, duplicate decisions). They get MySQL `ON DELETE CASCADE` (or `ON DELETE SET NULL` for the duplicate decisions' `kept_*` columns), as their models declare, so a spectrum, host, transient, user or group deleted through develop's code takes these rows with it instead of failing with error 1451. No row, column or develop table changes; constraint names are kept. The PROTECT audit columns (`created_by`, `modified_by`) of the catalogue tables are unchanged.

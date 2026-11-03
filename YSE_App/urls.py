@@ -20,6 +20,7 @@ from YSE_App.integrations.slack.handlers import slack_events
 from YSE_App import auth_views as yse_auth_views
 from YSE_App import service_run_views
 from YSE_App import download_views
+from YSE_App import export_views
 from YSE_App import change_log_views
 from YSE_App import health_views
 from YSE_App import profile_views
@@ -482,6 +483,9 @@ urlpatterns = [
     # Background job queue (#263) and notifications (#266)
     re_path(r'^jobs/$', job_views.jobs_status, name='jobs_status'),
     re_path(r'^jobs/status\.json$', job_views.jobs_status_json, name='jobs_status_json'),
+    # Background exports (#855): the requesting user's export files (BACKGROUND_EXPORTS_ENABLED).
+    re_path(r'^jobs/exports/$', export_views.export_list, name='export_list'),
+    re_path(r'^jobs/exports/(?P<job_id>[0-9]+)/download/$', export_views.export_download, name='export_download'),
     re_path(r'^notifications/$', notification_views.notification_list, name='notification_list'),
     re_path(r'^notifications/unread_count\.json$', notification_views.notification_unread_count,
             name='notification_unread_count'),
