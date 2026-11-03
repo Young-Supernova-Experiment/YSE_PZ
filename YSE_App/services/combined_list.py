@@ -99,7 +99,7 @@ def default_choice(user):
     """The defaults: the viewer's own Selections and dashboard queries, 3 nights of requests, TNS."""
     from YSE_App.models import Selection, UserQuery
 
-    slugs = list(Selection.objects.filter(owner=user).exclude(kind=Selection.KIND_RULES)
+    slugs = list(Selection.objects.filter(owner=user)
                  .order_by('name', 'pk').values_list('slug', flat=True)[:MAX_CHOSEN])
     uqs = list(UserQuery.objects.filter(user=user)
                .filter(Q(query__isnull=False) | (Q(python_query__isnull=False) & ~Q(python_query='')))

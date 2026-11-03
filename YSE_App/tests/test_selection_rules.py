@@ -371,6 +371,26 @@ class PageTests(SearchFixture):
         sel.refresh_from_db()
         self.assertEqual(sel.rules, new)  # the outsider cannot edit it
 
+    def test_builder_and_repeat_follow_up_render_together(self):
+        # #853's "Repeat follow-up" control and the rule builder share the search and Selection pages.
+        self.assertEqual(reverse("rule_builder_check"), "/selections/rule-builder/check/")
+        self.assertEqual(reverse("rule_builder_save"), "/selections/rule-builder/save/")
+        self.assertTrue(reverse("bulk_repeat_followup"))
+        client = _client(self.user)
+        search = client.get("/search/").content.decode()
+        self.assertIn('id="rule-builder"', search)
+        self.assertIn('value="repeat_followup"', search)
+        sel = svc.create_selection(self.user, "both", kind=Selection.KIND_RULES, rules=self.TREE)
+        detail = client.get(reverse("selection_detail", kwargs={"slug": sel.slug})).content.decode()
+        self.assertIn('id="selection-rule-builder"', detail)
+        self.assertIn('class="yse-repeat-fu', detail)
+        self.assertIn('action="%s"' % reverse("bulk_repeat_followup"), detail)
+        self.assertEqual(html_script_problems(search), [])
+        self.assertEqual(html_script_problems(detail), [])
+        off = _client(self.user, preview=False).get("/search/").content.decode()
+        self.assertNotIn('id="rule-builder"', off)
+        self.assertNotIn('value="repeat_followup"', off)
+
     def test_search_selection_page_has_no_builder(self):
         sel = svc.create_selection(self.user, "plain", search_params="status=New")
         html = _client(self.user).get(reverse("selection_detail", kwargs={"slug": sel.slug})).content.decode()
