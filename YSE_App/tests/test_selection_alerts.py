@@ -71,7 +71,7 @@ class AlertFixture(TestCase):
         for user in (cls.owner, cls.deputy, cls.member):
             user.groups.add(cls.team)
         cls.owner.groups.add(cls.secret)
-        profile = GroupProfile.objects.create(group=cls.team)
+        profile, _ = GroupProfile.objects.get_or_create(group=cls.team)  # a signal may have made it
         profile.owners.add(cls.owner)
         profile.deputies.add(cls.deputy)
         for name in ("2099alra", "2099alrb"):  # TNS-style names: listed for everyone
