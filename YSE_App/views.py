@@ -2336,149 +2336,178 @@ def download_photometry(request, slug):
     else:
         user = request.user
 
-        
+
     # Streamed (#929): same text as before, written one point at a time; the per-point service call
     # decides which points of each visible set are included.
     from YSE_App.services import download_stream
 
     transient = Transient.objects.filter(slug=slug)
-    transient_fields = download_stream.serialized(transient)[0]['fields']
-    header = snana_header_comment_lines(transient_fields)
-
-    authorized_phot = list(PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient[0].id))
-    phot_sets = []
-    for p, head in zip(authorized_phot, download_stream.serialized(authorized_phot)):
-        telescope = head['fields']['instrument'].split(' - ')[0]
-        instrument = head['fields']['instrument'].split(' - ')[1]
-        phot_sets.append((p.id, telescope.replace(' ','_'), instrument.replace(' ','_')))
-
-    chunks = download_stream.snana_chunks(user, header, phot_sets)
+    chunks = snana_photometry_chunks(user, transient)
     response = StreamingHttpResponse(download_stream.buffered(chunks), content_type='text/plain')
     response['Content-Disposition'] = 'attachment; filename=%s' % '%s_data.snana.txt'%slug
 
     return response
 
-def bulk_photometry_zip_response(user, transients, options=None):
-    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284).
 
-    ``options`` (``services.download_options.PhotometryOptions``, #848) narrows the points: date or
-    phase range, bands, data-quality flags. Without it the output is as before.
+def snana_photometry_chunks(user, transient_qs, keep=None):
+    """Text chunks of one transient's SNANA file as ``user`` may see it (``download_photometry``).
+
+    ``transient_qs`` is a queryset whose first row is the transient. ``keep(fields)`` (optional,
+    #855) drops points that fail the download options; without it the file is as before.
     """
-    s = BytesIO()
-    archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
-    skipped = []  # (transient name, MJD, band, reason) for README.txt (#809)
-    if options is not None and not options.active:
-        options = None
-    n_left_out = 0
-    for transient in transients:
-        
-        content = ""
+    from YSE_App.services import download_stream
+
+    transient_fields = download_stream.serialized(transient_qs)[0]['fields']
+    header = snana_header_comment_lines(transient_fields)
+
+    authorized_phot = list(PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient_qs[0].id))
+    phot_sets = []
+    for p, head in zip(authorized_phot, download_stream.serialized(authorized_phot)):
+        telescope = head['fields']['instrument'].split(' - ')[0]
+        instrument = head['fields']['instrument'].split(' - ')[1]
+        phot_sets.append((p.id, telescope.replace(' ','_'), instrument.replace(' ','_')))
+    return download_stream.snana_chunks(user, header, phot_sets, keep=keep)
+
+
+BULK_PHOTOMETRY_COLUMNS = "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT,DQ\n"
+BULK_PHOTOMETRY_LINEFMT = "%.3f,%s,%.3f,%.3f,%.3f,%.3f,%s,%s,%s,%s\n"
+
+
+class BulkPhotometryExport:
+    """The bulk photometry export of ``user`` (#284, #809, #848), one transient at a time.
+
+    ``rows(transient)`` yields ``(mjd, flt, fluxcal, fluxcalerr, mag, magerr, magsys, telescope,
+    instrument, dq)`` for the points ``user`` may see that pass ``options``; the CSV zip
+    (``bulk_photometry_zip_response``) and the combined ECSV table of #855 are both written from it.
+    Points without a usable flux or magnitude are counted in ``skipped``, points outside the options
+    in ``n_left_out``.
+    """
+
+    def __init__(self, user, options=None):
+        self.user = user
+        self.options = options if (options is not None and options.active) else None
+        self.skipped = []  # (transient name, MJD, band, reason) for README.txt (#809)
+        self.n_left_out = 0
+
+    def header(self, transient):
+        from YSE_App.services.visibility import redact_transient_export_header_fields
+
+        fields = json.loads(serializers.serialize("json", Transient.objects.filter(name=transient.name), use_natural_foreign_keys=True))
+        header_fields = redact_transient_export_header_fields(fields[0]['fields'])
+        return "".join("# %s: %s\n" % (k.upper(), header_fields[k]) for k in header_fields.keys())
+
+    def rows(self, transient):
+        options = self.options
         epoch = None
         if options is not None and options.phase_range:
             from YSE_App.services.download_options import transient_reference
             epoch = transient_reference(transient, options.reference)
 
-        data = {transient.name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-        data[transient.name]['transient'] = json.loads(serializers.serialize("json", Transient.objects.filter(name=transient.name), use_natural_foreign_keys=True))
-        from YSE_App.services.visibility import redact_transient_export_header_fields
-
-        header_fields = redact_transient_export_header_fields(
-            data[transient.name]['transient'][0]['fields']
-        )
-        for k in header_fields.keys():
-            content += "# %s: %s\n"%(k.upper(),header_fields[k])
-
-        content += "\n"
-        content += "MJD,FLT,FLUXCAL,FLUXCALERR,MAG,MAGERR,MAGSYS,TELESCOPE,INSTRUMENT,DQ\n"
-        linefmt =  "%.3f,%s,%.3f,%.3f,%.3f,%.3f,%s,%s,%s,%s\n"
-
-
         # Get photometry by user & transient
-        authorized_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient.id)
-        if len(authorized_phot):
-            data[transient.name]['photometry'] = json.loads(serializers.serialize("json", authorized_phot,use_natural_foreign_keys=True))
+        authorized_phot = PhotometryService.GetAuthorizedTransientPhotometry_ByUser_ByTransient(self.user, transient.id)
+        if not len(authorized_phot):
+            return
+        photometry = json.loads(serializers.serialize("json", authorized_phot, use_natural_foreign_keys=True))
 
-            # Get data points
-            for p,pd in zip(authorized_phot,range(len(data[transient.name]['photometry']))):
+        # Get data points
+        for p, head in zip(authorized_phot, photometry):
 
-                telescope = data[transient.name]['photometry'][pd]['fields']['instrument'].split(' - ')[0]
-                instrument = data[transient.name]['photometry'][pd]['fields']['instrument'].split(' - ')[1]
+            telescope = head['fields']['instrument'].split(' - ')[0]
+            instrument = head['fields']['instrument'].split(' - ')[1]
 
-                photdata = PhotometryService.GetAuthorizedTransientPhotData_ByPhotometry(user, p.id, includeBadData=True).order_by('obs_date')
-                data[transient.name]['photometry'][pd]['data'] = json.loads(serializers.serialize("json", photdata, use_natural_foreign_keys=True))
+            photdata = PhotometryService.GetAuthorizedTransientPhotData_ByPhotometry(self.user, p.id, includeBadData=True).order_by('obs_date')
+            for d in json.loads(serializers.serialize("json", photdata, use_natural_foreign_keys=True)):
+                mjd = date_to_mjd(d['fields']['obs_date'])
+                # Data-quality flags by name; ";" because the file is comma-separated.
+                data_quality = ';'.join(str(q) for q in (d['fields'].get('data_quality') or []))
+                if options is not None:
+                    from YSE_App.services.spectral_phase import phase_days
+                    phase = phase_days(mjd, epoch[0], epoch[1]) if epoch is not None else None
+                    if not options.keeps(mjd, d['fields']['band'].split(' - ')[-1], data_quality, phase):
+                        self.n_left_out += 1
+                        continue
+                if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
+                    if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
+                    else: flux_err = 0
 
-                for d in data[transient.name]['photometry'][pd]['data']:
-                    mjd = date_to_mjd(d['fields']['obs_date'])
-                    # Data-quality flags by name; ";" because the file is comma-separated.
-                    data_quality = ';'.join(str(q) for q in (d['fields'].get('data_quality') or []))
-                    if options is not None:
-                        from YSE_App.services.spectral_phase import phase_days
-                        phase = phase_days(mjd, epoch[0], epoch[1]) if epoch is not None else None
-                        if not options.keeps(mjd, d['fields']['band'].split(' - ')[-1], data_quality, phase):
-                            n_left_out += 1
-                            continue
-                    if d['fields']['flux'] and d['fields']['flux_zero_point'] and not d['fields']['mag']:
-                        if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
-                        else: flux_err = 0
+                    flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
+                    flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
+                    mag = -2.5*np.log10(flux)+27.5
+                    mag_err = 2.5/np.log(10)*flux_err/flux
 
-                        flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                        flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                        mag = -2.5*np.log10(flux)+27.5
-                        mag_err = 2.5/np.log(10)*flux_err/flux
+                    yield (mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
-                        content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,mag,mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
+                elif not d['fields']['flux'] and d['fields']['mag']:
+                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
+                    else: mag_err = 0
 
-                    elif not d['fields']['flux'] and d['fields']['mag']:
-                        if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                        else: mag_err = 0
+                    flux = 10**(-0.4*(d['fields']['mag']-27.5))
+                    flux_err = 0.4*np.log(10)*flux*mag_err
 
-                        flux = 10**(-0.4*(d['fields']['mag']-27.5))
-                        flux_err = 0.4*np.log(10)*flux*mag_err
+                    yield (mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
-                        content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
+                elif d['fields']['flux'] and d['fields']['flux_zero_point'] and d['fields']['mag']:
+                    if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
+                    else: flux_err = 0
+                    if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
+                    else: mag_err = 0
 
-                    elif d['fields']['flux'] and d['fields']['flux_zero_point'] and d['fields']['mag']:
-                        if d['fields']['flux_err']: flux_err = d['fields']['flux_err']
-                        else: flux_err = 0
-                        if d['fields']['mag_err']: mag_err = d['fields']['mag_err']
-                        else: mag_err = 0
+                    flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
+                    flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
 
-                        flux = d['fields']['flux']*10**(0.4*(d['fields']['flux_zero_point']-27.5))
-                        flux_err = flux_err*10**(0.4*(d['fields']['flux_zero_point']-27.5))
+                    yield (mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
 
-                        content += linefmt%(
-                            mjd,d['fields']['band'].split(' - ')[1],flux,flux_err,d['fields']['mag'],mag_err,d['fields']['mag_sys'],telescope,instrument,data_quality)
-
-                    else:
-                        # Same points as before (#809); the reason says what is missing.
-                        if d['fields']['flux'] and not d['fields']['flux_zero_point']:
-                            if d['fields']['mag']:
-                                reason = 'flux without a flux zero point (magnitude present but not used with flux)'
-                            else:
-                                reason = 'flux without a flux zero point and no magnitude'
+                else:
+                    # Same points as before (#809); the reason says what is missing.
+                    if d['fields']['flux'] and not d['fields']['flux_zero_point']:
+                        if d['fields']['mag']:
+                            reason = 'flux without a flux zero point (magnitude present but not used with flux)'
                         else:
-                            reason = 'no flux and no magnitude'
-                        skipped.append((transient.name, mjd, d['fields']['band'].split(' - ')[-1], reason))
+                            reason = 'flux without a flux zero point and no magnitude'
+                    else:
+                        reason = 'no flux and no magnitude'
+                    self.skipped.append((transient.name, mjd, d['fields']['band'].split(' - ')[-1], reason))
 
-        archive.writestr('%s.csv'%transient.name,content)
+    def csv_content(self, transient):
+        """One transient's CSV in the zip: header lines, a blank line, the column names, the points."""
+        content = self.header(transient) + "\n" + BULK_PHOTOMETRY_COLUMNS
+        return content + "".join(BULK_PHOTOMETRY_LINEFMT % row for row in self.rows(transient))
 
-    readme = [
-        'YSE-PZ bulk photometry export',
-        '',
-        'One CSV per transient. Columns: MJD, FLT, FLUXCAL, FLUXCALERR, MAG, MAGERR, MAGSYS, TELESCOPE,',
-        'INSTRUMENT, DQ. FLUXCAL is in units with zero point 27.5. DQ lists the data-quality flags set on',
-        'the point, separated by ";" (empty: none). Flagged points are included, not removed.',
-        '',
-        'Points skipped (no usable flux, or flux without a flux zero point): %d' % len(skipped),
-    ]
-    for name, mjd, band, reason in skipped:
-        readme.append('%s  MJD %.3f  %s  %s' % (name, mjd, band, reason))
-    if options is not None:
-        readme += ['', 'Download options (points outside them are left out: %d)' % n_left_out]
-        readme += ['  ' + line for line in options.describe()]
-    archive.writestr('README.txt', '\n'.join(readme) + '\n')
+    def readme(self):
+        readme = [
+            'YSE-PZ bulk photometry export',
+            '',
+            'One CSV per transient. Columns: MJD, FLT, FLUXCAL, FLUXCALERR, MAG, MAGERR, MAGSYS, TELESCOPE,',
+            'INSTRUMENT, DQ. FLUXCAL is in units with zero point 27.5. DQ lists the data-quality flags set on',
+            'the point, separated by ";" (empty: none). Flagged points are included, not removed.',
+            '',
+            'Points skipped (no usable flux, or flux without a flux zero point): %d' % len(self.skipped),
+        ]
+        for name, mjd, band, reason in self.skipped:
+            readme.append('%s  MJD %.3f  %s  %s' % (name, mjd, band, reason))
+        if self.options is not None:
+            readme += ['', 'Download options (points outside them are left out: %d)' % self.n_left_out]
+            readme += ['  ' + line for line in self.options.describe()]
+        return '\n'.join(readme) + '\n'
+
+    def zip_entries(self, transients):
+        """``(name, content)`` members of the CSV zip, in order: one CSV per transient, then README.txt."""
+        for transient in transients:
+            yield '%s.csv' % transient.name, self.csv_content(transient)
+        yield 'README.txt', self.readme()
+
+
+def bulk_photometry_zip_response(user, transients, options=None):
+    """Zip of one photometry CSV per transient, limited to what ``user`` may see (shared with the search page, #284).
+
+    ``options`` (``services.download_options.PhotometryOptions``, #848) narrows the points: date or
+    phase range, bands, data-quality flags. Without it the output is as before. The members come
+    from ``BulkPhotometryExport.zip_entries`` (also used by the background export of #855).
+    """
+    s = BytesIO()
+    archive = zipfile.ZipFile(s, 'w', zipfile.ZIP_DEFLATED)
+    for name, content in BulkPhotometryExport(user, options).zip_entries(transients):
+        archive.writestr(name, content)
     archive.close()
     response = HttpResponse(s.getvalue(), content_type='application/x-zip-compressed')
     response['Content-Disposition'] = 'attachment; filename=YSEPZ_transient_photometry.zip'
@@ -3201,6 +3230,20 @@ def search_bulk_action(request):
         pks = list(filterset.qs.values_list('pk', flat=True)[:limit + 1])
     else:
         pks = [int(v) for v in request.POST.getlist('transient_id') if v.isdigit()][:limit + 1]
+    if len(pks) > limit and action == 'photometry' and ui_preview_enabled(request):
+        # Over the cap with background exports on (#855): queue the same zip as a job.
+        from YSE_App.services import background_exports
+
+        if background_exports.enabled():
+            if request.POST.get('select_all') in ('1', 'true', 'on'):
+                job = background_exports.request_export(
+                    request.user, data='photometry', fmt='csv', source='search', params=params.urlencode(),
+                    order_by='-disc_date')
+            else:
+                job = background_exports.request_export(
+                    request.user, data='photometry', fmt='csv', source='ids', order_by='-disc_date',
+                    ids=[int(v) for v in request.POST.getlist('transient_id') if v.isdigit()])
+            return _search_bulk_redirect(params, background_exports.queued_message(job))
     if len(pks) > limit:
         return _search_bulk_redirect(
             params, 'Too many rows for this action (limit %d); narrow the search first.' % limit)

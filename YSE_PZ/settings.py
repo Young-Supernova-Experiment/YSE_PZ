@@ -1335,6 +1335,12 @@ FAVORITE_SPECTRUM_DELAY_SECONDS = config.getint('site_settings', 'FAVORITE_SPECT
 NOTIFICATION_RETENTION_DAYS = config.getint('site_settings', 'NOTIFICATION_RETENTION_DAYS', fallback=90)
 NOTIFICATION_UNREAD_RETENTION_DAYS = config.getint('site_settings', 'NOTIFICATION_UNREAD_RETENTION_DAYS', fallback=365)
 JOB_RETENTION_DAYS = config.getint('site_settings', 'JOB_RETENTION_DAYS', fallback=30)
+# Background exports (#855; docs/background-exports.md): a photometry or spectra download over the
+# object cap runs as an `exports.build` job instead of being refused. Off by default: it needs the
+# job runner (`run_jobs`) on the stack. Files go to MEDIA_ROOT/exports/<job id>-<random>/ and are deleted
+# EXPORT_RETENTION_DAYS after they were written (`manage.py prune_exports`, also run by each job).
+BACKGROUND_EXPORTS_ENABLED = _flag('YSE_BACKGROUND_EXPORTS', 'site_settings', 'BACKGROUND_EXPORTS_ENABLED', False)
+EXPORT_RETENTION_DAYS = _int_setting('YSE_EXPORT_RETENTION_DAYS', 'site_settings', 'EXPORT_RETENTION_DAYS', 7)
 NOTIFICATION_PRUNE_CRON_ENABLED = config.getboolean('site_settings', 'NOTIFICATION_PRUNE_CRON_ENABLED', fallback=True)
 NOTIFICATION_PRUNE_CRON_MINUTES = config.getint('site_settings', 'NOTIFICATION_PRUNE_CRON_MINUTES', fallback=1440)
 

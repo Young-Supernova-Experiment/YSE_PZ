@@ -20,7 +20,7 @@ download_views.download_menu_context. GET forms: they read data, they change not
         <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
       </div>
       <div class="modal-body">
-        <p class="small text-muted">A zip with one CSV per spectrum you may see and a manifest (phase, reference and frame, redshift, instrument, S/N). At most {{ download_menu.cap }} transients.</p>
+        <p class="small text-muted">A zip with one CSV per spectrum you may see and a manifest (phase, reference and frame, redshift, instrument, S/N). {% if download_menu.background_exports %}More than {{ download_menu.cap }} transients run as a background job: you get a notification with the link, and the file is kept for {{ download_menu.retention_days }} days.{% else %}At most {{ download_menu.cap }} transients.{% endif %}</p>
         <div class="form-group">
           <label for="download-spectra-ref">Phase reference</label>
           <select class="form-control form-control-sm" id="download-spectra-ref" name="phase_ref">
@@ -64,7 +64,13 @@ download_views.download_menu_context. GET forms: they read data, they change not
         <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
       </div>
       <div class="modal-body">
-        <p class="small text-muted">A zip with one CSV per transient (the bulk photometry format) of the points you may see. At most {{ download_menu.cap }} transients.</p>
+        <p class="small text-muted">The points you may see, in the format below. {% if download_menu.background_exports %}More than {{ download_menu.cap }} transients run as a background job: you get a notification with the link, and the file is kept for {{ download_menu.retention_days }} days.{% else %}At most {{ download_menu.cap }} transients.{% endif %}</p>
+        <div class="form-group">
+          <label for="download-phot-format">Format</label>
+          <select class="form-control form-control-sm" id="download-phot-format" name="format">
+            {% for key, label in download_menu.photometry_formats %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+          </select>
+        </div>
         <div class="form-row">
           <div class="form-group col">
             <label for="download-phot-mjd-min">MJD from</label>
@@ -101,7 +107,7 @@ download_views.download_menu_context. GET forms: they read data, they change not
         </div>
       </div>
       <div class="modal-footer">
-        <button type="submit" class="btn btn-primary btn-sm" id="download-photometry-submit">Download zip</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="download-photometry-submit">Download</button>
       </div>
     </form>
   </div>

@@ -198,11 +198,12 @@ def snana_obs_line(fields, telescope, instrument):
     return None
 
 
-def snana_chunks(user, header, phot_sets):
+def snana_chunks(user, header, phot_sets, keep=None):
     """Text chunks of the ``download_photometry`` SNANA file.
 
     ``header`` is the comment block; ``phot_sets`` is ``[(set id, telescope, instrument), ...]`` for the
     sets ``user`` may see. Each set's points come from the per-point service call, by observation date.
+    ``keep(fields)`` (optional; the download options of #855) leaves out the points it returns False for.
     """
     yield header
     yield "\n"
@@ -212,6 +213,8 @@ def snana_chunks(user, header, phot_sets):
         if photdata is None:
             continue
         for row in serialized_rows(photdata.order_by('obs_date')):
+            if keep is not None and not keep(row['fields']):
+                continue
             line = snana_obs_line(row['fields'], telescope, instrument)
             if line is not None:
                 yield line
