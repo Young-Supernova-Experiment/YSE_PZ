@@ -19,6 +19,7 @@
 <style>
   .yse-search-chip { display: inline-block; margin: 0 .35rem .35rem 0; padding: .15rem .5rem; border-radius: 1rem; font-size: .85rem; background: rgba(60,141,188,.15); border: 1px solid rgba(60,141,188,.5); }
 </style>
+{% if rule_builder %}<link rel="stylesheet" href="{% static 'YSE_App/rule-builder.css' %}?v=rule-builder-1">{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -54,6 +55,7 @@
     {% if can_edit %}
     <div id="selection-edit" class="mt-2" hidden>
       {% include 'YSE_App/selections/edit_form.html' with selection=selection next='detail' %}
+      {% if rule_builder %}<div class="mt-3" id="selection-rule-builder">{% include 'YSE_App/selections/rule_builder.html' with builder=rule_builder %}</div>{% endif %}
     </div>
     {% endif %}
   </div>
@@ -96,4 +98,5 @@ $(function() {
 });
 </script>
 <script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+{% if rule_builder %}<script src="{% static 'YSE_App/rule-builder.js' %}?v=rule-builder-1"></script>{% endif %}
 {% endblock %}

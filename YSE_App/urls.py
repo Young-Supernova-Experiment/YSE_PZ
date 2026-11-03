@@ -270,6 +270,8 @@ urlpatterns = [
     re_path(r'^combined-list/$', combined_list_views.combined_list, name='combined_list'),
     re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),
     re_path(r'^selections/save/$', selection_views.selection_save, name='selection_save'),
+    re_path(r'^selections/rule-builder/check/$', selection_views.rule_builder_check, name='rule_builder_check'),
+    re_path(r'^selections/rule-builder/save/$', selection_views.rule_builder_save, name='rule_builder_save'),
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/$', selection_views.selection_detail, name='selection_detail'),
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/edit/$', selection_views.selection_edit, name='selection_edit'),
     re_path(r'^selections/(?P<slug>[-a-zA-Z0-9_]+)/delete/$', selection_views.selection_delete,

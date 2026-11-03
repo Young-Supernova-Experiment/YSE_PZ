@@ -6,6 +6,9 @@
 * ``GET selections/<slug>/``: a Selection's results, as the search table, with list stepping
   into the transient page (#850, source ``sel``) and "Observable tonight" (#854).
 * ``POST selections/<slug>/edit/`` and ``POST selections/<slug>/delete/``.
+* The rule builder (#843): ``POST selections/rule-builder/check/`` (count, summary and "View as
+  SQL" for a rule tree, as JSON) and ``POST selections/rule-builder/save/`` ("Save as Selection").
+  It renders in the search page's facet sidebar and on a rule Selection's edit panel.
 
 Users without the preview get 404 on every page here; the REST endpoint
 (``/api/selections/``) is not a page and is not gated.
@@ -15,9 +18,10 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpResponseRedirect, QueryDict
+from django.http import Http404, HttpResponseRedirect, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils.cache import add_never_cache_headers
 from django.views.decorators.http import require_GET, require_POST
 from django_tables2 import RequestConfig
 
@@ -190,6 +194,8 @@ def selection_detail(request, slug):
         'download_menu': download_menu_context(
             reverse('selection_download_spectra', kwargs={'slug': selection.slug}),
             reverse('selection_download_photometry', kwargs={'slug': selection.slug})),
+        'rule_builder': (rule_builder_context(request, selection.rules, mode='edit', selection=selection)
+                         if selection.kind == Selection.KIND_RULES and svc.can_edit(request.user, selection) else None),
     })
 
 
@@ -215,6 +221,8 @@ def selection_edit(request, slug):
         changes['team'] = request.POST.get('team', '')
     if 'description' in request.POST:
         changes['description'] = request.POST.get('description', '')
+    if 'rules' in request.POST:  # the rule builder (#843)
+        changes['rules'] = request.POST.get('rules', '')
     try:
         svc.update_selection(request.user, selection, **changes)
     except svc.SelectionAccessError as exc:
@@ -239,3 +247,127 @@ def selection_delete(request, slug):
     selection.delete()
     messages.success(request, 'Deleted the Selection "%s".' % name)
     return HttpResponseRedirect(reverse('selection_list'))
+
+
+# --------------------------------------------------------------------------- rule builder (#843)
+
+def _field_descriptor(rule_field, choices_cache):
+    from YSE_App.services import selection_rules as rules_svc
+
+    if rule_field.key not in choices_cache:
+        choices_cache[rule_field.key] = rules_svc.field_choices(rule_field)
+    return {
+        'key': rule_field.key, 'label': rule_field.label, 'kind': rule_field.kind, 'unit': rule_field.unit,
+        'help': rule_field.help, 'operators': [(op.key, op.label) for op in rule_field.operators],
+        'choices': choices_cache[rule_field.key],
+    }
+
+
+def _view_tree(node, descriptors, depth=1):
+    """The template's view of a (cleaned) rule tree: groups with depth, rules with their field descriptor."""
+    from YSE_App.services.selection_rules import MAX_DEPTH
+
+    children = []
+    for child in node.get('rules', []):
+        if 'rules' in child:
+            children.append(_view_tree(child, descriptors, depth + 1))
+        else:
+            value = child.get('value')
+            children.append({
+                'is_group': False, 'field': child['field'], 'operator': child['operator'],
+                'value': value if isinstance(value, list) else str(value),
+                'values': value if isinstance(value, list) else [str(value)],
+                'rf': descriptors.get(child['field']),
+            })
+    return {'is_group': True, 'op': node.get('op', 'and'), 'children': children, 'depth': depth,
+            'can_nest': depth < MAX_DEPTH}
+
+
+def rule_builder_context(request, tree=None, *, mode='save', selection=None, search_params=''):
+    """Context of ``selections/rule_builder.html``.
+
+    ``mode='save'`` (search sidebar): "Save as Selection" with a name and sharing.
+    ``mode='edit'`` (a rule Selection's edit panel): "Save rules" on ``selection``.
+    A saved tree that no longer validates opens empty, with the reason shown.
+    """
+    from YSE_App.services import selection_rules as rules_svc
+
+    error = ''
+    try:
+        cleaned = rules_svc.clean_rules(tree) if tree else rules_svc.empty_tree()
+    except svc.SelectionError as exc:
+        cleaned, error = rules_svc.empty_tree(), str(exc)
+    choices_cache = {}
+    groups = [(title, [_field_descriptor(f, choices_cache) for f in fields])
+              for title, fields in rules_svc.RULE_FIELD_GROUPS]
+    descriptors = {d['key']: d for _title, fields in groups for d in fields}
+    if mode == 'edit':
+        action = reverse('selection_edit', kwargs={'slug': selection.slug})
+    else:
+        action = reverse('rule_builder_save')
+    return {
+        'mode': mode,
+        'tree': _view_tree(cleaned, descriptors),
+        'new_group': {'is_group': True, 'op': 'and', 'children': [], 'depth': 2,
+                      'can_nest': 2 < rules_svc.MAX_DEPTH},
+        'field_groups': groups,
+        'fields': [d for _title, fields in groups for d in fields],
+        'max_depth': rules_svc.MAX_DEPTH,
+        'max_rules': rules_svc.MAX_RULES,
+        'action': action,
+        'check_url': reverse('rule_builder_check'),
+        'selection': selection,
+        'search_params': search_params,
+        'teams': svc.team_choices(request.user) if mode == 'save' else [],
+        'error': error,
+    }
+
+
+@login_required
+@require_POST
+def rule_builder_check(request):
+    """A rule tree's summary, match count and the SQL Django runs for it, as JSON (read-only).
+
+    Fields: ``rules`` (JSON). ``sql=1`` adds the SQL; ``count=1`` the number of matches for
+    the requesting user. Errors come back as ``{"ok": false, "error": ...}``.
+    """
+    _require_preview(request)
+    from YSE_App.services import selection_rules as rules_svc
+
+    try:
+        tree = rules_svc.clean_rules(request.POST.get('rules', ''))
+        payload = {'ok': True, 'summary': rules_svc.describe_rules(tree), 'rules': tree}
+        if request.POST.get('sql') == '1':
+            _sql, params, display = rules_svc.rules_sql(tree, request.user)
+            payload['sql'] = display
+            payload['param_count'] = len(params)
+        if request.POST.get('count') == '1':
+            payload['count'] = rules_svc.rules_queryset(tree, request.user).count()
+    except svc.SelectionError as exc:
+        payload = {'ok': False, 'error': str(exc)}
+    response = JsonResponse(payload)
+    add_never_cache_headers(response)
+    return response
+
+
+@login_required
+@require_POST
+def rule_builder_save(request):
+    """"Save as Selection" from the rule builder: a ``rules`` Selection, then its page.
+
+    Fields: ``name``, ``visibility``, ``team``, ``description``, ``rules`` (JSON) and ``params``
+    (the search page's query string, to go back to it with ``selection_error`` on failure).
+    """
+    _require_preview(request)
+    try:
+        selection = svc.create_selection(
+            request.user, request.POST.get('name', ''), kind=Selection.KIND_RULES,
+            visibility=request.POST.get('visibility', Selection.VISIBILITY_ME),
+            team=request.POST.get('team', ''), rules=request.POST.get('rules', ''),
+            description=request.POST.get('description', ''))
+    except svc.SelectionError as exc:
+        back = QueryDict(svc.normalize_search_params(request.POST.get('params', '')), mutable=True)
+        back['selection_error'] = str(exc)
+        return HttpResponseRedirect('%s?%s' % (reverse('search'), back.urlencode()))
+    messages.success(request, 'Saved the Selection "%s".' % selection.name)
+    return HttpResponseRedirect(reverse('selection_detail', kwargs={'slug': selection.slug}))

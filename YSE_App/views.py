@@ -2949,6 +2949,7 @@ class SearchResultsView(TemplateView):
         context['obs_tonight'] = self._obs_tonight_context(filterset, context['result_count'])
         context['selection_save'] = self._selection_save_context(filterset)
         context['search_facets'] = self._facets_context(filterset, params)
+        context['rule_builder'] = self._rule_builder_context(params)
         context['download_menu'] = self._download_menu_context(params, preview)
         return context
 
@@ -2970,6 +2971,16 @@ class SearchResultsView(TemplateView):
             return None
         counts = facet_counts(filterset, self.request.user, params)
         return build_facets(counts, params)
+
+    def _rule_builder_context(self, params):
+        """The rule builder (#843) in the facet sidebar, UI preview only; not for the partial reload."""
+        from YSE_App.common.ui_preview import ui_preview_enabled
+
+        if not ui_preview_enabled(self.request) or self.request.headers.get(SEARCH_PARTIAL_HEADER) == 'search':
+            return None
+        from YSE_App.selection_views import rule_builder_context
+
+        return rule_builder_context(self.request, mode='save', search_params=self._bulk_params(params))
 
     def get(self, request, *args, **kwargs):
         """The page; with ``X-YSE-Partial: search`` (preview only) the parts a facet click changes, as JSON."""
