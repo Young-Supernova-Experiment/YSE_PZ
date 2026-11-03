@@ -64,6 +64,7 @@
     </select>
     <button type="button" class="btn btn-primary btn-sm yse-dash-bulk-apply" disabled>Apply to selected</button>
     <span class="yse-dash-bulk-msg"></span>
+    {% load repeat_followup %}{% repeat_followup_control id_selector=".yse-dash-select" scope="#yse-dash2 .yse-dash-panel:not([hidden])" %}
   </div>
 
   <ul class="nav nav-tabs yse-dash-tabs" role="tablist">

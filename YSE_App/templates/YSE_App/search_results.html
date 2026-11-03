@@ -115,6 +115,7 @@
         <option value="status">Set status</option>
         <option value="add_tag">Add tag</option>
         <option value="photometry">Download photometry (zip)</option>
+        {% if ui_preview %}<option value="repeat_followup">Repeat follow-up…</option>{% endif %}
       </select>
       <select name="status_id" id="search-bulk-status" class="form-control form-control-sm mr-2" style="display:none">
         {% for st in all_transient_statuses %}<option value="{{ st.id }}" title="{{ st.name|status_title }}">{{ st.name|status_label }}</option>{% endfor %}
@@ -253,7 +254,8 @@ $(function() {
     var n = $('.search-select-row:checked').length;
     if (!action) { event.preventDefault(); alert('Choose an action first.'); return; }
     if (!all && n === 0) { event.preventDefault(); alert('Tick at least one row, or choose "All matches".'); return; }
-    if (action !== 'photometry') {
+    // Repeat follow-up has its own review page, so no confirmation here (#853).
+    if (action !== 'photometry' && action !== 'repeat_followup') {
       var what = all ? 'every match of this search' : (n + ' selected transient(s)');
       if (!window.confirm('Apply "' + $('#search-bulk-action option:selected').text() + '" to ' + what + '?')) {
         event.preventDefault();

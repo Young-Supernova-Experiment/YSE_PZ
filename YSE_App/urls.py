@@ -26,6 +26,7 @@ from YSE_App import profile_views
 from YSE_App import group_views
 from YSE_App import selection_views
 from YSE_App import combined_list_views
+from YSE_App import bulk_followup_views
 from YSE_App.common import ui_preview as ui_preview_views
 from YSE_App import signup_views
 from YSE_App import access_views
@@ -268,6 +269,7 @@ urlpatterns = [
             download_views.selection_download_photometry, name='selection_download_photometry'),
     # Selections (#841): saved criteria shared by owner, team or all YSE; pages are UI preview only.
     re_path(r'^combined-list/$', combined_list_views.combined_list, name='combined_list'),
+    re_path(r'^followup/repeat/$', bulk_followup_views.repeat_followup, name='bulk_repeat_followup'),
     re_path(r'^selections/$', selection_views.selection_list, name='selection_list'),
     re_path(r'^selections/save/$', selection_views.selection_save, name='selection_save'),
     re_path(r'^selections/rule-builder/check/$', selection_views.rule_builder_check, name='rule_builder_check'),
