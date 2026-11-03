@@ -221,8 +221,13 @@ def get_field(key):
     return _BY_KEY.get(key)
 
 
-def field_choices(rule_field):
-    """``[(value, label)]`` a ``choice`` or ``bool`` field offers (from the search filter's own form field)."""
+def field_choices(rule_field, user=None, keep=()):
+    """``[(value, label)]`` a ``choice`` or ``bool`` field offers (from the search filter's own form field).
+
+    With ``user``, tags are only those on transients ``user`` may see listed (as in the facet
+    sidebar, so a tag used only on hidden objects is not shown), plus the values in ``keep``
+    (a saved rule's own values, which its viewers can read in the criteria anyway).
+    """
     if rule_field.kind == 'bool':
         return list(BOOL_CHOICES)
     if rule_field.kind != 'choice':
@@ -230,7 +235,17 @@ def field_choices(rule_field):
     from YSE_App.filters.transient_search import TransientSearchFilterSet
 
     form_field = TransientSearchFilterSet().form.fields[rule_field.choices_from]
-    return [(str(value), str(label)) for value, label in form_field.choices if str(value) != '']
+    choices = [(str(value), str(label)) for value, label in form_field.choices if str(value) != '']
+    if rule_field.key == 'tags' and user is not None:
+        from YSE_App.services.visibility import filter_listed_transients
+
+        through = Transient.tags.through
+        listed = filter_listed_transients(user, Transient.objects.all()).values('pk')
+        seen = set(through.objects.filter(transient_id__in=listed)
+                   .values_list('transienttag__name', flat=True).distinct())
+        seen.update(keep)
+        choices = [(value, label) for value, label in choices if value in seen]
+    return choices
 
 
 def empty_tree():

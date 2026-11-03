@@ -251,11 +251,24 @@ def selection_delete(request, slug):
 
 # --------------------------------------------------------------------------- rule builder (#843)
 
-def _field_descriptor(rule_field, choices_cache):
+def _saved_values(node, key):
+    """Values the rules of ``node`` (a cleaned tree) give field ``key``."""
+    out = set()
+    for child in node.get('rules', []):
+        if 'rules' in child:
+            out |= _saved_values(child, key)
+        elif child.get('field') == key:
+            value = child.get('value')
+            out.update(value if isinstance(value, list) else [value])
+    return out
+
+
+def _field_descriptor(rule_field, choices_cache, user=None, tree=None):
     from YSE_App.services import selection_rules as rules_svc
 
     if rule_field.key not in choices_cache:
-        choices_cache[rule_field.key] = rules_svc.field_choices(rule_field)
+        keep = _saved_values(tree, rule_field.key) if tree else ()
+        choices_cache[rule_field.key] = rules_svc.field_choices(rule_field, user=user, keep=keep)
     return {
         'key': rule_field.key, 'label': rule_field.label, 'kind': rule_field.kind, 'unit': rule_field.unit,
         'help': rule_field.help, 'operators': [(op.key, op.label) for op in rule_field.operators],
@@ -298,7 +311,7 @@ def rule_builder_context(request, tree=None, *, mode='save', selection=None, sea
     except svc.SelectionError as exc:
         cleaned, error = rules_svc.empty_tree(), str(exc)
     choices_cache = {}
-    groups = [(title, [_field_descriptor(f, choices_cache) for f in fields])
+    groups = [(title, [_field_descriptor(f, choices_cache, request.user, cleaned) for f in fields])
               for title, fields in rules_svc.RULE_FIELD_GROUPS]
     descriptors = {d['key']: d for _title, fields in groups for d in fields}
     if mode == 'edit':

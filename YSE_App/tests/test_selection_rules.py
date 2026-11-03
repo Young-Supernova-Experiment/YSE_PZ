@@ -176,6 +176,18 @@ class VisibilityTests(SearchFixture):
                     count = rules_svc.rules_queryset(tree, viewer).count()
                     self.assertEqual(count, len(rows))
 
+    def test_tag_options_are_only_tags_on_listed_transients(self):
+        from YSE_App.models import TransientTag, WebAppColor
+
+        color = WebAppColor.objects.first()
+        TransientTag.objects.create(name="rule-unused-tag", color=color, **self.audit)
+        tags = rules_svc.get_field("tags")
+        offered = dict(rules_svc.field_choices(tags, user=self.outsider))
+        self.assertNotIn("rule-unused-tag", offered)
+        self.assertIn("young", offered)  # on 2026sea, listed for everyone
+        kept = dict(rules_svc.field_choices(tags, user=self.outsider, keep={"rule-unused-tag"}))
+        self.assertIn("rule-unused-tag", kept)  # a saved rule's own value stays selectable
+
     def test_private_selection_is_not_compiled_for_others(self):
         sel = svc.create_selection(self.member, "mine", kind=Selection.KIND_RULES, rules=group("and"))
         with self.assertRaises(svc.SelectionAccessError):
