@@ -1,0 +1,11 @@
+{% comment %}One rule row (#843). Context: rule (view-tree rule, or nothing for a new row), field_groups.{% endcomment %}
+<li class="yse-rule-row" role="group" aria-label="Rule">
+  <div class="yse-rule-inputs">
+    <select class="form-control form-control-sm yse-rule-field" aria-label="Field">
+      <option value="">Choose a field…</option>
+      {% for title, fields in field_groups %}<optgroup label="{{ title }}">{% for rf in fields %}<option value="{{ rf.key }}"{% if rule and rf.key == rule.field %} selected{% endif %}>{{ rf.label }}</option>{% endfor %}</optgroup>{% endfor %}
+    </select>
+    <span class="yse-rule-controls">{% if rule and rule.rf %}{% include 'YSE_App/selections/_rule_controls.html' with rf=rule.rf rule=rule %}{% endif %}</span>
+  </div>
+  <button type="button" class="btn btn-outline-secondary btn-sm yse-rule-remove" aria-label="Remove this rule" title="Remove this rule"><i class="fa fa-times" aria-hidden="true"></i></button>
+</li>

@@ -170,6 +170,15 @@ class SourceTests(CombinedListBase):
         clamped = comb.parse_choice(QueryDict("src=1&nights=999&uq=x&tag=-3"), self.viewer)
         self.assertEqual((clamped.nights, clamped.user_queries, clamped.tags), (comb.MAX_NIGHTS, [], []))
 
+    def test_rule_selections_are_in_the_defaults(self):
+        # Rule Selections compile since #843, so they are default sources like the other kinds.
+        rules = sel_svc.create_selection(self.viewer, "zz rules", kind=Selection.KIND_RULES,
+                                     rules={"op": "and", "rules": []})
+        choice = comb.parse_choice(QueryDict(""), self.viewer)
+        self.assertIn(rules.slug, choice.selections)
+        sources = comb.build_sources(self.viewer, choice)
+        self.assertTrue(any(s.queryset is not None and not s.error for s in sources if rules.name in s.label))
+
     def test_nothing_is_stored(self):
         before = {m: m.objects.count() for m in (Selection, UserQuery, TransientTag, TransientFollowup)}
         client = Client()

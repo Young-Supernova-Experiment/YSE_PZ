@@ -28,6 +28,7 @@
   .yse-search-actions .form-group { margin-right: .75rem; }
 </style>
 {% if ui_preview %}<link rel="stylesheet" href="{% static 'YSE_App/search-facets.css' %}?v=search-facets-2">{% endif %}
+{% if rule_builder %}<link rel="stylesheet" href="{% static 'YSE_App/rule-builder.css' %}?v=rule-builder-1">{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -298,4 +299,5 @@ $(function() {
 </script>
 {% if ui_preview %}<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
 <script src="{% static 'YSE_App/search-facets.js' %}?v=search-facets-2"></script>{% endif %}
+{% if rule_builder %}<script src="{% static 'YSE_App/rule-builder.js' %}?v=rule-builder-1"></script>{% endif %}
 {% endblock %}

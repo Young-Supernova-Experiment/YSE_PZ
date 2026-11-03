@@ -1,0 +1,21 @@
+{% comment %}Operator and value of one rule (#843). Context: rf (field descriptor), rule (or nothing for a new row).{% endcomment %}
+<select class="form-control form-control-sm yse-rule-operator" aria-label="Comparison for {{ rf.label }}">
+  {% for key, label in rf.operators %}<option value="{{ key }}"{% if rule and key == rule.operator %} selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+{% if rf.kind == 'choice' %}
+<select class="form-control form-control-sm yse-rule-value" multiple size="4" aria-label="Values for {{ rf.label }}">
+  {% for value, label in rf.choices %}<option value="{{ value }}"{% if rule and value in rule.values %} selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+{% elif rf.kind == 'bool' %}
+<select class="form-control form-control-sm yse-rule-value" aria-label="Value for {{ rf.label }}">
+  {% for value, label in rf.choices %}<option value="{{ value }}"{% if rule and value == rule.value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+{% elif rf.kind == 'date' %}
+<input type="date" class="form-control form-control-sm yse-rule-value" aria-label="Date for {{ rf.label }}"{% if rule %} value="{{ rule.value }}"{% endif %}>
+{% elif rf.kind == 'text' %}
+<input type="text" class="form-control form-control-sm yse-rule-value" maxlength="200" aria-label="Text for {{ rf.label }}"{% if rule %} value="{{ rule.value }}"{% endif %}>
+{% else %}
+<input type="number" step="any"{% if rf.kind == 'days' %} min="0"{% endif %} class="form-control form-control-sm yse-rule-value" aria-label="Number for {{ rf.label }}{% if rf.unit %} ({{ rf.unit }}){% endif %}"{% if rule %} value="{{ rule.value }}"{% endif %}>
+{% endif %}
+{% if rf.unit %}<span class="yse-rule-unit small text-muted">{{ rf.unit }}</span>{% endif %}
+{% if rf.help %}<span class="yse-rule-help small text-muted">{{ rf.help }}</span>{% endif %}

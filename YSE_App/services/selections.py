@@ -55,7 +55,7 @@ __all__ = [
 NAME_MAX_LENGTH = 200
 SLUG_BASE_MAX_LENGTH = 70
 #: Slugs that would collide with the pages under ``selections/``.
-RESERVED_SLUGS = frozenset({'save'})
+RESERVED_SLUGS = frozenset({'save', 'rule-builder'})
 
 #: Search page parameters that are page state, not criteria (paging, sorting, messages).
 SEARCH_STATE_KEYS = ('page', 'per_page', 'sort', 'saved_query', 'saved_user_query', 'save_error',
@@ -264,9 +264,11 @@ def create_selection(owner, name, *, kind=Selection.KIND_SEARCH, visibility=Sele
             raise SelectionError('Unknown built-in list "%s".' % python_query)
         fields['python_query'] = python_query
     elif kind == Selection.KIND_RULES:
-        if not isinstance(rules, (dict, list)):
+        from YSE_App.services.selection_rules import clean_rules
+
+        if not isinstance(rules, (dict, list, str)):
             raise SelectionError('A rule-based Selection needs a rule tree.')
-        fields['rules'] = rules
+        fields['rules'] = clean_rules(rules)
     else:
         raise SelectionError('Unknown kind of Selection.')
     if user_query is not None and user_query.user_id != owner.pk:
@@ -295,7 +297,7 @@ _UNSET = object()
 
 
 def update_selection(user, selection, *, name=_UNSET, visibility=_UNSET, team=_UNSET, description=_UNSET,
-                     search_params=_UNSET):
+                     search_params=_UNSET, rules=_UNSET):
     """Change ``selection`` as ``user`` (who must be allowed to edit it). The slug never changes."""
     if not can_edit(user, selection):
         raise SelectionAccessError('You cannot edit this Selection.')
@@ -324,6 +326,12 @@ def update_selection(user, selection, *, name=_UNSET, visibility=_UNSET, team=_U
         params = normalize_search_params(search_params)
         _search_filterset(params, user, Transient.objects.none())
         selection.search_params = params
+    if rules is not _UNSET:
+        if selection.kind != Selection.KIND_RULES:
+            raise SelectionError('Only rule Selections have rules.')
+        from YSE_App.services.selection_rules import clean_rules
+
+        selection.rules = clean_rules(rules)
     selection.modified_by = user
     selection.save()
     return selection
@@ -394,7 +402,7 @@ def selection_queryset(selection, user):
 
     Raises :class:`SelectionAccessError` when ``user`` may not view the Selection and
     :class:`SelectionError` when its criteria cannot be compiled (for example a rule
-    tree before #843, a deleted Explorer query, or SQL the dashboards refuse for ``user``).
+    rule tree, a deleted Explorer query, or SQL the dashboards refuse for ``user``).
     """
     from YSE_App.services.visibility import filter_listed_transients
 
@@ -402,7 +410,7 @@ def selection_queryset(selection, user):
         raise SelectionAccessError('You cannot see this Selection.')
     compiler = _COMPILERS.get(selection.kind)
     if compiler is None:
-        raise SelectionError('Selections of kind "%s" cannot be listed yet.' % selection.get_kind_display())
+        raise SelectionError('Selections of kind "%s" cannot be listed.' % selection.get_kind_display())
     return filter_listed_transients(user, compiler(selection, user))
 
 
@@ -419,4 +427,10 @@ def criteria_summary(selection, user=None):
         return [('SQL query', selection.query.title if selection.query_id else '(deleted)')]
     if selection.kind == Selection.KIND_FUNCTION:
         return [('Built-in list', selection.python_query.replace('_', ' '))]
-    return [('Rules', 'rule tree (not listable yet)')]
+    from YSE_App.services.selection_rules import describe_rules
+
+    return [('Rules', describe_rules(selection.rules))]
+
+
+# The rule-tree compiler (#843) registers itself for kind 'rules' when imported.
+from YSE_App.services import selection_rules as _selection_rules  # noqa: E402,F401

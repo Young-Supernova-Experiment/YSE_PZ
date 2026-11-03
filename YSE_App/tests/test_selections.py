@@ -135,12 +135,15 @@ class SharingTests(TestCase):
         with self.assertRaises(svc.SelectionError):
             svc.create_selection(self.owner, "", search_params="")
 
-    def test_rules_kind_is_stored_but_not_listed_yet(self):
-        sel = svc.create_selection(self.owner, "rules", kind=Selection.KIND_RULES, rules={"all": []})
+    def test_rules_kind_is_stored_and_compiled(self):
+        # The rule-tree compiler comes with #843 (tests in test_selection_rules.py).
+        tree = {"op": "and", "rules": [{"field": "has_host", "operator": "is", "value": "true"}]}
+        sel = svc.create_selection(self.owner, "rules", kind=Selection.KIND_RULES, rules=tree)
         sel.refresh_from_db()
-        self.assertEqual(sel.rules, {"all": []})
+        self.assertEqual(sel.rules, tree)
+        self.assertEqual(list(svc.selection_queryset(sel, self.owner)), [])
         with self.assertRaises(svc.SelectionError):
-            svc.selection_queryset(sel, self.owner)
+            svc.create_selection(self.owner, "bad rules", kind=Selection.KIND_RULES, rules={"all": []})
 
 
 class CompilerMatchesSearchTests(SearchFixture):
