@@ -264,6 +264,7 @@ Archives (only when an archive has data), GW (GW candidates only), History.
 {% block scripts %}
     {{ block.super }}
     <script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+    <script src="{% static 'YSE_App/fit-subset.js' %}?v=subset-fits-1"></script>
     <script>
     /* Preview layout (#856, #851). Handlers are delegated on document, so fragments that
        load later are covered. Nothing here scores, ranks or hides evidence. */

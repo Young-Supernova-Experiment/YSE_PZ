@@ -5,7 +5,7 @@
 		<div class="card-tools"><button type="button" class="btn btn-tool" data-card-widget="collapse"><i class="fa fa-minus"></i></button></div>
 	</div>
 	<div class="card-body">
-		<p class="text-muted small">Every Bazin and SALT fit kept, newest first. Default values elsewhere come from the newest full fit (marked <span class="badge badge-primary">current</span>); the Bazin peak is the default reference epoch, SALT t₀ the alternative.</p>
+		<p class="text-muted small">Every Bazin and SALT fit kept, newest first. Default values elsewhere come from the newest full fit (marked <span class="badge badge-primary">current</span>), never from a <span class="badge badge-secondary">subset</span> fit; the Bazin peak is the default reference epoch, SALT t₀ the alternative.</p>
 		{% if fit_history.bazin %}
 		<h5>Bazin</h5>
 		<div class="table-responsive">
@@ -24,7 +24,8 @@
 					<td rowspan="{{ entry.rows|length }}" class="text-nowrap">{{ row.fit_date|utcdate|default:"-" }}
 						{% if entry.current %}<span class="badge badge-primary">current</span>{% endif %}
 						{% if row.is_subset %}<span class="badge badge-secondary" title="Fit to part of the light curve; never the default">subset</span>{% endif %}
-						{% if entry.run.request_payload.scheduled_refit %}<span class="badge badge-light" title="{{ entry.run.request_payload.refit_reason }}">scheduled</span>{% endif %}</td>
+						{% if entry.run.request_payload.scheduled_refit %}<span class="badge badge-light" title="{{ entry.run.request_payload.refit_reason }}">scheduled</span>{% endif %}
+						{% include "YSE_App/transient_detail/fit_subset_line_v2.html" %}</td>
 					<td rowspan="{{ entry.rows|length }}">{{ entry.run.created_by.username|default:"-" }}</td>
 					{% endif %}
 					<td>{% if row.is_reference_band %}<strong title="Reference band">{{ row.band }}</strong>{% else %}{{ row.band }}{% endif %}</td>
@@ -57,7 +58,8 @@
 					<td class="text-nowrap">{{ row.fit_date|utcdate|default:"-" }}
 						{% if entry.current %}<span class="badge badge-primary">current</span>{% endif %}
 						{% if row.is_subset %}<span class="badge badge-secondary" title="Fit to part of the light curve; never the default">subset</span>{% endif %}
-						{% if row.run.request_payload.scheduled_refit %}<span class="badge badge-light" title="{{ row.run.request_payload.refit_reason }}">scheduled</span>{% endif %}</td>
+						{% if row.run.request_payload.scheduled_refit %}<span class="badge badge-light" title="{{ row.run.request_payload.refit_reason }}">scheduled</span>{% endif %}
+						{% include "YSE_App/transient_detail/fit_subset_line_v2.html" %}</td>
 					<td>{{ row.run.created_by.username|default:"-" }}</td>
 					<td>{{ row.model }}{% if row.model_version %} v{{ row.model_version }}{% endif %}</td>
 					<td>{{ row.t0|fit_value:row.t0_err }}</td>

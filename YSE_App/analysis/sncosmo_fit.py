@@ -41,6 +41,7 @@ from YSE_App.analysis.base import (
 from YSE_App.analysis.bazin_fit import rest_frame_phase
 from YSE_App.services import bazin
 from YSE_App.services.analysis_payload import detections
+from YSE_App.services.fit_subset import as_of_mjd
 
 NAME = "SALT3 light-curve fit (sncosmo)"
 DESCRIPTION = ("Fits an sncosmo model (SALT3 by default) to the visible photometry; "
@@ -163,7 +164,7 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
     cov = result.covariance
     cov_list = np.asarray(cov, dtype=float).tolist() if cov is not None else None
     t0 = values.get("t0")
-    today = _today_mjd()
+    today = as_of_mjd(params, _today_mjd())  # a subset cut at a date: "today" is that date (#847)
     bands_used = sorted(set(str(b) for b in data["band"]))
 
     version = getattr(getattr(model, "source", None), "version", None)

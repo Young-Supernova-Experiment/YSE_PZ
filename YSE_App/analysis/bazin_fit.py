@@ -30,6 +30,7 @@ from YSE_App.analysis.base import AnalysisError, AnalysisResult, band_colors, cl
 from YSE_App.common.filter_display import band_effective_wavelength
 from YSE_App.services import bazin
 from YSE_App.services.analysis_payload import detections
+from YSE_App.services.fit_subset import as_of_mjd
 
 NAME = "Bazin light-curve fit"
 DESCRIPTION = ("Joint Bazin fit of every band (rise/fall time scales tied across neighbouring filters) "
@@ -102,7 +103,7 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
 
     if not ref_band or ref_band not in fits:
         ref_band = max(fits, key=lambda b: (fits[b].n_points, -wavelengths.get(b, 0.0)))
-    today = _today_mjd()
+    today = as_of_mjd(params, _today_mjd())  # a subset cut at a date: "today" is that date (#847)
     last_mjd = max(f.mjd_max for f in fits.values())
     extrap_mjd = last_mjd + extrapolate_days
 
