@@ -69,6 +69,7 @@
     {% else %}
     {% load observable_tonight %}
     {% observable_tonight_control id_selector=".search-select-row" scope="#selection-results" blocked=obs_blocked %}
+    {% load repeat_followup %}<div class="mb-2">{% repeat_followup_control id_selector=".search-select-row" scope="#selection-results" %}</div>
     {# links into a transient keep this Selection (#850): source "sel", the slug as the list tab #}
     <div data-yse-list-source="sel" data-yse-list-tab="{{ selection.slug }}" data-yse-list-query="{{ list_query }}">
     {% render_table table %}

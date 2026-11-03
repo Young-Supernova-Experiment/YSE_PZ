@@ -99,6 +99,7 @@ with "Why it's here". Stores nothing: the sources are in the URL, and the browse
   <div class="box-body">
     {% load observable_tonight %}
     {% observable_tonight_control id_selector=".search-select-row" scope="#combined-results" blocked=obs_blocked %}
+    {% load repeat_followup %}<div class="mb-2">{% repeat_followup_control id_selector=".search-select-row" scope="#combined-results" %}</div>
     {# links into a transient keep this list (#850): source "comb", the sources and page in the list query #}
     <div data-yse-list-source="comb" data-yse-list-query="{{ list_query }}">
     {% render_table table %}

@@ -3151,7 +3151,8 @@ def _search_bulk_redirect(params, message):
 def search_bulk_action(request):
     """POST from the search page: act on the selected rows, or on every row the search matches (#287, #284).
 
-    Fields: ``action`` (``status``, ``add_tag`` or ``photometry``), ``status_id`` / ``tag_id``
+    Fields: ``action`` (``status``, ``add_tag``, ``photometry``, or for preview users
+    ``repeat_followup``, which shows the review page of #853), ``status_id`` / ``tag_id``
     for the first two, ``params`` (the search's query string) and either one
     ``transient_id`` per ticked row or ``select_all=1`` for every match of
     ``params``. Needs POST and the CSRF token (the global middleware). Only
@@ -3168,7 +3169,11 @@ def search_bulk_action(request):
     for key in _SEARCH_STATE_KEYS:
         params.pop(key, None)
     action = request.POST.get('action', '')
-    if action not in ('status', 'add_tag', 'photometry'):
+    actions = ('status', 'add_tag', 'photometry')
+    if ui_preview_enabled(request):
+        # Repeat follow-up (#853): a review page first, for preview users only.
+        actions += ('repeat_followup',)
+    if action not in actions:
         return _search_bulk_redirect(params, 'Choose an action first.')
 
     status_obj = tag_obj = None
@@ -3184,6 +3189,10 @@ def search_bulk_action(request):
             return _search_bulk_redirect(params, 'Choose a tag first.')
 
     limit = SEARCH_BULK_PHOTOMETRY_MAX_ROWS if action == 'photometry' else SEARCH_BULK_MAX_ROWS
+    if action == 'repeat_followup':
+        from YSE_App import bulk_followup_views
+
+        limit = bulk_followup_views.MAX_OBJECTS
     if request.POST.get('select_all') in ('1', 'true', 'on'):
         filterset = TransientSearchFilterSet(
             quick_search_params(params), queryset=Transient.objects.all(), request=request)
@@ -3201,6 +3210,9 @@ def search_bulk_action(request):
     rows = filter_listed_transients(request.user, Transient.objects.filter(pk__in=pks))
     visible_pks = list(rows.values_list('pk', flat=True))
 
+    if action == 'repeat_followup':
+        # Unlisted ids are counted as skipped there, without their names.
+        return bulk_followup_views.render_review(request, pks, '%s?%s' % (reverse('search'), params.urlencode()))
     if action == 'photometry':
         return bulk_photometry_zip_response(
             request.user, Transient.objects.filter(pk__in=visible_pks).order_by('-disc_date'))
