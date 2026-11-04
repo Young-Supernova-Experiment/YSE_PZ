@@ -202,6 +202,9 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Deny-by-default login check with a public allowlist (#496); see
+    # YSE_App/login_required.py and LOGIN_REQUIRED_MIDDLEWARE below.
+    'YSE_App.login_required.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     # Onboarding gate (#630): accept the User Agreement, then complete the
     # profile. ONBOARDING_GATE_ENABLED below; exemptions in YSE_App/onboarding.py.
@@ -211,6 +214,15 @@ MIDDLEWARE = [
     'auditlog.middleware.AuditlogMiddleware',
     #'django.middleware.cache.FetchFromCacheMiddleware'
 ]
+
+# LoginRequiredMiddleware (#496) is on by default. Rollback switch only: set
+# [site_settings] LOGIN_REQUIRED_MIDDLEWARE = False in settings.ini, or the
+# YSE_LOGIN_REQUIRED_MIDDLEWARE=0 env var (the env var wins), to turn it off.
+_login_required_env = os.environ.get('YSE_LOGIN_REQUIRED_MIDDLEWARE', '').strip().lower()
+if _login_required_env:
+    LOGIN_REQUIRED_MIDDLEWARE = _login_required_env not in ('0', 'false', 'no', 'off')
+else:
+    LOGIN_REQUIRED_MIDDLEWARE = config.getboolean('site_settings', 'LOGIN_REQUIRED_MIDDLEWARE', fallback=True)
 
 #CACHE_MIDDLEWARE_ALIAS = 'default'
 #CACHE_MIDDLEWARE_SECONDS = 600
@@ -343,6 +355,43 @@ EXPLORER_QUERY_CACHE_SECONDS = int(
     or config.getint('site_settings', 'EXPLORER_QUERY_CACHE_SECONDS', fallback=3600)
 )
 
+# Saved Explorer queries /query_api/<title>/ serves to accounts without SQL
+# Explorer access (#524). The built-in titles are the ones the crons and
+# scripts in YSE_App/data_ingest, yse_utils and util request. Owners may always
+# call their own queries; Explorer users and service accounts may call any.
+# [site_settings] QUERY_API_ALLOWED_QUERIES (or env YSE_QUERY_API_ALLOWED_QUERIES)
+# adds titles: one per line, or separated by '|'.
+QUERY_API_DEFAULT_ALLOWED_QUERIES = (
+    'YSE forced photometry for non-YSE, non-Antares transients',  # data_ingest/QUB_data.py
+    'DECAT_transients_mags',  # data_ingest/DECam_upload.py, DECam_upload_clusters.py
+    'all_yse_transients',  # util/ and yse_utils/get_YSE_PAs.py
+    'yse_transients_goodcell',  # util/ and yse_utils/get_YSE_PAs.py
+)
+
+
+def _title_list(raw):
+    return [t.strip() for t in (raw or '').replace('|', '\n').split('\n') if t.strip()]
+
+
+QUERY_API_ALLOWED_QUERIES = list(QUERY_API_DEFAULT_ALLOWED_QUERIES) + _title_list(
+    os.environ.get('YSE_QUERY_API_ALLOWED_QUERIES', '')
+    or config.get('site_settings', 'QUERY_API_ALLOWED_QUERIES', fallback='')
+)
+# The [main] dblogin account the ingest crons use (a username, not a secret):
+# a service account for /query_api/, which sees every row.
+API_SERVICE_USERNAMES = [
+    name for name in (config.get('main', 'dblogin', fallback='').strip(),)
+    if name and not name.startswith('<')
+]
+# Rows of /query_api/ results are limited to transients the caller may view,
+# except for staff, superusers and service accounts (#524). Default True;
+# env YSE_QUERY_API_VISIBILITY_FILTER=0 (or [site_settings] False) turns it off.
+_qavf = os.environ.get('YSE_QUERY_API_VISIBILITY_FILTER', '').strip()
+QUERY_API_VISIBILITY_FILTER = (
+    _qavf != '0' if _qavf
+    else config.getboolean('site_settings', 'QUERY_API_VISIBILITY_FILTER', fallback=True)
+)
+
 # Cache warmer cron (YSE_App.data_ingest.Dashboard_Cache_Warm): re-run every
 # dashboard saved query on a schedule so no browser triggers a cold run.
 # Off unless [site_settings] DASHBOARD_CACHE_WARM_ENABLED is True (or the
@@ -421,10 +470,10 @@ EXPLORER_SQL_BLACKLIST = (
 ) + _PERSONAL_DATA_TABLES
 
 REST_FRAMEWORK = {
-    # Use Django's standard `django.contrib.auth` permissions,
-    # or allow read-only access for unauthenticated users.
+    # Every viewset sets its own permission classes; the default only covers
+    # views that do not (API root, schema): never anonymous reads.
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
+        'rest_framework.permissions.IsAuthenticated'
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
        'rest_framework.authentication.BasicAuthentication',

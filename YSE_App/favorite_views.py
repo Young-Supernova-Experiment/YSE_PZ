@@ -64,7 +64,7 @@ def favorite_ids(request):
 def _favorites_table(request, per_page=50):
     from YSE_App.table_utils import FavoriteTransientTable
 
-    table = FavoriteTransientTable(svc.favorites_for_user(request.user), prefix="fav-")
+    table = FavoriteTransientTable(svc.favorites_for_user(request.user), prefix="fav-", viewer=request.user)
     RequestConfig(request, paginate={"per_page": per_page}).configure(table)
     return table
 

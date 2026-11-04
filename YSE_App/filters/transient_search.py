@@ -291,8 +291,10 @@ def _rows_visible_to(qs, user):
     """Restrict grouped rows (photometry / spectra) to what ``user`` may see."""
     if user is None or user.is_staff or user.is_superuser:
         return qs
+    from YSE_App.services.visibility import dataset_group_q
+
     names = list(user.groups.values_list('name', flat=True)) if user.is_authenticated else []
-    return qs.filter(Q(groups__isnull=True) | Q(groups__name__in=names))
+    return qs.filter(dataset_group_q(qs.model, user, names=names))
 
 
 class UtcNowMinusSeconds(Func):
@@ -377,8 +379,32 @@ class StableOrderingFilter(django_filters.OrderingFilter):
         if not value or not any(v for v in value):
             return qs
         ordering = [self.get_ordering_value(v) for v in value if v]
+        qs, ordering = _viewer_safe_ordering(qs, ordering, getattr(getattr(self.parent, 'request', None), 'user', None))
         tie = '-pk' if ordering and ordering[0].startswith('-') else 'pk'
         return qs.order_by(*ordering, tie)
+
+
+def _viewer_safe_ordering(qs, ordering, user):
+    """Order by stored photometry statistics only where ``user`` sees all of the transient's photometry.
+
+    The statistics are computed from every point, so a transient with
+    photometry hidden from ``user`` sorts as if it had no value (NULL).
+    """
+    from YSE_App.services.visibility import null_if_hidden_photometry
+
+    safe = []
+    for o in ordering:
+        field = o.lstrip('-')
+        if field.startswith('photstat__'):
+            alias = '_viewer_' + field.replace('__', '_')
+            qs = qs.annotate(**{alias: null_if_hidden_photometry(user, F(field))})
+            o = o[:len(o) - len(field)] + alias
+        safe.append(o)
+    return qs, safe
+
+
+# Filters on values computed from all of a transient's photometry (``TransientPhotStat``).
+DERIVED_PHOTOMETRY_FILTERS = ('days_since_last_det_max',)
 
 
 class AnyBooleanWidget(filter_widgets.BooleanWidget):
@@ -615,9 +641,23 @@ class TransientSearchFilterSet(django_filters.FilterSet):
             return True
         return any(o.lstrip('-') == 'gal_b' for o in (cleaned.get('ordering') or []) if o)
 
+    def _uses_derived_photometry(self, cleaned):
+        """True when a filter on a stored photometry statistic is active."""
+        for name, flt in self.filters.items():
+            derived = name in DERIVED_PHOTOMETRY_FILTERS or (getattr(flt, 'field_name', None) or '').startswith('photstat__')
+            if derived and cleaned.get(name) not in (None, '', [], ()):
+                return True
+        return False
+
     def filter_queryset(self, queryset):
         cone = self.cone
         cleaned = self.form.cleaned_data
+        if self._uses_derived_photometry(cleaned):
+            # The statistics come from all points: a transient with photometry hidden
+            # from the user never matches (else the filter is an oracle on hidden data).
+            from YSE_App.services.visibility import exclude_hidden_photometry
+
+            queryset = exclude_hidden_photometry(queryset, getattr(self.request, 'user', None))
         ordering = [o for o in (cleaned.get('ordering') or []) if o]
         wanted = {o.lstrip('-') for o in ordering}
         if cone is not None:

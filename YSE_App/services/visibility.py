@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Iterable, List, Optional, Set, Union
 
 from django.contrib.auth.models import Group, User
-from django.db.models import Count, Exists, OuterRef, Q, QuerySet
+from django.db.models import Case, Count, Exists, OuterRef, Q, QuerySet, Value, When
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 
@@ -34,13 +34,16 @@ def group_access_plot_cache_token(user: User) -> str:
 
     if not user.is_authenticated:
         return "anon"
-    if user.is_staff or user.is_superuser:
-        return "staff"
+    # Staff see data by group like everyone else (``dataset_group_q`` has no
+    # staff exemption), so their token carries their groups too.
+    prefix = "staff" if (user.is_staff or user.is_superuser) else ""
+    if is_service_reader(user):
+        prefix += "svc"
     names = sorted(user_group_names(user))
     if not names:
-        return "nogroups"
+        return f"{prefix}nogroups"
     digest = hashlib.sha256("|".join(names).encode()).hexdigest()[:12]
-    return f"g{digest}"
+    return f"{prefix}g{digest}"
 
 
 # Backward-compatible alias (deprecated name).
@@ -53,6 +56,131 @@ def get_user_group_query(user: User):
     no_group = Q(groups__isnull=True)
     contains_group = Q(groups__name__in=names)
     return no_group, contains_group
+
+
+# Data (photometry sets and spectra, transient and host) use a stricter group
+# rule than observing resources (``get_user_group_query``):
+#
+# * ``Public`` shows a dataset only when it is the dataset's only group. A set
+#   that also carries a team group (for example TNS points merged into the YSE
+#   set of the same instrument and observation group) stays with that team;
+#   with the plain rule every member of ``Public``, i.e. every user, saw it.
+# * A dataset of the ``YSE`` observation group without a team group is YSE
+#   data that was never labelled: only members of the ``YSE`` group see it.
+YSE_COLLABORATION_GROUP_NAME = "YSE"
+YSE_OBSERVATION_GROUP_NAME = "YSE"
+
+
+def _open_dataset_q(model, names: Iterable[str]) -> Q:
+    """Rows of ``model`` that are open data for a user with group ``names``.
+
+    Open data has no group other than ``Public`` (``Public`` alone counts
+    only for its members) and, for a user outside ``YSE``, is not unlabelled
+    YSE data.
+    """
+    names = set(names)
+    links = model.groups.through.objects.filter(**{model._meta.model_name + "_id": OuterRef("pk")})
+    if PUBLIC_COLLABORATION_GROUP_NAME in names:
+        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
+    q = Q(~Exists(links))
+    if YSE_COLLABORATION_GROUP_NAME not in names:
+        q &= ~Q(obs_group__name=YSE_OBSERVATION_GROUP_NAME)
+    return q
+
+
+def dataset_group_q(model, user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """The group rule for data rows of ``model``: open data, or a team group the user is in.
+
+    Joins ``groups``, so querysets filtered with it need ``.distinct()``.
+    """
+    names = user_group_names(user) if names is None else list(names)
+    team_names = [n for n in names if n != PUBLIC_COLLABORATION_GROUP_NAME]
+    return _open_dataset_q(model, names) | Q(groups__name__in=team_names)
+
+
+def is_service_reader(user) -> bool:
+    """A cron or script account that reads all data: active, authenticated and named in
+    ``settings.API_SERVICE_USERNAMES`` (the ``[main] dblogin`` ingest account). No query."""
+    if user is None or not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
+        return False
+    from django.conf import settings
+
+    return getattr(user, "username", None) in set(getattr(settings, "API_SERVICE_USERNAMES", ()) or ())
+
+
+def hidden_photometry_exists(user: User, transient_ref: str = "pk", names: Optional[Iterable[str]] = None) -> Q:
+    """Condition: the transient at ``OuterRef(transient_ref)`` has photometry ``user`` may not see.
+
+    Values derived from all of a transient's photometry (latest and peak
+    magnitudes, ``TransientPhotStat``, the stored summary, fits) are shown to a
+    viewer only when this is false; otherwise they are blank, never the
+    all-data values. Service readers never have hidden photometry.
+    """
+    from YSE_App.models import TransientPhotometry
+
+    on_transient = TransientPhotometry.objects.filter(transient_id=OuterRef(transient_ref))
+    if is_service_reader(user):
+        return Q(Exists(on_transient.none()))
+    if names is None:
+        names = user_group_names(user) if getattr(user, "is_authenticated", False) else []
+    visible = TransientPhotometry.objects.filter(dataset_group_q(TransientPhotometry, user, names=names)).values("pk")
+    return Q(Exists(on_transient.exclude(pk__in=visible)))
+
+
+def transients_with_hidden_photometry(
+    user: User, transient_ids: Iterable[int], names: Optional[Iterable[str]] = None
+) -> Set[int]:
+    """The ids among ``transient_ids`` with photometry ``user`` may not see (one query)."""
+    ids = {int(t) for t in transient_ids if t is not None}
+    if not ids or is_service_reader(user):
+        return set()
+    from YSE_App.models import Transient
+
+    return set(
+        Transient.objects.filter(pk__in=ids).filter(hidden_photometry_exists(user, names=names)).values_list("pk", flat=True)
+    )
+
+
+def user_has_hidden_photometry(user: User, transient_id: int) -> bool:
+    return bool(transients_with_hidden_photometry(user, [transient_id]))
+
+
+def visible_photometry_ids(user: User, names: Optional[Iterable[str]] = None):
+    """Subquery of the ``TransientPhotometry`` pks ``user`` may see, or None (service readers: all).
+
+    For computing derived values (latest magnitude, last date) per viewer:
+    ``TransientPhotData.objects.filter(photometry_id__in=visible_photometry_ids(user))``.
+    """
+    if is_service_reader(user):
+        return None
+    from YSE_App.models import TransientPhotometry
+
+    if names is None:
+        names = user_group_names(user) if getattr(user, "is_authenticated", False) else []
+    return TransientPhotometry.objects.filter(dataset_group_q(TransientPhotometry, user, names=names)).values("pk")
+
+
+def null_if_hidden_photometry(user: User, expression, transient_ref: str = "pk", output_field=None,
+                              names: Optional[Iterable[str]] = None):
+    """``expression``, or NULL where the transient at ``transient_ref`` has photometry hidden from ``user``.
+
+    For annotations, sorts and filters on values derived from all of a
+    transient's photometry (``TransientPhotStat`` fields and the like).
+    """
+    if is_service_reader(user):
+        return expression
+    return Case(
+        When(hidden_photometry_exists(user, transient_ref, names=names), then=Value(None)),
+        default=expression,
+        output_field=output_field,
+    )
+
+
+def exclude_hidden_photometry(queryset: QuerySet, user: User, transient_ref: str = "pk") -> QuerySet:
+    """``queryset`` without rows whose transient (at ``transient_ref``) has photometry hidden from ``user``."""
+    if is_service_reader(user):
+        return queryset
+    return queryset.exclude(hidden_photometry_exists(user, transient_ref))
 
 
 def object_has_groups(obj) -> bool:

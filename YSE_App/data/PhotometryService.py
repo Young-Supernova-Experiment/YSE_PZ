@@ -1,31 +1,27 @@
 from YSE_App.models import *
 from django.db.models import Q
 from YSE_App.models import phot_models
-from YSE_App.services.visibility import get_user_group_query as GetUserGroupQuery
+from YSE_App.services.visibility import dataset_group_q
 
 def GetAuthorizedTransientPhotometry_ByUser(user):
-    group_query_tuple = GetUserGroupQuery(user)
-    allowed_phot = TransientPhotometry.objects.filter(group_query_tuple[0] | group_query_tuple[1]).distinct()
+    allowed_phot = TransientPhotometry.objects.filter(dataset_group_q(TransientPhotometry, user)).distinct()
 
     return allowed_phot
 
 def GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient_id):
-    group_query_tuple = GetUserGroupQuery(user)
     return TransientPhotometry.objects.filter(
-        group_query_tuple[0] | group_query_tuple[1],
+        dataset_group_q(TransientPhotometry, user),
         transient_id=transient_id,
     ).distinct()
 
 def GetAuthorizedHostPhotometry_ByUser(user):
-    host_query_tuple = GetUserGroupQuery(user)
-    allowed_phot = HostPhotometry.objects.filter(host_query_tuple[0] | host_query_tuple[1]).distinct()
+    allowed_phot = HostPhotometry.objects.filter(dataset_group_q(HostPhotometry, user)).distinct()
 
     return allowed_phot
 
 def GetAuthorizedHostPhotometry_ByUser_ByHost(user, host_id):
-    host_query_tuple = GetUserGroupQuery(user)
     return HostPhotometry.objects.filter(
-        host_query_tuple[0] | host_query_tuple[1],
+        dataset_group_q(HostPhotometry, user),
         host_id=host_id,
     ).distinct()
 

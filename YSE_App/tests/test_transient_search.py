@@ -76,11 +76,16 @@ class SearchFixture(TestCase):
         cls.outsider = create_test_user("search_outsider", is_staff=False)
         cls.group, _ = Group.objects.get_or_create(name=PRIVATE_GROUP)
         cls.member.groups.add(cls.group)
+        # The searcher sees every set (YSE and the private group): derived-photometry
+        # filters only match transients whose photometry the user sees in full.
+        yse_group, _ = Group.objects.get_or_create(name="YSE")
+        cls.user.groups.add(yse_group, cls.group)
         audit = audit_fields(cls.user)
         cls.audit = audit
         now = timezone.now()
 
-        cls.obs_group, cls.instrument, cls.band = create_instrument_stack(cls.user, obs_group_name="YSE")
+        # Not the YSE observation group: its ungrouped data are YSE-only, and these sets stand for open data.
+        cls.obs_group, cls.instrument, cls.band = create_instrument_stack(cls.user, obs_group_name="SearchSurvey")
         other_group, _, _ = create_instrument_stack(cls.user, obs_group_name="ZTF")
         survey, _ = InternalSurvey.objects.get_or_create(name="YSE", defaults=audit)
         cls.sn_ia, _ = TransientClass.objects.get_or_create(name="SN Ia", defaults=audit)

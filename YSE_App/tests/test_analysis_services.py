@@ -788,7 +788,11 @@ class AnalysisTabTests(AnalysisBase):
         self.assertEqual(html.count('class="analysis-run-row"'), 1)
         self.assertIn(str(mine.uuid), html)
         self.assertIn("do not have access", html)
+        # staff see other users' runs only when no data are hidden from them
         self.client.force_login(self.staff)
+        html = self.client.get(self.fragment_url).content.decode()
+        self.assertEqual(html.count('class="analysis-run-row"'), 0)
+        self.staff.groups.add(grp)
         html = self.client.get(self.fragment_url).content.decode()
         self.assertEqual(html.count('class="analysis-run-row"'), 2)
 

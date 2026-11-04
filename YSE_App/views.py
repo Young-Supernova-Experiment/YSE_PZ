@@ -50,7 +50,6 @@ from astropy.time import Time
 from .common.utilities import getRADecBox
 from YSE_App.common.magnitude_format import format_magnitude_with_error
 from YSE_App.common.db_time_cap import explorer_cap_ms, translate_query_timeout
-from YSE_App.queries.raw_sql import RECENT_MAG_SQL
 from YSE_App.services.dashboard_queries import (
     dashboard_sql_is_supported,
     dashboard_sql_rejection_reason,
@@ -70,6 +69,8 @@ from .table_utils import (
     YSEObsNightTable,
     ToOFollowupTable,
     annotate_dashboard_transient_fields,
+    annotate_followup_recent_mag,
+    annotate_viewer_recent_phot,
     prefetch_followup_resources,
 )
 from .queries.yse_python_queries import *
@@ -78,8 +79,9 @@ from .queries import yse_python_queries
 from django_tables2 import RequestConfig
 from .basicauth import *
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 from django.template import RequestContext
+from YSE_App.login_required import login_exempt
 from urllib.parse import unquote
 
 from .common.utilities import date_to_mjd, mjd_to_date
@@ -99,10 +101,22 @@ def index(request):
 #def add_followup(request,obj):
 #        return '<a href="%s">Add followup for %s</a>' % (obj.firm_url,obj.firm_url)
 
+def _safe_next_url(request, next_page):
+    """``next_page`` if it is a URL on this host (#503), else None."""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    if next_page and url_has_allowed_host_and_scheme(
+        url=next_page, allowed_hosts={request.get_host()}, require_https=request.is_secure(),
+    ):
+        return next_page
+    return None
+
+
 # Create your views here.
+@login_exempt
 def auth_login(request):
     logout(request)
-    next_page = request.POST.get('next')
+    next_page = _safe_next_url(request, request.POST.get('next'))
 
     user = None
     if request.POST:
@@ -122,8 +136,15 @@ def auth_login(request):
         from YSE_App.services.signup import signup_enabled
         return render(request, 'YSE_App/login.html', {'signup_enabled': signup_enabled()})
 
+@login_exempt
+@require_http_methods(['GET', 'POST'])
 def auth_logout(request):
-    logout(request)
+    """Log out on POST only (#504); a GET shows a confirmation form."""
+    if request.method == 'POST':
+        logout(request)
+        return render(request, 'YSE_App/index.html')
+    if request.user.is_authenticated:
+        return render(request, 'YSE_App/logout_confirm.html')
     return render(request, 'YSE_App/index.html')
 
 _DASHBOARD_STATUS_SECTIONS = (
@@ -146,19 +167,19 @@ def _dashboard_section_tuple(request, title, statusname, status_by_name):
     status = status_by_name.get(statusname)
     if status:
         transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(status=status).order_by('-disc_date')
+            Transient.objects.filter(status=status).order_by('-disc_date'), request.user
         )
     else:
         transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(status=None).order_by('-disc_date')
+            Transient.objects.filter(status=None).order_by('-disc_date'), request.user
         )
     transientfilter = TransientFilter(
         request.GET, queryset=transients, prefix=statusname.lower()
     )
     if statusname == 'New':
-        table = NewTransientTable(transientfilter.qs, prefix=statusname.lower())
+        table = NewTransientTable(transientfilter.qs, prefix=statusname.lower(), viewer=request.user)
     else:
-        table = TransientTable(transientfilter.qs, prefix=statusname.lower())
+        table = TransientTable(transientfilter.qs, prefix=statusname.lower(), viewer=request.user)
     RequestConfig(request, paginate={'per_page': 10}).configure(table)
     return (table, title, statusname.lower(), transientfilter)
 
@@ -299,7 +320,7 @@ def _personaldashboard_configure_table(request, prefix, queryset):
     request.GET = _personaldashboard_request_get(request, prefix)
     try:
         transient_filter = TransientFilter(request.GET, queryset=queryset, prefix=prefix)
-        table = TransientTable(transient_filter.qs, prefix=prefix)
+        table = TransientTable(transient_filter.qs, prefix=prefix, viewer=request.user)
         RequestConfig(request, paginate={'per_page': 10}).configure(table)
         return table, transient_filter
     finally:
@@ -315,14 +336,15 @@ def _personaldashboard_table_for_user_query(request, q):
             cached_result = run_explorer_query_cached(q.query)
             if not cached_result:
                 prefix = _personaldashboard_sql_query_prefix(q.query.title)
-                empty_qs = annotate_dashboard_transient_fields(Transient.objects.none())
+                empty_qs = annotate_dashboard_transient_fields(Transient.objects.none(), request.user)
                 table, transient_filter = _personaldashboard_configure_table(
                     request, prefix, empty_qs
                 )
                 return (table, q.query.title, prefix, transient_filter, q.id, 0)
             base_transients = annotate_dashboard_transient_fields(
                 # -pk breaks disc_date ties so LIMIT/OFFSET pages never overlap on MySQL
-                Transient.objects.filter(name__in=cached_result).order_by('-disc_date', '-pk')
+                Transient.objects.filter(name__in=cached_result).order_by('-disc_date', '-pk'),
+                request.user,
             )
             prefix = _personaldashboard_sql_query_prefix(q.query.title)
             section_qs = base_transients.filter(name__in=cached_result)
@@ -337,12 +359,12 @@ def _personaldashboard_table_for_user_query(request, q):
     if q.python_query:
         try:
             transients = annotate_dashboard_transient_fields(
-                getattr(yse_python_queries, q.python_query)()
+                yse_python_queries.python_query_for_viewer(q.python_query, request.user), request.user
             )
             transient_filter = TransientFilter(
                 request.GET, queryset=transients, prefix=q.python_query
             )
-            table = TransientTable(transient_filter.qs, prefix=q.python_query)
+            table = TransientTable(transient_filter.qs, prefix=q.python_query, viewer=request.user)
             RequestConfig(request, paginate={'per_page': 10}).configure(table)
             return (
                 table,
@@ -385,7 +407,8 @@ def _personaldashboard_build_all_tables(request, queries):
         from YSE_App.services.visibility import filter_transients_by_user_access
 
         base_transients = annotate_dashboard_transient_fields(
-            Transient.objects.filter(name__in=all_transient_names).order_by('-disc_date', '-pk')
+            Transient.objects.filter(name__in=all_transient_names).order_by('-disc_date', '-pk'),
+            request.user,
         )
         base_transients = filter_transients_by_user_access(
             request.user, base_transients
@@ -530,7 +553,7 @@ def transient_summary(request,status_or_query_name,
             if not len(query):
                 return HttpResponseNotFound("Invalid Query")
             query = query[0]
-            transients = getattr(yse_python_queries,query.python_query)()
+            transients = yse_python_queries.python_query_for_viewer(query.python_query, request.user)
 
     if 'sort' in request.GET.keys():
         if request.GET['sort'] == 'last_obs_date' or request.GET['sort'] == '-last_obs_date':
@@ -539,19 +562,15 @@ def transient_summary(request,status_or_query_name,
             else:
                 is_descending = False
             
-            all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = transients)
-            phot_ids = all_phot.values('id')
-        
-            phot_data_query = Q(transientphotometry__id__in=phot_ids)
-            transients = transients.annotate(
-                recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-            ).order_by(('-' if is_descending else '') + 'recent_magdate')
+            # Last date / magnitude from the photometry this user may see (no order from hidden data).
+            transients = annotate_viewer_recent_phot(transients, request.user).order_by(
+                ('-' if is_descending else '') + 'recent_magdate')
             
         elif request.GET['sort'] == 'last_mag' or request.GET['sort'] == '-last_mag':
-            raw_query = RECENT_MAG_SQL
             if request.GET['sort'] == '-last_mag': is_descending = True
             else: is_descending = False
-            transients = transients.annotate(last_mag=RawSQL(raw_query,())).order_by(('-' if is_descending else '') + 'last_mag')
+            transients = annotate_viewer_recent_phot(transients, request.user).order_by(
+                ('-' if is_descending else '') + 'recent_mag')
         else:
             transients = transients.order_by(request.GET['sort'])
             
@@ -613,7 +632,7 @@ def followup(request):
         if not followuptransientfilter.qs.exists():
             continue
 
-        followup_table = FollowupTable(followuptransientfilter.qs,prefix=t)
+        followup_table = FollowupTable(followuptransientfilter.qs,prefix=t,viewer=request.user)
         RequestConfig(request, paginate={'per_page': 10}).configure(followup_table)
         table_list += [(t.name,followup_table,t.name.replace(' ','_'),followuptransientfilter.qs,followuptransientfilter)]
 
@@ -820,7 +839,7 @@ def too_requests(request, telescope, pi_name):
     followuptransientfilter = FollowupFilter(
         request.GET, queryset=follow_requests,prefix=telescope.replace('_',''))
         
-    followup_table = ToOFollowupTable(followuptransientfilter.qs,prefix=telescope.replace('_',''),too_resource=too_resource)
+    followup_table = ToOFollowupTable(followuptransientfilter.qs,prefix=telescope.replace('_',''),too_resource=too_resource,viewer=request.user)
     RequestConfig(request, paginate={'per_page': 20}).configure(followup_table)
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
@@ -893,9 +912,13 @@ def _yse_home_section_tuple(request, section):
     _key, prefix, anchor, table_cls = section
     # recent_mag/recent_magdate as annotations and the follow-up resource
     # columns from one prefetch, instead of ~8 queries per rendered row.
-    queryset = annotate_dashboard_transient_fields(prefetch_followup_resources(_yse_home_queryset(prefix)))
+    base = _yse_home_queryset(prefix)
+    if prefix in ('yserise', 'ysefastrise'):
+        # rising lists are computed from all photometry: none with hidden photometry
+        base = yse_python_queries.python_query_for_viewer('rising_transient_queryset', request.user, base)
+    queryset = annotate_dashboard_transient_fields(prefetch_followup_resources(base), request.user)
     transientfilter = TransientFilter(request.GET, queryset=queryset, prefix=prefix)
-    table = table_cls(transientfilter.qs, prefix=prefix)
+    table = table_cls(transientfilter.qs, prefix=prefix, viewer=request.user)
     RequestConfig(request, paginate={'per_page': 10}).configure(table)
     return (table, anchor, transientfilter)
 
@@ -1168,7 +1191,7 @@ def observing_night(request, telescope, obs_date, pi_name):
 
     followuptransientfilter = FollowupFilter(request.GET, queryset=follow_requests,prefix=telescope)
         
-    followup_table = ObsNightFollowupTable(followuptransientfilter.qs,prefix=telescope,classical_obs_date=classical_obs_date)
+    followup_table = ObsNightFollowupTable(followuptransientfilter.qs,prefix=telescope,classical_obs_date=classical_obs_date,viewer=request.user)
     RequestConfig(request, paginate={'per_page': 20}).configure(followup_table)
     table = (telescope.replace('_',' '),followup_table,telescope,follow_requests,followuptransientfilter)
 
@@ -1252,8 +1275,10 @@ def yse_observing_night(request, obs_date):
     return render(request, 'YSE_App/yse_observing_night.html', context)
 
 
+@login_required
 def download_target_list(request, telescope, obs_date):
     from YSE_App.services.followup_requests import format_comments, requests_prefetch
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1263,8 +1288,12 @@ def download_target_list(request, telescope, obs_date):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
+    # only the follow-ups this user may see (#499)
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related('transient').prefetch_related(requests_prefetch())
+    # last magnitude from the photometry this user may see, one subquery for the list
+    follow_requests = annotate_followup_recent_mag(follow_requests, request.user)
 
     location = EarthLocation.from_geodetic(
         classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
@@ -1278,20 +1307,24 @@ def download_target_list(request, telescope, obs_date):
     from YSE_App.common.filter_display import display_filter_label
     from YSE_App.services.bazin import extrapolated_mags, local_midnight_mjd
 
+    from YSE_App.services.visibility import transients_with_hidden_photometry
+
     follow_requests = list(follow_requests)
     observatory = classical_obs_date.resource.telescope.observatory
     night_mjd = local_midnight_mjd(classical_obs_date.obs_date, observatory.utc_offset if observatory else 0)
-    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests], night_mjd)
+    # A fit reads all of a transient's points: none where photometry is hidden from this user.
+    hidden = transients_with_hidden_photometry(request.user, [f.transient_id for f in follow_requests])
+    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests if f.transient_id not in hidden], night_mjd)
 
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     for f in follow_requests:
         comments = format_comments(f)
         bazin = bazin_mags.get(f.transient_id)
         bazin_str = "bazin_mag = %.2f %s " % (bazin[0], display_filter_label(bazin[1])) if bazin else ""
-        if f.transient.recent_mag():
+        if f.recent_mag is not None:
             content += "%s  %s %s 2000 mag = %.2f %scomment = %s\n"%(
                 f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),
-                f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()),bazin_str,comments)
+                f.transient.CoordString()[1].replace(':',' '),float(f.recent_mag),bazin_str,comments)
 
         else:
             content += "%s  %s %s 2000 %scomment = %s\n"%(
@@ -1303,7 +1336,9 @@ def download_target_list(request, telescope, obs_date):
 
     return response
 
+@login_required
 def download_targets_and_finders(request, telescope, obs_date):
+    from YSE_App.services.visibility import filter_transient_followups_for_user
 
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
@@ -1313,8 +1348,12 @@ def download_targets_and_finders(request, telescope, obs_date):
     if classical_obs_date is None:
         raise Http404('No classical observing date found for this telescope/date')
     follow_requests = TransientFollowup.objects.filter(classical_resource = classical_obs_date.resource).\
-        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date).\
+        filter(valid_start__lte = classical_obs_date.obs_date).filter(valid_stop__gte = classical_obs_date.obs_date)
+    # only the follow-ups this user may see (#499)
+    follow_requests = filter_transient_followups_for_user(follow_requests, request.user).\
         select_related('transient')
+    # last magnitude from the photometry this user may see
+    follow_requests = annotate_followup_recent_mag(follow_requests, request.user)
 
     location = EarthLocation.from_geodetic(
         classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
@@ -1327,8 +1366,12 @@ def download_targets_and_finders(request, telescope, obs_date):
     content_offsets = "\n"
     findernamelist = []
     for f in follow_requests:
-        content += "%s  %s %s 2000 mag = %.2f\n"%(
-            f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '),float(f.transient.recent_mag()))
+        if f.recent_mag is not None:
+            content += "%s  %s %s 2000 mag = %.2f\n"%(
+                f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '),float(f.recent_mag))
+        else:
+            content += "%s  %s %s 2000\n"%(
+                f.transient.name.ljust(20),f.transient.CoordString()[0].replace(':',' '),f.transient.CoordString()[1].replace(':',' '))
         offdictlist, findername = view_utils.finder().finderchart_noview()
         findernamelist += [findername]
         for offdict in offdictlist:
@@ -1557,6 +1600,22 @@ def transient_detail_resources_fragment(request, transient_id):
     )
 
 
+def _visible_diff_images(visible_photdata, transient_id):
+    """Diff / forced-photometry images of a transient, only for the points in ``visible_photdata``.
+
+    ``visible_photdata`` is the viewer's photometry table (``get_all_phot_for_transient``),
+    so the two never disagree and no further query is needed to decide visibility.
+    """
+    return TransientDiffImage.objects.filter(
+        phot_data__photometry__transient_id=transient_id,
+        phot_data__in=visible_photdata.values('pk'),
+    ).select_related(
+        'phot_data',
+        'phot_data__photometry',
+        'phot_data__band',
+    )
+
+
 @login_required
 def transient_detail_photometry_fragment(request, transient_id):
     transient_obj = get_object_or_404(Transient, pk=transient_id)
@@ -1570,13 +1629,7 @@ def transient_detail_photometry_fragment(request, transient_id):
         )
         .prefetch_related('data_quality', 'photometry__pis')
     )
-    diff_images = TransientDiffImage.objects.filter(
-        phot_data__photometry__transient_id=transient_id
-    ).select_related(
-        'phot_data',
-        'phot_data__photometry',
-        'phot_data__band',
-    )
+    diff_images = _visible_diff_images(allphotdata, transient_id)
     from YSE_App.collaboration_views import data_access_context
 
     ctx = {
@@ -1694,10 +1747,10 @@ def transient_detail(request, slug):
         if hostphotdata: transient_obj.hostphotdata = hostphotdata
 
         if defer_detail:
-            from YSE_App.models import TransientPhotData
-
-            good_photdata = TransientPhotData.objects.filter(
-                photometry__transient_id=transient_id,
+            # Only photometry this user may see (same rule as the full branch).
+            good_photdata = view_utils.get_all_phot_for_transient(
+                request.user, transient_id
+            ).filter(
                 mag__isnull=False,
             ).exclude(data_quality__isnull=False).select_related('band')
             lastphotdata = good_photdata.order_by('-obs_date').first()
@@ -1730,13 +1783,7 @@ def transient_detail(request, slug):
             ).select_related('instrument', 'instrument__telescope').prefetch_related(
                 'data_quality', 'pis'
             )
-            diff_images_qs = TransientDiffImage.objects.filter(
-                phot_data__photometry__transient_id=transient_id
-            ).select_related(
-                'phot_data',
-                'phot_data__photometry',
-                'phot_data__band',
-            )
+            diff_images_qs = _visible_diff_images(allphotdata, transient_id)
 
         comment_cutoff = timezone.now() - datetime.timedelta(1)
         has_new_comment = any(
@@ -1791,9 +1838,14 @@ def transient_detail(request, slug):
         # A transient the backfill has not reached yet gets its row computed
         # here, once, from its own photometry (#345); a failure renders the
         # block empty rather than failing the page.
+        # The statistics come from all points: none for a viewer with hidden photometry.
         from YSE_App.services.photstat import stat_for_transient
+        from YSE_App.services.visibility import user_has_hidden_photometry
 
-        context['photstat'] = stat_for_transient(transient_obj.id)
+        if user_has_hidden_photometry(request.user, transient_obj.id):
+            context['photstat'] = None
+        else:
+            context['photstat'] = stat_for_transient(transient_obj.id)
 
         # "Working on this" interests box (#290) and the restricted-data hints (#293).
         from YSE_App.collaboration_views import collaboration_context
@@ -1855,7 +1907,9 @@ def transient_detail(request, slug):
             and '_cand' in transient_obj.name
             and 'DECAT' in [t.name for t in assigned_transient_tags]
         ):
-            submit_to_tns = True
+            from YSE_App.util.submit_to_tns import user_may_submit_legacy_tns
+
+            submit_to_tns = user_may_submit_legacy_tns(request.user)
         else:
             submit_to_tns = False
         context['submit_to_tns'] = submit_to_tns
@@ -1925,6 +1979,22 @@ def transient_edit(request, transient_id=None):
 
 
 from wsgiref.util import FileWrapper
+
+
+def _transient_export_rows(user, transient_qs):
+    """Serialized transient rows for a download; the stored summary (written from all data)
+    is left out when ``user`` has photometry of the transient hidden from them."""
+    from YSE_App.services.visibility import transients_with_hidden_photometry
+
+    rows = json.loads(serializers.serialize("json", transient_qs, use_natural_foreign_keys=True))
+    hidden = transients_with_hidden_photometry(user, [row['pk'] for row in rows])
+    for row in rows:
+        if row['pk'] in hidden:
+            row['fields'].pop('summary', None)
+            row['fields'].pop('summary_modified', None)
+    return rows
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def download_data(request, slug):
@@ -1939,7 +2009,7 @@ def download_data(request, slug):
         
     transient = Transient.objects.filter(slug=slug)
     data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
+    data[transient[0].name]['transient'] = _transient_export_rows(user, transient)
 
     if transient[0].host:
         host = Host.objects.filter(id=transient[0].host.id)
@@ -1989,7 +2059,7 @@ def download_photometry(request, slug):
         
     transient = Transient.objects.filter(slug=slug)
     data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
+    data[transient[0].name]['transient'] = _transient_export_rows(user, transient)
     for k in data[transient[0].name]['transient'][0]['fields'].keys():
         if k not in ['created_by','modified_by','candidate_hosts']:
             content += "# %s: %s\n"%(k.upper(),data[transient[0].name]['transient'][0]['fields'][k])
@@ -2099,7 +2169,7 @@ def download_bulk_photometry(request, query_title):
     elif getattr(yse_python_queries,query_title):
         from YSE_App.services.visibility import filter_transients_by_user_access
 
-        transients = getattr(yse_python_queries,query_title)()
+        transients = yse_python_queries.python_query_for_viewer(query_title, user)
         transients = filter_transients_by_user_access(user, transients)
 
     s = BytesIO()
@@ -2419,10 +2489,10 @@ def delete_followup_request(request, request_id):
 SEARCH_PER_PAGE_CHOICES = (25, 50, 100, 200)
 
 
-def search_results_queryset():
-    """Base queryset for the search page: the dashboard annotations plus the FKs the table shows."""
+def search_results_queryset(user=None):
+    """Base queryset for the search page: the dashboard annotations (``user``'s photometry) plus the FKs the table shows."""
     return annotate_dashboard_transient_fields(
-        Transient.objects.select_related('best_spec_class').order_by('-disc_date', '-pk')
+        Transient.objects.select_related('best_spec_class').order_by('-disc_date', '-pk'), user
     )
 
 
@@ -2450,7 +2520,7 @@ class SearchResultsView(TemplateView):
 
         context = super().get_context_data(**kwargs)
         params = quick_search_params(self.request.GET)
-        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(), request=self.request)
+        filterset = TransientSearchFilterSet(params, queryset=search_results_queryset(self.request.user), request=self.request)
         cone = filterset.cone
 
         try:
@@ -2466,7 +2536,7 @@ class SearchResultsView(TemplateView):
         annotation_column = filterset.annotation_column_spec
         if annotation_column is None:
             excluded = excluded + ('annotation_value',)
-        table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded)
+        table = SearchTransientTable(filterset.qs, prefix='', exclude=excluded, viewer=self.request.user)
         if annotation_column is not None:
             table.columns['annotation_value'].column.verbose_name = filterset.annotation_column_label
         RequestConfig(self.request, paginate={'per_page': per_page}).configure(table)

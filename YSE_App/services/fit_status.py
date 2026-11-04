@@ -20,9 +20,16 @@ import math
 from typing import Dict, List, Optional
 
 from django.core.cache import cache
+from django.db.models import Exists, OuterRef, Q
 
 from YSE_App.models.analysis_models import AnalysisService
 from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
+from YSE_App.services.visibility import (
+    dataset_group_q,
+    hidden_photometry_exists,
+    is_service_reader,
+    user_group_names,
+)
 
 log = logging.getLogger(__name__)
 
@@ -62,11 +69,91 @@ def active_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
             .filter(status__in=(ExternalServiceRun.STATUS_PENDING, ExternalServiceRun.STATUS_RUNNING)).first())
 
 
+# --- who may see a stored run ------------------------------------------------------------------
+#
+# A run's input is built from its *creator's* data access (``analysis_payload``), so
+# a fit made by a YSE member reflects YSE-only photometry. Another viewer sees a
+# stored run only when the transient has no photometry or spectra hidden from
+# them (then the run cannot hold anything they may not see), when they made the
+# run, or when they are a service reader. Hidden data is a function of the
+# viewer's group names, so the group-token plot cache stays correct as long as
+# cached plots pass ``allow_creator=False``.
+
+def _transient_pk(transient):
+    return getattr(transient, "pk", transient)
+
+
+def _is_user(user) -> bool:
+    return user is not None and getattr(user, "is_authenticated", False)
+
+
+def hidden_data_exists(user, transient_ref: str = "pk") -> Q:
+    """Condition: the transient at ``OuterRef(transient_ref)`` has photometry or spectra ``user`` may not see."""
+    from YSE_App.models import TransientSpectrum
+
+    if is_service_reader(user):
+        return Q(pk__in=[])
+    on_transient = TransientSpectrum.objects.filter(transient_id=OuterRef(transient_ref))
+    names = user_group_names(user) if _is_user(user) else []
+    visible = TransientSpectrum.objects.filter(dataset_group_q(TransientSpectrum, user, names=names)).values("pk")
+    return hidden_photometry_exists(user, transient_ref) | Q(Exists(on_transient.exclude(pk__in=visible)))
+
+
+def others_runs_visible(transient, user) -> bool:
+    """Whether ``user`` may see analysis runs that other users made on ``transient``."""
+    if not _is_user(user):
+        return False
+    if is_service_reader(user):
+        return True
+    from YSE_App.models import Transient
+
+    return not Transient.objects.filter(pk=_transient_pk(transient)).filter(hidden_data_exists(user)).exists()
+
+
+def run_visible_to_user(run: Optional[ExternalServiceRun], user, *, allow_creator: bool = True) -> bool:
+    """Whether ``user`` may see ``run``'s result and files (see the rule above)."""
+    if run is None or not _is_user(user):
+        return False
+    if allow_creator and run.created_by_id is not None and run.created_by_id == user.pk:
+        return True
+    if is_service_reader(user):
+        return True
+    if run.transient_id is None:
+        return False
+    return others_runs_visible(run.transient_id, user)
+
+
+def visible_runs_q(user) -> Q:
+    """``ExternalServiceRun`` rows whose results ``user`` may see: their own, or on a transient with no hidden data."""
+    if is_service_reader(user):
+        return Q()
+    return ~hidden_data_exists(user, "transient_id") | Q(created_by_id=user.pk)
+
+
+def latest_successful_run_for_user(transient, runner_path: str, user, *,
+                                   allow_creator: bool = True) -> Optional[ExternalServiceRun]:
+    """The newest successful run ``user`` may see: anyone's, or only their own when data are hidden from them."""
+    if not _is_user(user):
+        return None
+    qs = runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED)
+    newest = qs.first()
+    if newest is None or (allow_creator and newest.created_by_id == user.pk):
+        return newest  # no visibility queries when there is nothing to hide
+    if others_runs_visible(transient, user):
+        return newest
+    if allow_creator:
+        return qs.filter(created_by_id=user.pk).first()
+    return None
+
+
 # --- the stored SALT fit --------------------------------------------------------------------
 
-def stored_salt_fit(transient) -> Optional[ExternalServiceRun]:
-    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit."""
-    return latest_successful_run(transient, SNCOSMO_RUNNER)
+def stored_salt_fit(transient, user, *, allow_creator: bool = True) -> Optional[ExternalServiceRun]:
+    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit ``user`` may see.
+
+    Cached plot HTML (keyed by group access, not user) must pass ``allow_creator=False``.
+    """
+    return latest_successful_run_for_user(transient, SNCOSMO_RUNNER, user, allow_creator=allow_creator)
 
 
 def model_curves(run: ExternalServiceRun) -> Dict:
@@ -163,11 +250,23 @@ def _service_entry(user, runner_path: str) -> Dict:
     }
 
 
+def _own_or_visible(run: Optional[ExternalServiceRun], transient, user) -> Optional[ExternalServiceRun]:
+    """``run`` when ``user`` may see it; otherwise ``user``'s own newest run of that runner, or ``None``."""
+    if run is None or run_visible_to_user(run, user):
+        return run
+    if not _is_user(user):
+        return None
+    runner_path = getattr(getattr(run.service, "analysis", None), "runner_path", None)
+    if not runner_path:
+        return None
+    return runs_of_runner(transient, runner_path).filter(created_by_id=user.pk).first()
+
+
 def salt_fit_context(transient, user) -> Dict:
     """Context of ``transient_detail/salt_fit_status.html``."""
     service = _service_entry(user, SNCOSMO_RUNNER)
-    latest = latest_run(transient, SNCOSMO_RUNNER)
-    success = stored_salt_fit(transient)
+    latest = _own_or_visible(latest_run(transient, SNCOSMO_RUNNER), transient, user)
+    success = stored_salt_fit(transient, user)
     active = latest if (latest is not None and not latest.is_finished) else None
     entry = _run_entry(success)
     if entry is not None:
@@ -194,8 +293,8 @@ def ngsf_context(transient, user, *, availability: Optional[Dict] = None) -> Dic
 
     service = _service_entry(user, NGSF_RUNNER)
     avail = availability if availability is not None else ngsf_mod.availability()
-    latest = latest_run(transient, NGSF_RUNNER)
-    success = latest_successful_run(transient, NGSF_RUNNER)
+    latest = _own_or_visible(latest_run(transient, NGSF_RUNNER), transient, user)
+    success = latest_successful_run_for_user(transient, NGSF_RUNNER, user)
     active = latest if (latest is not None and not latest.is_finished) else None
     entry = _run_entry(success)
     if entry is not None:
