@@ -61,6 +61,8 @@ EXPECTED_PUBLIC_NAMES = {
     "login", "logout", "password_reset", "password_reset_done",
     "password_reset_confirm", "password_reset_complete",
     "slack_events", "external_service_run_callback",
+    # self-service signup (#448): login_exempt views
+    "signup", "signup_verify_email",
 }
 
 # Views behind YSE_App.basicauth.login_or_basic_auth_required: scripts and crons

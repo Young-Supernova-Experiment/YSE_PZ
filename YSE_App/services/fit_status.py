@@ -136,8 +136,11 @@ def latest_successful_run_for_user(transient, runner_path: str, user, *,
     if not _is_user(user):
         return None
     qs = runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED)
+    newest = qs.first()
+    if newest is None or (allow_creator and newest.created_by_id == user.pk):
+        return newest  # no visibility queries when there is nothing to hide
     if others_runs_visible(transient, user):
-        return qs.first()
+        return newest
     if allow_creator:
         return qs.filter(created_by_id=user.pk).first()
     return None

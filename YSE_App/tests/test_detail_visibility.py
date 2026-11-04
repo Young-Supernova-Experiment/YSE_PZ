@@ -124,11 +124,13 @@ class DetailVisibilityTests(TestCase):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
+        from YSE_App import view_utils
         from YSE_App.views import _visible_diff_images
 
         def count():
             with CaptureQueriesContext(connection) as ctx:
-                rows = list(_visible_diff_images(self.outsider, self.transient.pk))
+                rows = list(_visible_diff_images(
+                    view_utils.get_all_phot_for_transient(self.outsider, self.transient.pk), self.transient.pk))
                 for d in rows:
                     d.phot_data.band, d.phot_data.photometry
             return len(ctx.captured_queries)
