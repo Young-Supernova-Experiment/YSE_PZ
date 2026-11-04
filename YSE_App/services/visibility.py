@@ -55,6 +55,46 @@ def get_user_group_query(user: User):
     return no_group, contains_group
 
 
+# Data (photometry sets and spectra, transient and host) use a stricter group
+# rule than observing resources (``get_user_group_query``):
+#
+# * ``Public`` shows a dataset only when it is the dataset's only group. A set
+#   that also carries a team group (for example TNS points merged into the YSE
+#   set of the same instrument and observation group) stays with that team;
+#   with the plain rule every member of ``Public``, i.e. every user, saw it.
+# * A dataset of the ``YSE`` observation group without a team group is YSE
+#   data that was never labelled: only members of the ``YSE`` group see it.
+YSE_COLLABORATION_GROUP_NAME = "YSE"
+YSE_OBSERVATION_GROUP_NAME = "YSE"
+
+
+def _open_dataset_q(model, names: Iterable[str]) -> Q:
+    """Rows of ``model`` that are open data for a user with group ``names``.
+
+    Open data has no group other than ``Public`` (``Public`` alone counts
+    only for its members) and, for a user outside ``YSE``, is not unlabelled
+    YSE data.
+    """
+    names = set(names)
+    links = model.groups.through.objects.filter(**{model._meta.model_name + "_id": OuterRef("pk")})
+    if PUBLIC_COLLABORATION_GROUP_NAME in names:
+        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
+    q = Q(~Exists(links))
+    if YSE_COLLABORATION_GROUP_NAME not in names:
+        q &= ~Q(obs_group__name=YSE_OBSERVATION_GROUP_NAME)
+    return q
+
+
+def dataset_group_q(model, user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """The group rule for data rows of ``model``: open data, or a team group the user is in.
+
+    Joins ``groups``, so querysets filtered with it need ``.distinct()``.
+    """
+    names = user_group_names(user) if names is None else list(names)
+    team_names = [n for n in names if n != PUBLIC_COLLABORATION_GROUP_NAME]
+    return _open_dataset_q(model, names) | Q(groups__name__in=team_names)
+
+
 def object_has_groups(obj) -> bool:
     return obj.groups.exists()
 

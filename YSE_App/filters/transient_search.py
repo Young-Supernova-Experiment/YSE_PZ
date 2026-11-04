@@ -291,8 +291,10 @@ def _rows_visible_to(qs, user):
     """Restrict grouped rows (photometry / spectra) to what ``user`` may see."""
     if user is None or user.is_staff or user.is_superuser:
         return qs
+    from YSE_App.services.visibility import dataset_group_q
+
     names = list(user.groups.values_list('name', flat=True)) if user.is_authenticated else []
-    return qs.filter(Q(groups__isnull=True) | Q(groups__name__in=names))
+    return qs.filter(dataset_group_q(qs.model, user, names=names))
 
 
 class UtcNowMinusSeconds(Func):
