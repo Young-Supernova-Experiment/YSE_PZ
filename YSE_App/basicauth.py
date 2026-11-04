@@ -23,6 +23,7 @@ def login_or_basic_auth_required(view):
 				user = auth.authenticate(username=username, password=password)
 				if user is not None and user.is_active:
 					# Correct password, and the user is marked "active"
+					request.user = user
 					return view(request, *args, **kwargs)
 				else:
 					return HttpResponseForbidden('Incorrect user credentials.')
@@ -38,6 +39,7 @@ def login_or_basic_auth_required(view):
 				user = auth.authenticate(username=username, password=password)
 				if user is not None and user.is_active:
 					# Correct password, and the user is marked "active"
+					request.request.user = user
 					return view(request, *args, **kwargs)
 				else:
 					return HttpResponseForbidden('Incorrect user credentials.')
