@@ -84,7 +84,9 @@ def analysis_tab_context(request, transient):
     services = [_service_entry(p, request.user) for p in svc.services_for_user(request.user)]
     sees_data = user_may_see_transient(request.user, transient)
     qs = svc.runs_for_transient(transient, request.user, limit=None)
-    if not sees_data:
+    # Results derive from the requester's data access: other users' runs only
+    # when no photometry or spectra of this transient are hidden from the viewer.
+    if not sees_data or not fit_status.others_runs_visible(transient, request.user):
         qs = qs.filter(created_by=request.user)
     run_rows = [_run_entry(r, request.user) for r in qs[:50]]
     return {
@@ -178,12 +180,15 @@ def _run_for_user(request, run_uuid) -> ExternalServiceRun:
             uuid=run_uuid, service__kind=ExternalService.KIND_ANALYSIS)
     except (ExternalServiceRun.DoesNotExist, ValueError):
         raise Http404("unknown analysis run")
-    # The requester (and staff) always; anyone else only when they may see the transient's data,
-    # since results derive from it.
-    if svc.can_manage_run(run, request.user):
+    # The requester always; anyone else (staff too) only when they may see the transient
+    # and none of its data are hidden from them, since results derive from the
+    # requester's data access.
+    if run.created_by_id is not None and run.created_by_id == request.user.pk:
         return run
     if run.transient_id is None or not user_may_see_transient(request.user, run.transient):
         raise PermissionDenied("you may not see this transient's data")
+    if not fit_status.run_visible_to_user(run, request.user):
+        raise PermissionDenied("this run was made from data you may not see")
     return run
 
 

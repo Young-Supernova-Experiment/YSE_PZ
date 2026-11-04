@@ -531,6 +531,10 @@ class AnalysisRunViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mix
             visible = filter_transients_by_user_access(
                 user, Transient.objects.filter(service_runs__service__kind=ExternalService.KIND_ANALYSIS).distinct())
             qs = qs.filter(Q(created_by=user) | Q(transient__in=visible))
+        # Results derive from the requester's data access: another user's run is
+        # listed only when none of the transient's data are hidden from the viewer.
+        from YSE_App.services import fit_status
+        qs = qs.filter(fit_status.visible_runs_q(user))
         transient = self.request.query_params.get("transient")
         if transient:
             qs = qs.filter(Q(transient_id=transient) if str(transient).isdigit() else Q(transient__name=transient))
