@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Iterable, List, Optional, Set, Union
 
 from django.contrib.auth.models import Group, User
-from django.db.models import Count, Exists, OuterRef, Q, QuerySet
+from django.db.models import Case, Count, Exists, OuterRef, Q, QuerySet, Value, When
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 
@@ -108,7 +108,7 @@ def is_service_reader(user) -> bool:
     return getattr(user, "username", None) in set(getattr(settings, "API_SERVICE_USERNAMES", ()) or ())
 
 
-def hidden_photometry_exists(user: User, transient_ref: str = "pk") -> Q:
+def hidden_photometry_exists(user: User, transient_ref: str = "pk", names: Optional[Iterable[str]] = None) -> Q:
     """Condition: the transient at ``OuterRef(transient_ref)`` has photometry ``user`` may not see.
 
     Values derived from all of a transient's photometry (latest and peak
@@ -121,12 +121,15 @@ def hidden_photometry_exists(user: User, transient_ref: str = "pk") -> Q:
     on_transient = TransientPhotometry.objects.filter(transient_id=OuterRef(transient_ref))
     if is_service_reader(user):
         return Q(Exists(on_transient.none()))
-    names = user_group_names(user) if getattr(user, "is_authenticated", False) else []
+    if names is None:
+        names = user_group_names(user) if getattr(user, "is_authenticated", False) else []
     visible = TransientPhotometry.objects.filter(dataset_group_q(TransientPhotometry, user, names=names)).values("pk")
     return Q(Exists(on_transient.exclude(pk__in=visible)))
 
 
-def transients_with_hidden_photometry(user: User, transient_ids: Iterable[int]) -> Set[int]:
+def transients_with_hidden_photometry(
+    user: User, transient_ids: Iterable[int], names: Optional[Iterable[str]] = None
+) -> Set[int]:
     """The ids among ``transient_ids`` with photometry ``user`` may not see (one query)."""
     ids = {int(t) for t in transient_ids if t is not None}
     if not ids or is_service_reader(user):
@@ -134,12 +137,50 @@ def transients_with_hidden_photometry(user: User, transient_ids: Iterable[int]) 
     from YSE_App.models import Transient
 
     return set(
-        Transient.objects.filter(pk__in=ids).filter(hidden_photometry_exists(user)).values_list("pk", flat=True)
+        Transient.objects.filter(pk__in=ids).filter(hidden_photometry_exists(user, names=names)).values_list("pk", flat=True)
     )
 
 
 def user_has_hidden_photometry(user: User, transient_id: int) -> bool:
     return bool(transients_with_hidden_photometry(user, [transient_id]))
+
+
+def visible_photometry_ids(user: User, names: Optional[Iterable[str]] = None):
+    """Subquery of the ``TransientPhotometry`` pks ``user`` may see, or None (service readers: all).
+
+    For computing derived values (latest magnitude, last date) per viewer:
+    ``TransientPhotData.objects.filter(photometry_id__in=visible_photometry_ids(user))``.
+    """
+    if is_service_reader(user):
+        return None
+    from YSE_App.models import TransientPhotometry
+
+    if names is None:
+        names = user_group_names(user) if getattr(user, "is_authenticated", False) else []
+    return TransientPhotometry.objects.filter(dataset_group_q(TransientPhotometry, user, names=names)).values("pk")
+
+
+def null_if_hidden_photometry(user: User, expression, transient_ref: str = "pk", output_field=None,
+                              names: Optional[Iterable[str]] = None):
+    """``expression``, or NULL where the transient at ``transient_ref`` has photometry hidden from ``user``.
+
+    For annotations, sorts and filters on values derived from all of a
+    transient's photometry (``TransientPhotStat`` fields and the like).
+    """
+    if is_service_reader(user):
+        return expression
+    return Case(
+        When(hidden_photometry_exists(user, transient_ref, names=names), then=Value(None)),
+        default=expression,
+        output_field=output_field,
+    )
+
+
+def exclude_hidden_photometry(queryset: QuerySet, user: User, transient_ref: str = "pk") -> QuerySet:
+    """``queryset`` without rows whose transient (at ``transient_ref``) has photometry hidden from ``user``."""
+    if is_service_reader(user):
+        return queryset
+    return queryset.exclude(hidden_photometry_exists(user, transient_ref))
 
 
 def object_has_groups(obj) -> bool:

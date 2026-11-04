@@ -329,6 +329,15 @@ class TransientImageViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientImageSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        # Only images of points in photometry sets the user may see.
+        from YSE_App.services.visibility import visible_photometry_ids
+
+        visible = visible_photometry_ids(self.request.user)
+        if visible is None:
+            return TransientImage.objects.all()
+        return TransientImage.objects.filter(phot_data__photometry_id__in=visible)
+
 class HostImageViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = HostImage.objects.all()
     serializer_class = HostImageSerializer
@@ -819,15 +828,18 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     def _summary_payload(self, transient):
         from YSE_App.services import summaries as summaries_svc
 
-        version = summaries_svc.current_version(transient)
+        # The stored summary is written from all data: blank for a viewer with hidden photometry.
+        readable = summaries_svc.can_read(self.request.user, transient)
+        version = summaries_svc.current_version(transient) if readable else None
         run = summaries_svc.latest_run(transient)
         return {
             'transient': transient.pk,
             'transient_name': transient.name,
-            'summary': transient.summary or '',
-            'summary_modified': transient.summary_modified,
+            'summary': (transient.summary or '') if readable else '',
+            'summary_modified': transient.summary_modified if readable else None,
             'current': TransientSummaryVersionSerializer(version).data if version is not None else None,
-            'history': TransientSummaryVersionSerializer(summaries_svc.history(transient), many=True).data,
+            'history': (TransientSummaryVersionSerializer(summaries_svc.history(transient), many=True).data
+                        if readable else []),
             'run': {'uuid': str(run.uuid), 'status': run.status, 'error': run.error,
                     'finished_at': run.finished_at} if run is not None else None,
         }
@@ -947,9 +959,16 @@ class TransientPhotStatViewSet(viewsets.ReadOnlyModelViewSet):
     filter_class = TransientPhotStatFilter
 
     def get_queryset(self):
+        from YSE_App.services.visibility import exclude_hidden_photometry
+
         allowed = filter_transients_by_user_access(self.request.user, Transient.objects.all())
+        # The statistics come from all of a transient's points: no row (and no
+        # filter match) where some of its photometry is hidden from the user.
+        stats = exclude_hidden_photometry(
+            TransientPhotStat.objects.filter(transient__in=allowed.values('pk')), self.request.user, 'transient_id'
+        )
         return (
-            TransientPhotStat.objects.filter(transient__in=allowed.values('pk'))
+            stats
             .select_related('transient', 'first_detected_band', 'last_detected_band', 'peak_band',
                             'deepest_limit_band', 'last_non_detection_band')
             .order_by('-last_updated', '-pk')

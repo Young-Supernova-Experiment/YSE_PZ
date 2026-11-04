@@ -10,6 +10,8 @@ from django.db.models.functions import Greatest, Coalesce
 from django_tables2 import A
 from django.db import models
 from django.db.models.query import QuerySet
+from django.urls import reverse
+from django.utils.html import format_html
 from .data import PhotometryService
 import time
 import django_filters
@@ -27,7 +29,6 @@ from matplotlib.dates import DateFormatter
 from matplotlib import rcParams
 from django.db.models.expressions import RawSQL
 from .common.magnitude_format import format_magnitude
-from YSE_App.queries.raw_sql import RECENT_MAG_SQL
 # Circular: table_utils is imported from yse_pa during views import, before
 # follow-up request helpers are safe to load. Import in render methods.
 rcParams['figure.figsize'] = (7,7)
@@ -40,14 +41,22 @@ def stable_order_by(queryset, field, is_descending):
     return queryset.order_by(field, 'pk')
 
 
-def _recent_phot_subqueries(transient_ref):
+def _recent_phot_subqueries(transient_ref, user=None, names=None):
     """(recent_mag, recent_magdate) scalar subqueries for the transient at ``transient_ref``.
 
     Matches PhotometryService / Transient.recent_mag(): flagged bad data excluded.
+    Only photometry sets ``user`` may see count (``visibility.visible_photometry_ids``),
+    so the values never come from data hidden from the viewer (``user=None``:
+    an anonymous viewer, i.e. open data only). ``names``: the user's group names, if known.
     """
+    from YSE_App.services.visibility import visible_photometry_ids
+
     recent_phot = TransientPhotData.objects.filter(
         photometry__transient=OuterRef(transient_ref),
     ).exclude(data_quality__isnull=False)
+    visible = visible_photometry_ids(user, names=names)
+    if visible is not None:
+        recent_phot = recent_phot.filter(photometry_id__in=visible)
     recent_mag_sq = (
         recent_phot.filter(mag__isnull=False)
         .order_by('-obs_date')
@@ -57,27 +66,132 @@ def _recent_phot_subqueries(transient_ref):
     return Subquery(recent_mag_sq), Subquery(recent_magdate_sq)
 
 
-def annotate_followup_recent_mag(qs):
-    """recent_mag for each TransientFollowup row, one subquery instead of a query per row."""
-    if 'recent_mag' in qs.query.annotations:
-        return qs
-    recent_mag, _ = _recent_phot_subqueries('transient_id')
+def annotate_viewer_recent_phot(qs, user, transient_ref='pk', names=None):
+    """``recent_mag`` / ``recent_magdate`` from the photometry ``user`` may see (replaces any earlier value)."""
+    recent_mag, recent_magdate = _recent_phot_subqueries(transient_ref, user, names=names)
+    return qs.annotate(recent_mag=recent_mag, recent_magdate=recent_magdate)
+
+
+def annotate_followup_recent_mag(qs, user=None, names=None):
+    """recent_mag for each TransientFollowup row from the viewer's photometry, one subquery per queryset."""
+    recent_mag, _ = _recent_phot_subqueries('transient_id', user, names=names)
     return qs.annotate(recent_mag=recent_mag)
 
 
-class FollowupRecentMagMixin:
-    """Follow-up tables: recent_mag from the annotation, formatted like Transient.recent_mag()."""
+class ViewerHiddenPhotometryMixin:
+    """The viewer (``viewer=`` kwarg, else anonymous) and which page rows have photometry hidden from them.
 
-    def __init__(self, data, *args, **kwargs):
+    Values derived from all of a transient's photometry (stored summary,
+    Bazin fits, model-method magnitudes) are blank for those rows. The set
+    is computed once per page (one query) the first time a row asks.
+    """
+
+    _row_transient_attr = 'pk'
+
+    def _set_viewer(self, viewer):
+        self.viewer = viewer
+        self._hidden_ids = None
+        self._viewer_names = None
+
+    @property
+    def viewer_group_names(self):
+        """The viewer's group names, read once per table."""
+        from YSE_App.services.visibility import user_group_names
+
+        if self._viewer_names is None:
+            viewer = self.viewer
+            self._viewer_names = user_group_names(viewer) if getattr(viewer, 'is_authenticated', False) else []
+        return self._viewer_names
+
+    def _row_transient_id(self, record):
+        return getattr(record, self._row_transient_attr, None)
+
+    def _hidden_for(self, transient_id):
+        from YSE_App.services.visibility import transients_with_hidden_photometry
+
+        if getattr(self, '_hidden_ids', None) is None:
+            self._hidden_ids, self._hidden_checked = set(), set()
+        if transient_id not in self._hidden_checked:
+            ids = {transient_id}
+            rows = self.page.object_list if getattr(self, 'page', None) is not None else self.rows
+            try:
+                for row in rows:
+                    ids.add(self._row_transient_id(getattr(row, 'record', row)))
+            except Exception:
+                pass
+            ids -= self._hidden_checked
+            ids.discard(None)
+            self._hidden_ids |= transients_with_hidden_photometry(self.viewer, ids, names=self.viewer_group_names)
+            self._hidden_checked |= ids
+        return transient_id in self._hidden_ids
+
+
+class ViewerPhotometryMixin(ViewerHiddenPhotometryMixin):
+    """Transient tables: last magnitude / date from the viewer's photometry, peak blank when data is hidden.
+
+    ``recent_mag`` / ``recent_magdate`` are annotated from the photometry sets
+    the viewer may see; ``peak_mag`` (``TransientPhotStat``, all data) is NULL
+    for transients with photometry hidden from the viewer. Sorting uses the
+    same expressions, so neither the cells nor the order leak hidden data.
+    Pass ``viewer=request.user``; without it the table shows open data only.
+    """
+
+    _annotate_peak_mag = False
+
+    def __init__(self, data, *args, viewer=None, **kwargs):
+        self._set_viewer(viewer)
+        self._viewer_annotated = isinstance(data, QuerySet)
+        if self._viewer_annotated:
+            data = self._annotate_viewer_fields(data)
+        super().__init__(data, *args, **kwargs)
+
+    def _annotate_viewer_fields(self, queryset):
+        queryset = annotate_viewer_recent_phot(queryset, self.viewer, names=self.viewer_group_names)
+        if self._annotate_peak_mag:
+            queryset = annotate_peak_mag(queryset, self.viewer, names=self.viewer_group_names)
+        return queryset
+
+    def _derived_hidden(self, record):
+        """Un-annotated rows (a list) fall back to all-data model methods: blank them when data is hidden."""
+        return not self._viewer_annotated and self._hidden_for(record.pk)
+
+    def render_recent_mag(self, value, record):
+        if self._derived_hidden(record):
+            return ''
+        return format_magnitude(value)
+
+    def render_recent_magdate(self, value, record):
+        if self._derived_hidden(record):
+            return ''
+        if hasattr(value, 'strftime'):
+            return value.strftime(LastObsDateColumn.DATE_FORMAT)
+        return value
+
+    def order_recent_mag(self, queryset, is_descending):
+        queryset = annotate_viewer_recent_phot(queryset, self.viewer, names=self.viewer_group_names)
+        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
+
+    def order_recent_magdate(self, queryset, is_descending):
+        queryset = annotate_viewer_recent_phot(queryset, self.viewer, names=self.viewer_group_names)
+        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
+
+
+class FollowupRecentMagMixin(ViewerHiddenPhotometryMixin):
+    """Follow-up tables: recent_mag from the viewer's photometry, formatted like Transient.recent_mag()."""
+
+    _row_transient_attr = 'transient_id'
+
+    def __init__(self, data, *args, viewer=None, **kwargs):
+        self._set_viewer(viewer)
         if isinstance(data, QuerySet):
-            data = annotate_followup_recent_mag(data)
+            data = annotate_followup_recent_mag(data, viewer, names=self.viewer_group_names)
         super().__init__(data, *args, **kwargs)
 
     def render_recent_mag(self, value):
         return '%.2f' % value
 
     def order_recent_mag(self, queryset, is_descending):
-        queryset = annotate_followup_recent_mag(queryset)
+        queryset = annotate_followup_recent_mag(queryset, self.viewer, names=self.viewer_group_names)
         return (stable_order_by(queryset, 'recent_mag', is_descending), True)
 
 
@@ -113,8 +227,12 @@ class BazinMagMixin:
     def _bazin_mag_for(self, transient_id):
         from YSE_App.services.bazin import extrapolated_mags
 
+        # A fit reads all of a transient's points: none for rows with photometry hidden from the viewer.
+        if self._hidden_for(transient_id):
+            return None
         if transient_id not in self._bazin_seen:
             ids = self._page_transient_ids(transient_id)
+            ids = {i for i in ids if not self._hidden_for(i)}
             self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd))
             self._bazin_seen |= ids
         return self._bazin_mags.get(transient_id)
@@ -310,11 +428,16 @@ class PeakMagColumn(MagnitudeColumn):
     """
 
 
-def annotate_peak_mag(qs):
-    """``peak_mag`` from the stored photometry statistics, once per queryset."""
-    if 'peak_mag' in qs.query.annotations:
-        return qs
-    return qs.annotate(peak_mag=F('photstat__peak_mag'))
+def annotate_peak_mag(qs, user=None, names=None):
+    """``peak_mag`` from the stored photometry statistics; NULL when photometry is hidden from ``user``.
+
+    The stored statistics are computed from all of a transient's points, so a
+    viewer who may not see every set gets no value (and no sort position).
+    """
+    from YSE_App.services.visibility import null_if_hidden_photometry
+
+    return qs.annotate(peak_mag=null_if_hidden_photometry(
+        user, F('photstat__peak_mag'), output_field=models.FloatField(), names=names))
 
 
 # Star toggle (#323). The state is painted after load by base.html from
@@ -348,10 +471,10 @@ def annotate_open_interest_count(qs):
     return qs.annotate(open_interest_count=Subquery(counts, output_field=IntegerField()))
 
 
-class TransientTable(tables.Table):
+class TransientTable(ViewerPhotometryMixin, tables.Table):
 
-    # The first line of the AI/human summary (#295) as the link's tooltip.
-    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\"{% if record.summary %} title=\"{{ record.summary_first_line }}\" class=\"yse-has-summary\"{% endif %}>{{ record.name }}</a>",
+    # The first line of the AI/human summary (#295) as the link's tooltip (``render_name_string``).
+    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
     favorite = tables.TemplateColumn(FAVORITE_STAR_TEMPLATE, verbose_name='Fav.', orderable=False,
                                      attrs={'td': {'class': 'yse-fav-cell'}, 'th': {'class': 'yse-fav-cell'}})
@@ -399,19 +522,31 @@ class TransientTable(tables.Table):
                                           verbose_name='Status',orderable=True,order_by='status')
 
 
+    _annotate_peak_mag = True
+
     def __init__(self, data, *args, **kwargs):
         if isinstance(data, QuerySet):
-            data = annotate_open_interest_count(annotate_peak_mag(data))
+            data = annotate_open_interest_count(data)
         super().__init__(data, *args, **kwargs)
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
+
+    def render_name_string(self, record):
+        # The stored summary is written from all data: no tooltip when photometry is hidden from the viewer.
+        summary_line = None
+        if record.summary and not self._hidden_for(record.pk):
+            summary_line = record.summary_first_line
+        url = reverse('transient_detail', args=[record.slug])
+        if summary_line:
+            return format_html('<a href="{}" title="{}" class="yse-has-summary">{}</a>', url, summary_line, record.name)
+        return format_html('<a href="{}">{}</a>', url, record.name)
 
     def order_interest_count(self, queryset, is_descending):
         queryset = annotate_open_interest_count(queryset)
         return (stable_order_by(queryset, 'open_interest_count', is_descending), True)
 
     def order_peak_mag(self, queryset, is_descending):
-        queryset = annotate_peak_mag(queryset)
+        queryset = annotate_peak_mag(queryset, self.viewer, names=self.viewer_group_names)
         return (stable_order_by(queryset, 'peak_mag', is_descending), True)
 
 
@@ -424,25 +559,6 @@ class TransientTable(tables.Table):
             best_redshift=Coalesce('redshift', 'host__redshift'),
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
-
-
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -527,7 +643,7 @@ class FavoriteTransientTable(TransientTable):
         attrs['order'] = [[13, "desc"]]
 
 
-class FieldTransientTable(tables.Table):
+class FieldTransientTable(ViewerPhotometryMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -596,25 +712,6 @@ class FieldTransientTable(tables.Table):
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
-
-
     class Meta:
         model = Transient
         fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','mw_ebv',
@@ -638,7 +735,7 @@ class FieldTransientTable(tables.Table):
             "order": [[ 3, "desc" ]],
         }
 
-class AdjustFieldTransientTable(tables.Table):
+class AdjustFieldTransientTable(ViewerPhotometryMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -707,25 +804,6 @@ class AdjustFieldTransientTable(tables.Table):
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
-
-
     class Meta:
         model = Transient
         fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','mw_ebv',
@@ -750,7 +828,7 @@ class AdjustFieldTransientTable(tables.Table):
         }
 
 
-class YSETransientTable(tables.Table):
+class YSETransientTable(ViewerPhotometryMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -826,25 +904,6 @@ class YSETransientTable(tables.Table):
         return followup_comments_text(record)
 
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
-
-
     class Meta:
         model = Transient
         fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','mw_ebv',
@@ -868,7 +927,7 @@ class YSETransientTable(tables.Table):
             "order": [[ 3, "desc" ]],
         }
 
-class YSEFullTransientTable(tables.Table):
+class YSEFullTransientTable(ViewerPhotometryMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -938,25 +997,6 @@ class YSEFullTransientTable(tables.Table):
         return followup_resource_names(record, _SUCCESSFUL_FOLLOWUP_STATUSES)
 
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
-
-
     class Meta:
         model = Transient
         fields = ('name_string','ra_string','dec_string','disc_date_string','recent_mag','recent_magdate','mw_ebv',
@@ -980,7 +1020,7 @@ class YSEFullTransientTable(tables.Table):
             "order": [[ 3, "desc" ]],
         }
 
-class YSERisingTransientTable(tables.Table):
+class YSERisingTransientTable(ViewerPhotometryMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -1060,23 +1100,6 @@ class YSERisingTransientTable(tables.Table):
 
         return '%.2f'%value/24/60/60
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -1103,7 +1126,7 @@ class YSERisingTransientTable(tables.Table):
         }
 
 
-class NewTransientTable(tables.Table):
+class NewTransientTable(ViewerPhotometryMixin, tables.Table):
 
     name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
@@ -1165,23 +1188,6 @@ class NewTransientTable(tables.Table):
         )
         return (stable_order_by(queryset, 'best_redshift', is_descending), True)
 
-    def order_recent_mag(self, queryset, is_descending):
-
-        raw_query = RECENT_MAG_SQL
-
-        queryset = queryset.annotate(recent_mag=RawSQL(raw_query,()))
-        return (stable_order_by(queryset, 'recent_mag', is_descending), True)
-
-    def order_recent_magdate(self, queryset, is_descending):
-
-        all_phot = TransientPhotometry.objects.values('transient').filter(transient__in = queryset)
-        phot_ids = all_phot.values('id')
-
-        phot_data_query = Q(transientphotometry__id__in=phot_ids)
-        queryset = queryset.annotate(
-            recent_magdate=Max('transientphotometry__transientphotdata__obs_date',filter=phot_data_query), #,filter=phot_data_query
-        )
-        return (stable_order_by(queryset, 'recent_magdate', is_descending), True)
 
 
     class Meta:
@@ -1566,15 +1572,16 @@ class PageFirstQuerySet(QuerySet):
         return super().__getitem__(k)
 
 
-def annotate_dashboard_transient_fields(qs):
+def annotate_dashboard_transient_fields(qs, user=None):
     """
     Prefetch FKs and annotate recent photometry for dashboard tables.
 
     Avoids N+1 queries from Transient.recent_mag() / recent_magdate() during render.
+    The magnitudes come from the photometry ``user`` may see.
     Returns a PageFirstQuerySet so django-tables2's page slice does not evaluate the
     subqueries for every row of the bucket (see PageFirstQuerySet).
     """
-    recent_mag, recent_magdate = _recent_phot_subqueries('pk')
+    recent_mag, recent_magdate = _recent_phot_subqueries('pk', user)
     return PageFirstQuerySet.wrap(
         qs.select_related('status', 'host', 'obs_group').annotate(
             recent_mag=recent_mag,
@@ -1719,7 +1726,7 @@ def dashboard_tables(request):
 
     k2_transients = Transient.objects.all()
 
-    table = TransientTable(k2_transients)
+    table = TransientTable(k2_transients, viewer=request.user)
     RequestConfig(request, paginate={'per_page': 10}).configure(table)
 
     context = {'k2_transients': table}

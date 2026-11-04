@@ -47,13 +47,15 @@ def summary_card_context(request, transient: Transient) -> dict:
     service = svc.service_row()
     run = svc.latest_run(transient)
     active = bool(run is not None and not run.is_finished)
+    # The stored summary is written from all data: blank for a viewer with hidden photometry.
+    readable = svc.can_read(user, transient)
     provider_ok, provider_reason = (llm.chat_available(service, service.default_params or {})
                                     if service is not None else (False, "no service"))
     return {
         "transient": transient,
-        "summary_text": transient.summary or "",
-        "summary_version": svc.current_version(transient),
-        "summary_history": svc.history(transient, HISTORY_LIMIT),
+        "summary_text": (transient.summary or "") if readable else "",
+        "summary_version": svc.current_version(transient) if readable else None,
+        "summary_history": svc.history(transient, HISTORY_LIMIT) if readable else [],
         "summary_can_edit": svc.can_edit(user, transient),
         "summary_service": service,
         "summary_group_allows": svc.group_allows(user, service),

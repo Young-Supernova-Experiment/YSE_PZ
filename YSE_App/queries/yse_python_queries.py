@@ -1,3 +1,5 @@
+import sys
+
 from YSE_App.models import *
 from django.db.models import DateTimeField, ExpressionWrapper, F, Q
 from django.db.models.functions import Greatest
@@ -21,6 +23,31 @@ def makeRegistrar():
     registrar.all = registry
     return registrar
 python_query_reg = makeRegistrar()
+
+# Queries whose membership is computed from all of a transient's photometry
+# (rise rates from the latest points of every set).
+PHOTOMETRY_DERIVED_QUERIES = frozenset((
+    'fastrising_transient_queryset',
+    'rising_transient_queryset',
+    'tns_yse_rising_transient_queryset',
+    'recent_rising_transient_queryset',
+))
+
+
+def python_query_for_viewer(name, user, queryset=None):
+    """The python query ``name`` (or its ``queryset``) as ``user`` may see it.
+
+    Stop-gap until the rise rates are computed per viewer: a photometry-derived
+    query leaves out transients with photometry hidden from ``user``, so list
+    membership never reveals hidden points.
+    """
+    from YSE_App.services.visibility import exclude_hidden_photometry
+
+    if queryset is None:
+        queryset = getattr(sys.modules[__name__], name)()
+    if name in PHOTOMETRY_DERIVED_QUERIES:
+        queryset = exclude_hidden_photometry(queryset, user)
+    return queryset
 
 def annotate_rising_transient_qs(qs):
 

@@ -52,7 +52,12 @@ from YSE_App.models.transient_models import Transient
 from YSE_App.services import external_services as runs
 from YSE_App.services import llm
 from YSE_App.services.job_queue import enqueue, job
-from YSE_App.services.visibility import filter_transients_by_user_access, user_can_view_transient
+from YSE_App.services.visibility import (
+    filter_transients_by_user_access,
+    transients_with_hidden_photometry,
+    user_can_view_transient,
+    user_has_hidden_photometry,
+)
 
 log = logging.getLogger(__name__)
 
@@ -118,9 +123,14 @@ def can_view(user, transient: Transient) -> bool:
     return user_can_view_transient(user, transient.pk)
 
 
+def can_read(user, transient: Transient) -> bool:
+    """The stored summary is written from all of the transient's data: only for a viewer who sees all its photometry."""
+    return can_view(user, transient) and not user_has_hidden_photometry(user, transient.pk)
+
+
 def can_edit(user, transient: Transient) -> bool:
-    """Human edits: any user who can see the transient, unless SUMMARY_EDIT_STAFF_ONLY (then staff / permission)."""
-    if not can_view(user, transient):
+    """Human edits: any user who can read the summary, unless SUMMARY_EDIT_STAFF_ONLY (then staff / permission)."""
+    if not can_read(user, transient):
         return False
     if user.is_staff or user.is_superuser or user.has_perm("YSE_App." + EDIT_PERMISSION):
         return True
@@ -148,7 +158,7 @@ def can_generate(user, transient: Transient, service: Optional[ExternalService] 
     """Generate / regenerate: view access + the service allows the user's groups + the per-user opt-in."""
     if service is None:
         service = service_row()
-    return can_view(user, transient) and group_allows(user, service) and opted_in(user)
+    return can_read(user, transient) and group_allows(user, service) and opted_in(user)
 
 
 # --- context ----------------------------------------------------------------------
@@ -681,6 +691,9 @@ def search_summaries(query: str, user, limit: Optional[int] = None) -> Dict:
     scores = dict(ranked)
     transients = Transient.objects.filter(pk__in=list(order)).select_related("status", "best_spec_class", "host")
     visible = list(filter_transients_by_user_access(user, transients))
+    # Summaries are written from all data: none where photometry is hidden from the user.
+    hidden = transients_with_hidden_photometry(user, [t.pk for t in visible])
+    visible = [t for t in visible if t.pk not in hidden]
     visible.sort(key=lambda t: order[t.pk])
     for transient in visible[:limit]:
         out["results"].append({
