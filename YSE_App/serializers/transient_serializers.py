@@ -25,7 +25,36 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         fields = "__all__"
         # Edits go through PATCH /api/transients/<id>/summary/ (audited history, #295).
         read_only_fields = ("summary", "summary_modified")
-        
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The stored summary is written from all data: blank for a viewer with hidden photometry.
+        if data.get("summary") and self._photometry_hidden(instance):
+            data["summary"] = None
+            data["summary_modified"] = None
+        return data
+
+    def _photometry_hidden(self, instance):
+        """One query for a whole list response: the hidden set is computed for every listed transient."""
+        from YSE_App.services.visibility import transients_with_hidden_photometry
+
+        context = self.context if isinstance(self.context, dict) else {}
+        checked = context.setdefault("_photometry_checked", set())
+        hidden = context.setdefault("_photometry_hidden", set())
+        if instance.pk not in checked:
+            ids = {instance.pk}
+            siblings = getattr(self.parent, "instance", None)
+            if siblings is not None:
+                try:
+                    ids |= {t.pk for t in siblings if hasattr(t, "summary") and t.summary}
+                except TypeError:
+                    pass
+            ids -= checked
+            request = context.get("request")
+            hidden |= transients_with_hidden_photometry(getattr(request, "user", None), ids)
+            checked |= ids
+        return instance.pk in hidden
+
     def create(self, validated_data):
 
         tags_exist = 'tags' in validated_data.keys()
