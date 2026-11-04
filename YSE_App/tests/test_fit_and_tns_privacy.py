@@ -9,6 +9,7 @@ submit) is built only from data the reporting user may see, and only staff,
 All users and transients are synthetic; nothing talks to TNS.
 """
 
+import ast
 import datetime
 import json
 from unittest import mock
@@ -35,11 +36,19 @@ from YSE_App.tests.fixtures_minimal import (
 FIT_MARKER = "synthfitmarker"
 
 
-def _result_dict(value):
-    """The API may serialize ``result`` as an object or as a JSON string."""
-    if isinstance(value, str):
+def _as_python(value):
+    """A JSON-ish API field as Python data.
+
+    The API renders some JSON model fields (run ``result``, submission
+    ``payload``) as a string: JSON, or the Python repr of the dict. Accept a
+    dict, a JSON string or a Python-literal string; ``None`` stays ``None``.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
         return json.loads(value)
-    return value
+    except ValueError:
+        return ast.literal_eval(value)
 
 
 class PrivacyBase(TestCase):
@@ -110,7 +119,7 @@ class StoredFitPrivacyTests(PrivacyBase):
     def test_analysisruns_api(self):
         member_rows = self._api_rows(self.member)
         self.assertEqual([r["uuid"] for r in member_rows], [str(self.run.uuid)])
-        self.assertEqual(_result_dict(member_rows[0]["result"])["model"], FIT_MARKER)
+        self.assertEqual(_as_python(member_rows[0]["result"])["model"], FIT_MARKER)
         outsider_rows = self._api_rows(self.outsider)
         self.assertEqual(outsider_rows, [])
 
@@ -206,4 +215,4 @@ class TNSReportPrivacyTests(PrivacyBase):
             self.client.force_login(user)
             rows = self.client.get("/api/sharingsubmissions/?format=json").json()
             rows = rows.get("results", rows) if isinstance(rows, dict) else rows
-            self.assertEqual([r["payload"] for r in rows], [payload], user.username)
+            self.assertEqual([_as_python(r["payload"]) for r in rows], [payload], user.username)
