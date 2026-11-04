@@ -4,7 +4,7 @@
   queries, and any query for SQL Explorer users and service accounts. Anything
   else is a 404, the same as an unknown title.
 * Rows are limited to transients the caller may view, except for staff,
-  superusers and service accounts (the cron accounts).
+  superusers and service accounts (the cron account).
 * The titles the crons and scripts request are on the built-in list.
 
 Synthetic users, groups and transients only.
@@ -22,18 +22,17 @@ from django.contrib.auth.models import Group
 from django.core.cache import cache
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 
-from YSE_App import views as views_module
-from YSE_App.perf.access import (
-    MEMBER_GROUP_NAME,
-    create_non_staff_user,
-    seed_access_transients,
-    visible_suffixes_for,
+from YSE_App import data_utils as data_utils_module
+from YSE_App.tests.fixtures_minimal import (
+    attach_synthetic_photometry,
+    create_minimal_transient,
+    create_test_user,
 )
-from YSE_App.tests.fixtures_minimal import create_test_user
 
 _PASSWORD = 'query-api-access-pw'
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 _REPO_APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MEMBER_GROUP_NAME = 'qaa-member-group'
 
 
 def _basic_auth(username):
@@ -52,7 +51,6 @@ class _ExplorerToDefault:
 
 @override_settings(
     PASSWORD_HASHERS=PASSWORD_HASHERS,
-    QUERY_API_CACHE_SECONDS=0,
     QUERY_API_ALLOWED_QUERIES=['qaa published'],
     API_SERVICE_USERNAMES=['qaa_cron'],
     QUERY_API_VISIBILITY_FILTER=True,
@@ -63,12 +61,21 @@ class QueryApiAccessTests(TestCase):
         from explorer.models import Query
 
         cls.owner = create_test_user('qaa_owner')
-        cls.dataset = seed_access_transients(cls.owner, prefix='qaa')
-        cls.member = create_non_staff_user('qaa_member', (MEMBER_GROUP_NAME,))
+        member_group, _ = Group.objects.get_or_create(name=MEMBER_GROUP_NAME)
+        other_group, _ = Group.objects.get_or_create(name='qaa-other-group')
+        cls.by_suffix = {}
+        for suffix, group in (('memberphot', member_group), ('otherphot', other_group),
+                              ('openphot', None), ('nodata', None)):
+            transient = create_minimal_transient(cls.owner, name='qaa%s' % suffix)
+            if suffix != 'nodata':
+                phot = attach_synthetic_photometry(cls.owner, transient, n_points=1)
+                if group is not None:
+                    phot.groups.add(group)
+            cls.by_suffix[suffix] = transient
+        cls.member = create_test_user('qaa_member', is_staff=False)
+        cls.member.groups.add(member_group)
         cls.cron = create_test_user('qaa_cron', is_staff=False)
-        cls.writer = create_test_user('qaa_writer', is_staff=False)
-        cls.writer.groups.add(Group.objects.get_or_create(name=settings.API_WRITERS_GROUP)[0])
-        for user in (cls.owner, cls.member, cls.cron, cls.writer):
+        for user in (cls.owner, cls.member, cls.cron):
             user.set_password(_PASSWORD)
             user.save()
         sql = "SELECT t.name, t.ra FROM YSE_App_transient t WHERE t.name LIKE 'qaa%' ORDER BY t.name"
@@ -83,15 +90,13 @@ class QueryApiAccessTests(TestCase):
             sql="SELECT t.id AS transient_id, t.name AS label FROM YSE_App_transient t "
                 "WHERE t.name LIKE 'qaa%' ORDER BY t.name",
             snapshot=False, created_by_user=cls.owner)
-        cls.all_names = sorted(t.name for t in cls.dataset.transients)
-        visible = visible_suffixes_for((MEMBER_GROUP_NAME,))
-        cls.member_names = sorted(
-            t.name for s, t in cls.dataset.by_suffix.items() if s in visible)
+        cls.all_names = sorted(t.name for t in cls.by_suffix.values())
+        cls.member_names = sorted(cls.by_suffix[s].name for s in ('memberphot', 'openphot'))
 
     def setUp(self):
         cache.clear()
         self.addCleanup(cache.clear)
-        patcher = mock.patch.object(views_module, 'connections', _ExplorerToDefault())
+        patcher = mock.patch.object(data_utils_module, 'connections', _ExplorerToDefault())
         patcher.start()
         self.addCleanup(patcher.stop)
         self.client = Client()
@@ -114,11 +119,11 @@ class QueryApiAccessTests(TestCase):
     def test_own_query_runs_for_non_staff(self):
         self.assertEqual(self._names(self._get(self.member, self.own)), self.member_names)
 
-    def test_explorer_user_may_run_any_query(self):
+    def test_staff_may_run_any_query(self):
         self.assertEqual(self._names(self._get(self.owner, self.unpublished)), self.all_names)
 
     def test_service_accounts_may_run_any_query(self):
-        for user in (self.cron, self.writer):
+        for user in (self.cron,):
             with self.subTest(user=user.username):
                 self.assertEqual(self._names(self._get(user, self.unpublished)), self.all_names)
 
@@ -136,12 +141,12 @@ class QueryApiAccessTests(TestCase):
     def test_non_staff_rows_are_visibility_filtered(self):
         names = self._names(self._get(self.member, self.published))
         self.assertLess(len(names), len(self.all_names))
-        self.assertNotIn(self.dataset.by_suffix['otherphot'].name, names)
-        self.assertNotIn(self.dataset.by_suffix['nodata'].name, names)
-        self.assertIn(self.dataset.by_suffix['memberphot'].name, names)
+        self.assertNotIn(self.by_suffix['otherphot'].name, names)
+        self.assertNotIn(self.by_suffix['nodata'].name, names)
+        self.assertIn(self.by_suffix['memberphot'].name, names)
 
     def test_staff_and_service_accounts_get_every_row(self):
-        for user in (self.owner, self.cron, self.writer):
+        for user in (self.owner, self.cron):
             with self.subTest(user=user.username):
                 self.assertEqual(self._names(self._get(user, self.published)), self.all_names)
 
@@ -154,7 +159,7 @@ class QueryApiAccessTests(TestCase):
         with override_settings(QUERY_API_VISIBILITY_FILTER=False):
             self.assertEqual(self._names(self._get(self.member, self.published)), self.all_names)
 
-    # -- registered Python queries ----------------------------------------
+    # -- Python queries ----------------------------------------------------
 
     def test_python_query_rows_are_serialized_and_filtered(self):
         from YSE_App.models import Transient
@@ -163,11 +168,17 @@ class QueryApiAccessTests(TestCase):
         def qaa_py():
             return Transient.objects.filter(name__startswith='qaa')
 
-        with mock.patch.dict(yse_python_queries.python_query_reg.all, {'qaa_py': qaa_py}):
+        qaa_py.__module__ = yse_python_queries.__name__
+        with mock.patch.object(yse_python_queries, 'qaa_py', qaa_py, create=True):
             member = self.client.get('/query_api/qaa_py/', **_basic_auth(self.member.username))
             cron = self.client.get('/query_api/qaa_py/', **_basic_auth(self.cron.username))
         self.assertEqual(self._names(member, key='transient_name'), self.member_names)
         self.assertEqual(self._names(cron, key='transient_name'), self.all_names)
+
+    def test_python_query_name_must_be_defined_in_the_module(self):
+        # Names imported into yse_python_queries (here ``timedelta``) are not queries.
+        response = self.client.get('/query_api/timedelta/', **_basic_auth(self.member.username))
+        self.assertEqual(response.status_code, 404)
 
     def test_unknown_title_is_404(self):
         response = self.client.get('/query_api/qaa_nothing/', **_basic_auth(self.member.username))
