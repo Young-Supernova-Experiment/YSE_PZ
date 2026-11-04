@@ -470,10 +470,10 @@ EXPLORER_SQL_BLACKLIST = (
 ) + _PERSONAL_DATA_TABLES
 
 REST_FRAMEWORK = {
-    # Use Django's standard `django.contrib.auth` permissions,
-    # or allow read-only access for unauthenticated users.
+    # Every viewset sets its own permission classes; the default only covers
+    # views that do not (API root, schema): never anonymous reads.
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
+        'rest_framework.permissions.IsAuthenticated'
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
        'rest_framework.authentication.BasicAuthentication',

@@ -232,9 +232,20 @@ def system_user() -> Optional[User]:
 
 # --- photometry selection -----------------------------------------------------
 
-def _photometry_rows(service: SharingService, transient: Transient):
+def _photometry_rows(service: SharingService, transient: Transient, user: Optional[User] = None):
+    """Unflagged rows the service may report; with ``user``, only rows that user may see.
+
+    A person's report (the dialog) never carries data hidden from them; ``user=None``
+    is an auto-publisher rule, limited by the service's instruments / groups only.
+    """
+    if user is not None:
+        from YSE_App.data import PhotometryService
+
+        base = PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(user, transient.pk)
+    else:
+        base = TransientPhotData.objects.filter(photometry__transient=transient)
     qs = (
-        TransientPhotData.objects.filter(photometry__transient=transient)
+        base
         .select_related("photometry__instrument", "photometry__obs_group", "band")
         .annotate(n_dq=Count("data_quality"))
         .order_by("obs_date")
@@ -261,7 +272,8 @@ def _limiting_mag(point) -> Optional[float]:
     return -2.5 * math.log10(flux + 3.0 * flux_err) + zp
 
 
-def select_photometry(service: SharingService, transient: Transient, max_points: Optional[int] = None):
+def select_photometry(service: SharingService, transient: Transient, max_points: Optional[int] = None,
+                      user: Optional[User] = None):
     """``(detections, last_pre_detection_limit)`` from the allowed instruments/groups.
 
     Detections are unflagged rows with a magnitude, oldest first; the first one
@@ -269,7 +281,7 @@ def select_photometry(service: SharingService, transient: Transient, max_points:
     The limit is the latest non-detection *before* the discovery point (limits
     during the decline are not reported).
     """
-    rows = _photometry_rows(service, transient)
+    rows = _photometry_rows(service, transient, user=user)
     detections = [p for p in rows if _finite(p.mag) is not None]
     if not detections:
         return [], None
@@ -317,7 +329,8 @@ def _phot_entry(service, point, *, limiting=False) -> dict:
 
 
 def build_at_report(service: SharingService, transient: Transient, *, coauthors: str = "",
-                    remarks: str = "", internal_name: str = "", max_points: Optional[int] = None) -> dict:
+                    remarks: str = "", internal_name: str = "", max_points: Optional[int] = None,
+                    user: Optional[User] = None) -> dict:
     """A TNS ``at_report`` (discovery report) for ``transient``.
 
     Raises :class:`PayloadError` when the service has no reporting group, the
@@ -329,7 +342,7 @@ def build_at_report(service: SharingService, transient: Transient, *, coauthors:
         raise PayloadError("%s has no TNS reporting group id." % service.name)
     if is_tns_name(transient.name):
         raise PayloadError("%s already carries a TNS name." % transient.name)
-    detections, last_limit = select_photometry(service, transient, max_points=max_points)
+    detections, last_limit = select_photometry(service, transient, max_points=max_points, user=user)
     if not detections:
         raise PayloadError("No unflagged detection from the instruments this service may report.")
     discovery = detections[0]
@@ -403,8 +416,10 @@ def spectrum_ascii(spectrum: TransientSpectrum) -> Optional[bytes]:
 
 def build_classification_report(service: SharingService, transient: Transient, *, spectrum: TransientSpectrum,
                                 classification: str = "", redshift=None, coauthors: str = "",
-                                remarks: str = "") -> dict:
+                                remarks: str = "", user: Optional[User] = None) -> dict:
     """A TNS ``classification_report`` for ``transient`` based on ``spectrum``.
+
+    With ``user``, the spectrum must be one that user may see.
 
     The report carries ``_yse.spectrum_id`` (stripped before sending) so the
     submit job can upload the spectrum and fill ``ascii_file``.
@@ -418,6 +433,12 @@ def build_classification_report(service: SharingService, transient: Transient, *
         raise PayloadError("%s has no TNS name yet; report the discovery first (or run TNS retrieval)." % transient.name)
     if spectrum is None or spectrum.transient_id != transient.pk:
         raise PayloadError("A spectrum of this transient is required for a classification report.")
+    if user is not None:
+        from YSE_App.data import SpectraService
+
+        if not SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(
+                user, transient.pk).filter(pk=spectrum.pk).exists():
+            raise PayloadError("A spectrum of this transient is required for a classification report.")
     if not service.instrument_allowed(spectrum.instrument):
         raise PayloadError("Spectra from %s may not be reported through %s." % (spectrum.instrument.name, service.name))
     allowed_groups = service.allowed_obs_group_ids()
@@ -462,11 +483,13 @@ def build_classification_report(service: SharingService, transient: Transient, *
 def build_payload(service: SharingService, transient: Transient, kind: str, **options) -> dict:
     if kind == KIND_DISCOVERY:
         return build_at_report(service, transient, coauthors=options.get("coauthors", ""),
-                               remarks=options.get("remarks", ""), internal_name=options.get("internal_name", ""))
+                               remarks=options.get("remarks", ""), internal_name=options.get("internal_name", ""),
+                               user=options.get("user"))
     if kind == KIND_CLASSIFICATION:
         return build_classification_report(
             service, transient, spectrum=options.get("spectrum"), classification=options.get("classification", ""),
             redshift=options.get("redshift"), coauthors=options.get("coauthors", ""), remarks=options.get("remarks", ""),
+            user=options.get("user"),
         )
     if kind == KIND_HERMES:
         return {"hermes": {"transient": transient.name, "topic": service.hermes_topic,
@@ -726,7 +749,8 @@ def create_submission(service: SharingService, transient: Transient, kind: str, 
     if not service.enabled:
         raise SharingError("%s is disabled." % service.name)
     if payload is None:
-        payload = build_payload(service, transient, kind, **options)
+        # a person's report holds only data they may see; a rule (no user) is limited by the service
+        payload = build_payload(service, transient, kind, user=user, **options)
     submission = SharingSubmission.objects.create(
         service=service, transient=transient, kind=kind, payload=payload, auto_publisher=auto_publisher,
         created_by=actor, modified_by=actor,

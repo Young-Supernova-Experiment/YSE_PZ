@@ -190,7 +190,7 @@ def _note_salt2_fit_failure(ax, exc, transient_id):
 SALT_FIT_NONE_TEXT = "No stored SALT3 fit yet: use Refit on the Summary tab"
 
 
-def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=None):
+def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, salt_run=None, user=None):
     """Draw the last successful ``sncosmo_fit`` run (#315) instead of refitting in the request.
 
     ``series`` is ``[(bandkey, color)]`` with ``bandkey`` the ``bandpassdict``
@@ -198,10 +198,13 @@ def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, 
     holds magnitudes on zero point 27.5 per sncosmo band; ``flux_space``
     converts them to the flux plot's units. Returns the run drawn, or ``None``
     when there is no stored fit (the plot then says so and never blocks).
+    Without ``salt_run`` the fit is the newest one ``user`` may see
+    (``fit_status.stored_salt_fit``); a fit built from data hidden from
+    ``user`` is never drawn.
     """
     from YSE_App.services import fit_status
 
-    run = salt_run if salt_run is not None else fit_status.stored_salt_fit(transient_id)
+    run = salt_run if salt_run is not None else fit_status.stored_salt_fit(transient_id, user)
     if run is None:
         ax.add_layout(Label(
             x=10, y=280, x_units='screen', y_units='screen',
@@ -1296,9 +1299,10 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     salt_run = None
     if salt2:
         # The SALT3 overlay is the stored run's curves (#315): cheap and
-        # deterministic per run, so it is cached under the run's id.
+        # deterministic per run, so it is cached under the run's id. The HTML
+        # is shared by users with the same groups, so no creator-only fit.
         from YSE_App.services import fit_status
-        salt_run = fit_status.stored_salt_fit(transient_id)
+        salt_run = fit_status.stored_salt_fit(transient_id, request.user, allow_creator=False)
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (
@@ -1814,7 +1818,7 @@ def lightcurveplot_flux(request, transient_id, salt2=False):
                 color = colorlist[count % len(np.unique(colorlist))]
                 count += 1
             series.append((str(bs), color))
-        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=True)
+        _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=True, user=request.user)
 
     g = file_html(ax,CDN,"my plot")
     return HttpResponse(g.replace('width: 90%','width: 100%'))

@@ -34,13 +34,16 @@ def group_access_plot_cache_token(user: User) -> str:
 
     if not user.is_authenticated:
         return "anon"
-    if user.is_staff or user.is_superuser:
-        return "staff"
+    # Staff see data by group like everyone else (``dataset_group_q`` has no
+    # staff exemption), so their token carries their groups too.
+    prefix = "staff" if (user.is_staff or user.is_superuser) else ""
+    if is_service_reader(user):
+        prefix += "svc"
     names = sorted(user_group_names(user))
     if not names:
-        return "nogroups"
+        return f"{prefix}nogroups"
     digest = hashlib.sha256("|".join(names).encode()).hexdigest()[:12]
-    return f"g{digest}"
+    return f"{prefix}g{digest}"
 
 
 # Backward-compatible alias (deprecated name).
