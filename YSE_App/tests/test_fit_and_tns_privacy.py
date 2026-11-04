@@ -10,6 +10,7 @@ All users and transients are synthetic; nothing talks to TNS.
 """
 
 import datetime
+import json
 from unittest import mock
 
 from django.contrib.auth.models import Group
@@ -32,6 +33,13 @@ from YSE_App.tests.fixtures_minimal import (
 )
 
 FIT_MARKER = "synthfitmarker"
+
+
+def _result_dict(value):
+    """The API may serialize ``result`` as an object or as a JSON string."""
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
 
 
 class PrivacyBase(TestCase):
@@ -102,7 +110,7 @@ class StoredFitPrivacyTests(PrivacyBase):
     def test_analysisruns_api(self):
         member_rows = self._api_rows(self.member)
         self.assertEqual([r["uuid"] for r in member_rows], [str(self.run.uuid)])
-        self.assertEqual(member_rows[0]["result"]["model"], FIT_MARKER)
+        self.assertEqual(_result_dict(member_rows[0]["result"])["model"], FIT_MARKER)
         outsider_rows = self._api_rows(self.outsider)
         self.assertEqual(outsider_rows, [])
 
@@ -190,12 +198,12 @@ class TNSReportPrivacyTests(PrivacyBase):
         self.assertEqual(response.status_code, 404)
         self.assertFalse(SharingSubmission.objects.exists())
 
-    def test_submission_api_payload_only_for_reporters(self):
+    def test_submission_api_payload_only_for_reporters(self, *_mocks):
         SharingSubmission.objects.create(
             service=self.service, transient=self.transient, kind="discovery", payload={"synthetic": 1},
             created_by=self.admin, modified_by=self.admin)
         for user, payload in ((self.outsider, None), (self.member, {"synthetic": 1})):
             self.client.force_login(user)
             rows = self.client.get("/api/sharingsubmissions/?format=json").json()
-            rows = rows.get("results", rows)
+            rows = rows.get("results", rows) if isinstance(rows, dict) else rows
             self.assertEqual([r["payload"] for r in rows], [payload], user.username)
