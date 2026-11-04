@@ -189,3 +189,13 @@ class TNSReportPrivacyTests(PrivacyBase):
                                         {"service": self.service.pk, "kind": "classification", "spectrum": hidden.pk})
         self.assertEqual(response.status_code, 404)
         self.assertFalse(SharingSubmission.objects.exists())
+
+    def test_submission_api_payload_only_for_reporters(self):
+        SharingSubmission.objects.create(
+            service=self.service, transient=self.transient, kind="discovery", payload={"synthetic": 1},
+            created_by=self.admin, modified_by=self.admin)
+        for user, payload in ((self.outsider, None), (self.member, {"synthetic": 1})):
+            self.client.force_login(user)
+            rows = self.client.get("/api/sharingsubmissions/?format=json").json()
+            rows = rows.get("results", rows)
+            self.assertEqual([r["payload"] for r in rows], [payload], user.username)
