@@ -106,3 +106,21 @@ class YseDataPrivacyTests(TestCase):
         phot = self._phot(self.yse_stack, self.yse, self.other_team)
         self.assertTrue(self._sees_phot(self.other, phot))
         self.assertFalse(self._sees_phot(self.outsider, phot))
+
+
+class HiddenPhotometryTests(YseDataPrivacyTests):
+    def test_hidden_when_a_yse_set_is_hidden(self):
+        from YSE_App.services.visibility import transients_with_hidden_photometry
+
+        self._phot(self.other_stack)
+        self.assertEqual(transients_with_hidden_photometry(self.outsider, [self.transient.id]), set())
+        self._phot(self.yse_stack, self.yse, self.public)
+        self.assertEqual(transients_with_hidden_photometry(self.outsider, [self.transient.id]), {self.transient.id})
+        self.assertEqual(transients_with_hidden_photometry(self.member, [self.transient.id]), set())
+
+    def test_unlabelled_yse_set_is_hidden_from_outsiders(self):
+        from YSE_App.services.visibility import transients_with_hidden_photometry
+
+        self._phot(self.yse_stack)
+        self.assertEqual(transients_with_hidden_photometry(self.outsider, [self.transient.id]), {self.transient.id})
+        self.assertEqual(transients_with_hidden_photometry(self.member, [self.transient.id]), set())
