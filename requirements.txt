@@ -184,7 +184,7 @@ tensorflow-io-gcs-filesystem==0.34.0
 termcolor==1.1.0
 threadpoolctl==2.1.0
 toml==0.10.2
-tornado==6.1
+tornado==6.6
 tqdm==4.67.1
 traitlets==5.0.5
 typing-extensions==4.0.1
