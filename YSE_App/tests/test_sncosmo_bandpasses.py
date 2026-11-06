@@ -56,14 +56,15 @@ class BandpassDictTests(SimpleTestCase):
 
 class LocalBandpassTests(SimpleTestCase):
     def test_curves_load(self):
-        # (name, lower wavelength, upper wavelength) in Angstrom
-        for name, lo, hi in (("gotol", 3900, 7200), ("gotor", 5500, 7300), ("gotog", 4000, 6000), ("gotob", 3600, 5300),
-                             ("atlasc", 4100, 6600), ("atlaso", 5500, 8300)):
+        # (name, first and last tabulated wavelength, effective wavelength) in Angstrom, from the SVO files;
+        # GOTO G and B keep a faint red tail, so the file range is wider than the passband
+        for name, first, last, eff in (("gotol", 3960, 7140, 5650), ("gotor", 5610, 7210, 6440), ("gotog", 4720, 7590, 5390),
+                                       ("gotob", 3840, 6530, 4650), ("atlasc", 4110, 6580, 5480), ("atlaso", 5550, 8270, 6940)):
             fname = {**sncosmo_bandpasses.LOCAL_BANDPASSES, **sncosmo_bandpasses.FALLBACK_BANDPASSES}[name]
             band = sncosmo_bandpasses._load("%s/%s" % (sncosmo_bandpasses.BANDPASS_DIR, fname), name=name)
-            self.assertGreaterEqual(band.minwave(), lo - 100, name)
-            self.assertLessEqual(band.maxwave(), hi + 100, name)
-            self.assertTrue(lo < band.wave_eff < hi, (name, band.wave_eff))
+            self.assertAlmostEqual(band.minwave(), first, delta=1, msg=name)
+            self.assertAlmostEqual(band.maxwave(), last, delta=1, msg=name)
+            self.assertAlmostEqual(band.wave_eff, eff, delta=150, msg=name)
 
     def test_register_is_idempotent_and_resolves_goto(self):
         import sncosmo
