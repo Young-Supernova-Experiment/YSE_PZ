@@ -2671,26 +2671,48 @@ def save_search(request):
 
     
 ZTF_FORCED_PHOT_LOG_PREFIX = 'ZTF Forced Phot'
+ATLAS_FORCED_PHOT_LOG_PREFIX = 'ATLAS Forced Phot'
 
 
-def _ztf_forced_phot_via_allocation(request, transient):
-    """Submit through the first usable 'ztf' allocation; None when there is none (legacy path)."""
+def _forced_phot_via_allocation(request, transient, facility, label):
+    """Submit through the first usable allocation of ``facility``; None when there is none."""
     from YSE_App.facilities import FacilityValidationError
     from YSE_App.services import facility_requests as fr
 
-    allocation = fr.allocations_for_user(request.user).filter(facility='ztf').order_by('-end_date').first()
+    allocation = fr.allocations_for_user(request.user).filter(facility=facility).order_by('-end_date').first()
     if allocation is None:
         return None
     existing = fr.open_request_for(allocation, transient)
     if existing is not None:
-        return 'error: a ZTF forced-photometry request is already %s (submitted %s)' % (
-            existing.get_state_display().lower(), (existing.submitted_at or existing.created_date).strftime('%Y-%m-%d %H:%M UT'))
+        return 'error: a %s forced-photometry request is already %s (submitted %s)' % (
+            label, existing.get_state_display().lower(), (existing.submitted_at or existing.created_date).strftime('%Y-%m-%d %H:%M UT'))
     try:
         req = fr.submit_request(allocation, transient, request.user, {})
     except (FacilityValidationError, fr.FacilityRequestError) as exc:
         return 'error: %s' % exc
-    return 'success: ZTF forced photometry request %d is %s; the light curve is ingested when the service finishes' % (
-        req.pk, req.get_state_display().lower())
+    return 'success: %s forced photometry request %d is %s; the light curve is ingested when the service finishes' % (
+        label, req.pk, req.get_state_display().lower())
+
+
+def _ztf_forced_phot_via_allocation(request, transient):
+    """Submit through the first usable 'ztf' allocation; None when there is none (legacy path)."""
+    return _forced_phot_via_allocation(request, transient, 'ztf', 'ZTF')
+
+
+@login_required
+def atlas_forced_phot(request, slug):
+    """The Summary tab's ATLAS button: one request through the first 'atlas' allocation open to the user."""
+    transient = Transient.objects.get(slug=slug)
+    msg = _forced_phot_via_allocation(request, transient, 'atlas', 'ATLAS')
+    if msg is None:
+        return JsonResponse({'msg': 'error: no ATLAS forced-photometry allocation is open to you; staff can add one '
+                                    '(facility "atlas", credential {"api_token": ...}) on the Allocations page'})
+    if msg.startswith('success'):
+        Log.objects.create(
+            created_by=request.user, modified_by=request.user, transient=transient,
+            comment='%s requested by %s via the facility queue: %s' % (
+                ATLAS_FORCED_PHOT_LOG_PREFIX, request.user.username, msg))
+    return JsonResponse({'msg': msg})
 
 
 @login_required

@@ -127,6 +127,9 @@ def _load_heavy_plot_stack():
     from matplotlib.dates import DateFormatter as _DateFormatter
     from matplotlib.figure import Figure as _Figure
     import sncosmo as _sncosmo
+    from YSE_App.common import sncosmo_bandpasses as _sncosmo_bandpasses
+
+    _sncosmo_bandpasses.register()
 
     bokeh = _bokeh
     FontSizeSpec = _FontSizeSpec
