@@ -184,6 +184,11 @@ instrument (fluxes in microJansky, zero point 23.9, `mag` empty below 3 sigma). 
 `mjd_min`, `mjd_max`, `use_reduced`. Credential: `{"api_token": "..."}` or `{"username", "password"}`
 (token fetched from `api-token-auth/`).
 
+The **Request ATLAS Forced Phot** button on the detail page's Summary tab (`GET /atlas_forced_phot/<slug>/`)
+submits with the adapter's defaults (the last 200 days) through the first `atlas` allocation open to the
+user and adds an "ATLAS Forced Phot" comment; an unfinished request on that allocation is reported instead
+of a second submission. With no `atlas` allocation the button only says so; there is no legacy path.
+
 ### `swift` — Swift ToO (#302)
 
 Speaks the Swift TOO API protocol directly (what the `swifttools` package does, without the dependency):

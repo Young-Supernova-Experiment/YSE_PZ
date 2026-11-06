@@ -29,6 +29,7 @@ from YSE_App.models import (
     FollowupStatus,
     Instrument,
     Job,
+    Log,
     Notification,
     QueuedResource,
     Telescope,
@@ -468,6 +469,37 @@ class ATLASTests(_Base):
         self.alloc.credential = _credential(self.staff, {"nothing": 1}, name="atlas empty", service="atlas")
         with self.assertRaises(FacilityError):
             self.atlas.auth_headers(self.alloc)
+
+    def test_atlas_button_uses_allocation_and_request_state(self):
+        self.user.set_password("pw")
+        self.user.save()
+        client = Client()
+        client.login(username="fq_user", password="pw")
+        task = {"url": "https://fallingstar-data.com/forcedphot/queue/77/", "starttimestamp": None, "finishtimestamp": None}
+        with mock.patch("YSE_App.facilities.atlas.http_request", return_value=_FakeResponse(201, task)):
+            response = client.get(reverse("atlas_forced_phot", args=[self.transient.slug]))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["msg"].startswith("success: ATLAS"), response.json())
+        req = FacilityRequest.objects.get(allocation=self.alloc)
+        self.assertEqual(req.external_id, task["url"])
+        self.assertTrue(Log.objects.filter(transient=self.transient, comment__startswith="ATLAS Forced Phot").exists())
+        response = client.get(reverse("atlas_forced_phot", args=[self.transient.slug]))
+        self.assertIn("already accepted", response.json()["msg"])
+        self.assertEqual(FacilityRequest.objects.filter(allocation=self.alloc).count(), 1)
+
+    def test_atlas_button_without_allocation(self):
+        self.alloc.groups.set([])
+        self.alloc.is_active = False
+        self.alloc.save()
+        self.user.set_password("pw")
+        self.user.save()
+        client = Client()
+        client.login(username="fq_user", password="pw")
+        with mock.patch("YSE_App.facilities.atlas.http_request") as http:
+            response = client.get(reverse("atlas_forced_phot", args=[self.transient.slug]))
+        http.assert_not_called()
+        self.assertIn("no ATLAS forced-photometry allocation", response.json()["msg"])
+        self.assertFalse(FacilityRequest.objects.exists())
 
 
 # --- Swift, Gemini, MMT, LT, SOAR ------------------------------------------------------------

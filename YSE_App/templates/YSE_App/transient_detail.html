@@ -1705,6 +1705,28 @@
                 });
             });
 
+            $('.atlasrequest').on('click', function(event){
+
+                var url = "{% url 'atlas_forced_phot' transient.slug %}";
+                var $btn = $(this);
+                var label = $btn.text();
+                $btn.prop('disabled', true).text('Requesting ATLAS forced phot...');
+
+                $.get(url).done(function(json){
+                    var message = json.msg;
+                    alert(message);
+                    if (String(message).indexOf('success') === 0) {
+                        location.reload();  // show the new comment
+                    }
+                }).fail(function(xhr){
+                    var message = (xhr.responseJSON && xhr.responseJSON.msg) ||
+                        ('error: ATLAS forced photometry request failed (HTTP ' + xhr.status + '); nothing was submitted');
+                    alert(message);
+                }).always(function(){
+                    $btn.prop('disabled', false).text(label);
+                });
+            });
+
             $('.submit_to_tns').on('click', function(event){
 
                 {% if tns_sandbox_url %}
