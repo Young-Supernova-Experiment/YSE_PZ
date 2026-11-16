@@ -73,13 +73,26 @@ changed by hand. An entry is imported in steps:
   new one); for an existing transient a host more than 10 arcsec from the OSC's (or with another
   name) is flagged `discrepant` in `CatalogEntry.host_check`, never changed.
 
-**Instruments** (#894). `catalog_import/osc_instruments.json` maps OSC telescope/instrument strings
-(`p48`, `PTF48`, `1m0-08`, `Lick 3m - KAST`, ...) to YSE telescopes and instruments, with date
-ranges where one string means different cameras (P48: CFH12k before MJD 58194, ZTF-Cam after).
-`manage.py catalog_instruments --load --apply --user <USERNAME>` creates what is missing (new
-telescopes get latitude, longitude and elevation 0, as the TNS import does; fill them in by hand
-where they matter) and the alias rows; `--census <OSC_DIR>` lists the strings in the catalogue by
-frequency with what each resolves to, to extend the file. Unmapped strings go to `Unknown`.
+**Instruments** (#894, #1003). Every telescope/instrument string pair in the catalogue gets an
+alias row naming a YSE instrument, decided in this order:
+1. the first matching rule in `catalog_import/osc_instruments.json`. These are Ryan's mappings
+   (2026-11-16):
+   - SDSS -> SDSS/SDSS; PS1 and Pan-STARRS1 -> the existing GPC1; Pan-STARRS2 -> GPC2;
+   - Catalina Schmidt -> CSS/CSS; every Gaia string -> Gaia/Gaia;
+   - kaitN -> KAIT/KAITN; P48 and p48 -> P48/P48; PTF48 (and P48 with CFH12k) -> P48/PTF;
+   - PAIRITEL -> PAIRITEL/2MASS; nickelN -> Nickel/NickelN;
+   - anything UVOT -> the existing UVOT; Hubble -> HST;
+2. an existing YSE instrument of that name;
+3. otherwise, automatically:
+   - telescope and instrument given -> Telescope/Instrument;
+   - one given -> X/X;
+   - `Telescope - Instrument` in one field -> split.
+
+Empty strings, `None` and `Other` stay on `Unknown`. `manage.py catalog_instruments --census
+<OSC_DIR>/sne-*` prints the plan, most frequent strings first, with totals. Adding `--load --apply
+--user <USERNAME> --database <DB_NAME>` creates the missing telescopes and instruments and the
+alias rows. New telescopes get latitude, longitude and elevation 0, as the TNS import does; fill
+them in by hand where they matter. To change a mapping, edit the rules and run it again.
 
 **Other rules.**
 - Peak: the visual-band peak (`maxvisual*`) when there is one.
@@ -150,8 +163,8 @@ python3 manage.py import_osc --revert SN2011fe --apply --database <DB_NAME>     
 ```
 
 Other options: `--limit N`, `--no-spectra`, `--no-tns`, `--match-radius`,
-`--phot-tolerance`, `--spec-tolerance`, `--status`. Run `catalog_instruments --load --apply` before
-the first import so instruments resolve.
+`--phot-tolerance`, `--spec-tolerance`, `--status`. Run `catalog_instruments --census <OSC_DIR>/sne-*
+--load --apply` before the first import so instruments resolve.
 
 ## Size
 
@@ -196,11 +209,17 @@ step 1" (O1-O7).
 - Offline dry run of everything: `import_osc <OSC_DIR>/sne-* --offline --quiet --report offline.jsonl`,
   then `osc_report_summary offline.jsonl`. Gives parse failures, warnings, entries with no
   position, and exact row and pixel counts.
-- `catalog_instruments --census <OSC_DIR>/sne-*`. Extend `osc_instruments.json` with the frequent
-  unmapped strings (a code change, reviewed like any other).
+- `catalog_instruments --census <OSC_DIR>/sne-*`. Done 2026-11-16: 55,482 entries, no failures.
+  Ryan's mappings went into the rules (#1003).
 
-### Step 2: read-only dry run against the database
+### Step 2: instruments, then a read-only dry run against the database
 
+On Ziggy, David runs it from docs/ziggy-runbook.md, section "Open Supernova Catalog, step 2"
+(S1-S6).
+
+- Instruments first: the plan is a dry run, and Ryan approves it before `--load --apply` writes
+  the new telescopes, instruments and alias rows. Duplicate matching and the Unknown-instrument
+  report depend on them.
 - `import_osc <OSC_DIR>/sne-* --quiet --report dry-run.jsonl` against `YSE_test`, off-peak, one
   repository at a time. It only reads, but it is around a million queries, and load caused the
   2026-10-21 outage.
@@ -211,7 +230,6 @@ step 1" (O1-O7).
 
 ### Step 3: pilot import on YSE_test, about 25 entries chosen by hand
 
-- `catalog_instruments --load --apply` first.
 - Entries covering every path:
   - rich historical SNe (SN 2011fe, 1987A, 1993J, 2013dy);
   - X-ray and radio photometry (2006gy, 2014C);
