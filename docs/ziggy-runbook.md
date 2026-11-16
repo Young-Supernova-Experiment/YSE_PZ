@@ -1107,6 +1107,65 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_spectral_
 ```
 **Expected:** `N transient(s) with spectra: R phase row(s) written, 0 error(s)`. It replaces each transient's rows, so running it again is safe (and refreshes phases after redshift or discovery-date edits).
 
+<a id="osc-step2"></a>
+### Open Supernova Catalog, step 2: instruments, then a read-only dry run (2026-11-16, #1003, #906): when Ryan asks
+
+**What this is.** Step 2 of the OSC plan (docs/osc-import.md). Same machine, files and paths as step 1. S4 is the only step that writes: it adds telescopes, instruments and catalogue alias rows to `YSE_test`, and only after Ryan approves the plan from S3. Nothing else writes to any database. Run S5 off-peak.
+
+**S1. Paths** (again in every new shell; `/data/osc` is the directory used in step 1):
+```bash
+export OSC_DIR=/data/osc
+export EXP=/data/yse_pz/YSE_PZ_experimental
+export PY=$EXP/venv/bin/python
+```
+
+**S2. Check the deploy has the instrument rules (#1003):**
+```bash
+grep -c '"rules"' $EXP/YSE_App/catalog_import/osc_instruments.json
+```
+**Expected:** `1`. If `0`, stop: the deploy has not finished.
+
+**S3. Instrument plan** (reads only; a few minutes):
+```bash
+cd $EXP && $PY manage.py catalog_instruments --census $OSC_DIR/sne-* --top 0 > $OSC_DIR/reports/instrument-plan.txt
+```
+```bash
+tail -1 $OSC_DIR/reports/instrument-plan.txt
+```
+**Expected:** `N strings: ... to existing instruments ..., ... to M new instruments ..., ... Unknown ...`. **Send Ryan `instrument-plan.txt` and wait for his OK before S4.**
+
+**S4. Create the instruments** (writes to `YSE_test`; only after Ryan's OK). Replace `<USERNAME>` with your YSE_PZ username:
+```bash
+cd $EXP && $PY manage.py catalog_instruments --census $OSC_DIR/sne-* --load --apply --user <USERNAME> --database YSE_test > $OSC_DIR/reports/instrument-load.txt
+```
+```bash
+tail -1 $OSC_DIR/reports/instrument-load.txt
+```
+**Expected:** `Created: aliases N, instruments created M, telescopes created K`, with M matching S3. Running it again creates nothing new. **If it says the database does not match:** stop and tell Ryan which database it names.
+
+**S5. Read-only dry run against `YSE_test`**, one repository at a time, in the background, off-peak (likely a few hours):
+```bash
+cd $EXP && nohup sh -c 'for r in sne-pre-1990 sne-1990-1999 sne-2000-2004 sne-2005-2009 sne-2010-2014 sne-2015-2019; do $PY manage.py import_osc $OSC_DIR/$r --quiet --report $OSC_DIR/reports/dry-run-$r.jsonl > $OSC_DIR/reports/dry-run-$r.log 2>&1; done' > /dev/null 2>&1 &
+```
+Check whether it is still running (no output means it is done):
+```bash
+pgrep -fa "import_osc"
+```
+When it is done:
+```bash
+tail -qn1 $OSC_DIR/reports/dry-run-sne-*.log
+```
+**Expected:** six lines `Dry run: N entries, 0 written (0 new transients), F failed, ... s`. The N add up to 55,482.
+
+**S6. Summary for Ryan:**
+```bash
+cat $OSC_DIR/reports/dry-run-sne-*.jsonl > $OSC_DIR/reports/dry-run.jsonl
+```
+```bash
+cd $EXP && $PY manage.py osc_report_summary $OSC_DIR/reports/dry-run.jsonl --review-dir $OSC_DIR/reports/dry-run-review --sample 100 > $OSC_DIR/reports/dry-run-summary.txt
+```
+**Send Ryan** `dry-run-summary.txt` and the four CSV files in `dry-run-review/`. They hold only public catalogue data and the names of matching YSE_PZ transients.
+
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
 
@@ -3786,6 +3845,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-11-16 v122, **when Ryan asks: OSC step 2, S1-S6** (S4 writes telescopes, instruments and catalogue alias rows to `YSE_test` after Ryan approves the S3 plan; nothing else writes). Every catalogue telescope/instrument string now maps to a YSE instrument: Ryan's rules, then existing instruments of that name, then Telescope/Instrument from the strings ([#1003](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/1003)). See [Open Supernova Catalog, step 2](#osc-step2).
 * 2026-11-02 v121, **nothing required; when Ryan asks: spectral-phase backfill** (the deploy applies the migration; no new package). Computed spectral phase ([#848](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/848)): migrations `0069_spectrum_phase` and `0070_spectrum_phase_fk_on_delete` create one new table (`YSE_App_spectrumphase`) with `ON DELETE CASCADE` on its foreign keys to spectra and transients, safe on the shared `YSE_test` database. New spectra and new fits fill it; `manage.py backfill_spectral_phases --apply` fills it for existing spectra ([steps](#spectral-phase)). The search filter and Download -> Spectra / Photometry are UI preview only.
 * 2026-11-01 v120, **nothing required; when Ryan asks: fit-table backfill and scheduled refits** (the deploy applies the migration; no new package). SALT and Bazin fit tables ([#846](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/846)): migrations `0063_fit_tables` and `0064_fit_tables_fk_on_delete` create two new tables (`YSE_App_bazinfit`, `YSE_App_saltfit`) with `ON DELETE CASCADE` on their foreign keys to transients and runs, so develop's deletes on the shared `YSE_test` database still succeed. Every succeeded Bazin / SALT run writes its rows. `manage.py backfill_fit_tables` (dry run by default, `--apply`) and the scheduled refits (`FIT_REFIT_ENABLED`, default False; new `FitRefit` cron is a no-op while it is off) are in the section [SALT and Bazin fit tables](#fit-tables). The helper of 0062 moved to `YSE_App/common/fk_on_delete.py`.
 * 2026-11-01 v119, **nothing required** (the deploy applies the migration; no new package). Deletes on `/yse_test/` no longer fail on rows that only experimental knows about ([#941](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/941)): migration `0062_shared_db_fk_on_delete` runs automatically on the yse\_experimental deploy and changes only foreign-key constraints on the experimental-only tables created by 0056-0061 (spectrum arrays, catalogue tables, team deputies, duplicate decisions). They get MySQL `ON DELETE CASCADE` (or `ON DELETE SET NULL` for the duplicate decisions' `kept_*` columns), as their models declare, so a spectrum, host, transient, user or group deleted through develop's code takes these rows with it instead of failing with error 1451. No row, column or develop table changes; constraint names are kept. The PROTECT audit columns (`created_by`, `modified_by`) of the catalogue tables are unchanged.

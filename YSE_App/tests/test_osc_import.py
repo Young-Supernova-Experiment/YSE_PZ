@@ -9,6 +9,7 @@ import copy
 import json
 import os
 import tempfile
+from collections import Counter
 from io import StringIO
 
 from django.core.management import CommandError, call_command
@@ -315,6 +316,34 @@ class TNSPublicObjectsTests(SimpleTestCase):
             self.assertAlmostEqual(sexagesimal['decdeg'], 5.0)
 
 
+class InstrumentRulesTests(SimpleTestCase):
+    """#1003: Ryan's mappings and the automatic Telescope/Instrument."""
+
+    def test_rules(self):
+        rules = instruments.Rules.load()
+        expected = {
+            ('SDSS', ''): ('SDSS', 'SDSS'), ('PS1', ''): ('PS1', 'GPC1'), ('Pan-STARRS1', 'GPC'): ('PS1', 'GPC1'),
+            ('Pan-STARRS2', ''): ('PS2', 'GPC2'), ('Catalina Schmidt', ''): ('CSS', 'CSS'),
+            ('GAIA', 'Astrometric'): ('Gaia', 'Gaia'), ('kait2', ''): ('KAIT', 'KAIT2'),
+            ('kait4', ''): ('KAIT', 'KAIT4'), ('P48', ''): ('P48', 'P48'), ('p48', ''): ('P48', 'P48'),
+            ('PTF48', ''): ('P48', 'PTF'), ('PAIRITEL', ''): ('PAIRITEL', '2MASS'),
+            ('nickel2', ''): ('Nickel', 'Nickel2'), ('Hubble', 'ACS'): ('HST', 'ACS'),
+        }
+        for (tel, inst), target in expected.items():
+            with self.subTest(telescope=tel, instrument=inst):
+                self.assertEqual(rules.rule_target(tel, inst)[:2], target)
+
+    def test_automatic(self):
+        rules = instruments.Rules.load()
+        self.assertIsNone(rules.rule_target('NTT', 'EFOSC'))
+        self.assertEqual(rules.auto_target('NTT', 'EFOSC')[:2], ('NTT', 'EFOSC'))
+        self.assertEqual(rules.auto_target('CTIO 4m', '')[:2], ('CTIO 4m', 'CTIO 4m'))
+        self.assertEqual(rules.auto_target('', 'KEP1')[:2], ('KEP1', 'KEP1'))
+        self.assertEqual(rules.auto_target('', 'ESO-NTT - EFOSC2-NTT')[:2], ('ESO-NTT', 'EFOSC2-NTT'))
+        for tel, inst in (('', ''), ('', 'None'), ('', 'Other - Other')):
+            self.assertIsNone(rules.auto_target(tel, inst))
+
+
 def _setup_world(test_class, username):
     test_class.user = create_test_user(username)
     ensure_transient_statuses(test_class.user)
@@ -503,6 +532,7 @@ class OSCWriterTests(TestCase):
         self.assertTrue(writer.apply_entry(osc.parse_entry(NAME, entry()))['created'])
 
     def test_instrument_aliases(self):
+        # Alias rows (with optional time ranges) win; then an instrument of that name; then Unknown.
         audit = audit_fields(self.user)
         ptf = Instrument.objects.create(name='CFH12k-test', telescope=self.telescope, **audit)
         ztf = Instrument.objects.create(name='ZTF-Cam-test', telescope=self.telescope, **audit)
@@ -513,14 +543,35 @@ class OSCWriterTests(TestCase):
         self.assertEqual(resolver.resolve('P48', None, 59000), ztf)
         self.assertEqual(resolver.resolve(None, 'Nowhere 1m - NoCam'), self.nocam)
         self.assertEqual(resolver.resolve('Elsewhere', 'Nothing'), self.unknown)
-        lines = instruments.ensure_instruments(self.user, [{'telescope': 'Brand New Scope', 'instrument': 'BNS-Cam',
-                                                            'observatory': 'New Site', 'aliases': [['BNS', '']]}])
-        self.assertIn('create Brand New Scope / BNS-Cam (observatory New Site)', lines)
-        self.assertFalse(Instrument.objects.filter(name='BNS-Cam').exists())  # dry run
-        instruments.ensure_instruments(self.user, [{'telescope': 'Brand New Scope', 'instrument': 'BNS-Cam',
-                                                    'observatory': 'New Site', 'aliases': [['BNS', '']]}], apply=True)
-        self.assertEqual(instruments.InstrumentResolver().resolve('BNS', None).name, 'BNS-Cam')
 
+    def test_plan_and_apply_from_a_census(self):
+        # #1003: rules first, then an existing instrument of that name, then Telescope/Instrument.
+        audit = audit_fields(self.user)
+        gpc1 = Instrument.objects.create(name='GPC1', telescope=self.telescope, **audit)
+        counts = Counter({('photometry', 'PS1', ''): 50, ('photometry', 'Pan-STARRS1', 'GPC'): 5,
+                          ('photometry', 'kait3', ''): 7, ('photometry', 'CTIO 4m', ''): 4,
+                          ('photometry', 'Nowhere 1m', 'NoCam'): 3, ('spectra', '', 'ESO-NTT - EFOSC2-NTT'): 2,
+                          ('photometry', '', ''): 9, ('spectra', '', 'Other - Other'): 1})
+        rows = {(r.telescope, r.instrument): r for r in instruments.plan(counts, instruments.Rules.load())}
+        self.assertEqual((rows[('PS1', '')].action, rows[('PS1', '')].yse_instrument), ('use', gpc1))
+        self.assertEqual(rows[('Pan-STARRS1', 'GPC')].yse_instrument, gpc1)
+        self.assertEqual(rows[('kait3', '')].target[:2], ('KAIT', 'KAIT3'))
+        self.assertEqual((rows[('CTIO 4m', '')].action, rows[('CTIO 4m', '')].target.how), ('create', 'auto'))
+        self.assertEqual(rows[('Nowhere 1m', 'NoCam')].yse_instrument, self.nocam)
+        self.assertEqual(rows[('', 'ESO-NTT - EFOSC2-NTT')].target[:2], ('ESO-NTT', 'EFOSC2-NTT'))
+        self.assertEqual(rows[('', '')].action, 'unknown')
+        self.assertEqual(rows[('', 'Other - Other')].action, 'unknown')
+
+        done = instruments.apply_plan(rows.values(), self.user)
+        self.assertEqual(done['instruments created'], 3)  # KAIT3, CTIO 4m, EFOSC2-NTT
+        self.assertEqual(done['aliases'], 6)
+        again = instruments.apply_plan(instruments.plan(counts, instruments.Rules.load()), self.user)
+        self.assertNotIn('instruments created', again)  # idempotent
+        resolver = instruments.InstrumentResolver()
+        self.assertEqual(resolver.resolve('kait3', None).name, 'KAIT3')
+        self.assertEqual(resolver.resolve('kait3', None).telescope.name, 'KAIT')
+        self.assertEqual(resolver.resolve('PS1', ''), gpc1)
+        self.assertEqual(resolver.resolve('', ''), self.unknown)
 
 class FakeTNS:
     def __init__(self, objects, cone=()):
@@ -664,14 +715,18 @@ class DatabaseGuardTests(TestCase):
                 call_command('import_osc', path, '--apply', '--user', self.user.username, '--no-tns', *extra,
                              stdout=StringIO())
         self.assertFalse(CatalogEntry.objects.exists())
-        for command, args in (('catalog_instruments', ['--load', '--apply', '--user', self.user.username]),
+        for command, args in (('catalog_instruments', ['--census', path, '--load', '--apply',
+                                                       '--user', self.user.username]),
                               ('osc_tns_check', ['--apply'])):
             with self.assertRaises(CommandError):
                 call_command(command, *args, stdout=StringIO())
 
     def test_dry_run_names_the_database(self):
+        path = os.path.join(tempfile.mkdtemp(), NAME + '.json')
+        with open(path, 'w') as handle:
+            json.dump({NAME: ENTRY}, handle)
         out = StringIO()
-        call_command('catalog_instruments', '--load', stdout=out)
+        call_command('catalog_instruments', '--census', path, '--load', stdout=out)
         self.assertIn('Using database %s' % guard.database_name(), out.getvalue())
 
 

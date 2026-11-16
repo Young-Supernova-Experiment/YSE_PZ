@@ -1,18 +1,27 @@
 """
-Catalogue telescope / instrument strings -> YSE instruments (#894).
+Catalogue telescope / instrument strings -> YSE instruments (#894, #1003).
 
-``osc_instruments.json`` lists YSE telescopes and instruments with the catalogue strings that mean
-them. ``manage.py catalog_instruments --load`` turns it into ``CatalogInstrumentAlias`` rows,
-creating missing observatories, telescopes and instruments; :class:`InstrumentResolver` then
-resolves strings through those rows, then by instrument name, and falls back to ``Unknown``.
+Every string pair found in the catalogue gets a ``CatalogInstrumentAlias`` row naming the YSE
+instrument it means, decided in this order (:func:`plan`):
+
+1. the first rule of ``osc_instruments.json`` that matches (:class:`Rules`; Ryan's mappings);
+2. an existing YSE instrument of that name;
+3. automatically, Telescope/Instrument from the strings (:func:`auto_target`): both given ->
+   Telescope/Instrument, one given -> X/X, ``Telescope - Instrument`` in one field -> split.
+
+Empty or meaningless strings (``unknown`` in the file) stay on the ``Unknown`` instrument.
+``manage.py catalog_instruments --census <OSC_DIR> --load --apply`` creates the missing telescopes and
+instruments and the alias rows; :class:`InstrumentResolver` then resolves strings through the alias
+rows, then by instrument name, and falls back to ``Unknown``.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from collections import Counter
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 UNKNOWN = 'Unknown'
 MAPPING_PATH = os.path.join(os.path.dirname(__file__), 'osc_instruments.json')
@@ -20,11 +29,6 @@ MAPPING_PATH = os.path.join(os.path.dirname(__file__), 'osc_instruments.json')
 
 class NoUnknownInstrument(Exception):
     pass
-
-
-def load_mapping(path: str = MAPPING_PATH) -> List[dict]:
-    with open(path) as handle:
-        return json.load(handle)['instruments']
 
 
 def _norm(value: Optional[str]) -> str:
@@ -100,42 +104,180 @@ class InstrumentResolver:
         return None
 
 
-def ensure_instruments(user, mapping: Iterable[dict], *, catalog: str = 'OSC', apply: bool = False) -> List[str]:
-    """Create the missing observatories, telescopes, instruments and alias rows of ``mapping``.
+NAME_LENGTH = 64          # Telescope.name, Instrument.name
+ALIAS_LENGTH = 128        # CatalogInstrumentAlias.telescope / instrument
 
-    Reuses an instrument with the same name when there is exactly one. Returns report lines; writes
-    only with ``apply``.
+
+def _clean(value: Optional[str]) -> str:
+    return ' '.join((value or '').split())
+
+
+class Target(NamedTuple):
+    telescope: str
+    instrument: str
+    existing: Optional[str] = None   # a YSE instrument name to use if there is exactly one
+    how: str = 'rule'
+
+
+class Rules:
+    """The rules of ``osc_instruments.json``: patterns -> target telescope / instrument."""
+
+    def __init__(self, data: dict):
+        self.unknown = {_norm(v) for v in data.get('unknown', [])}
+        self.rules = []
+        for rule in data.get('rules', []):
+            compiled = {k: re.compile(rule[k], re.IGNORECASE) for k in ('telescope', 'instrument', 'any') if k in rule}
+            self.rules.append((compiled, rule))
+
+    @classmethod
+    def load(cls, path: str = MAPPING_PATH) -> 'Rules':
+        with open(path) as handle:
+            return cls(json.load(handle))
+
+    def is_unknown(self, value: str) -> bool:
+        return _norm(value) in self.unknown
+
+    def rule_target(self, telescope: Optional[str], instrument: Optional[str]) -> Optional[Target]:
+        tel, inst = _clean(telescope), _clean(instrument)
+        for compiled, rule in self.rules:
+            groups = []
+            matched = True
+            for key, pattern in compiled.items():
+                if key == 'any':
+                    m = pattern.search(tel) or pattern.search(inst)
+                else:
+                    m = pattern.fullmatch(tel if key == 'telescope' else inst)
+                if m is None:
+                    matched = False
+                    break
+                groups.extend(g for g in m.groups() if g)
+            if not matched:
+                continue
+
+            def fill(template):
+                return re.sub(r'\\(\d)', lambda m: groups[int(m.group(1)) - 1] if len(groups) >= int(m.group(1)) else '',
+                              template)[:NAME_LENGTH]
+
+            return Target(fill(rule['target_telescope']), fill(rule['target_instrument']), rule.get('existing'), 'rule')
+        return None
+
+    def auto_target(self, telescope: Optional[str], instrument: Optional[str]) -> Optional[Target]:
+        """Telescope/Instrument from the strings themselves; None when both are empty or meaningless."""
+        tel, inst = _clean(telescope), _clean(instrument)
+        if self.is_unknown(tel):
+            tel = ''
+        if self.is_unknown(inst):
+            inst = ''
+        if not tel and ' - ' in inst:
+            tel, inst = (part.strip() for part in inst.split(' - ', 1))
+        elif not inst and ' - ' in tel:
+            tel, inst = (part.strip() for part in tel.split(' - ', 1))
+        if self.is_unknown(tel):
+            tel = ''
+        if self.is_unknown(inst):
+            inst = ''
+        if not tel and not inst:
+            return None
+        return Target((tel or inst)[:NAME_LENGTH], (inst or tel)[:NAME_LENGTH], None, 'auto')
+
+
+class PlanRow(NamedTuple):
+    telescope: str            # as written in the catalogue
+    instrument: str
+    rows: int
+    kinds: Tuple[str, ...]
+    action: str               # use | create | unknown
+    target: Optional[Target]
+    yse_instrument: object    # the Instrument to use (action ``use``), else None
+
+
+def _find_instrument(telescope_name: str, instrument_name: str):
+    from YSE_App.models import Instrument
+
+    qs = Instrument.objects.filter(name__iexact=instrument_name, telescope__name__iexact=telescope_name)
+    return qs.first() if qs.count() == 1 else None
+
+
+def _unique_instrument(name: str):
+    from YSE_App.models import Instrument
+
+    qs = Instrument.objects.filter(name__iexact=name)
+    return qs.first() if qs.count() == 1 else None
+
+
+def plan(counts: Counter, rules: Rules) -> List[PlanRow]:
+    """What each catalogue string pair resolves to: an existing instrument, a new one, or Unknown.
+
+    ``counts`` is :func:`census` output. Reads the database only.
     """
+    pairs: Dict[Tuple[str, str], list] = {}
+    for (kind, tel, inst), n in counts.items():
+        entry = pairs.setdefault((tel[:ALIAS_LENGTH], inst[:ALIAS_LENGTH]), [0, set()])
+        entry[0] += n
+        entry[1].add(kind)
+    resolver = InstrumentResolver()
+    out = []
+    for (tel, inst), (n, kinds) in sorted(pairs.items(), key=lambda item: -item[1][0]):
+        target = rules.rule_target(tel, inst)
+        found = None
+        if target is not None:
+            found = (_unique_instrument(target.existing) if target.existing else None) or \
+                _find_instrument(target.telescope, target.instrument)
+        else:
+            target = rules.auto_target(tel, inst)   # None: empty or meaningless strings stay Unknown
+            if target is not None:
+                found = resolver._lookup(tel, inst, None) or _find_instrument(target.telescope, target.instrument)
+        if found is not None:
+            action = 'use'
+        elif target is not None:
+            action = 'create'
+        else:
+            action = 'unknown'
+        out.append(PlanRow(tel, inst, n, tuple(sorted(kinds)), action, target, found))
+    return out
+
+
+def describe(row: PlanRow) -> str:
+    if row.action == 'use':
+        what = 'use %s / %s' % (row.yse_instrument.telescope.name, row.yse_instrument.name)
+    elif row.action == 'create':
+        what = 'create %s / %s (%s)' % (row.target.telescope, row.target.instrument, row.target.how)
+    else:
+        what = 'Unknown'
+    return '%9d  %-18s %-30r %-30r -> %s' % (row.rows, '+'.join(row.kinds), row.telescope, row.instrument, what)
+
+
+def apply_plan(rows: Iterable[PlanRow], user, *, catalog: str = 'OSC') -> Dict[str, int]:
+    """Create the new telescopes and instruments (latitude, longitude, elevation 0, as the TNS import
+    does) and one alias row per string pair. Idempotent."""
     from YSE_App.models import CatalogInstrumentAlias, Instrument, Observatory, Telescope
 
     audit = {'created_by': user, 'modified_by': user}
-    lines = []
-    for item in mapping:
-        existing = Instrument.objects.filter(name__iexact=item['instrument'])
-        on_telescope = existing.filter(telescope__name__iexact=item['telescope'])
-        inst = (on_telescope.first() if on_telescope.count() == 1 else
-                existing.first() if existing.count() == 1 else None)
+    created: Dict[Tuple[str, str], object] = {}
+    counts = Counter()
+    for row in rows:
+        if row.action == 'unknown':
+            continue
+        inst = row.yse_instrument
         if inst is None:
-            lines.append('create %s / %s (observatory %s)' % (item['telescope'], item['instrument'], item['observatory']))
-            if apply:
-                observatory, _ = Observatory.objects.get_or_create(
-                    name=item['observatory'], defaults={'utc_offset': item.get('utc_offset', 0),
-                                                        'tz_name': item.get('tz_name', 'UTC'), **audit})
-                telescope, _ = Telescope.objects.get_or_create(
-                    name=item['telescope'], defaults={'observatory': observatory,
-                                                      'latitude': item.get('latitude', 0.0),
-                                                      'longitude': item.get('longitude', 0.0),
-                                                      'elevation': item.get('elevation', 0.0), **audit})
-                inst = Instrument.objects.create(telescope=telescope, name=item['instrument'], **audit)
-        else:
-            lines.append('use %s / %s (instrument %d)' % (inst.telescope.name, inst.name, inst.id))
-        for tel, ins in item['aliases']:
-            if apply and inst is not None:
-                CatalogInstrumentAlias.objects.update_or_create(
-                    catalog=catalog, telescope=tel, instrument=ins, mjd_min=item.get('mjd_min'),
-                    mjd_max=item.get('mjd_max'), defaults={'yse_instrument': inst, **audit})
-        lines.append('  %d aliases%s' % (len(item['aliases']), '' if apply else ' (dry run)'))
-    return lines
+            key = (row.target.telescope.lower(), row.target.instrument.lower())
+            inst = created.get(key) or _find_instrument(row.target.telescope, row.target.instrument)
+            if inst is None:
+                telescope = Telescope.objects.filter(name__iexact=row.target.telescope).order_by('id').first()
+                if telescope is None:
+                    observatory, _ = Observatory.objects.get_or_create(
+                        name=row.target.telescope, defaults={'utc_offset': 0, 'tz_name': 'UTC', **audit})
+                    telescope = Telescope.objects.create(observatory=observatory, name=row.target.telescope,
+                                                         latitude=0.0, longitude=0.0, elevation=0.0, **audit)
+                    counts['telescopes created'] += 1
+                inst = Instrument.objects.create(telescope=telescope, name=row.target.instrument, **audit)
+                counts['instruments created'] += 1
+            created[key] = inst
+        CatalogInstrumentAlias.objects.update_or_create(
+            catalog=catalog, telescope=row.telescope, instrument=row.instrument, mjd_min=None, mjd_max=None,
+            defaults={'yse_instrument': inst, **audit})
+        counts['aliases'] += 1
+    return dict(counts)
 
 
 def census(entries: Iterable[Tuple[str, dict]]) -> Counter:
