@@ -175,7 +175,10 @@ class TNSReportPrivacyTests(PrivacyBase):
         self.assertEqual(data["problems"], [])
         group = data["payload"]["at_report"]["0"]["photometry"]["photometry_group"]
         fluxes = sorted(entry["flux"] for entry in group.values())
-        self.assertEqual(fluxes, ["17.500", "17.500", "18.250", "18.250"])
+        # The YSE-only set is visible to the member but only its PI or a
+        # deputy may send it (#691), so the report holds the open points; never the other team's.
+        self.assertEqual(fluxes, ["18.250", "18.250"])
+        self.assertEqual(data["omitted"], {"photometry_sets": 1, "spectra": 0})
         self.assertNotIn("12.500", response.content.decode())
 
     def test_member_submit_has_visible_points_only(self, *_mocks):
@@ -186,7 +189,7 @@ class TNSReportPrivacyTests(PrivacyBase):
         self.assertEqual(response.status_code, 200, response.content)
         submission = SharingSubmission.objects.get(pk=response.json()["id"])
         group = submission.payload["at_report"]["0"]["photometry"]["photometry_group"]
-        self.assertEqual(len(group), 4)
+        self.assertEqual(len(group), 2)  # the open points; the YSE set needs its PI or a deputy (#691)
         self.assertNotIn("12.500", str(submission.payload))
 
     def test_hidden_spectrum_id_is_refused(self, *_mocks):
