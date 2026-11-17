@@ -184,6 +184,11 @@ class QueryApiAccessTests(TestCase):
         self.assertEqual(self._names(member, key='transient_name'), self.member_names)
         self.assertEqual(self._names(cron, key='transient_name'), self.all_names)
 
+    def test_python_query_name_must_be_defined_in_the_module(self):
+        # Names imported into yse_python_queries (here ``timedelta``) are not queries.
+        response = self.client.get('/query_api/timedelta/', **_basic_auth(self.member.username))
+        self.assertEqual(response.status_code, 404)
+
     def test_unknown_title_is_404(self):
         response = self.client.get('/query_api/qaa_nothing/', **_basic_auth(self.member.username))
         self.assertEqual(response.status_code, 404)

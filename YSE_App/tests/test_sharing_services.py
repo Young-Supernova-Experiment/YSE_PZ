@@ -522,6 +522,8 @@ class SharingViewTests(SharingBase):
     def setUp(self):
         super().setUp()
         self.client = Client()
+        # reporting through a service without groups needs staff or the YSE group
+        self.member.groups.add(Group.objects.get_or_create(name="YSE")[0])
         self.restricted = self.make_service(slug="restricted", name="Restricted", groups=[self.group])
         self.submission = tns.create_submission(self.service, self.transient, tns.KIND_DISCOVERY, self.staff,
                                                 dispatch=False)

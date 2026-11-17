@@ -504,6 +504,15 @@ class TransientImageViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     serializer_class = TransientImageSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        # Only images of photometry points the user may see (master hotfix #975; per point, #714).
+        from YSE_App.services.visibility import visible_photometry_ids_q
+
+        visible = visible_photometry_ids_q(self.request.user, prefix='phot_data__photometry_id')
+        if visible is None:
+            return TransientImage.objects.all()
+        return TransientImage.objects.filter(visible)
+
 class HostImageViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     queryset = HostImage.objects.all()
     serializer_class = HostImageSerializer
@@ -816,6 +825,10 @@ class AnalysisRunViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mix
             visible = filter_transients_by_data_access(
                 user, Transient.objects.filter(service_runs__service__kind=ExternalService.KIND_ANALYSIS).distinct())
             qs = qs.filter(Q(created_by=user) | Q(transient__in=visible))
+        # Results derive from the requester's data access: another user's run is
+        # listed only when none of the transient's data are hidden from the viewer.
+        from YSE_App.services import fit_status
+        qs = qs.filter(fit_status.visible_runs_q(user))
         transient = self.request.query_params.get("transient")
         if transient:
             qs = qs.filter(Q(transient_id=transient) if str(transient).isdigit() else Q(transient__name=transient))
@@ -1105,15 +1118,18 @@ class TransientViewSet(custom_viewsets.ListCreateRetrieveUpdateViewSet):
     def _summary_payload(self, transient):
         from YSE_App.services import summaries as summaries_svc
 
-        version = summaries_svc.current_version(transient)
+        # The stored summary is written from all data: blank for a viewer with hidden photometry.
+        readable = summaries_svc.can_read(self.request.user, transient)
+        version = summaries_svc.current_version(transient) if readable else None
         run = summaries_svc.latest_run(transient)
         return {
             'transient': transient.pk,
             'transient_name': transient.name,
-            'summary': transient.summary or '',
-            'summary_modified': transient.summary_modified,
+            'summary': (transient.summary or '') if readable else '',
+            'summary_modified': transient.summary_modified if readable else None,
             'current': TransientSummaryVersionSerializer(version).data if version is not None else None,
-            'history': TransientSummaryVersionSerializer(summaries_svc.history(transient), many=True).data,
+            'history': (TransientSummaryVersionSerializer(summaries_svc.history(transient), many=True).data
+                        if readable else []),
             'run': {'uuid': str(run.uuid), 'status': run.status, 'error': run.error,
                     'finished_at': run.finished_at} if run is not None else None,
         }

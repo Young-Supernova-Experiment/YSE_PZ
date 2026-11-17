@@ -271,10 +271,10 @@ class ViewerRows:
         return TransientSpectrum.objects.filter(spectrum_visible_q(self.user, names=self.names)).values('pk')
 
     def _group_rule(self, model):
-        from YSE_App.services.visibility import get_user_group_query
+        from YSE_App.services.visibility import dataset_group_q
 
-        no_group, contains_group = get_user_group_query(self.user, names=self.names)
-        return model.objects.filter(no_group | contains_group)
+        # The data group rule (#975): Public opens no team's data; unlabelled YSE data is YSE-only.
+        return model.objects.filter(dataset_group_q(model, self.user, names=self.names))
 
     def visible_host_photometry(self):
         from YSE_App.models import HostPhotometry

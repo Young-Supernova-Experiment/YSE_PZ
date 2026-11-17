@@ -35,3 +35,15 @@ class SharingSubmissionSerializer(serializers.ModelSerializer):
         fields = ("id", "service", "transient", "kind", "status", "external_id", "tns_name", "tns_object_url",
                   "error", "attempts", "payload", "response", "created_by", "created_date", "submitted_at",
                   "finished_at")
+
+    def to_representation(self, instance):
+        """``payload`` and ``response`` carry the report's data: only for those who may report (``may_report``)."""
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        from YSE_App.sharing_views import may_report
+
+        if user is None or not getattr(user, "is_authenticated", False) or not may_report(user, instance.service):
+            data["payload"] = None
+            data["response"] = None
+        return data

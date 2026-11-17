@@ -113,8 +113,17 @@ def data_json_chunks(user, transient_qs, authorized_phot, authorized_spectra, ar
     host = '{}'
     if transient.host:
         host = dumps(serialized(Host.objects.filter(id=transient.host.id)))
+    transient_rows = serialized(transient_qs)
+    from YSE_App.services.visibility import transients_with_hidden_photometry
+
+    # The stored summary is written from all data: left out for a viewer with hidden photometry (#975).
+    hidden = transients_with_hidden_photometry(user, [row['pk'] for row in transient_rows])
+    for row in transient_rows:
+        if row['pk'] in hidden:
+            row['fields']['summary'] = None
+            row['fields']['summary_modified'] = None
     yield '{%s: {"transient": %s, "host": %s, "photometry": ' % (
-        dumps(transient.name), dumps(serialized(transient_qs)), host)
+        dumps(transient.name), dumps(transient_rows), host)
 
     if authorized_phot:
         yield '['

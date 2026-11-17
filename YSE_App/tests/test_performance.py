@@ -43,10 +43,12 @@ from YSE_App.tests.perf_tracking import LoadTimeRegistry
 # +2 (#440, #445): the user's picker preferences and the system/inactive group flags,
 # one query each, memoised for the request.
 MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 61
-MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 61
+# +1 (master hotfix #975 backport): the stored summary is shown only to a viewer who
+# sees all of the transient's photometry (one hidden-photometry check).
+MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 62
 # +3 (#446): the PI names on the spectra and photometry tables ("pis" prefetches, loaded page only;
 # measured 100 -> 103 in CI). The check is strict (count < ceiling).
-MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 104  # audience form loads shared collaboration groups
+MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 105  # audience form loads shared collaboration groups; +1 summary check (#975)
 MAX_QUERIES_PERSONAL_DASHBOARD = 40
 # Cold: five explorer SQL runs + five table builds (heavy; ceiling guards regressions).
 MAX_QUERIES_PERSONAL_DASHBOARD_FIVE_QUERIES_COLD = 33

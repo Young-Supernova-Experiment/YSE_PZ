@@ -26,6 +26,14 @@ USER = "user"
 AUTOPUBLISH = "autopublish"
 
 
+def _unlabelled_yse(row) -> bool:
+    """A dataset of the YSE observation group with no group: YSE-only data (master hotfix #975)."""
+    from YSE_App.services.visibility import YSE_OBSERVATION_GROUP_NAME
+
+    return (getattr(getattr(row, "obs_group", None), "name", None) == YSE_OBSERVATION_GROUP_NAME
+            and not {g.name for g in row.groups.all()})
+
+
 class ReportScope:
     def __init__(self, mode: str = PUBLIC_ONLY, user=None):
         self.mode = mode
@@ -54,8 +62,15 @@ class ReportScope:
 
     def _decide(self, model, transient, visible_q_fn, optin_field):
         """``(allowed pks, count of visible datasets left out)`` for one dataset model on ``transient``."""
-        rows = list(model.objects.filter(transient=transient).prefetch_related("groups"))
+        rows = list(model.objects.filter(transient=transient).prefetch_related("groups").select_related("obs_group"))
         public = {r.pk for r in rows if data_sharing.is_public_dataset(r)}
+        if self.mode == USER and not user_sees_everything(self.user):
+            visible = set(model.objects.filter(transient=transient).filter(visible_q_fn(self.user))
+                          .values_list("pk", flat=True))
+            # Only data the submitter may see (master hotfix #975): unlabelled YSE data is YSE-only.
+            public &= visible
+        elif self.mode == PUBLIC_ONLY:
+            public = {r.pk for r in rows if r.pk in public and not _unlabelled_yse(r)}
         restricted = [r for r in rows if r.pk not in public]
         if self.mode == PUBLIC_ONLY or not restricted:
             return public, 0
@@ -66,9 +81,6 @@ class ReportScope:
         user = self.user
         if user_sees_everything(user):
             visible = {r.pk for r in restricted}
-        else:
-            visible = set(model.objects.filter(transient=transient).filter(visible_q_fn(user))
-                          .values_list("pk", flat=True))
         pi_ids = data_sharing.own_pi_ids(user)
         designations = data_sharing.designations_of(user)
         allowed = set(public)

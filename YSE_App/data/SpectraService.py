@@ -1,12 +1,12 @@
 from YSE_App.models import *
 from django.db.models import Q
 from YSE_App.common.quality_mask import legacy_good
-from YSE_App.services.visibility import get_user_group_query as GetUserGroupQuery
+from YSE_App.services.visibility import dataset_group_q
 from YSE_App.services.visibility import spectrum_visible_q
 
 # Transient spectrum visibility is the central read rule (#648):
-# ``services.visibility.spectrum_visible_q``. Host spectra keep the plain
-# group rule (no read-time grants for host data).
+# ``services.visibility.spectrum_visible_q``. Host spectra follow the
+# data group rule ``dataset_group_q`` (#975; no read-time grants for host data).
 
 def GetAuthorizedTransientSpectrum_ByUser(user, includeBadData=True):
     query = Q(spectrum_visible_q(user))
@@ -18,15 +18,13 @@ def GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient_id, includ
     return _GetTransientSpectrum(includeBadData, query).distinct()
 
 def GetAuthorizedHostSpectrum_ByUser(user, includeBadData=True):
-    host_query_tuple = GetUserGroupQuery(user)
-    query = Q(host_query_tuple[0] | host_query_tuple[1])
+    query = dataset_group_q(HostSpectrum, user)
     allowed_phot = _GetHostSpectrum(includeBadData, query).distinct()
 
     return allowed_phot
 
 def GetAuthorizedHostSpectrum_ByUser_ByHost(user, host_id, includeBadData=True):
-    host_query_tuple = GetUserGroupQuery(user)
-    query = (host_query_tuple[0] | host_query_tuple[1]) & Q(host_id=host_id)
+    query = dataset_group_q(HostSpectrum, user) & Q(host_id=host_id)
     return _GetHostSpectrum(includeBadData, query).distinct()
 
 def GetAuthorizedTransientSpecData_ByUser(user, includeBadData=True):

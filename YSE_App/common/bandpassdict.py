@@ -92,8 +92,6 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				# ATLAS w has no standard sncosmo bandpass: not listed, so fits skip it (#963).
 				'Band: WFC - r': 'sdssr',
 				'Band: WFC - g': 'sdssg',
-				'Band: GOTO-1 - L': 'sdssz',
-				'Band: GOTO-1 - g': 'sdssg',
 				'Band: BG-Cam3 - q': 'sdssg',
 				'Band: BG-Cam2 - q': 'sdssg',
 				'Band: GPC2 - g': 'sdssg',
@@ -111,18 +109,29 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 #				'Band: Gaia-Photometric - Other-'}
 
 # ATLAS c and o have their own sncosmo bandpasses, 'atlasc' / 'atlaso', which
-# sncosmo registers from 2.8.0 on (requirements.txt pins 2.8.0; the CI image's
-# lock still has 2.5.0). Never substitute SDSS curves for them (#963). The TNS
-# ingest stores ATLAS units ATLAS-01 .. ATLAS-08 with short band names c / o;
-# ATLAS w has no standard sncosmo bandpass and is deliberately absent.
+# sncosmo registers from 2.8.0 on; on older sncosmo (the CI image's lock and
+# production) common.sncosmo_bandpasses registers the same SVO curves, shipped
+# in common/bandpasses/ (master hotfix #977). Never substitute SDSS curves for
+# them (#963). The TNS ingest stores ATLAS units ATLAS-01 .. ATLAS-08 with
+# short band names c / o; facility-queue forced photometry lands on instrument
+# "ATLAS". ATLAS w has no standard sncosmo bandpass and is deliberately absent.
 ATLAS_BANDPASSES = {'c': 'atlasc', 'o': 'atlaso', 'cyan-ATLAS': 'atlasc', 'orange-ATLAS': 'atlaso'}
 ATLAS_MIN_SNCOSMO = (2, 8)
 ATLAS_UNAVAILABLE_HINT = ("ATLAS c/o need sncosmo >= 2.8 (bandpasses atlasc / atlaso); "
 						  "they are skipped rather than fitted with SDSS curves.")
-for _unit in range(1, 9):
+for _inst in ['ATLAS'] + ['ATLAS-%02d' % _unit for _unit in range(1, 9)]:
 	for _name, _bandpass in ATLAS_BANDPASSES.items():
-		bandpassdict['Band: ATLAS-%02d - %s' % (_unit, _name)] = _bandpass
-del _unit, _name, _bandpass
+		bandpassdict['Band: %s - %s' % (_inst, _name)] = _bandpass
+del _inst, _name, _bandpass
+
+# DECam (sncosmo's DES curves) and GOTO (curves registered by
+# common.sncosmo_bandpasses) (master hotfix #977).
+for _band, _name in [('g', 'desg'), ('r', 'desr'), ('i', 'desi'), ('z', 'desz'), ('Y', 'desy'), ('y', 'desy')]:
+	bandpassdict['Band: DECam - %s' % _band] = _name
+for _inst in ['GOTO-%i' % _i for _i in range(1, 5)]:
+	for _band, _name in [('L', 'gotol'), ('R', 'gotor'), ('r', 'gotor'), ('G', 'gotog'), ('g', 'gotog'), ('B', 'gotob'), ('b', 'gotob')]:
+		bandpassdict['Band: %s - %s' % (_inst, _band)] = _name
+del _inst, _band, _name
 
 ALL_BANDPASSES = dict(bandpassdict)  # every mapping, whether or not this sncosmo has the curve
 
@@ -149,5 +158,7 @@ def build_bandpassdict(atlas_available):
 	return {k: v for k, v in ALL_BANDPASSES.items() if v not in ('atlasc', 'atlaso')}
 
 
-ATLAS_AVAILABLE = atlas_bandpasses_available()
+# Always: sncosmo >= 2.8 ships atlasc / atlaso, and common.sncosmo_bandpasses.register()
+# (called before every sncosmo fit) registers the bundled curves on older versions (#977).
+ATLAS_AVAILABLE = True
 bandpassdict = build_bandpassdict(ATLAS_AVAILABLE)

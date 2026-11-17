@@ -510,18 +510,44 @@ class ScopeResult:
 
 
 def photometry_groups(transient_ids: Sequence[int]) -> Dict[int, Dict[int, frozenset]]:
-    """``{transient_id: {photometry_id: frozenset(group ids)}}`` for the sets that have groups (one query)."""
+    """``{transient_id: {photometry_id: frozenset(scope group ids)}}`` for the sets not open to everyone.
+
+    The data group rule (master hotfix #975, ``visibility.dataset_group_q``)
+    decides a set's scopes: its groups other than ``Public``; ``Public`` when
+    that is its only group (open only to Public's members); the ``YSE`` group
+    for an unlabelled set of the ``YSE`` observation group (YSE-only). An
+    empty frozenset means no scope may hold the set. One query (two with unlabelled YSE data).
+    """
+    from django.contrib.auth.models import Group
+    from django.db.models import Q
+
+    from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
     from YSE_App.models.phot_models import TransientPhotometry
+    from YSE_App.services.visibility import YSE_COLLABORATION_GROUP_NAME, YSE_OBSERVATION_GROUP_NAME
 
     ids = list({int(t) for t in transient_ids if t is not None})
-    out: Dict[int, Dict[int, set]] = {}
     if not ids:
         return {}
-    rows = TransientPhotometry.groups.through.objects.filter(
-        transientphotometry__transient_id__in=ids,
-    ).values_list('transientphotometry__transient_id', 'transientphotometry_id', 'group_id')
-    for tid, phot_id, group_id in rows:
-        out.setdefault(tid, {}).setdefault(phot_id, set()).add(group_id)
+    # One query: every set with a group (one row per group) and every ungrouped YSE set (group NULL).
+    rows = (TransientPhotometry.objects.filter(transient_id__in=ids)
+            .filter(Q(groups__isnull=False) | Q(groups__isnull=True, obs_group__name=YSE_OBSERVATION_GROUP_NAME))
+            .values_list('transient_id', 'pk', 'groups__id', 'groups__name'))
+    pairs: Dict[int, Dict[int, set]] = {}
+    unlabelled_yse = []
+    for tid, phot_id, group_id, group_name in rows:
+        if group_id is None:
+            unlabelled_yse.append((tid, phot_id))
+        else:
+            pairs.setdefault(tid, {}).setdefault(phot_id, set()).add((group_id, group_name))
+    out: Dict[int, Dict[int, set]] = {}
+    for tid, sets in pairs.items():
+        for phot_id, groups in sets.items():
+            team = {g for g, n in groups if n != PUBLIC_COLLABORATION_GROUP_NAME}
+            out.setdefault(tid, {})[phot_id] = team or {g for g, _n in groups}  # Public-only: the Public scope
+    if unlabelled_yse:
+        yse_gid = Group.objects.filter(name=YSE_COLLABORATION_GROUP_NAME).values_list('pk', flat=True).first()
+        for tid, phot_id in unlabelled_yse:
+            out.setdefault(tid, {})[phot_id] = {yse_gid} if yse_gid is not None else set()
     return {tid: {pid: frozenset(g) for pid, g in sets.items()} for tid, sets in out.items()}
 
 
@@ -549,7 +575,7 @@ def scope_point_sets(points: Sequence[PhotPoint], groups_by_photometry: Dict[int
         out[gid] = []
     for p in points:
         groups = groups_by_photometry.get(p.photometry_id)
-        if not groups:
+        if groups is None:  # open to everyone; an empty set is in no scope (#975)
             for bucket in out.values():
                 bucket.append(p)
             continue
@@ -636,6 +662,14 @@ def transients_needing_scopes(after_pk: int = 0, limit: Optional[int] = None) ->
     restricted = set(
         TransientPhotometry.groups.through.objects.filter(transientphotometry__transient_id__gt=after_pk)
         .values_list('transientphotometry__transient_id', flat=True).distinct()
+    )
+    # Unlabelled YSE observation-group data are YSE-only (#975).
+    from YSE_App.services.visibility import YSE_OBSERVATION_GROUP_NAME
+
+    restricted |= set(
+        TransientPhotometry.objects.filter(transient_id__gt=after_pk, obs_group__name=YSE_OBSERVATION_GROUP_NAME,
+                                           groups__isnull=True)
+        .values_list('transient_id', flat=True).distinct()
     )
     restricted |= set(
         TransientPhotStatScope.objects.filter(transient_id__gt=after_pk)
