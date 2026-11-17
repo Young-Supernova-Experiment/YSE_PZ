@@ -105,9 +105,11 @@ def _via_allocation(transient, user: User) -> Optional[Outcome]:
         return None
     existing = fr.open_request_for(allocation, transient)
     if existing is not None:
-        return Outcome("refused", "error: a ZTF forced-photometry request is already %s (submitted %s)" % (
+        from YSE_App.common.utc_dates import utc_day
+
+        return Outcome("refused", "error: a ZTF forced-photometry request is already %s (submitted %s UTC)" % (
             existing.get_state_display().lower(),
-            (existing.submitted_at or existing.created_date).strftime("%Y-%m-%d %H:%M UT")), via="allocation")
+            utc_day(existing.submitted_at or existing.created_date)), via="allocation")
     try:
         req = fr.submit_request(allocation, transient, user, {})
     except (FacilityValidationError, fr.FacilityRequestError) as exc:
@@ -115,6 +117,38 @@ def _via_allocation(transient, user: User) -> Optional[Outcome]:
     return Outcome(
         "submitted", "success: ZTF forced photometry request %d is %s; the light curve is ingested when the "
         "service finishes" % (req.pk, req.get_state_display().lower()), via="allocation")
+
+
+ATLAS_FORCED_PHOT_LOG_PREFIX = "ATLAS Forced Phot"
+
+
+def submit_atlas_forced_phot(transient, user: User) -> str:
+    """The Summary tab's ATLAS button (master hotfix #977): one request through the first 'atlas'
+    allocation open to ``user`` (the ATLAS facility adapter); the message for the page. Never raises."""
+    from YSE_App.facilities import FacilityValidationError
+    from YSE_App.models import Log
+    from YSE_App.services import facility_requests as fr
+
+    allocation = fr.allocations_for_user(user).filter(facility="atlas").order_by("-end_date").first()
+    if allocation is None:
+        return ('error: no ATLAS forced-photometry allocation is open to you; staff can add one '
+                '(facility "atlas", credential {"api_token": ...}) on the Allocations page')
+    existing = fr.open_request_for(allocation, transient)
+    if existing is not None:
+        from YSE_App.common.utc_dates import utc_day
+
+        return "error: an ATLAS forced-photometry request is already %s (submitted %s UTC)" % (
+            existing.get_state_display().lower(), utc_day(existing.submitted_at or existing.created_date))
+    try:
+        req = fr.submit_request(allocation, transient, user, {})
+    except (FacilityValidationError, fr.FacilityRequestError) as exc:
+        return "error: %s" % exc
+    msg = ("success: ATLAS forced photometry request %d is %s; the light curve is ingested when the service "
+           "finishes" % (req.pk, req.get_state_display().lower()))
+    Log.objects.create(created_by=user, modified_by=user, transient=transient,
+                       comment="%s requested by %s via the facility queue: %s" % (
+                           ATLAS_FORCED_PHOT_LOG_PREFIX, user.username, msg))
+    return msg
 
 
 def submit_forced_phot(transient, user: User) -> Outcome:

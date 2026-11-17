@@ -1,0 +1,19 @@
+/* Facet sidebar on Transient Search (#842), UI preview only. */
+.yse-facets .box-body { padding: .5rem .75rem; }
+.yse-facet { border-top: 1px solid rgba(0, 0, 0, .1); padding: .35rem 0; }
+.yse-facet:first-of-type { border-top: 0; }
+.yse-facet-title { font-weight: 600; cursor: pointer; }
+.yse-facet-values { margin: .25rem 0 0; }
+.yse-facet-values li { margin: 0; }
+.yse-facet-link { display: flex; align-items: center; gap: .35rem; padding: .15rem .25rem; border-radius: .2rem; text-decoration: none; }
+.yse-facet-link:hover, .yse-facet-link:focus { background: rgba(60, 141, 188, .12); text-decoration: none; }
+.yse-facet-link.active { font-weight: 600; background: rgba(60, 141, 188, .18); }
+.yse-facet-check { width: 1em; flex: 0 0 1em; text-align: center; }
+.yse-facet-label { flex: 1 1 auto; overflow-wrap: anywhere; }
+.yse-facet-count { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.yse-facet-more > summary { font-size: .85rem; cursor: pointer; padding-left: 1.6rem; }
+#search-preview-layout[aria-busy="true"] #search-results-table,
+#search-preview-layout[aria-busy="true"] #search-facets-body { opacity: .55; transition: opacity .15s; }
+@media (max-width: 991.98px) {
+  #search-facets-col { margin-bottom: .75rem; }
+}

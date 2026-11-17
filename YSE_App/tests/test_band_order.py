@@ -158,6 +158,17 @@ class BandWavelengthOrderTests(SimpleTestCase):
 
     def test_atlas_and_near_infrared(self):
         self.assertLess(band_sort_key("cyan-ATLAS"), band_sort_key("orange-ATLAS"))
+
+    def test_atlas_c_and_o_sit_between_g_r_and_r_i(self):
+        # c (5330 A) between g and r, o (6790 A) between r and i, whatever the band is called
+        self.assertEqual(sorted(["i", "o", "r", "c", "g"], key=band_sort_key), ["g", "c", "r", "o", "i"])
+        self.assertEqual(
+            sorted(["i-ZTF", "orange-ATLAS", "r-ZTF", "cyan-ATLAS", "g-ZTF"], key=band_sort_key),
+            ["g-ZTF", "cyan-ATLAS", "r-ZTF", "orange-ATLAS", "i-ZTF"],
+        )
+        self.assertEqual(band_wavelength("c"), 5330.0)
+        self.assertEqual(band_wavelength("o"), 6790.0)
+        self.assertEqual(band_wavelength("c"), band_wavelength("cyan-ATLAS"))
         self.assertLess(band_sort_key("orange-ATLAS"), band_sort_key("J"))
         self.assertLess(band_sort_key("J"), band_sort_key("H"))
 

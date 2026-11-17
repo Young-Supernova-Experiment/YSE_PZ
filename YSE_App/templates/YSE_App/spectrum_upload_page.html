@@ -1,0 +1,16 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12 col-lg-8">
+        <div class="box box-primary">
+            <div class="box-header with-border"><h3 class="box-title">Upload a spectrum</h3></div>
+            <div class="box-body">
+                {% if errors %}<div class="alert alert-danger">Spectrum not uploaded. {{ errors }}</div>{% endif %}
+                <p>Spectra are uploaded from the transient's page: open the transient, then use
+                   <strong>Upload Spectrum</strong> under the spectrum plot on the Summary tab.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

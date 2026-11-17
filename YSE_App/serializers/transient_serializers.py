@@ -26,7 +26,36 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         fields = "__all__"
         # Edits go through PATCH /api/transients/<id>/summary/ (audited history, #295).
         read_only_fields = ("summary", "summary_modified")
-        
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The stored summary is written from all data: blank for a viewer with hidden photometry.
+        if data.get("summary") and self._photometry_hidden(instance):
+            data["summary"] = None
+            data["summary_modified"] = None
+        return data
+
+    def _photometry_hidden(self, instance):
+        """One query for a whole list response: the hidden set is computed for every listed transient."""
+        from YSE_App.services.visibility import transients_with_hidden_photometry
+
+        context = self.context if isinstance(self.context, dict) else {}
+        checked = context.setdefault("_photometry_checked", set())
+        hidden = context.setdefault("_photometry_hidden", set())
+        if instance.pk not in checked:
+            ids = {instance.pk}
+            siblings = getattr(self.parent, "instance", None)
+            if siblings is not None:
+                try:
+                    ids |= {t.pk for t in siblings if hasattr(t, "summary") and t.summary}
+                except TypeError:
+                    pass
+            ids -= checked
+            request = context.get("request")
+            hidden |= transients_with_hidden_photometry(getattr(request, "user", None), ids)
+            checked |= ids
+        return instance.pk in hidden
+
     def create(self, validated_data):
 
         tags_exist = 'tags' in validated_data.keys()
@@ -62,7 +91,8 @@ class TransientSerializer(serializers.HyperlinkedModelSerializer):
         instance.host = validated_data.get('host', instance.host)
         instance.abs_mag_peak_band = validated_data.get('abs_mag_peak_band', instance.abs_mag_peak_band)
         instance.created_by = validated_data.get('created_by', instance.created_by)
-        instance.modified_by = validated_data.get('modified_by_id', instance.modified_by)
+        # the viewsets pass the requesting user's id as ``modified_by`` (#886)
+        instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
         instance.antares_classification = validated_data.get('antares_classification', instance.antares_classification)
         instance.internal_survey = validated_data.get('internal_survey', instance.internal_survey)
 

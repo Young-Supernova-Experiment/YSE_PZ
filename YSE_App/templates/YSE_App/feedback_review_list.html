@@ -22,7 +22,7 @@
 				{% for row in rows %}
 					<tr>
 						<td><a href="{% url 'feedback_review_detail' row.pk %}">{{ row.pk }}</a></td>
-						<td>{{ row.created|date:"Y-m-d H:i" }}</td>
+						<td>{{ row.created|utcdate }}</td>
 						<td>{{ row.get_kind_display }}</td>
 						<td><a href="{% url 'feedback_review_detail' row.pk %}">{{ row.title|default:row.text|truncatechars:80 }}</a></td>
 						<td><code>{{ row.page_url|truncatechars:60 }}</code></td>

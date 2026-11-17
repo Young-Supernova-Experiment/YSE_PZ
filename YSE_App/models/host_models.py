@@ -94,10 +94,10 @@ class Host(BaseModel):
 		return GetSexigesimalString(self.ra, self.dec)
 
 	def RADecimalString(self):
-		return '%.7f'%(self.ra)
+		return '%.5f'%(self.ra)  # degrees, 5 decimals (#832)
 
 	def DecDecimalString(self):
-		return '%.7f'%(self.dec)
+		return '%.5f'%(self.dec)
 
 	def __str__(self):
 		return self.HostString()

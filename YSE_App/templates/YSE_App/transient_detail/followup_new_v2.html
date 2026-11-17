@@ -1,0 +1,60 @@
+{% comment %}
+Follow-up tab of the preview layout (#857), below the existing follow-up requests:
+facility requests, then one "New request" form with a type selector, then "Advanced"
+(observing resources, observation tasks, automated spectra). The deferred
+followup_rest fragment renders this; the non-deferred tab includes it. Form ids,
+fields and endpoints are the current page's, so its handlers drive them.
+Everything sits inside #facility_request_box, which the facility script binds to,
+so the "Request follow-up" dialog (#850) can move the whole box and keep it working.
+{% endcomment %}
+<div id="facility_request_box" class="yse-v2-followup-forms">
+    <section class="yse-v2-tab-only" id="yse-v2-facility-requests" aria-labelledby="yse-v2-facility-requests-title">
+        <h4 id="yse-v2-facility-requests-title">Facility requests</h4>
+        {% include "YSE_App/form_snippets/facility_request_list.html" %}
+    </section>
+
+    <section id="yse-v2-new-request" aria-labelledby="yse-v2-new-request-title">
+        <h4 id="yse-v2-new-request-title" class="yse-v2-tab-only">New request</h4>
+        <fieldset class="yse-v2-request-type form-group">
+            <legend class="col-form-label pt-0">Request type</legend>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="yse-v2-request-type" id="yse-v2-request-type-followup" value="followup" checked>
+                <label class="form-check-label" for="yse-v2-request-type-followup">Follow-up with an observing resource</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="yse-v2-request-type" id="yse-v2-request-type-facility" value="facility"{% if not facility_allocations %} disabled{% endif %}>
+                <label class="form-check-label" for="yse-v2-request-type-facility">Submit to a facility{% if not facility_allocations %} <small class="text-muted">(no allocation open to you)</small>{% endif %}</label>
+            </div>
+        </fieldset>
+        <div class="yse-v2-request-form" data-yse-request-type="followup">
+            {% include "YSE_App/form_snippets/transient_followup_form_fields.html" with form=transient_followup_form %}
+        </div>
+        <div class="yse-v2-request-form" data-yse-request-type="facility" hidden>
+            {% include "YSE_App/form_snippets/facility_request_form_body.html" %}
+        </div>
+    </section>
+
+    <details class="yse-v2-advanced yse-v2-tab-only" id="yse-v2-followup-advanced">
+        <summary>Advanced: observing resources, observation tasks and automated spectra</summary>
+        <div class="row">
+            <div class="col-md-6 col-12">
+                {% include "YSE_App/form_snippets/classical_resource_form.html" with form=classical_resource_form %}
+            </div>
+            <div class="col-md-6 col-12">
+                {% include "YSE_App/form_snippets/too_resource_form.html" with form=too_resource_form %}
+            </div>
+        </div>
+        <div class="row">
+            {% if include_task_form %}
+            <div class="col-md-6 col-12">
+                <input type="hidden" id="followup_pk" />
+                {% include "YSE_App/form_snippets/transient_observation_task_form.html" with form=transient_observation_task_form %}
+            </div>
+            {% endif %}
+            <div class="col-md-6 col-12">
+                {% include "YSE_App/form_snippets/automated_spectrum_form.html" with form=automated_spectrum_form %}
+            </div>
+        </div>
+    </details>
+</div>
+{% include "YSE_App/form_snippets/facility_request_script.html" %}

@@ -218,7 +218,7 @@ def save_search_query(user, params, title, *, add_to_dashboard=False, request=No
     if len(title) > TITLE_MAX_LENGTH:
         raise SearchSaveError('The title must be at most %d characters.' % TITLE_MAX_LENGTH)
     if Query.objects.filter(title=title).exists():
-        # transient_summary and download_bulk_photometry look queries up by
+        # transient_summary and the by-title download_bulk_photometry URL look queries up by
         # title, so a second query with the same title would be unreachable.
         raise SearchSaveError('A saved query called "%s" already exists; choose another title.' % title)
     filterset, sql = compiled_search(params, request=request)

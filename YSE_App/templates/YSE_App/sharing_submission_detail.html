@@ -19,9 +19,9 @@
 					<tr><th>Report id</th><td>{% if submission.external_id %}<code>{{ submission.external_id }}</code>{% else %}-{% endif %}</td></tr>
 					<tr><th>Attempts</th><td>{{ submission.attempts }}</td></tr>
 					<tr><th>Requested by</th><td>{{ submission.created_by.username }}{% if submission.auto_publisher %} (rule: {{ submission.auto_publisher.name }}){% endif %}</td></tr>
-					<tr><th>Created</th><td>{{ submission.created_date|date:"Y-m-d H:i:s" }}</td></tr>
-					<tr><th>Submitted</th><td>{{ submission.submitted_at|date:"Y-m-d H:i:s"|default:"-" }}</td></tr>
-					<tr><th>Finished</th><td>{{ submission.finished_at|date:"Y-m-d H:i:s"|default:"-" }}</td></tr>
+					<tr><th>Created</th><td>{{ submission.created_date|utcdate }}</td></tr>
+					<tr><th>Submitted</th><td>{{ submission.submitted_at|utcdate|default:"-" }}</td></tr>
+					<tr><th>Finished</th><td>{{ submission.finished_at|utcdate|default:"-" }}</td></tr>
 					<tr><th>Queue job</th><td>{% if submission.job %}<a href="{% url 'admin:YSE_App_job_change' submission.job.pk %}">#{{ submission.job.pk }}</a> ({{ submission.job.status }}){% else %}-{% endif %}</td></tr>
 				</table>
 			</div>

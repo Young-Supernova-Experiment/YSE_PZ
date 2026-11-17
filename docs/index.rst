@@ -20,11 +20,17 @@ The modern study of astrophysical transients has been transformed by an exponent
    triage
    adding_data
    forms
-   docker
    howto
    contributing
    api
-   
+
+.. toctree::
+   :maxdepth: 1
+   :caption: User guides
+
+   archive-tabs
+   observability
+
 Indices and tables
 ==================
 

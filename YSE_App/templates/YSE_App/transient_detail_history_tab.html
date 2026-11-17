@@ -21,7 +21,7 @@
             <tbody>
                 {% for c in changes %}
                 <tr>
-                    <td class="text-nowrap">{{ c.created_at|date:"Y-m-d H:i:s" }}</td>
+                    <td class="text-nowrap">{{ c.created_at|utcdate }}</td>
                     <td>{% if c.transient_id %}transient{% else %}host{% endif %}</td>
                     <td><code>{{ c.field }}</code></td>
                     <td>{{ c.old_value|default_if_none:"—" }}{% if c.old_source %} <span class="text-muted">({{ c.old_source }})</span>{% endif %}</td>

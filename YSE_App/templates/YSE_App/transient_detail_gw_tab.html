@@ -4,7 +4,7 @@
 <table class="table table-bordered table-striped">
     <thead>
         <tr>
-            <th>Date</th>
+            <th>Date (UTC)</th>
             <th>Telescope</th>
             <th>Filter</th>
             <th>DOPHOT Class</th>
@@ -14,7 +14,7 @@
     <tbody>
         {% for gw_image in gw_images %}
         <tr>
-            <td>{{ gw_image.obs_date }}</td>
+            <td>{{ gw_image.obs_date|utcdate }}</td>
             <td>{{ gw_image.image_filter.instrument }}</td>
             <td>{{ gw_image.image_filter }}</td>
             <td>{{ gw_image.dophot_class }}</td>

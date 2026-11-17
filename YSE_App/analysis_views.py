@@ -27,7 +27,8 @@ from django.views.decorators.http import require_GET, require_POST
 from YSE_App.models import AnalysisResultFile, AnalysisService, ExternalService, ExternalServiceRun, Transient
 from YSE_App.services import analysis_services as svc
 from YSE_App.services import external_services as runs
-from YSE_App.services import fit_status
+from YSE_App.common.ui_preview import ui_preview_enabled
+from YSE_App.services import fit_status, fit_subset, fit_tables
 from YSE_App.services.visibility import filter_transients_by_user_access
 
 POLL_SECONDS = 4
@@ -84,10 +85,22 @@ def analysis_tab_context(request, transient):
     services = [_service_entry(p, request.user) for p in svc.services_for_user(request.user)]
     sees_data = user_may_see_transient(request.user, transient)
     qs = svc.runs_for_transient(transient, request.user, limit=None)
-    if not sees_data:
+    # Results derive from the requester's data access: other users' runs only
+    # when no photometry or spectra of this transient are hidden from the viewer.
+    if not sees_data or not fit_status.others_runs_visible(transient, request.user):
         qs = qs.filter(created_by=request.user)
     run_rows = [_run_entry(r, request.user) for r in qs[:50]]
+    fit_history = None
+    subset = None
+    if ui_preview_enabled(request):
+        # Preview only (#846): every Bazin / SALT fit of the runs this user may see.
+        fit_history = fit_tables.history(transient.pk, run_ids=qs.prefetch_related(None).values_list("pk", flat=True))
+        if not (fit_history["bazin"] or fit_history["salt"]):
+            fit_history = None
+        subset = subset_context(request.user, transient, services, fit_history)
     return {
+        "fit_history": fit_history,
+        "fit_subset": subset,
         "transient": transient,
         "analysis_sees_data": sees_data,
         "analysis_services": services,
@@ -100,6 +113,44 @@ def analysis_tab_context(request, transient):
               "runner_kind": s["runner_kind"]} for s in services],
             default=str,
         )),
+    }
+
+
+def subset_context(user, transient, services, fit_history) -> dict:
+    """The "fit part of the data" form and the history's subset lines (#847, UI preview only).
+
+    The form offers the Bazin / SALT services the user may run and the bands, telescopes and
+    quality levels of the points they may see. Each subset entry of ``fit_history`` gets a
+    one-line ``selection_summary`` and, when the user may run its service, ``repeat``: the
+    service and the run's parameters, which the "Repeat this fit" button posts unchanged.
+    """
+    fit_services = []
+    for s in services:
+        profile = s["profile"]
+        if profile.runner_kind != AnalysisService.RUNNER_INPROCESS:
+            continue
+        kind = fit_tables.runner_kind(profile.runner_path)
+        if kind is not None:
+            fit_services.append({"slug": s["slug"], "name": s["name"], "kind": kind, "cap": s["cap"]})
+    runnable = {s["slug"] for s in fit_services}
+
+    def decorate(entry, run, selection):
+        entry["selection_summary"] = fit_subset.summary(selection) if selection else ""
+        entry["repeat"] = None
+        if selection and run is not None and run.service.slug in runnable:
+            entry["repeat"] = {"service": run.service.slug,
+                               "params_json": json.dumps(svc.run_params(run), sort_keys=True, default=str)}
+
+    if fit_history:
+        for entry in fit_history["bazin"]:
+            first = entry["rows"][0]
+            decorate(entry, entry["run"], first.selection if first.is_subset else None)
+        for entry in fit_history["salt"]:
+            row = entry["row"]
+            decorate(entry, row.run, row.selection if row.is_subset else None)
+    return {
+        "services": fit_services,
+        "options": fit_subset.options(user, transient),
     }
 
 
@@ -179,12 +230,15 @@ def _run_for_user(request, run_uuid) -> ExternalServiceRun:
             uuid=run_uuid, service__kind=ExternalService.KIND_ANALYSIS)
     except (ExternalServiceRun.DoesNotExist, ValueError):
         raise Http404("unknown analysis run")
-    # The requester (and staff) always; anyone else only when they may see the transient's data,
-    # since results derive from it.
-    if svc.can_manage_run(run, request.user):
+    # The requester always; anyone else (staff too) only when they may see the transient
+    # and none of its data are hidden from them, since results derive from the
+    # requester's data access.
+    if run.created_by_id is not None and run.created_by_id == request.user.pk:
         return run
     if run.transient_id is None or not user_may_see_transient(request.user, run.transient):
         raise PermissionDenied("you may not see this transient's data")
+    if not fit_status.run_visible_to_user(run, request.user):
+        raise PermissionDenied("this run was made from data you may not see")
     return run
 
 

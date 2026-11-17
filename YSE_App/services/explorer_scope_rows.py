@@ -114,6 +114,7 @@ def row_rules() -> Dict[str, RowRule]:
         _rule(m.TransientSpectrum, 'id', 'visible_transient_spectra'),
         *_through_rules(m.TransientSpectrum, 'visible_transient_spectra'),
         _rule(m.TransientSpecData, 'spectrum_id', 'visible_transient_spectra'),
+        _rule(m.TransientSpectrumArrays, 'spectrum_id', 'visible_transient_spectra'),  # pixels as arrays (#891)
 
         _rule(m.Host, None, None, masks=[_mask('best_spec_id', 'visible_host_spectra', m.HostSpectrum)]),
         _rule(m.HostPhotometry, 'id', 'visible_host_photometry'),
@@ -124,6 +125,7 @@ def row_rules() -> Dict[str, RowRule]:
         _rule(m.HostSpectrum, 'id', 'visible_host_spectra'),
         *_through_rules(m.HostSpectrum, 'visible_host_spectra'),
         _rule(m.HostSpecData, 'spectrum_id', 'visible_host_spectra'),
+        _rule(m.HostSpectrumArrays, 'spectrum_id', 'visible_host_spectra'),  # pixels as arrays (#891)
 
         _rule(m.TransientPhotStat, 'id', 'visible_photstat'),
         _rule(m.TransientPhotStatScope, 'id', 'visible_photstat_scopes'),
@@ -269,10 +271,10 @@ class ViewerRows:
         return TransientSpectrum.objects.filter(spectrum_visible_q(self.user, names=self.names)).values('pk')
 
     def _group_rule(self, model):
-        from YSE_App.services.visibility import get_user_group_query
+        from YSE_App.services.visibility import dataset_group_q
 
-        no_group, contains_group = get_user_group_query(self.user, names=self.names)
-        return model.objects.filter(no_group | contains_group)
+        # The data group rule (#975): Public opens no team's data; unlabelled YSE data is YSE-only.
+        return model.objects.filter(dataset_group_q(model, self.user, names=self.names))
 
     def visible_host_photometry(self):
         from YSE_App.models import HostPhotometry

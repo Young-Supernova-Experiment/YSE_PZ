@@ -1,0 +1,23 @@
+{# The facets and their counts (#842); also the facet partial reload. #}
+{% for facet in search_facets %}
+<details class="yse-facet" id="search-facet-{{ facet.key }}" open>
+  <summary class="yse-facet-title">{{ facet.title }}{% if facet.active %} <span class="badge badge-primary">on</span>{% endif %}</summary>
+  {% if facet.values %}
+  <ul class="yse-facet-values list-unstyled">
+    {% for v in facet.values %}{% include 'YSE_App/search/_facet_value.html' %}{% endfor %}
+  </ul>
+  {% if facet.more %}
+  <details class="yse-facet-more">
+    <summary>{{ facet.more|length }} more</summary>
+    <ul class="yse-facet-values list-unstyled">
+      {% for v in facet.more %}{% include 'YSE_App/search/_facet_value.html' %}{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% else %}
+  <p class="text-muted small mb-1 yse-facet-empty">None in these results.</p>
+  {% endif %}
+</details>
+{% empty %}
+<p class="text-muted small mb-0">Fix the filters above to see counts.</p>
+{% endfor %}

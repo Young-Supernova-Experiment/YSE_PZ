@@ -40,7 +40,7 @@ from YSE_App.services import researcher_profile as rp
 from YSE_App.tests.test_researcher_profile import with_key
 
 VALID_ORCID = "0000-0002-1825-0097"  # ORCID's documented example iD (fictitious researcher)
-GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
+GATE_ON = dict(ONBOARDING_GATE_ENABLED=True, ONBOARDING_EMAIL_REQUIRED=False, RESEARCH_PUBLIC_KEY="", RESEARCH_PUBLIC_KEY_PATH="")
 UTC = datetime.timezone.utc
 GO_LIVE_DATE = datetime.date(2026, 1, 1)
 GO_LIVE = datetime.datetime(2026, 1, 1, tzinfo=UTC)
@@ -51,6 +51,8 @@ def at(month, day=1):
 
 
 def complete_profile(user):
+    user.first_name, user.last_name = "Synthetic", "Person"
+    User.objects.filter(pk=user.pk).update(first_name="Synthetic", last_name="Person")
     return ResearcherProfile.objects.create(
         user=user, full_name="Test Person", institution="Example University", department="Physics",
         career_level="tenured", orcid=VALID_ORCID)
@@ -277,11 +279,11 @@ class ResearchFieldsTests(TestCase):
     def setUp(self):
         research_crypto.reset_cache()
         self.addCleanup(research_crypto.reset_cache)
-        self.user = User.objects.create_user("fields_user", password="x")
+        self.user = User.objects.create_user("fields_user", password="x", first_name="Synthetic", last_name="Person")
         self.client.force_login(self.user)
 
     def post_profile(self, **extra):
-        data = dict(full_name="Test Person", institution="Example University", department="Physics",
+        data = dict(first_name="Synthetic", last_name="Person", full_name="Test Person", institution="Example University", department="Physics",
                     career_level="postdoc", orcid=VALID_ORCID, phd_year="2015", pronouns="they/them")
         data.update(extra)
         return self.client.post(reverse("researcher_profile_edit"), data)
@@ -299,6 +301,7 @@ class ResearchFieldsTests(TestCase):
             for name in ("full_name", "author_name_format", "institution", "orcid", "acknowledgment_text"):
                 self.assertContains(page, 'name="%s"' % name)
             resp = self.client.post(reverse("researcher_profile_edit"), dict(
+                first_name="Synthetic", last_name="Person",
                 full_name="Test Person", institution="Example University", gender="woman", country="Atlantis",
                 career_level="grad", pronouns="they/them"))
             self.assertEqual(resp.status_code, 302)
@@ -353,6 +356,7 @@ class ResearchFieldsTests(TestCase):
         self._store_research_data()
         with with_key():
             self.client.post(reverse("researcher_profile_edit"), dict(
+                first_name="Synthetic", last_name="Person",
                 full_name="Test Person", institution="Example University", clear_gender="on"))
         self.assertEqual(self.stored(), {"phd_year", "country"})
         self.assertEqual(ResearcherProfile.objects.get(user=self.user).career_level, "grad")  # kept

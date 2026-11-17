@@ -20,6 +20,7 @@ class GWCandidateSerializer(serializers.HyperlinkedModelSerializer):
 		instance.transient = validated_data.get('transient', instance.transient)
 		instance.websniff_url = validated_data.get('websniff_url', instance.websniff_url)
 		
+		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
 		instance.save()
 
 		return instance
@@ -44,6 +45,7 @@ class GWCandidateImageSerializer(serializers.HyperlinkedModelSerializer):
 		instance.image_filter = validated_data.get('image_filter', instance.image_filter)
 		instance.dophot_class = validated_data.get('dophot_class', instance.dophot_class)
 		
+		instance.modified_by_id = validated_data.get('modified_by', instance.modified_by_id)
 		instance.save()
 
 		return instance

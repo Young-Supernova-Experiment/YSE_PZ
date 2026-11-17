@@ -1,0 +1,461 @@
+{% extends 'YSE_App/transient_detail.html' %}
+{% load static %}
+{% load transient_detail_extras %}
+{% comment %}
+Transient page, preview layout (#856, #851): shown only to users with the UI preview on.
+It reuses the current page's header and scripts (block.super); element ids match the
+current page, so the deferred fragment/tab loading drives both layouts. Ten tabs:
+Summary, Follow-up, Photometry, Spectra, Observing, Brokers, Analysis & Annotations,
+Archives (only when an archive has data), GW (GW candidates only), History.
+{% endcomment %}
+
+{% block styles %}
+    {{ block.super }}
+    <style>
+        .yse-v2-actionbar {
+            position: sticky;
+            top: 0;
+            z-index: 1020;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            margin-bottom: 10px;
+            background: var(--yse-surface, #fff);
+            border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+        }
+        .dark-mode .yse-v2-actionbar { background: var(--yse-surface, #343a40); }
+        .yse-v2-actionbar .yse-v2-name { font-weight: 600; margin-right: 8px; }
+        .yse-v2-more > summary { cursor: pointer; list-style: revert; }
+        .yse-v2-evidence #lcplot, .yse-v2-evidence #specplot { min-height: 120px; }
+        /* List stepping (#850) and the follow-up tab (#857). */
+        .yse-v2-list-stepper { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .yse-v2-list-position { white-space: nowrap; max-width: 28em; overflow: hidden; text-overflow: ellipsis; }
+        #yse-v2-followup-existing, #yse-v2-facility-requests, #yse-v2-new-request { margin-bottom: 18px; }
+        .yse-v2-empty { padding: 10px 12px; border: 1px dashed rgba(127, 127, 127, 0.5); border-radius: 4px; margin-bottom: 10px; }
+        .yse-v2-advanced > summary { cursor: pointer; list-style: revert; font-weight: 600; margin-bottom: 8px; }
+        #yse-v2-request-modal .yse-v2-tab-only { display: none !important; }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-12">
+            {% if transient_detail_defer %}
+            <input type="hidden" id="transient_pk" value="{{ transient.id }}"/>
+            {% endif %}
+            {% if messages %}
+            <div class="yse-detail-messages">
+                {% for message in messages %}<div class="alert alert-{{ message.level_tag|default:"info" }} py-2 mb-2">{{ message }}</div>{% endfor %}
+            </div>
+            {% endif %}
+
+            {# Pinned header: name, one status menu and the page actions. #}
+            <div class="yse-v2-actionbar" id="yse-v2-actionbar" role="toolbar" aria-label="Actions for {{ transient.name }}">
+                <span class="yse-v2-name">{{ transient.name }}</span>
+                <div class="dropdown yse-v2-status">
+                    <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Change this transient's status">
+                        Change status
+                    </button>
+                    <div class="dropdown-menu">
+                        {% for status in all_transient_statuses %}
+                            <a class="dropdown-item transientStatusChange" href="#" data-status_id="{{ status.id }}" data-status_name="{{ status.name|status_label }}" title="{{ status.name|status_title }}">{{ status.name|status_label }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+                <a href="#followup_tab" class="btn btn-sm btn-primary yse-v2-request-followup" data-yse-hook="request-followup">Request follow-up</a>
+                {% if sharing_services %}
+                    <a class="btn btn-sm btn-outline-primary yse-report-tns" href="#yse-report-modal" data-toggle="modal" data-target="#yse-report-modal">Report to TNS</a>
+                {% elif submit_to_tns %}
+                    <a class="btn btn-sm btn-outline-primary submit_to_tns" href="#">Submit to TNS</a>
+                {% endif %}
+                <div class="dropdown">
+                    <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Download</button>
+                    <div class="dropdown-menu">
+                        <a class="dropdown-item" href="{% url 'download_data' transient.slug %}" target="_blank">All data</a>
+                        <a class="dropdown-item" href="{% url 'download_photometry' transient.slug %}" target="_blank">Photometry</a>
+                        <a class="dropdown-item" href="{% url 'download_spectra' slug=transient.slug %}">Spectra</a>
+                    </div>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary yse-v2-share" title="Copy a link to this transient">Share</button>
+                <div class="dropdown">
+                    <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" aria-label="More actions">&hellip;</button>
+                    <div class="dropdown-menu dropdown-menu-right">
+                        <a class="dropdown-item" href="{% url 'observability' transient.id %}">Observability</a>
+                        <a class="dropdown-item" href="{% url 'finderchart' transient.id %}" target="_blank">Finder chart</a>
+                        {% if user.is_staff %}<a class="dropdown-item" href="{% url 'admin:YSE_App_transient_change' transient.id %}" target="_blank">Edit in admin</a>{% endif %}
+                    </div>
+                </div>
+                {# List stepping (#850): only when the page was opened from a list. Nothing about the path is saved. #}
+                <span class="ml-auto yse-v2-list-stepper" id="yse-v2-list-stepper" data-yse-hook="list-stepping"{% if list_step %} data-prev-url="{{ list_step.prev_url|default:'' }}" data-next-url="{{ list_step.next_url|default:'' }}" data-default-comment="{{ list_step.default_comment }}"{% endif %}>
+                    {% if list_step %}
+                    <span class="btn-group btn-group-sm" role="group" aria-label="Step through {{ list_step.label }}">
+                        {% if list_step.prev_url %}<a class="btn btn-outline-secondary" href="{{ list_step.prev_url }}" rel="prev" title="Previous in this list (K)" aria-keyshortcuts="K">&lsaquo; Previous</a>{% else %}<span class="btn btn-outline-secondary disabled" aria-disabled="true">&lsaquo; Previous</span>{% endif %}
+                        {% if list_step.next_url %}<a class="btn btn-outline-secondary" href="{{ list_step.next_url }}" rel="next" title="Next in this list (J)" aria-keyshortcuts="J">Next &rsaquo;</a>{% else %}<span class="btn btn-outline-secondary disabled" aria-disabled="true">Next &rsaquo;</span>{% endif %}
+                    </span>
+                    <span class="yse-v2-list-position small" id="yse-v2-list-position">{% if list_step.position %}{{ list_step.position }} of {{ list_step.count }}{% else %}Not on this page of the list ({{ list_step.count }}){% endif %} &middot; {{ list_step.label }}</span>
+                    <a class="btn btn-sm btn-link" href="{{ list_step.back_url }}" id="yse-v2-back-to-list">Back to list</a>
+                    {% endif %}
+                </span>
+                <span class="small text-success" id="yse-v2-request-status" role="status" aria-live="polite"></span>
+            </div>
+
+            <div class="nav-tabs-custom yse-page-transient-summary yse-v2-tabs">
+                <ul class="nav nav-tabs">
+                    <li class="nav-item"><a class="nav-link active" href="#summary_tab" data-toggle="tab">Summary</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#followup_tab" data-toggle="tab">Follow-up</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#photometry_tab" data-toggle="tab">Photometry</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#spectra_tab" data-toggle="tab">Spectra</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#resources_tab" data-toggle="tab">Observing</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#brokers_tab" data-toggle="tab" id="brokers_tab_header">Brokers</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#analysis_tab" data-toggle="tab" id="analysis_tab_header">Analysis &amp; Annotations</a></li>
+                    <li class="nav-item d-none" id="yse-v2-archives-nav"><a class="nav-link" href="#archives_tab" data-toggle="tab" id="archives_tab_header">Archives</a></li>
+                    {% if has_gw_candidate_tag %}
+                        <li class="nav-item"><a class="nav-link" href="#gw_tab" data-toggle="tab" id="gw_tab_header">GW</a></li>
+                    {% endif %}
+                    <li class="nav-item"><a class="nav-link" href="#history_tab" data-toggle="tab" id="history_tab_header">History</a></li>
+                </ul>
+                <div class="tab-content">
+                    <div class="active tab-pane" id="summary_tab">
+                        {% include "YSE_App/transient_detail/summary_tab_v2.html" %}
+                    </div>
+                    <div class="tab-pane" id="followup_tab">
+                        {% include "YSE_App/transient_detail/followup_tab_v2.html" %}
+                    </div>
+                    <div class="tab-pane" id="photometry_tab">
+                        <div class="box box-primary">
+                            <div class="box-header">
+                                <h3 class="box-title">Photometry (Flux Units)</h3>
+                            </div>
+                            &ensp;&nbsp;<div class="btn-group">
+                                <button style="margin-bottom:5px;" type="button" class="plotSALT2flux" id="salt2fluxplot">
+                                Show SALT3 Fit
+                                </button>
+                            </div>
+                            <button type="button" class="plotFlux">Show Flux Plot</button>
+                            <div class="box-body" id="lcfluxplot"></div>
+                        </div>
+                        <div id="photometry_deferred_tables">
+                            {% if transient_detail_defer %}
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Photometry tables load when you open this tab.</p>
+                            {% else %}
+                            {% include "YSE_App/transient_detail_photometry_tables.html" %}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="spectra_tab">
+                        <div id="spectra_tab_content">
+                            {% if transient_detail_defer %}
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Spectra list loads when you open this tab.</p>
+                            {% else %}
+                            {% include "YSE_App/transient_detail_spectra_tab.html" %}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="resources_tab">
+                        <div class="row">
+                            <div class="col-12">
+                                <h4>Current UTC Time: <strong>{{ nowtime|utcdate }}</strong></h4>
+                                <ul>
+                                  <li><a target="_blank" href="{% url 'finderchart' transient.id %}">Generate Finder Chart</a></li>
+                                  <li><a href="{% url 'observability' transient.id %}" title="Tonight's altitude, airmass and moon at every telescope">Observability</a></li>
+                                  <li><button type="button" class="showObsDetails">Show Observing Details</button> <small class="text-muted">(airmass at upcoming nights and resources)</small></li>
+                                </ul>
+                                {% if has_finder_chart %}
+                                <img src="{% static finder_chart_static %}" style='width:240px' alt="Finder chart for {{ transient.name }}" />
+                                {% else %}
+                                <p class="help-block">Finder chart not generated yet. Use the link above.</p>
+                                {% endif %}
+                            </div>
+                            <div id="resources_deferred_tables">
+                                {% if transient_detail_defer %}
+                                <p class="text-muted"><i class="fa fa-info-circle"></i> Resource tables load when you open this tab.</p>
+                                {% else %}
+                                {% include "YSE_App/transient_detail_resources_tables.html" %}
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="brokers_tab">
+                        <div id="brokers_tab_content" data-fragment-url="{% url 'transient_detail_brokers_fragment' transient.id %}" data-import-url="{% url 'transient_broker_import' transient.id %}">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Broker matches load when you open this tab.</p>
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="analysis_tab">
+                        <h4>Analysis</h4>
+                        <div id="analysis_container">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> Analysis runs load when you open this tab.</p>
+                        </div>
+                        <hr>
+                        <h4>Annotations</h4>
+                        <div id="annotations_tab">
+                            <div id="annotations_container">
+                                <p class="text-muted"><i class="fa fa-info-circle"></i> Annotations load when you open this tab.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="archives_tab">
+                        <section id="yse-v2-archive-hst" data-archive="hst">
+                            <h4>HST Images for {{transient.name}}</h4>
+                            <table class="table table-bordered table-striped">
+                                <thead>
+                                    <tr><th>Date (UTC)</th><th>Filter</th><th>Instrument</th><th>Image</th></tr>
+                                </thead>
+                                <tbody id="hst_image_list"></tbody>
+                            </table>
+                        </section>
+                        <section id="yse-v2-archive-jwst" data-archive="jwst">
+                            <h4>JWST Images for {{transient.name}}</h4>
+                            <p class="text-muted small" id="jwst_summary">Science images in the MAST archive within 1&Prime; of the transient position (spectra are not listed).</p>
+                            <table class="table table-bordered table-striped" id="jwst_observation_table">
+                                <thead>
+                                    <tr><th>Date (UTC)</th><th>Instrument</th><th>Filter</th><th>Program</th><th>Target</th><th>Exp. (s)</th><th>Preview</th><th>Links</th></tr>
+                                </thead>
+                                <tbody id="jwst_observation_list"></tbody>
+                            </table>
+                        </section>
+                        <section id="yse-v2-archive-chandra" data-archive="chandra">
+                            <h4>Chandra Images for {{transient.name}}</h4>
+                            <h4 id="totalchandraexp">total exposure time</h4>
+                            <table class="table table-bordered table-striped">
+                                <thead>
+                                    <tr><th>Date (UTC)</th><th>Exp. Time</th><th>Image</th></tr>
+                                </thead>
+                                <tbody id="chandra_image_list"></tbody>
+                            </table>
+                        </section>
+                    </div>
+                    <div class="tab-pane" id="gw_tab">
+                        <div id="gw_tab_content">
+                            {% if transient_detail_defer %}
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> GW info loads when you open this tab.</p>
+                            {% else %}
+                            {% include "YSE_App/transient_detail_gw_tab.html" %}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="tab-pane" id="history_tab">
+                        <div id="history_tab_content">
+                            <p class="text-muted"><i class="fa fa-info-circle"></i> The change history loads when you open this tab.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% include "YSE_App/transient_detail/report_modal.html" %}
+    {# "Request follow-up" (#850): the Follow-up tab's own form, moved in here while the dialog is open. #}
+    <div class="modal fade" id="yse-v2-request-modal" tabindex="-1" role="dialog" aria-labelledby="yse-v2-request-modal-title" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="yse-v2-request-modal-title">Request follow-up for {{ transient.name }}</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                </div>
+                <div class="modal-body" id="yse-v2-request-modal-body">
+                    <p class="text-muted yse-v2-request-loading"><i class="fa fa-spinner fa-spin"></i> Loading the request form…</p>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    {{ block.super }}
+    <script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+    <script src="{% static 'YSE_App/fit-subset.js' %}?v=subset-fits-1"></script>
+    <script>
+    /* Preview layout (#856, #851). Handlers are delegated on document, so fragments that
+       load later are covered. Nothing here scores, ranks or hides evidence. */
+    (function($) {
+        if (!$) { return; }
+
+        /* Bazin is the default fit display; SALT3 stays one click away. Once the plain
+           light curve has loaded (and has points), turn the Bazin overlay on. */
+        var lcUrl = "{% url 'lightcurveplot_detail' transient.id %}";
+        var bazinDefaultDone = false;
+        $(document).ajaxComplete(function(event, xhr, settings) {
+            if (bazinDefaultDone || !settings || !settings.url || settings.url.indexOf(lcUrl) !== 0) { return; }
+            bazinDefaultDone = true;
+            if (!xhr || xhr.status !== 200 || !$.trim(xhr.responseText || '')) { return; }
+            $(function() {
+                var $b = $('#bazinplot');
+                if ($b.length && ($b.html() || '').indexOf('Show') > -1 &&
+                        ($('#salt2plot').html() || '').indexOf('Hide') === -1) {
+                    $b.trigger('click');
+                }
+            });
+        });
+
+        /* Archives tab: shown only when HST, JWST or Chandra has data here. A failed or
+           timed-out lookup is not "no data" (#838), so the tab then stays available and
+           opening it retries. A section whose archive answered "nothing" is hidden. */
+        var archives = [
+            {key: 'hst', url: "{% url 'get_hst_status' transient.id %}", loader: 'yseLoadHstImages'},
+            {key: 'jwst', url: "{% url 'get_jwst_status' transient.id %}", loader: 'yseLoadJwstObservations'},
+            {key: 'chandra', url: "{% url 'get_chandra_status' transient.id %}", loader: 'yseLoadChandraImages'}
+        ];
+        var archivesLoaded = false;
+        function revealArchives() { $('#yse-v2-archives-nav').removeClass('d-none'); }
+        function checkArchive(a) {
+            $.ajax({url: a.url, dataType: 'json', timeout: 15000}).done(function(json) {
+                if (json && !json.error && json.has_data === false) {
+                    $('#yse-v2-archive-' + a.key).addClass('d-none');
+                } else {
+                    revealArchives();
+                }
+            }).fail(revealArchives);
+        }
+        function loadArchives() {
+            if (archivesLoaded) { return; }
+            archivesLoaded = true;
+            archives.forEach(function(a) {
+                if (!$('#yse-v2-archive-' + a.key).hasClass('d-none') && window[a.loader]) {
+                    window[a.loader]();
+                }
+            });
+        }
+        $(document).on('shown.bs.tab', 'a[href="#archives_tab"]', loadArchives);
+
+        /* Analysis & Annotations share a tab; load the annotations with it. */
+        $(document).on('shown.bs.tab', 'a[href="#analysis_tab"]', function() {
+            if (window.yseLoadAnnotationsTab) { window.yseLoadAnnotationsTab(false); }
+        });
+        $(document).on('click', 'a.annotation-badge', function(event) {
+            event.preventDefault();
+            $('a[href="#analysis_tab"]').tab('show');
+        });
+
+        /* Follow-up tab (#857): the type selector shows one form at a time. */
+        $(document).on('change', 'input[name="yse-v2-request-type"]', function() {
+            var type = $('input[name="yse-v2-request-type"]:checked').val() || 'followup';
+            $('.yse-v2-request-form').each(function() {
+                this.hidden = $(this).data('yse-request-type') !== type;
+            });
+        });
+        $(document).on('click', '.yse-v2-goto-new', function(event) {
+            event.preventDefault();
+            var el = document.getElementById('yse-v2-new-request');
+            if (el && el.scrollIntoView) { el.scrollIntoView({block: 'start'}); }
+        });
+
+        /* Default comment (#850): only when the page was opened from a list, the list
+           says why the object is here ("In list: ..."). It fills an empty, untouched
+           comment box and stays editable; without a list it stays empty. */
+        var defaultComment = $('#yse-v2-list-stepper').attr('data-default-comment') || '';
+        function applyDefaultComment() {
+            if (!defaultComment) { return; }
+            var $c = $('#add_transient_followup [name="comment"]');
+            if ($c.length && !$c.val() && !$c.data('yse-touched')) { $c.val(defaultComment); }
+        }
+        $(document).on('input', '#add_transient_followup [name="comment"]', function() {
+            $(this).data('yse-touched', true);
+        });
+        $(document).on('shown.bs.tab', 'a[href="#followup_tab"]', applyDefaultComment);
+        $(document).ajaxComplete(function(event, xhr, settings) {
+            if (settings && settings.url && settings.url.indexOf("{% url 'transient_detail_followup_rest_fragment' transient.id %}") === 0) {
+                applyDefaultComment();
+            }
+        });
+
+        /* Automated spectrum form: the current page binds it directly, which misses the
+           copy that arrives with the deferred fragment. Delegate, unless a direct
+           handler already took the submit. */
+        $(document).on('submit', '#automated_spectrum_request', function(event) {
+            if (event.isDefaultPrevented()) { return; }
+            event.preventDefault();
+            var data = $(this).serialize() + '&transient=' + encodeURIComponent($('#transient_pk').val());
+            $.ajax({url: "{% url 'automated_spectrum_request' %}", type: 'POST', data: data}).done(function(json) {
+                var errors = json && json.data && json.data.errors;
+                if (errors) { window.alert(errors); } else { window.location.reload(); }
+            }).fail(function(xhr) {
+                window.alert(xhr.status + ': ' + xhr.responseText);
+            });
+        });
+
+        /* "Request follow-up" (#850): the Follow-up tab's form in a dialog, so you stay on
+           the page (and in the list). The form box is moved, not copied: ids stay unique
+           and every handler keeps working. It goes back when the dialog closes. */
+        var deferMode = {{ transient_detail_defer|yesno:"true,false" }};
+        var $modal = $('#yse-v2-request-modal');
+        var $modalBody = $('#yse-v2-request-modal-body');
+        var requestOpen = false;
+        function moveFormIntoModal() {
+            var $box = $('#followup_rest_slot #facility_request_box');
+            if (!requestOpen || !$box.length) { return; }
+            $modalBody.find('.yse-v2-request-loading').remove();
+            $box.detach().appendTo($modalBody);
+            applyDefaultComment();
+            $modalBody.find('#add_transient_followup select, #add_transient_followup textarea').first().trigger('focus');
+        }
+        function moveFormBack() {
+            var $box = $modalBody.find('#facility_request_box');
+            if ($box.length && !$('#followup_rest_slot #facility_request_box').length) {
+                $box.detach().appendTo('#followup_rest_slot');
+            } else {
+                $box.remove();
+            }
+            if (!$modalBody.find('.yse-v2-request-loading').length) {
+                $modalBody.html('<p class="text-muted yse-v2-request-loading"><i class="fa fa-spinner fa-spin"></i> Loading the request form…</p>');
+            }
+        }
+        $(document).on('click', '.yse-v2-request-followup', function(event) {
+            event.preventDefault();
+            $('#yse-v2-request-status').text('');
+            requestOpen = true;
+            $modal.modal('show');
+            var loading = window.yseLoadFollowupPhased ? window.yseLoadFollowupPhased() : null;
+            $.when(loading).always(moveFormIntoModal);
+        });
+        $modal.on('hidden.bs.modal', function() {
+            requestOpen = false;
+            moveFormBack();
+        });
+        $(document).ajaxSuccess(function(event, xhr, settings) {
+            if (!requestOpen || !settings || String(settings.type).toUpperCase() !== 'POST' ||
+                    !settings.url || settings.url.indexOf("{% url 'add_transient_followup' %}") === -1) { return; }
+            if (deferMode) {
+                /* The current page reloads the follow-up fragments after a request; this copy is stale. */
+                $modalBody.find('#facility_request_box').remove();
+            }
+            $modal.modal('hide');
+            $('#yse-v2-request-status').text('Follow-up requested.');
+        });
+        $(document).on('click', '.yse-v2-share', function(event) {
+            event.preventDefault();
+            $('.yse-copy-btn[data-copy-path]').first().trigger('click');
+        });
+        $(document).on('click', '.yse-v2-status .transientStatusChange, .yse-v2-actionbar .submit_to_tns', function(event) {
+            event.preventDefault();
+        });
+
+        $(function() {
+            archives.forEach(checkArchive);
+            /* Old links to tabs that moved: #hst_tab, #jwst_tab, #chandra_tab -> Archives;
+               #annotations_tab -> Analysis & Annotations. */
+            var moved = {'#hst_tab': '#archives_tab', '#jwst_tab': '#archives_tab',
+                         '#chandra_tab': '#archives_tab', '#annotations_tab': '#analysis_tab'};
+            var target = moved[window.location.hash];
+            if (target) {
+                if (target === '#archives_tab') { revealArchives(); }
+                $('a[href="' + target + '"]').tab('show');
+            }
+            /* Brokers tab: the same lazy fragment as the current page. */
+            var brokersLoaded = false;
+            function loadBrokers() {
+                if (brokersLoaded) { return; }
+                brokersLoaded = true;
+                var $c = $('#brokers_tab_content');
+                $c.html('<p class="text-muted"><i class="fa fa-spinner fa-spin"></i> Asking the brokers…</p>');
+                $.get($c.data('fragment-url')).done(function(html) { $c.html(html); }).fail(function() {
+                    brokersLoaded = false;
+                    $c.html('<p class="text-danger">Failed to load the broker matches.</p>');
+                });
+            }
+            $(document).on('shown.bs.tab', 'a[href="#brokers_tab"]', loadBrokers);
+            if (window.location.hash === '#brokers_tab') { loadBrokers(); }
+        });
+    })(window.jQuery);
+    </script>
+{% endblock %}

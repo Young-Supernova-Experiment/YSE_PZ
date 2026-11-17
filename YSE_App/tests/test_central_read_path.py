@@ -58,64 +58,83 @@ def _old_names(user):
     return list(user.groups.values_list("name", flat=True)) if user.is_authenticated else []
 
 
-def _old_q(user):
-    names = _old_names(user)
-    return Q(groups__isnull=True), Q(groups__name__in=names)
+# The reference rule is the data group rule of master hotfix #975: a team group
+# the user is in, or open data (no group other than Public, Public alone only for
+# its members; for a user outside YSE, not unlabelled YSE observation-group data).
+def _old_q(model, user):
+    return visibility.dataset_group_q(model, user, names=_old_names(user))
 
 
 def _old_phot(user, transient_id=None):
-    a, b = _old_q(user)
+    q = _old_q(TransientPhotometry, user)
     if transient_id is None:
-        return TransientPhotometry.objects.filter(a | b).distinct()
-    return TransientPhotometry.objects.filter(a | b, transient_id=transient_id).distinct()
+        return TransientPhotometry.objects.filter(q).distinct()
+    return TransientPhotometry.objects.filter(q, transient_id=transient_id).distinct()
 
 
 def _old_spec(user, transient_id=None):
-    a, b = _old_q(user)
+    q = _old_q(TransientSpectrum, user)
     if transient_id is None:
-        return TransientSpectrum.objects.filter(Q(a | b)).distinct()
-    return TransientSpectrum.objects.filter((a | b) & Q(transient_id=transient_id)).distinct()
+        return TransientSpectrum.objects.filter(Q(q)).distinct()
+    return TransientSpectrum.objects.filter(q & Q(transient_id=transient_id)).distinct()
 
 
 def _old_visible_ids_q(user):
     if visibility.user_sees_everything(user):
         return None
-    a, b = _old_q(user)
-    return Q(photometry_id__in=TransientPhotometry.objects.filter(a | b).values("pk"))
+    return Q(photometry_id__in=TransientPhotometry.objects.filter(_old_q(TransientPhotometry, user)).values("pk"))
 
 
 def _old_hidden_exists(user):
     through = TransientPhotometry.groups.through
-    restricted = TransientPhotometry.objects.filter(transient_id=OuterRef("pk")).filter(
-        Exists(through.objects.filter(transientphotometry_id=OuterRef("pk"))))
-    gids = list(user.groups.values_list("id", flat=True)) if user.is_authenticated else []
-    if gids:
+    names = set(_old_names(user))
+    links = through.objects.filter(transientphotometry_id=OuterRef("pk"))
+    if PUBLIC_COLLABORATION_GROUP_NAME in names:
+        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
+    closed = Q(Exists(links))
+    if visibility.YSE_COLLABORATION_GROUP_NAME not in names:
+        closed |= Q(obs_group__name=visibility.YSE_OBSERVATION_GROUP_NAME)
+    restricted = TransientPhotometry.objects.filter(transient_id=OuterRef("pk")).filter(closed)
+    team_names = sorted(names - {PUBLIC_COLLABORATION_GROUP_NAME})
+    if team_names:
         restricted = restricted.filter(~Exists(
-            through.objects.filter(transientphotometry_id=OuterRef("pk"), group_id__in=gids)))
+            through.objects.filter(transientphotometry_id=OuterRef("pk"), group__name__in=team_names)))
     return Exists(restricted)
 
 
 def _old_transient_access_q(user):
-    a, b = _old_q(user)
-    phot = TransientPhotometry.objects.filter(a | b, transient_id=OuterRef("pk"))
-    spec = TransientSpectrum.objects.filter(a | b, transient_id=OuterRef("pk"))
+    phot = TransientPhotometry.objects.filter(_old_q(TransientPhotometry, user), transient_id=OuterRef("pk"))
+    spec = TransientSpectrum.objects.filter(_old_q(TransientSpectrum, user), transient_id=OuterRef("pk"))
     return Q(Exists(phot)) | Q(Exists(spec))
 
 
+def _old_row_visible(names, row):
+    names = set(names)
+    obj_names = set(row.groups.values_list("name", flat=True))
+    team = obj_names - {PUBLIC_COLLABORATION_GROUP_NAME}
+    if team:
+        return bool(team & names)
+    if obj_names and PUBLIC_COLLABORATION_GROUP_NAME not in names:
+        return False
+    if visibility.YSE_COLLABORATION_GROUP_NAME not in names:
+        return row.obs_group.name != visibility.YSE_OBSERVATION_GROUP_NAME
+    return True
+
+
 def _old_object_visible(user, obj):
-    # The group rule; staff no longer bypass it for photometry and spectra (#706).
+    # The data group rule; staff no longer bypass it for photometry and spectra (#706).
     if not user.is_authenticated:
         return False
-    obj_names = set(obj.groups.values_list("name", flat=True))
-    return not obj_names or bool(set(_old_names(user)) & obj_names)
+    return _old_row_visible(_old_names(user), obj)
 
 
 def _old_hidden_datasets(user, transient_id, model):
     if not user.is_authenticated:
         return set()
-    names = set(_old_names(user))
+    names = _old_names(user)
+    # Only datasets with groups can be requested (``data_access.restricted_datasets``).
     return {row.pk for row in model.objects.filter(transient_id=transient_id)
-            if row.groups.exists() and not {g.name for g in row.groups.all()} & names}
+            if row.groups.exists() and not _old_row_visible(names, row)}
 
 
 def _pks(qs):
@@ -271,8 +290,7 @@ class EquivalenceTests(_Fixture):
                 if user.is_authenticated and visibility.user_sees_everything(user):
                     self.assertEqual(_pks(new), _pks(qs))
                     continue
-                a, b = _old_q(user)
-                old = qs.filter(a | b)
+                old = qs.filter(_old_q(TransientSpectrum, user))
                 self.assertEqual(_pks(new), _pks(old))
                 self.assertEqual(str(new.query), str(old.query))
 

@@ -125,3 +125,30 @@ class HostSpecData(SpecData):
 
     def __str__(self):
         return '%s - %s' % (self.wavelength, self.flux)
+
+
+class SpectrumArrays(models.Model):
+    """A spectrum's pixels as three arrays on one row instead of one row per pixel (#891).
+
+    ``wavelength`` / ``flux`` / ``flux_err``: zlib-compressed little-endian float64 arrays, written and
+    read only through ``YSE_App.common.spectrum_arrays``. Readers use these when present and the
+    per-pixel ``*SpecData`` rows otherwise. Wavelengths in Angstrom, sorted ascending.
+    """
+    class Meta:
+        abstract = True
+
+    wavelength = models.BinaryField()
+    flux = models.BinaryField()
+    flux_err = models.BinaryField(null=True, blank=True)
+    n_pixels = models.PositiveIntegerField()
+    wavelength_min = models.FloatField()
+    wavelength_max = models.FloatField()
+    modified_date = models.DateTimeField(auto_now=True)
+
+
+class TransientSpectrumArrays(SpectrumArrays):
+    spectrum = models.OneToOneField(TransientSpectrum, on_delete=models.CASCADE, primary_key=True, related_name='arrays')
+
+
+class HostSpectrumArrays(SpectrumArrays):
+    spectrum = models.OneToOneField(HostSpectrum, on_delete=models.CASCADE, primary_key=True, related_name='arrays')

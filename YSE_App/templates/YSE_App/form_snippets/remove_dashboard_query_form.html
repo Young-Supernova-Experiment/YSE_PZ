@@ -8,7 +8,7 @@
         {% for hidden_field in form.hidden_fields %}
          {{ hidden_field }}
         {% endfor %}
-          &nbsp;<button type="submit" class="fa fa-trash-o fa-border"></button>
+          &nbsp;<button type="submit" class="fa fa-trash-o fa-border" aria-label="Remove this query from dashboard" title="Remove this query from dashboard"></button>
       </form>
 
 {% endblock %}

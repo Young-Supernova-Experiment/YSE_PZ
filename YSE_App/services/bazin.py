@@ -75,7 +75,7 @@ GRID_STEP_DAYS = 0.5
 # Fit results are cached per (transient, photometry token); the token changes
 # whenever a detection is added or edited, so the timeout only bounds growth.
 FIT_CACHE_TIMEOUT = 7 * 24 * 3600
-FIT_CACHE_VERSION = 'v2'  # v2: joint wavelength-correlated fit (#336)
+FIT_CACHE_VERSION = 'v3'  # v2: joint wavelength-correlated fit (#336); v3: ATLAS c/o wavelengths
 
 _MJD_EPOCH = datetime.datetime(1858, 11, 17, tzinfo=datetime.timezone.utc)
 _LN10_OVER_2P5 = 0.4 * math.log(10.0)
@@ -561,6 +561,32 @@ def fits_for_transients(transient_ids: Iterable[int], user=None) -> Dict[int, Di
         except Exception:
             pass
     return result
+
+
+def table_fits_enabled():
+    """True when tables and the target-list download may run Bazin fits while rendering.
+
+    Off by default (``BAZIN_TABLE_FITS_ENABLED``, master hotfix #1005): the fits are
+    too slow for a request on a long observing-night list.
+    """
+    from django.conf import settings
+
+    return bool(getattr(settings, "BAZIN_TABLE_FITS_ENABLED", False))
+
+
+def safe_extrapolated_mags(transient_ids, at_mjd, *args, **kwargs):
+    """:func:`extrapolated_mags` for page rendering: empty when switched off or when a fit fails.
+
+    Extra arguments (``band_preference``, ``user``: fits use only the photometry
+    that viewer may see, #607) are passed on.
+    """
+    if not table_fits_enabled():
+        return {}
+    try:
+        return extrapolated_mags(transient_ids, at_mjd, *args, **kwargs)
+    except Exception:
+        logger.exception("Bazin fits failed; rendering without Bazin magnitudes")
+        return {}
 
 
 def _extrapolated_with_band_ids(

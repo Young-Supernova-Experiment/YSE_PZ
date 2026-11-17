@@ -173,7 +173,7 @@ def send_verification_email(request, user: User, email: str) -> bool:
     hours = max(1, _int_setting("SELF_SIGNUP_VERIFY_HOURS", 72))
     prefix = getattr(settings, "NOTIFICATION_EMAIL_SUBJECT_PREFIX", "") or ""
     body = (
-        "Someone (hopefully you) created the YSE-PZ account \"%s\" with this email address.\n\n"
+        "Someone (hopefully you) asked to use this email address for the YSE-PZ account \"%s\".\n\n"
         "To confirm the address, open this link within %d hours and press Confirm:\n\n%s\n\n"
         "If this was not you, ignore this message; the address will not be added to the account.\n"
         % (user.get_username(), hours, link)

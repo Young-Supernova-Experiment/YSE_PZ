@@ -1,0 +1,97 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+{% load bootstrap3 %}
+{% load observable_tonight %}
+{% comment %}Tabbed main dashboard for UI preview users (#859); the current page is dashboard.html.{% endcomment %}
+
+{% block styles %}
+<link rel="stylesheet" href="{% static 'YSE_App/dashboard-tabs.css' %}?v=dash-tabs-1">
+{% endblock %}
+
+{% block content_header %}
+    <h1>
+        Young Supernova Experiment
+        <small>Dashboard</small>
+    </h1>
+    <ol class="breadcrumb">
+        <li><i class="fa fa-dashboard"></i> Home</li>
+    </ol>
+{% endblock %}
+
+{% block content %}
+<div class="yse-page-dashboard yse-dash2" id="yse-dash2"
+     data-default-tab="{{ default_tab }}"
+     data-default-columns="{{ default_columns }}"
+     data-api-url="{% url 'transient-detail' 0 %}"
+     data-csrf="{{ csrf_token }}">
+  {% if broker_stale_heartbeats %}
+  <div class="alert alert-warning yse-broker-stale-banner" role="alert">
+    <i class="fa fa-exclamation-triangle"></i>
+    <strong>Broker stream ingest stale:</strong>
+    {% for hb in broker_stale_heartbeats %}<code>{{ hb.connection.slug }}{% if hb.topic %}/{{ hb.topic }}{% endif %}#{{ hb.worker }}</code> last seen {{ hb.last_seen|timesince }} ago{% if hb.last_error %} (last error: {{ hb.last_error|truncatechars:80 }}){% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}.
+    {% if user.is_staff %}<a href="{% url 'admin:YSE_App_ingestheartbeat_changelist' %}" class="alert-link">Heartbeats</a>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="yse-dash-toolbar">
+    <form action="" method="get" class="form-inline yse-dash-filter" role="search">
+      {% bootstrap_form dash_filter.form layout='inline' %}
+      <button type="submit" class="btn btn-default btn-sm">Filter</button>
+      {% if dash_filter.form.ex.value %}<a href="?" class="btn btn-link btn-sm">Clear</a>{% endif %}
+    </form>
+    {% include "YSE_App/form_snippets/dashboard_per_page.html" %}
+    <details class="yse-dash-columns">
+      <summary class="btn btn-default btn-sm">Columns</summary>
+      <div class="yse-dash-columns-menu" role="group" aria-label="Columns to show">
+        {% for name, label, shown in column_choices %}
+        <label><input type="checkbox" class="yse-dash-col-toggle" value="{{ name }}"{% if shown %} checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+        <button type="button" class="btn btn-link btn-sm yse-dash-col-reset">Reset to default</button>
+      </div>
+    </details>
+  </div>
+
+  {% observable_tonight_control id_selector=".yse-dash-select" scope="#yse-dash2 .yse-dash-panel:not([hidden])" watch="#yse-dash2" %}
+
+  <div class="yse-dash-bulk" aria-live="polite">
+    <span class="yse-dash-bulk-count">0 selected</span>
+    <label for="yse-dash-bulk-status" class="sr-only">New status</label>
+    <select id="yse-dash-bulk-status" class="form-control input-sm form-control-sm">
+      <option value="">Set status to…</option>
+      {% for status in all_transient_statuses %}
+      <option value="{% url 'transientstatus-detail' status.id %}" title="{{ status.name|status_title }}">{{ status.name|status_label }}</option>
+      {% endfor %}
+    </select>
+    <button type="button" class="btn btn-primary btn-sm yse-dash-bulk-apply" disabled>Apply to selected</button>
+    <span class="yse-dash-bulk-msg"></span>
+    {% load repeat_followup %}{% repeat_followup_control id_selector=".yse-dash-select" scope="#yse-dash2 .yse-dash-panel:not([hidden])" %}
+  </div>
+
+  <ul class="nav nav-tabs yse-dash-tabs" role="tablist">
+    {% for tab in tabs %}
+    <li class="nav-item" role="presentation">
+      <a class="nav-link{% if tab.key == default_tab %} active{% endif %}" href="#{{ tab.key }}" role="tab"
+         id="yse-dash-tab-{{ tab.key }}" data-dash-tab="{{ tab.key }}" aria-controls="yse-dash-panel-{{ tab.key }}"
+         title="{{ tab.key|status_title }}">{{ tab.title }} <span class="badge badge-secondary yse-dash-count">{{ tab.count }}</span></a>
+    </li>
+    {% endfor %}
+  </ul>
+  {# data-yse-list-*: links into a transient keep this tab, filter, sort and page (#850). #}
+  <div class="yse-dash-panels" data-yse-list-source="dash">
+    {% for tab in tabs %}
+    <div class="yse-dash-panel" role="tabpanel" id="yse-dash-panel-{{ tab.key }}" data-dash-panel="{{ tab.key }}" data-yse-list-tab="{{ tab.key }}"
+         aria-labelledby="yse-dash-tab-{{ tab.key }}"{% if tab.key != default_tab %} hidden{% endif %}>
+      <p class="yse-dash-summary-link"><a href="{% url 'transient_summary' tab.key %}">Summary view of {{ tab.title }}</a></p>
+      <div class="yse-dash-slot" data-url="{% url 'dashboard_section' tab.key %}">
+        <p><i class="fa fa-spinner fa-spin"></i> Loading {{ tab.title }}…</p>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'YSE_App/dashboard-tabs.js' %}?v=dash-tabs-1"></script>
+<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+{% endblock %}

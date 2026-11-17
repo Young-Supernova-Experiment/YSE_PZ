@@ -10,6 +10,8 @@ instrument, bands from bluest to reddest:
 2. Bands: by effective wavelength from ``FILTER_EFFECTIVE_WAVELENGTH_AA``
    (exact alias, then filter family, then the part before ``-``).  Bands
    with no known wavelength follow the known ones, alphabetically.
+   ATLAS c (5330 A) and o (6790 A) are bands of their own: c sorts between
+   g and r, o between r and i.
 
 The keys depend only on the names, never on which series have data or on
 database ids, so the same band always sits in the same place (#91).

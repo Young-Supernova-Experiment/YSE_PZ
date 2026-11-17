@@ -8,14 +8,14 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: Direct/2Kx2K - V':'bessellv',
 				"Band: Direct/2Kx2K - i'":'cspi',
 				"Band: Direct/2Kx2K - r'":'cspr',
-				'Band: ACAM1 - orange':'sdssr',
+				'Band: ACAM1 - orange':'atlaso',
 				#'Band: Gaia-Photometric - G':'',
 				'Band: GPC1 - i-Sloan':'sdssi',
 				#'Band: GPC1 - w-PS1':'',
 				'Band: Leavitt - g-Sloan':'sdssg',
 				'Band: Paczynski - g-Sloan':'sdssg',
 				'Band: Cassius - V-Johnson':'bessellb',
-				'Band: ACAM1 - cyan':'sdssg',
+				'Band: ACAM1 - cyan':'atlasc',
 				'Band: STA1600 - i-Sloan':'sdssi',
 				#'Band: BATC - Clear -':'',
 				'Band: OSIRIS - r-Sloan':'sdssr',
@@ -23,10 +23,10 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: OGLE-IV Cam - I-Cousins':'bessellI',
 				'Band: Brutus - R-Cousins':'bessellR',
 				'Band: SM-WFCam - r-SM-SkyMapper':'sdssr',
-				'Band: Unknown - orange-ATLAS':'sdssr',
+				'Band: Unknown - orange-ATLAS':'atlaso',
 				#'Band: Unknown - G-Gaia':'',
 				#'Band: Unknown - Clear-':'',
-				'Band: Unknown - cyan-ATLAS':'sdssg',
+				'Band: Unknown - cyan-ATLAS':'atlasc',
 				#'Band: Unknown - z-Sloan':'sdssz',
 				'Band: Unknown - B-Johnson':'bessellb',
 				#'Band: Unknown - K-Bessel':'',
@@ -47,9 +47,9 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: Unknown - g-PTF':'sdssg',
 				'Band: Unknown - I-PTF':'besselli',
 				'Band: Unknown - r-ZTF':'sdssr',
-				'Band: ACAM1 - orange-ATLAS':'sdssr',
+				'Band: ACAM1 - orange-ATLAS':'atlaso',
 				#'Band: Gaia-Photometric - G-Gaia':'',
-				'Band: ACAM1 - cyan-ATLAS':'sdssg',
+				'Band: ACAM1 - cyan-ATLAS':'atlasc',
 				'Band: Unknown - r-Sloan':'sdssr',
 				#'Band: GPC1 - G-Gaia':'',
 				'Band: Gaia-Photometric - i-Sloan':'sdssi',
@@ -68,8 +68,8 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: Unknown - V-Johnson':'bessellv',
 				#'Band: ACAM1 - G-Gaia':'',
 				#'Band: ACAM1 - w-PS1':'',
-				#'Band: GPC1 - orange-ATLAS':'',
-				'Band: Gaia-Photometric - orange-ATLAS':'bessellr',
+				'Band: GPC1 - orange-ATLAS':'atlaso',
+				'Band: Gaia-Photometric - orange-ATLAS':'atlaso',
 				#'Band: Gaia-Photometric - w-PS1':'',
 				'Band: STA1600 - V-Johnson':'bessellv',
 				'Band: Leavitt - V-Johnson':'bessellv',
@@ -89,14 +89,9 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: UVOT - B': 'bessellb',
 				'Band: UVOT - U': 'bessellux',
 				# TNS ingest short band names (tns_photometry_map.py)
-				'Band: ATLAS-05 - w': 'sdssr',
-				'Band: ATLAS-05 - o': 'sdssr',
-				'Band: ATLAS-05 - c': 'sdssg',
-				'Band: ATLAS-01 - o': 'sdssr',
+				# ATLAS w has no standard sncosmo bandpass: not listed, so fits skip it (#963).
 				'Band: WFC - r': 'sdssr',
 				'Band: WFC - g': 'sdssg',
-				'Band: GOTO-1 - L': 'sdssz',
-				'Band: GOTO-1 - g': 'sdssg',
 				'Band: BG-Cam3 - q': 'sdssg',
 				'Band: BG-Cam2 - q': 'sdssg',
 				'Band: GPC2 - g': 'sdssg',
@@ -113,3 +108,57 @@ bandpassdict = {'Band: Direct/4Kx4K - B':'bessellb',
 				'Band: LSSTCam - y': 'lssty'}
 #				'Band: Gaia-Photometric - Other-'}
 
+# ATLAS c and o have their own sncosmo bandpasses, 'atlasc' / 'atlaso', which
+# sncosmo registers from 2.8.0 on; on older sncosmo (the CI image's lock and
+# production) common.sncosmo_bandpasses registers the same SVO curves, shipped
+# in common/bandpasses/ (master hotfix #977). Never substitute SDSS curves for
+# them (#963). The TNS ingest stores ATLAS units ATLAS-01 .. ATLAS-08 with
+# short band names c / o; facility-queue forced photometry lands on instrument
+# "ATLAS". ATLAS w has no standard sncosmo bandpass and is deliberately absent.
+ATLAS_BANDPASSES = {'c': 'atlasc', 'o': 'atlaso', 'cyan-ATLAS': 'atlasc', 'orange-ATLAS': 'atlaso'}
+ATLAS_MIN_SNCOSMO = (2, 8)
+ATLAS_UNAVAILABLE_HINT = ("ATLAS c/o need sncosmo >= 2.8 (bandpasses atlasc / atlaso); "
+						  "they are skipped rather than fitted with SDSS curves.")
+for _inst in ['ATLAS'] + ['ATLAS-%02d' % _unit for _unit in range(1, 9)]:
+	for _name, _bandpass in ATLAS_BANDPASSES.items():
+		bandpassdict['Band: %s - %s' % (_inst, _name)] = _bandpass
+del _inst, _name, _bandpass
+
+# DECam (sncosmo's DES curves) and GOTO (curves registered by
+# common.sncosmo_bandpasses) (master hotfix #977).
+for _band, _name in [('g', 'desg'), ('r', 'desr'), ('i', 'desi'), ('z', 'desz'), ('Y', 'desy'), ('y', 'desy')]:
+	bandpassdict['Band: DECam - %s' % _band] = _name
+for _inst in ['GOTO-%i' % _i for _i in range(1, 5)]:
+	for _band, _name in [('L', 'gotol'), ('R', 'gotor'), ('r', 'gotor'), ('G', 'gotog'), ('g', 'gotog'), ('B', 'gotob'), ('b', 'gotob')]:
+		bandpassdict['Band: %s - %s' % (_inst, _band)] = _name
+del _inst, _band, _name
+
+ALL_BANDPASSES = dict(bandpassdict)  # every mapping, whether or not this sncosmo has the curve
+
+
+def atlas_bandpasses_available(version=None):
+	"""True when the installed sncosmo (or ``version``) registers atlasc / atlaso; never imports sncosmo."""
+	if version is None:
+		try:
+			from importlib.metadata import version as _dist_version
+			version = _dist_version('sncosmo')
+		except Exception:
+			return False
+	parts = []
+	for piece in str(version).split('.')[:2]:
+		digits = ''.join(ch for ch in piece if ch.isdigit())
+		parts.append(int(digits) if digits else 0)
+	return tuple(parts) >= ATLAS_MIN_SNCOSMO
+
+
+def build_bandpassdict(atlas_available):
+	"""The mapping fits use: ATLAS keys are dropped (so the band is skipped) when sncosmo lacks the curves."""
+	if atlas_available:
+		return dict(ALL_BANDPASSES)
+	return {k: v for k, v in ALL_BANDPASSES.items() if v not in ('atlasc', 'atlaso')}
+
+
+# Always: sncosmo >= 2.8 ships atlasc / atlaso, and common.sncosmo_bandpasses.register()
+# (called before every sncosmo fit) registers the bundled curves on older versions (#977).
+ATLAS_AVAILABLE = True
+bandpassdict = build_bandpassdict(ATLAS_AVAILABLE)

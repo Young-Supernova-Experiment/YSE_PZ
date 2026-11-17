@@ -1,0 +1,8 @@
+{# Active-filter chips; also the facet partial reload (#842). #}
+    {% if active_chips %}
+    <div class="mt-2" id="search-active-filters">
+      {% for chip in active_chips %}
+      <span class="yse-search-chip"><strong>{{ chip.label }}</strong>: {{ chip.value }}<a href="{{ chip.remove_url }}" title="Remove this filter" aria-label="Remove {{ chip.label }}">&times;</a></span>
+      {% endfor %}
+    </div>
+    {% endif %}

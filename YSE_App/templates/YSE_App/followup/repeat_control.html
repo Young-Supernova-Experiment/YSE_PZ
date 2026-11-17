@@ -1,0 +1,13 @@
+{% load static %}{% comment %}"Repeat follow-up…" for ticked rows (#853, UI preview only). Rendered by {% repeat_followup_control %}.{% endcomment %}{% if show %}
+<form class="yse-repeat-fu form-inline d-inline-block" method="post" action="{% url 'bulk_repeat_followup' %}"
+      data-id-selector="{{ id_selector }}" data-scope="{{ scope }}">
+  <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+  <input type="hidden" name="next" value="{{ next_url }}">
+  <button type="submit" class="btn btn-default btn-outline-secondary btn-sm yse-repeat-fu-submit"
+          title="Another request for ticked objects that already have one. You review it before anything is created.">
+    <i class="fa fa-repeat" aria-hidden="true"></i> Repeat follow-up…
+  </button>
+  <span class="yse-repeat-fu-msg small text-muted" aria-live="polite"></span>
+</form>
+<script src="{% static 'YSE_App/repeat-followup.js' %}?v=repeat-fu-1" defer></script>
+{% endif %}

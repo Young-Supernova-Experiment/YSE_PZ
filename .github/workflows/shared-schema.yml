@@ -1,0 +1,185 @@
+name: Shared schema
+
+# /yse_test/ runs develop's code on the YSE_test database, and every experimental
+# deploy applies experimental's migrations to that database (#935, #395). This job
+# builds the test database with the PR head's migrations, then runs develop's own
+# test suite against it, as /yse_test/ would after the deploy.
+#
+# NON-BLOCKING for now: failures show as a warning and in the job summary, and the
+# check stays green. To make it blocking, drop `continue-on-error: true` from the
+# "develop's tests" step and turn the warning in the last step into an exit 1.
+#
+# The test tables are empty at the start of each test, so hazards that need
+# existing rows (foreign keys from experimental-only tables, #941) are not caught.
+
+on:
+  pull_request:
+    branches: [experimental]
+    paths:
+      - '**/migrations/**'
+      - '**/models/**'
+      - '**/models*.py'
+      - '.github/workflows/shared-schema.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  develop-on-head-schema:
+    name: develop tests on the PR head's schema (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+
+      # Inside the workspace, so the web container sees it at /app/develop-src.
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          path: develop-src
+
+      - name: Configure application settings (both trees)
+        run: |
+          cp YSE_PZ/public_settings.ini YSE_PZ/settings.ini
+          cp develop-src/YSE_PZ/public_settings.ini develop-src/YSE_PZ/settings.ini
+          echo "PR head: $(git rev-parse --short HEAD)  develop: $(git -C develop-src rev-parse --short HEAD)"
+          echo "Migrations on the PR head but not on develop:"
+          comm -23 <(ls YSE_App/migrations | sort) <(ls develop-src/YSE_App/migrations | sort)
+
+      # Same environment as ci.yml's docker-test job.
+      - name: Write docker compose environment
+        id: env
+        continue-on-error: true
+        working-directory: docker
+        run: |
+          # throwaway per-run test credentials; nothing here is a real secret
+          DB_PWD="$(openssl rand -hex 16)"
+          printf '%s\n' \
+            "VOL=${{ github.workspace }}" \
+            "VOL_DB=${{ github.workspace }}/database" \
+            "VOL_GHOST=${{ github.workspace }}/ghost_logs" \
+            "STATIC_VOL=${{ github.workspace }}/YSE_PZ/static" \
+            "DB_PWD=$DB_PWD" \
+            "YSE_DATABASE_PASSWORD=$(openssl rand -hex 16)" \
+            "YSE_EXPLORER_PASSWORD=$(openssl rand -hex 16)" \
+            "LOCAL_DB_PORT=53306" \
+            "LOCAL_HTTP_PORT=8080" \
+            "DJANGO_SUPERUSER_USERNAME=ci_admin" \
+            "DJANGO_SUPERUSER_PASSWORD=$(openssl rand -hex 16)" \
+            "DJANGO_SUPERUSER_EMAIL=ci@example.com" \
+            "YSE_IS_DEBUG=1" \
+            "YSE_LOGIN_LOCKOUT=1" \
+            > .env
+          echo "::add-mask::$DB_PWD"
+          echo "DB_PWD=$DB_PWD" >> "$GITHUB_ENV"
+          cp .env.secrets.example .env.secrets
+
+      # As in docker-test: the GHCR image with the requirements.txt pins on top
+      # (develop and experimental share requirements.txt during the freeze).
+      - name: Build the CI web image with the requirements pins
+        id: image
+        if: steps.env.outcome == 'success'
+        continue-on-error: true
+        working-directory: docker
+        run: |
+          IMAGE=ghcr.io/young-supernova-experiment/yse_pz:latest
+          CTX="$RUNNER_TEMP/ci-image"
+          mkdir -p "$CTX"
+          PINS="$CTX/pins.txt"
+          : > "$PINS"
+          for p in asgiref Django Pillow cryptography urllib3 certifi sqlparse lxml Jinja2 MarkupSafe tornado Werkzeug segno sqlglot; do
+            grep -i -m1 "^$p==" ../requirements.txt >> "$PINS" || { echo "::error::no $p pin in requirements.txt"; exit 1; }
+          done
+          grep -E '^(django-[A-Za-z0-9-]+|djangorestframework)==' ../requirements.txt >> "$PINS"
+          grep -m1 '^gunicorn==' requirements.web.lock >> "$PINS"
+          grep -m1 '^astroscheduler ' ../requirements.txt >> "$PINS"
+          printf 'FROM %s\nCOPY pins.txt /tmp/ci-pins.txt\nRUN pip3 install --quiet --no-deps -r /tmp/ci-pins.txt\n' "$IMAGE" > "$CTX/Dockerfile"
+          docker pull --quiet "$IMAGE"
+          docker build --quiet -t "$IMAGE" "$CTX"
+
+      - name: Start database and web services
+        id: start
+        if: steps.image.outcome == 'success'
+        continue-on-error: true
+        working-directory: docker
+        run: |
+          docker compose up -d yse_db web
+          for i in $(seq 1 60); do
+            if timeout 15 docker exec ysepz_db_container mysqladmin ping -h localhost -p"$DB_PWD" --silent; then
+              echo "MySQL ready after attempt $i"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "MySQL did not become ready in time"
+          docker compose logs --tail=200 yse_db || true
+          exit 1
+
+      # setup_databases(keepdb=True) creates test_YSE with the PR head's code and
+      # migrations and keeps it. The read-only `explorer` alias has the same NAME,
+      # so Django treats it as the same test database and does not create it again.
+      # MySQL answers its own ping before it accepts TCP from the web container, so retry.
+      - name: Build test_YSE with the PR head's migrations
+        id: testdb
+        if: steps.start.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for i in $(seq 1 10); do
+            docker exec -e DJANGO_SETTINGS_MODULE=YSE_PZ.settings ysepz_web_container python3 -c \
+              'import django; django.setup(); from django.test.utils import setup_databases; setup_databases(verbosity=1, interactive=False, keepdb=True)' \
+              && break
+            [ "$i" = 10 ] && exit 1
+            sleep 5
+          done
+          echo "Latest YSE_App migrations recorded in test_YSE:"
+          docker exec ysepz_db_container mysql -uroot -p"$DB_PWD" -N -e \
+            "SELECT name FROM test_YSE.django_migrations WHERE app='YSE_App' ORDER BY id DESC LIMIT 8" 2>/dev/null
+
+      # develop's code, from /app/develop-src, on that database. --keepdb reuses
+      # test_YSE; Django still runs develop's own `migrate`, which ignores the
+      # applied migrations it does not know (as the deploy on /yse_test/ does).
+      - name: develop's tests on the PR head's schema
+        id: devtests
+        if: steps.testdb.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          docker exec -w /app/develop-src ysepz_web_container \
+            python3 manage.py test YSE_App.tests --keepdb --noinput --verbosity=2 2>&1 | tee "$RUNNER_TEMP/devtests.log"
+
+      - name: Report
+        if: always()
+        env:
+          SETUP: ${{ steps.testdb.outcome }}
+          TESTS: ${{ steps.devtests.outcome }}
+        run: |
+          {
+            echo "## develop's tests on the PR head's schema (non-blocking)"
+            echo
+            echo "- test database built with the PR head's migrations: **${SETUP:-skipped}**"
+            echo "- develop's \`YSE_App.tests\` on it: **${TESTS:-skipped}**"
+            if [ -f "$RUNNER_TEMP/devtests.log" ]; then
+              echo
+              echo '```'
+              grep -E '^(Ran |OK|FAILED|ERROR:|FAIL:|IntegrityError|django.db.utils)' "$RUNNER_TEMP/devtests.log" | head -60
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SETUP" != success ]; then
+            echo "::warning::Could not build the test database with the PR head's migrations (setup problem, or a migration failed); see the step logs."
+          elif [ "$TESTS" != success ]; then
+            echo "::warning::develop's tests fail on a database migrated by this PR. /yse_test/ (develop's code on YSE_test) may break after this is deployed to experimental; see the job summary."
+          else
+            echo "develop's tests pass on the PR head's schema."
+          fi
+
+      - name: Tear down and prune Docker artifacts
+        if: always()
+        continue-on-error: true
+        working-directory: docker
+        run: |
+          docker compose down -v || true
+          bash scripts/prune-yse-docker.sh aggressive || true

@@ -477,8 +477,8 @@ class PlotEndpointAuthTests(TestCase):
             "lightcurveplot_detail": reverse("lightcurveplot_detail", args=[t]),
             "lightcurveplot_flux": reverse("lightcurveplot_flux", args=[t]),
             "lightcurveplot_summary": reverse("lightcurveplot_summary", args=[t]),
-            "salt2plot": reverse("salt2plot", args=[t, 0]),
-            "salt2fluxplot": reverse("salt2fluxplot", args=[t, 0]),
+            "salt2plot": reverse("salt3plot", args=[t, 0]),
+            "salt2fluxplot": reverse("salt3fluxplot", args=[t, 0]),
             "bazinplot": reverse("bazinplot", args=[t, 0]),
         }
 

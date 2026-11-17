@@ -1,0 +1,95 @@
+{% extends 'YSE_App/base.html' %}
+{% comment %}"My Selections" (#841, UI preview only): saved criteria shared by owner, team or all YSE.{% endcomment %}
+
+{% block content_header %}
+    <h1>My Selections <small class="text-muted">saved searches you can reopen and share</small></h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item active">Selections</li>
+    </ol>
+{% endblock %}
+
+{% block content %}
+{% if messages %}
+<div id="selection-messages">
+  {% for message in messages %}<div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags|default:'info' }}{% endif %} py-2">{{ message }}</div>{% endfor %}
+</div>
+{% endif %}
+
+<div class="box" id="selection-help">
+  <div class="box-body small">
+    A Selection keeps the <em>criteria</em> of a search (filters, later rules or a saved SQL query), never a fixed list:
+    each time it is opened it lists the transients that match now, showing only the data you may see.
+    Save one with <strong>Save as Selection</strong> on <a href="{% url 'search' %}">Transient Search</a>.
+    Share it with a team (everyone on the team can rename and re-share it) or with all of YSE.
+  </div>
+</div>
+
+{% for key, title, rows in sections %}
+<div class="box" id="selections-{{ key }}">
+  <div class="box-header with-border"><h3 class="box-title">{{ title }} <small class="text-muted">{{ rows|length }}</small></h3></div>
+  <div class="box-body p-0 table-responsive">
+    {% if rows %}
+    <table class="table table-sm mb-0 yse-selection-table">
+      <thead><tr><th scope="col">Name</th><th scope="col">Criteria</th><th scope="col">Shared with</th><th scope="col">Owner</th><th scope="col">Changed</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+      {% for row in rows %}{% with sel=row.selection %}
+      <tr data-selection="{{ sel.slug }}">
+        <td><a href="{% url 'selection_detail' sel.slug %}">{{ sel.name }}</a></td>
+        <td class="small">{% for label, value in row.criteria %}<span class="mr-2"><strong>{{ label }}</strong>: {{ value }}</span>{% endfor %}</td>
+        <td>{{ sel.get_visibility_display }}{% if sel.team %} ({{ sel.team.name }}){% endif %}</td>
+        <td>{{ row.owner }}</td>
+        <td><span title="{{ sel.modified_date|date:'Y-m-d H:i' }} UTC">{{ sel.modified_date|date:'Y-m-d' }}</span></td>
+        <td class="text-nowrap">
+          {% if row.can_edit %}
+          <button type="button" class="btn btn-outline-secondary btn-sm yse-selection-edit-toggle" aria-expanded="false"
+                  aria-controls="selection-edit-{{ sel.slug }}">Edit</button>
+          {% endif %}
+          {% if row.can_delete %}
+          <form class="d-inline yse-selection-delete" action="{% url 'selection_delete' sel.slug %}" method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-danger btn-sm" data-name="{{ sel.name }}">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% if row.can_edit %}
+      <tr id="selection-edit-{{ sel.slug }}" class="yse-selection-edit-row" hidden>
+        <td colspan="6">
+          {% include 'YSE_App/selections/edit_form.html' with selection=sel next='list' %}
+        </td>
+      </tr>
+      {% endif %}
+      {% endwith %}{% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="p-3 mb-0 text-muted">{% if key == 'mine' %}You have not saved a Selection yet.{% elif key == 'team' %}Nobody has shared a Selection with your teams yet.{% else %}No Selections are shared with all of YSE yet.{% endif %}</p>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script type="text/javascript">
+$(function() {
+  $('.yse-selection-edit-toggle').on('click', function() {
+    var row = $('#' + $(this).attr('aria-controls'));
+    var open = row.prop('hidden');
+    row.prop('hidden', !open);
+    $(this).attr('aria-expanded', open ? 'true' : 'false');
+    if (open) { row.find('input[name=name]').trigger('focus'); }
+  });
+  $('.yse-selection-delete').on('submit', function(event) {
+    var name = $(this).find('button').data('name');
+    if (!window.confirm('Delete the Selection "' + name + '"? Its transients are not touched.')) {
+      event.preventDefault();
+    }
+  });
+  $('.yse-selection-visibility').on('change', function() {
+    $(this).closest('form').find('.yse-selection-team').prop('hidden', $(this).val() === 'me');
+  }).trigger('change');
+});
+</script>
+{% endblock %}
