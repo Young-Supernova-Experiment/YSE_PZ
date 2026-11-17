@@ -1305,7 +1305,7 @@ def download_target_list(request, telescope, obs_date):
     # Bazin-extrapolated magnitude at local midnight of the night (#225), one
     # photometry query for the whole list; blank when no band has a usable fit.
     from YSE_App.common.filter_display import display_filter_label
-    from YSE_App.services.bazin import extrapolated_mags, local_midnight_mjd
+    from YSE_App.services.bazin import local_midnight_mjd, safe_extrapolated_mags
 
     from YSE_App.services.visibility import transients_with_hidden_photometry
 
@@ -1314,7 +1314,7 @@ def download_target_list(request, telescope, obs_date):
     night_mjd = local_midnight_mjd(classical_obs_date.obs_date, observatory.utc_offset if observatory else 0)
     # A fit reads all of a transient's points: none where photometry is hidden from this user.
     hidden = transients_with_hidden_photometry(request.user, [f.transient_id for f in follow_requests])
-    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests if f.transient_id not in hidden], night_mjd)
+    bazin_mags = safe_extrapolated_mags([f.transient_id for f in follow_requests if f.transient_id not in hidden], night_mjd)
 
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
     for f in follow_requests:

@@ -403,6 +403,13 @@ DASHBOARD_CACHE_WARM_ENABLED = (
 )
 DASHBOARD_CACHE_WARM_MINUTES = config.getint('site_settings', 'DASHBOARD_CACHE_WARM_MINUTES', fallback=60)
 
+# Bazin fits inside page rendering (the "Bazin Mag @ Night"/"Bazin Mag Now"
+# columns and the observing-night target-list download). Each fit is a
+# least-squares solve per transient, so a long night list timed out the page
+# on Ziggy (2026-11-10). Off unless [site_settings] BAZIN_TABLE_FITS_ENABLED
+# is True; the "Show Bazin Fit" plot overlay is not affected.
+BAZIN_TABLE_FITS_ENABLED = config.getboolean('site_settings', 'BAZIN_TABLE_FITS_ENABLED', fallback=False)
+
 # Where `manage.py rewrite_dashboard_queries --apply` writes the previous SQL
 # of every saved query it changes ([site_settings] DASHBOARD_QUERY_BACKUP_DIR).
 DASHBOARD_QUERY_BACKUP_DIR = config.get(
