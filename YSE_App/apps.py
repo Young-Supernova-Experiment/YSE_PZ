@@ -1,4 +1,11 @@
+import warnings
+
 from django.apps import AppConfig
+
+
+def _no_iers_range_check(self, *args, **kwargs):
+    """Stand-in for astropy's IERS range check on versions without ``iers_degraded_accuracy``."""
+    return None
 
 
 def astropy_offline():
@@ -16,8 +23,22 @@ def astropy_offline():
     except ImportError:
         return
     iers.conf.auto_download = False
+    # Never treat the bundled table as stale (no refresh attempts).
+    iers.conf.auto_max_age = None
     if hasattr(iers.conf, "iers_degraded_accuracy"):
         iers.conf.iers_degraded_accuracy = "ignore"
+    else:
+        # astropy 5.0 (Ziggy's venv) has no switch: dates past the bundled table
+        # (any future observing night) raise IERSRangeError converting UTC->UT1,
+        # a 500 on the observing-night page. Drop the range check; astropy has
+        # already clipped the indices, so such times get the last tabulated value.
+        for name in ("IERS", "IERS_A", "IERS_B", "IERS_Auto"):
+            cls = getattr(iers, name, None)
+            if cls is not None and "_check_interpolate_indices" in vars(cls):
+                cls._check_interpolate_indices = _no_iers_range_check
+    iers_warning = getattr(iers, "IERSWarning", None)
+    if iers_warning is not None:
+        warnings.filterwarnings("ignore", category=iers_warning)
 
 
 class YseAppConfig(AppConfig):

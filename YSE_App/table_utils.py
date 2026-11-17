@@ -225,7 +225,7 @@ class BazinMagMixin:
         return ids
 
     def _bazin_mag_for(self, transient_id):
-        from YSE_App.services.bazin import extrapolated_mags
+        from YSE_App.services.bazin import safe_extrapolated_mags
 
         # A fit reads all of a transient's points: none for rows with photometry hidden from the viewer.
         if self._hidden_for(transient_id):
@@ -233,7 +233,7 @@ class BazinMagMixin:
         if transient_id not in self._bazin_seen:
             ids = self._page_transient_ids(transient_id)
             ids = {i for i in ids if not self._hidden_for(i)}
-            self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd))
+            self._bazin_mags.update(safe_extrapolated_mags(ids, self._bazin_mjd))
             self._bazin_seen |= ids
         return self._bazin_mags.get(transient_id)
 
