@@ -120,8 +120,8 @@ def data_json_chunks(user, transient_qs, authorized_phot, authorized_spectra, ar
     hidden = transients_with_hidden_photometry(user, [row['pk'] for row in transient_rows])
     for row in transient_rows:
         if row['pk'] in hidden:
-            row['fields'].pop('summary', None)
-            row['fields'].pop('summary_modified', None)
+            row['fields']['summary'] = None
+            row['fields']['summary_modified'] = None
     yield '{%s: {"transient": %s, "host": %s, "photometry": ' % (
         dumps(transient.name), dumps(transient_rows), host)
 

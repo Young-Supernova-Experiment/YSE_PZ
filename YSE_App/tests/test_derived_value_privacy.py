@@ -93,12 +93,14 @@ class DerivedValuePrivacyTests(TestCase):
         return client
 
     # --- tables -------------------------------------------------------------
-    def _table(self, user, **kwargs):
-        # The viewer is the request's user, as RequestConfig sets it (#607).
+    def _table(self, user, order_by=None):
+        # The viewer is the request's user, as RequestConfig sets it (#607); sort after it is known.
         qs = Transient.objects.filter(pk__in=[self.transient.pk, self.other.pk])
-        table = TransientTable(qs, **kwargs)
+        table = TransientTable(qs)
         table.request = RequestFactory().get("/")
         table.request.user = user
+        if order_by:
+            table.order_by = order_by
         return table
 
     def test_table_cells_and_sort(self):

@@ -516,9 +516,10 @@ def photometry_groups(transient_ids: Sequence[int]) -> Dict[int, Dict[int, froze
     decides a set's scopes: its groups other than ``Public``; ``Public`` when
     that is its only group (open only to Public's members); the ``YSE`` group
     for an unlabelled set of the ``YSE`` observation group (YSE-only). An
-    empty frozenset means no scope may hold the set. Two queries.
+    empty frozenset means no scope may hold the set. One query (two with unlabelled YSE data).
     """
     from django.contrib.auth.models import Group
+    from django.db.models import Q
 
     from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
     from YSE_App.models.phot_models import TransientPhotometry
@@ -527,20 +528,22 @@ def photometry_groups(transient_ids: Sequence[int]) -> Dict[int, Dict[int, froze
     ids = list({int(t) for t in transient_ids if t is not None})
     if not ids:
         return {}
+    # One query: every set with a group (one row per group) and every ungrouped YSE set (group NULL).
+    rows = (TransientPhotometry.objects.filter(transient_id__in=ids)
+            .filter(Q(groups__isnull=False) | Q(groups__isnull=True, obs_group__name=YSE_OBSERVATION_GROUP_NAME))
+            .values_list('transient_id', 'pk', 'groups__id', 'groups__name'))
     pairs: Dict[int, Dict[int, set]] = {}
-    rows = TransientPhotometry.groups.through.objects.filter(
-        transientphotometry__transient_id__in=ids,
-    ).values_list('transientphotometry__transient_id', 'transientphotometry_id', 'group_id', 'group__name')
+    unlabelled_yse = []
     for tid, phot_id, group_id, group_name in rows:
-        pairs.setdefault(tid, {}).setdefault(phot_id, set()).add((group_id, group_name))
+        if group_id is None:
+            unlabelled_yse.append((tid, phot_id))
+        else:
+            pairs.setdefault(tid, {}).setdefault(phot_id, set()).add((group_id, group_name))
     out: Dict[int, Dict[int, set]] = {}
     for tid, sets in pairs.items():
         for phot_id, groups in sets.items():
             team = {g for g, n in groups if n != PUBLIC_COLLABORATION_GROUP_NAME}
             out.setdefault(tid, {})[phot_id] = team or {g for g, _n in groups}  # Public-only: the Public scope
-    unlabelled_yse = list(TransientPhotometry.objects.filter(
-        transient_id__in=ids, obs_group__name=YSE_OBSERVATION_GROUP_NAME, groups__isnull=True,
-    ).values_list('transient_id', 'pk'))
     if unlabelled_yse:
         yse_gid = Group.objects.filter(name=YSE_COLLABORATION_GROUP_NAME).values_list('pk', flat=True).first()
         for tid, phot_id in unlabelled_yse:
