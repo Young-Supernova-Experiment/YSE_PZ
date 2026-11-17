@@ -1488,12 +1488,12 @@ def download_target_list(request, telescope, obs_date):
     # Bazin-extrapolated magnitude at local midnight of the night (#225), one
     # photometry query for the whole list; blank when no band has a usable fit.
     from YSE_App.common.filter_display import display_filter_label
-    from YSE_App.services.bazin import extrapolated_mags, local_midnight_mjd
+    from YSE_App.services.bazin import local_midnight_mjd, safe_extrapolated_mags
 
     follow_requests = list(follow_requests)
     observatory = classical_obs_date.resource.telescope.observatory
     night_mjd = local_midnight_mjd(classical_obs_date.obs_date, observatory.utc_offset if observatory else 0)
-    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests], night_mjd, user=request.user)
+    bazin_mags = safe_extrapolated_mags([f.transient_id for f in follow_requests], night_mjd, user=request.user)
     recent_mags = _visible_recent_mags(request.user, [f.transient for f in follow_requests])
 
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"

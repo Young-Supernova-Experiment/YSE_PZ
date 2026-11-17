@@ -386,12 +386,12 @@ class BazinMagMixin:
         return ids
 
     def _bazin_mag_for(self, transient_id):
-        from YSE_App.services.bazin import extrapolated_mags
+        from YSE_App.services.bazin import safe_extrapolated_mags
 
         if transient_id not in self._bazin_seen:
             ids = self._page_transient_ids(transient_id)
             # Fitted to the photometry the viewer may see (#607).
-            self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd, user=_table_viewer(self)))
+            self._bazin_mags.update(safe_extrapolated_mags(ids, self._bazin_mjd, user=_table_viewer(self)))
             self._bazin_seen |= ids
         return self._bazin_mags.get(transient_id)
 
