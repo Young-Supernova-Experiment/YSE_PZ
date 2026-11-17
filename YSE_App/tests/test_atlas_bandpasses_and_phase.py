@@ -109,11 +109,16 @@ class AtlasBandpassDictTests(SimpleTestCase):
         self.assertEqual(bandpassdict, build_bandpassdict(bpd.ATLAS_AVAILABLE))
 
     def test_installed_sncosmo_matches_the_gate(self):
+        # The bundled curves (#977) make ATLAS available on every sncosmo version.
         from sncosmo.bandpasses import _BANDPASSES
 
+        from YSE_App.common import sncosmo_bandpasses
+
+        sncosmo_bandpasses.register()
         names = {m["name"] for m in _BANDPASSES.get_loaders_metadata()}
-        self.assertEqual("atlasc" in names, bpd.ATLAS_AVAILABLE)
-        self.assertEqual("atlaso" in names, bpd.ATLAS_AVAILABLE)
+        self.assertTrue(bpd.ATLAS_AVAILABLE)
+        self.assertIn("atlasc", names)
+        self.assertIn("atlaso", names)
 
 
 class _StandInAtlasBandpasses:

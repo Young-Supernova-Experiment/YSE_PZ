@@ -129,6 +129,9 @@ def _load_heavy_plot_stack():
     from matplotlib.dates import DateFormatter as _DateFormatter
     from matplotlib.figure import Figure as _Figure
     import sncosmo as _sncosmo
+    from YSE_App.common import sncosmo_bandpasses as _sncosmo_bandpasses
+
+    _sncosmo_bandpasses.register()
 
     bokeh = _bokeh
     FontSizeSpec = _FontSizeSpec
@@ -200,6 +203,9 @@ def _overlay_stored_salt_fit(ax, transient_id, series, today, flux_space=False, 
     holds magnitudes on zero point 27.5 per sncosmo band; ``flux_space``
     converts them to the flux plot's units. Returns the run drawn, or ``None``
     when there is no stored fit (the plot then says so and never blocks).
+    Without ``salt_run`` the fit is the newest one ``user`` may see
+    (``fit_status.stored_salt_fit``); a fit built from data hidden from
+    ``user`` is never drawn.
     """
     from YSE_App.services import fit_status
 
@@ -1505,9 +1511,10 @@ def lightcurveplot_detail(request, transient_id, salt2=False, bazin=False):
     salt_run = None
     if salt2:
         # The SALT3 overlay is the stored run's curves (#315): cheap and
-        # deterministic per run, so it is cached under the run's id.
+        # deterministic per run, so it is cached under the run's id. The HTML
+        # is shared by users with the same groups, so no creator-only fit.
         from YSE_App.services import fit_status
-        salt_run = fit_status.stored_salt_fit(transient_id, user=request.user)
+        salt_run = fit_status.stored_salt_fit(transient_id, request.user, allow_creator=False)
     if _plot_html_cache_enabled():
         user_key = group_access_plot_cache_token(request.user)
         cache_key = (

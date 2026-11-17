@@ -12,7 +12,8 @@ with its parameters, errors, covariance and plots stored on the run:
 * the data window is ``[peak - window_before, peak + window_after]`` days
   around the brightest point with S/N above ``minsnr`` (the Summary tab's
   ``-20 / +40``);
-* only bands ``common.bandpassdict`` maps to an sncosmo bandpass are used.
+* only bands ``common.bandpassdict`` maps to an sncosmo bandpass are used
+  (GOTO's are registered by ``common.sncosmo_bandpasses``).
 
 Results: every fitted parameter with its error, ``chi2`` / ``ndof``,
 ``t0`` (peak MJD), ``phase_today`` (observer-frame days since ``t0``) and
@@ -96,6 +97,10 @@ def _atlas_note(skipped_rows: List[Dict]) -> str:
 
 def run(payload: Dict, params: Dict) -> AnalysisResult:
     import sncosmo
+
+    from YSE_App.common import sncosmo_bandpasses
+
+    sncosmo_bandpasses.register()
 
     source = str(param(params, "source", "salt3", str))
     fit_redshift = param(params, "fit_redshift", False, bool)

@@ -3322,6 +3322,15 @@ def ztf_forced_phot(request,slug):
 
 
 @login_required
+def atlas_forced_phot(request, slug):
+    """Request ATLAS forced photometry through the user's 'atlas' allocation (master hotfix #977)."""
+    from YSE_App.services import ztf_forced
+
+    transient = get_object_or_404(Transient, slug=slug)
+    return JsonResponse({'msg': ztf_forced.submit_atlas_forced_phot(transient, request.user)})
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def desi_lookup(request, slug):
     """The DESI button (#738). POST queues a DESI lookup for this object (its host's redshift, or a host

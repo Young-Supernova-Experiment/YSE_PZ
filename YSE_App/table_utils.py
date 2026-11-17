@@ -12,6 +12,7 @@ from django.db.models.functions import Greatest
 from django_tables2 import A
 from django.db import models
 from django.db.models.query import QuerySet
+from django.urls import reverse
 from .data import PhotometryService
 from .models.transient_models import batch_nearest_survey_fields
 from YSE_App.services.redshift_sql import annotate_best_redshift
@@ -660,8 +661,8 @@ def annotate_open_interest_count(qs):
 
 class TransientTable(RecentPhotOrderMixin, tables.Table):
 
-    # The first line of the AI/human summary (#295) as the link's tooltip.
-    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\"{% if record.summary %} title=\"{{ record.summary_first_line }}\" class=\"yse-has-summary\"{% endif %}>{{ record.name }}</a>",
+    # The first line of the AI/human summary (#295) as the link's tooltip (``render_name_string``).
+    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
     favorite = tables.TemplateColumn(FAVORITE_STAR_TEMPLATE, verbose_name='Fav.', orderable=False,
                                      attrs={'td': {'class': 'yse-fav-cell'}, 'th': {'class': 'yse-fav-cell'}})
@@ -713,6 +714,40 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
         super().__init__(data, *args, **kwargs)
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
+
+    def render_name_string(self, record):
+        # The stored summary is written from all data: no tooltip when photometry is hidden from the viewer.
+        summary_line = None
+        if record.summary and not self._summary_hidden_for(record.pk):
+            summary_line = record.summary_first_line
+        url = reverse('transient_detail', args=[record.slug])
+        if summary_line:
+            return format_html('<a href="{}" title="{}" class="yse-has-summary">{}</a>', url, summary_line, record.name)
+        return format_html('<a href="{}">{}</a>', url, record.name)
+
+    def _summary_hidden_for(self, transient_id):
+        """Rows of this page with photometry hidden from the viewer (one query per page; master hotfix #975)."""
+        viewer = _scoped_viewer(_table_viewer(self))
+        if viewer is None:
+            return False
+        cache = self.__dict__.setdefault('_summary_hidden', None)
+        if cache is None:
+            from YSE_App.services.visibility import transients_with_hidden_photometry
+
+            rows = self.page.object_list if getattr(self, 'page', None) is not None else self.rows
+            ids = {transient_id}
+            try:
+                ids |= {row.record.pk for row in rows}
+            except Exception:
+                pass
+            cache = self._summary_hidden = (set(ids), transients_with_hidden_photometry(viewer, ids))
+        checked, hidden = cache
+        if transient_id not in checked:
+            from YSE_App.services.visibility import transients_with_hidden_photometry
+
+            checked.add(transient_id)
+            hidden |= transients_with_hidden_photometry(viewer, [transient_id])
+        return transient_id in hidden
 
     def order_interest_count(self, queryset, is_descending):
         queryset = annotate_open_interest_count(queryset)

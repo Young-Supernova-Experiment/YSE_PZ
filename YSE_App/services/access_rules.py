@@ -123,6 +123,9 @@ class RulesSummary(NamedTuple):
     groups: Dict[int, FrozenSet[str]]
     left: Dict[int, object]  # group id -> latest left_at, for groups the user is no longer in
     left_allow: FrozenSet[int]  # groups in ``left`` with allow rules
+    # Member of the YSE collaboration group: sees unlabelled YSE observation-group data (#975).
+    # Defaults to False (more restrictive) for summaries cached before the field existed.
+    yse_member: bool = False
 
     @property
     def empty(self) -> bool:
@@ -134,6 +137,8 @@ class RulesSummary(NamedTuple):
 
 def _load_summary(user, version: int) -> RulesSummary:
     from YSE_App.models import DataAccessRule, GroupMembershipPeriod
+
+    from YSE_App.services.visibility import YSE_COLLABORATION_GROUP_NAME
 
     memberships = list(user.groups.values_list("id", "name"))
     gids = tuple(sorted(g for g, _n in memberships))
@@ -160,7 +165,8 @@ def _load_summary(user, version: int) -> RulesSummary:
                 left_allow.add(gid)
     return RulesSummary(
         version=version, user_id=user.pk, group_ids=gids, public_group_id=public_gid, personal=personal,
-        groups={g: frozenset(e) for g, e in groups.items()}, left=left, left_allow=frozenset(left_allow))
+        groups={g: frozenset(e) for g, e in groups.items()}, left=left, left_allow=frozenset(left_allow),
+        yse_member=any(n == YSE_COLLABORATION_GROUP_NAME for _g, n in memberships))
 
 
 def summary_for(user) -> Optional[RulesSummary]:
@@ -297,13 +303,23 @@ def _spectrum_terms(summary: RulesSummary) -> _Terms:
 
 
 def _public_set_q(summary: RulesSummary, set_ref: str) -> Q:
-    """The point's / set's photometry set is public for this user (no deny may hide it)."""
+    """The point's / set's photometry set is open data for this user (no deny may hide it).
+
+    The data group rule (#975, ``visibility.dataset_group_q``): no group other
+    than Public (Public alone only for its members) and, for a user outside
+    YSE, not unlabelled YSE observation-group data.
+    """
     from YSE_App.models import TransientPhotometry
+    from YSE_App.services.visibility import YSE_OBSERVATION_GROUP_NAME
 
     links = TransientPhotometry.groups.through.objects.filter(transientphotometry_id=OuterRef(set_ref))
     if summary.public_group_id is not None:
         links = links.exclude(group_id=summary.public_group_id)
-    return Q(~Exists(links))
+    q = Q(~Exists(links))
+    if not summary.yse_member:
+        q &= ~Q(Exists(TransientPhotometry.objects.filter(
+            pk=OuterRef(set_ref), obs_group__name=YSE_OBSERVATION_GROUP_NAME)))
+    return q
 
 
 def point_visible_q(summary: RulesSummary) -> Q:
@@ -312,9 +328,10 @@ def point_visible_q(summary: RulesSummary) -> Q:
 
     terms = _point_terms(summary)
     base = None
-    if summary.group_ids:
+    team_ids = [g for g in summary.group_ids if g != summary.public_group_id]  # Public opens nothing (#975)
+    if team_ids:
         base = Q(Exists(TransientPhotometry.groups.through.objects.filter(
-            transientphotometry_id=OuterRef("photometry_id"), group_id__in=list(summary.group_ids))))
+            transientphotometry_id=OuterRef("photometry_id"), group_id__in=team_ids)))
     return _or(_public_set_q(summary, "photometry_id"), terms.pa,
                _and_not(_or(base, terms.ga, terms.xa, terms.xb), terms.pd, terms.gd))
 
