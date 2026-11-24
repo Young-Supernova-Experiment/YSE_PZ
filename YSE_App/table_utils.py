@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.urls import reverse
 from django.utils.html import format_html
 from .models import *
 from . import view_utils
@@ -382,12 +383,12 @@ class BazinMagMixin:
         return ids
 
     def _bazin_mag_for(self, transient_id):
-        from YSE_App.services.bazin import extrapolated_mags
+        from YSE_App.services.bazin import safe_extrapolated_mags
 
         if transient_id not in self._bazin_seen:
             ids = self._page_transient_ids(transient_id)
             # Fitted to the photometry the viewer may see (#607).
-            self._bazin_mags.update(extrapolated_mags(ids, self._bazin_mjd, user=_table_viewer(self)))
+            self._bazin_mags.update(safe_extrapolated_mags(ids, self._bazin_mjd, user=_table_viewer(self)))
             self._bazin_seen |= ids
         return self._bazin_mags.get(transient_id)
 
@@ -637,8 +638,8 @@ def annotate_open_interest_count(qs):
 
 class TransientTable(RecentPhotOrderMixin, tables.Table):
 
-    # The first line of the AI/human summary (#295) as the link's tooltip.
-    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\"{% if record.summary %} title=\"{{ record.summary_first_line }}\" class=\"yse-has-summary\"{% endif %}>{{ record.name }}</a>",
+    # The first line of the AI/human summary (#295) as the link's tooltip (``render_name_string``).
+    name_string = tables.TemplateColumn("<a href=\"{% url 'transient_detail' record.slug %}\">{{ record.name }}</a>",
                                         verbose_name='Name',orderable=True,order_by='name')
     favorite = tables.TemplateColumn(FAVORITE_STAR_TEMPLATE, verbose_name='Fav.', orderable=False,
                                      attrs={'td': {'class': 'yse-fav-cell'}, 'th': {'class': 'yse-fav-cell'}})
@@ -690,6 +691,28 @@ class TransientTable(RecentPhotOrderMixin, tables.Table):
         super().__init__(data, *args, **kwargs)
 
         self.base_columns['best_spec_class'].verbose_name = 'Spec. Class'
+
+    def _summary_hidden_for(self, record):
+        """The stored summary is written from all data: hidden where photometry is hidden from the viewer."""
+        viewer = _scoped_viewer(_table_viewer(self))
+        if viewer is None:
+            return False
+        cache = self.__dict__.setdefault('_summary_hidden_cache', {})
+        if record.pk not in cache:
+            from YSE_App.services.visibility import transients_with_hidden_photometry
+
+            # One query for the page.
+            ids = {r.pk for r in _page_records(record, self) if r.pk not in cache}
+            hidden = transients_with_hidden_photometry(viewer, ids)
+            cache.update({i: i in hidden for i in ids})
+        return cache[record.pk]
+
+    def render_name_string(self, record):
+        url = reverse('transient_detail', args=[record.slug])
+        if record.summary and not self._summary_hidden_for(record):
+            return format_html('<a href="{}" title="{}" class="yse-has-summary">{}</a>',
+                               url, record.summary_first_line, record.name)
+        return format_html('<a href="{}">{}</a>', url, record.name)
 
     def order_interest_count(self, queryset, is_descending):
         queryset = annotate_open_interest_count(queryset)

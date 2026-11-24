@@ -28,7 +28,7 @@ from unittest import mock
 import numpy as np
 from django.core.cache import cache
 from django.db import connection
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -587,6 +587,7 @@ class BazinPlotViewTests(TestCase):
 # ------------------------------------------------------------ scheduling table
 
 
+@override_settings(BAZIN_TABLE_FITS_ENABLED=True)
 class BazinTableTests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -737,3 +738,30 @@ class BazinTableTests(TestCase):
         self.assertIn("mag = %.2f comment = bazin" % float(self.transients[4].recent_mag()), no_fit)
         no_phot = next(line for line in body.splitlines() if line.startswith(self.transients[5].name))
         self.assertIn("2000 comment = bazin", no_phot)
+
+    def _target_list_body(self):
+        from YSE_App.tests.deploy_checklist_helpers import iers_offline
+
+        url = reverse("download_target_list", kwargs={
+            "telescope": self.resource.telescope.name.replace(" ", "_"),
+            "obs_date": self.obs_date.strftime("%Y-%m-%d"),
+        })
+        with iers_offline():
+            response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    @override_settings(BAZIN_TABLE_FITS_ENABLED=False)
+    def test_switched_off_runs_no_fits(self):
+        # The default: the target list and the night tables never fit while rendering.
+        with mock.patch.object(bazin, "extrapolated_mags") as fits:
+            body = self._target_list_body()
+        fits.assert_not_called()
+        self.assertNotIn("bazin_mag", body)
+        self.assertIn(self.transients[0].name, body)
+
+    def test_failing_fit_renders_without_bazin(self):
+        with mock.patch.object(bazin, "extrapolated_mags", side_effect=RuntimeError("synthetic")):
+            body = self._target_list_body()
+        self.assertNotIn("bazin_mag", body)
+        self.assertIn(self.transients[0].name, body)

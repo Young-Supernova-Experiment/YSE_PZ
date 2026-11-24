@@ -1417,12 +1417,12 @@ def download_target_list(request, telescope, obs_date):
     # Bazin-extrapolated magnitude at local midnight of the night (#225), one
     # photometry query for the whole list; blank when no band has a usable fit.
     from YSE_App.common.filter_display import display_filter_label
-    from YSE_App.services.bazin import extrapolated_mags, local_midnight_mjd
+    from YSE_App.services.bazin import local_midnight_mjd, safe_extrapolated_mags
 
     follow_requests = list(follow_requests)
     observatory = classical_obs_date.resource.telescope.observatory
     night_mjd = local_midnight_mjd(classical_obs_date.obs_date, observatory.utc_offset if observatory else 0)
-    bazin_mags = extrapolated_mags([f.transient_id for f in follow_requests], night_mjd, user=request.user)
+    bazin_mags = safe_extrapolated_mags([f.transient_id for f in follow_requests], night_mjd, user=request.user)
     recent_mags = _visible_recent_mags(request.user, [f.transient for f in follow_requests])
 
     content = "!Data {name %20} ra_h ra_m ra_s dec_d dec_m dec_s equinox {comment *}\n"
@@ -2116,6 +2116,22 @@ def transient_edit(request, transient_id=None):
 
 
 from wsgiref.util import FileWrapper
+
+
+def _transient_export_rows(user, transient_qs):
+    """Serialized transient rows for a download; the stored summary (written from all data)
+    is left out when ``user`` has photometry of the transient hidden from them."""
+    from YSE_App.services.visibility import transients_with_hidden_photometry
+
+    rows = json.loads(serializers.serialize("json", transient_qs, use_natural_foreign_keys=True))
+    hidden = transients_with_hidden_photometry(user, [row['pk'] for row in rows])
+    for row in rows:
+        if row['pk'] in hidden:
+            row['fields'].pop('summary', None)
+            row['fields'].pop('summary_modified', None)
+    return rows
+
+
 @csrf_exempt
 @login_or_basic_auth_required
 def download_data(request, slug):
@@ -2130,7 +2146,7 @@ def download_data(request, slug):
         
     transient = Transient.objects.filter(slug=slug)
     data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
+    data[transient[0].name]['transient'] = _transient_export_rows(user, transient)
 
     if transient[0].host:
         host = Host.objects.filter(id=transient[0].host.id)
@@ -2180,7 +2196,7 @@ def download_photometry(request, slug):
         
     transient = Transient.objects.filter(slug=slug)
     data = {transient[0].name:{'transient':{},'host':{},'photometry':{},'spectra':{}}}
-    data[transient[0].name]['transient'] = json.loads(serializers.serialize("json", transient, use_natural_foreign_keys=True))
+    data[transient[0].name]['transient'] = _transient_export_rows(user, transient)
     for k in data[transient[0].name]['transient'][0]['fields'].keys():
         if k not in ['created_by','modified_by','candidate_hosts']:
             content += "# %s: %s\n"%(k.upper(),data[transient[0].name]['transient'][0]['fields'][k])
@@ -2971,6 +2987,43 @@ def search_export_csv(request):
 
     
 from YSE_App.services.ztf_forced import ZTF_FORCED_PHOT_LOG_PREFIX  # noqa: E402,F401
+ATLAS_FORCED_PHOT_LOG_PREFIX = 'ATLAS Forced Phot'
+
+
+def _forced_phot_via_allocation(request, transient, facility, label):
+    """Submit through the first usable allocation of ``facility``; None when there is none."""
+    from YSE_App.facilities import FacilityValidationError
+    from YSE_App.services import facility_requests as fr
+
+    allocation = fr.allocations_for_user(request.user).filter(facility=facility).order_by('-end_date').first()
+    if allocation is None:
+        return None
+    existing = fr.open_request_for(allocation, transient)
+    if existing is not None:
+        return 'error: a %s forced-photometry request is already %s (submitted %s)' % (
+            label, existing.get_state_display().lower(), (existing.submitted_at or existing.created_date).strftime('%Y-%m-%d %H:%M UT'))
+    try:
+        req = fr.submit_request(allocation, transient, request.user, {})
+    except (FacilityValidationError, fr.FacilityRequestError) as exc:
+        return 'error: %s' % exc
+    return 'success: %s forced photometry request %d is %s; the light curve is ingested when the service finishes' % (
+        label, req.pk, req.get_state_display().lower())
+
+
+@login_required
+def atlas_forced_phot(request, slug):
+    """The Summary tab's ATLAS button: one request through the first 'atlas' allocation open to the user."""
+    transient = Transient.objects.get(slug=slug)
+    msg = _forced_phot_via_allocation(request, transient, 'atlas', 'ATLAS')
+    if msg is None:
+        return JsonResponse({'msg': 'error: no ATLAS forced-photometry allocation is open to you; staff can add one '
+                                    '(facility "atlas", credential {"api_token": ...}) on the Allocations page'})
+    if msg.startswith('success'):
+        Log.objects.create(
+            created_by=request.user, modified_by=request.user, transient=transient,
+            comment='%s requested by %s via the facility queue: %s' % (
+                ATLAS_FORCED_PHOT_LOG_PREFIX, request.user.username, msg))
+    return JsonResponse({'msg': msg})
 
 
 @login_required
