@@ -359,13 +359,13 @@ class StoredSaltOverlayTests(SummaryRefitBase):
         self.assertIn("by refit_staff", flux)
 
     def test_stored_fit_helpers_pick_the_newest_success(self):
-        self.assertIsNone(fit_status.stored_salt_fit(self.transient))
+        self.assertIsNone(fit_status.stored_salt_fit(self.transient, self.staff))
         run = self.stored_fit()
-        self.assertEqual(fit_status.stored_salt_fit(self.transient).pk, run.pk)
+        self.assertEqual(fit_status.stored_salt_fit(self.transient, self.staff).pk, run.pk)
         profile = self.register_sncosmo()
         failed = svc.start_analysis(profile, self.transient, self.user, {}, dispatch=False)
         failed.mark_failed("no good")
-        self.assertEqual(fit_status.stored_salt_fit(self.transient).pk, run.pk)
+        self.assertEqual(fit_status.stored_salt_fit(self.transient, self.staff).pk, run.pk)
         self.assertEqual(fit_status.latest_run(self.transient, "sncosmo_fit").pk, failed.pk)
         self.assertEqual(fit_status.model_curves(failed), {"mjd": [], "bands": {}})
 

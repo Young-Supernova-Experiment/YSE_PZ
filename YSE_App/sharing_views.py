@@ -6,8 +6,11 @@
   "Report to TNS" dialog on the transient page: build the payload for review, then queue it.
 
 Permissions: a service is usable by staff and by members of its ``groups``
-(every authenticated user when the list is empty). Submissions are visible
-through the same rule; retrying needs the service to be usable by the user.
+(every authenticated user when the list is empty). Submissions are listed
+through the same rule. Reporting (preview, submit, retry) and a submission's
+payload additionally need staff, membership of the ``YSE`` group, or (for a
+service with ``groups``) membership of one of them: a report carries data, and
+only data the reporting user may see (``PhotometryService`` / ``SpectraService``).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from YSE_App.models import (SharingService, SharingSubmission, Transient, Transi
                             TransientSpectrum)
 from YSE_App.models.sharing_models import AutoPublisher
 from YSE_App.services import autopublish_optin as optin_service
+from YSE_App.services.visibility import YSE_COLLABORATION_GROUP_NAME, user_group_names
 from YSE_App.sharing import tns
 from YSE_App.sharing.report_scope import OMITTED_REASON, ReportScope
 
@@ -44,6 +48,17 @@ def _service_for(user, service_id):
     if not service.visible_to(user):
         raise Http404("unknown service")
     return service
+
+
+def may_report(user, service) -> bool:
+    """Staff, or a member of ``YSE`` / of the service's groups (on top of ``visible_to``)."""
+    if not service.visible_to(user):
+        return False
+    if user.is_staff or user.is_superuser:
+        return True
+    if service.groups.exists():
+        return True  # visible_to: the user is in one of the service's groups
+    return YSE_COLLABORATION_GROUP_NAME in user_group_names(user)
 
 
 @login_required
@@ -89,6 +104,8 @@ def sharing_submission_detail(request, submission_id):
         pk=submission_id)
     if not submission.service.visible_to(request.user):
         raise Http404("unknown submission")
+    if not may_report(request.user, submission.service):
+        return HttpResponseForbidden("Only members of the reporting groups may see a report's payload.")
     context = {
         "submission": submission,
         "payload_json": json.dumps(tns.strip_private(submission.payload or {}), indent=2, sort_keys=True, default=str),
@@ -103,6 +120,8 @@ def sharing_submission_retry(request, submission_id):
     submission = get_object_or_404(SharingSubmission.objects.select_related("service", "transient"), pk=submission_id)
     if not submission.service.visible_to(request.user):
         raise Http404("unknown submission")
+    if not may_report(request.user, submission.service):
+        return HttpResponseForbidden("Only members of the reporting groups may report.")
     if not submission.service.enabled and not request.user.is_staff:
         return HttpResponseForbidden("This service is disabled.")
     try:
@@ -164,10 +183,16 @@ def _report_options(request, transient):
     }
     if kind == tns.KIND_CLASSIFICATION:
         spectrum_id = data.get("spectrum")
-        # only spectra the submitter may see and send (#691)
-        options["spectrum"] = TransientSpectrum.objects.filter(
-            pk=spectrum_id, transient=transient, pk__in=scope.spectrum_ids(transient)
-        ).select_related("instrument", "obs_group").first() if spectrum_id else None
+        # only spectra the submitter may see and send (#691); an unknown or hidden id is a 404
+        spectrum = None
+        if spectrum_id:
+            if str(spectrum_id).isdigit():
+                spectrum = TransientSpectrum.objects.filter(
+                    pk=int(spectrum_id), transient=transient, pk__in=scope.spectrum_ids(transient)
+                ).select_related("instrument", "obs_group").first()
+            if spectrum is None:
+                raise Http404("unknown spectrum")
+        options["spectrum"] = spectrum
         options["classification"] = (data.get("classification") or "").strip()
         redshift = (data.get("redshift") or "").strip()
         options["redshift"] = redshift if redshift else None
@@ -182,6 +207,8 @@ def _dialog_context(request, transient):
         service = _service_for(request.user, int(service_id))
     except (TypeError, ValueError):
         return None, JsonResponse({"error": "Choose a service."}, status=400)
+    if not may_report(request.user, service):
+        return None, JsonResponse({"error": "Only members of the reporting groups may report."}, status=403)
     if not service.enabled:
         return None, JsonResponse({"error": "%s is disabled." % service.name}, status=403)
     return service, None
@@ -235,7 +262,7 @@ def report_submit(request, transient_id):
 
 def report_dialog_context(user, transient):
     """Template context for the "Report to TNS" dialog on the transient page (#326)."""
-    services = [s for s in SharingService.for_user(user, kind=SharingService.KIND_TNS)]
+    services = [s for s in SharingService.for_user(user, kind=SharingService.KIND_TNS) if may_report(user, s)]
     if not services:
         return {"sharing_services": []}
     scope = ReportScope.for_user(user)

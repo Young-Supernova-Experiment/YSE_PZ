@@ -582,6 +582,28 @@ def _extrapolated_with_band_ids(
     return out
 
 
+def table_fits_enabled():
+    """True when tables and the target-list download may run Bazin fits while rendering.
+
+    Off by default (``BAZIN_TABLE_FITS_ENABLED``): the fits are too slow for a
+    request on a long observing-night list.
+    """
+    from django.conf import settings
+
+    return bool(getattr(settings, "BAZIN_TABLE_FITS_ENABLED", False))
+
+
+def safe_extrapolated_mags(transient_ids, at_mjd, user=None):
+    """``extrapolated_mags`` for page rendering: empty when switched off or when a fit fails."""
+    if not table_fits_enabled():
+        return {}
+    try:
+        return extrapolated_mags(transient_ids, at_mjd, user=user)
+    except Exception:
+        logger.exception("Bazin fits failed; rendering without Bazin magnitudes")
+        return {}
+
+
 def extrapolated_mags(
     transient_ids: Iterable[int], at_mjd: float, band_preference: Optional[Sequence[str]] = None, user=None,
 ) -> Dict[int, Tuple[float, str]]:

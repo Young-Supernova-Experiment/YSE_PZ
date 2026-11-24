@@ -2,12 +2,11 @@ from YSE_App.models import *
 from django.db.models import Q
 from YSE_App.common.quality_mask import legacy_good
 from YSE_App.models import phot_models
-from YSE_App.services.visibility import get_user_group_query as GetUserGroupQuery
-from YSE_App.services.visibility import photometry_points_visible_q, photometry_visible_q
+from YSE_App.services.visibility import dataset_group_q, photometry_points_visible_q, photometry_visible_q
 
 # Transient photometry visibility is the central read rule (#648):
-# ``services.visibility.photometry_visible_q``. Host photometry keeps the
-# plain group rule (no read-time grants for host data).
+# ``services.visibility.photometry_visible_q``. Host photometry follows
+# ``dataset_group_q`` (no read-time grants for host data).
 
 def GetAuthorizedTransientPhotometry_ByUser(user):
     allowed_phot = TransientPhotometry.objects.filter(photometry_visible_q(user)).distinct()
@@ -21,15 +20,13 @@ def GetAuthorizedTransientPhotometry_ByUser_ByTransient(user, transient_id):
     ).distinct()
 
 def GetAuthorizedHostPhotometry_ByUser(user):
-    host_query_tuple = GetUserGroupQuery(user)
-    allowed_phot = HostPhotometry.objects.filter(host_query_tuple[0] | host_query_tuple[1]).distinct()
+    allowed_phot = HostPhotometry.objects.filter(dataset_group_q(HostPhotometry, user)).distinct()
 
     return allowed_phot
 
 def GetAuthorizedHostPhotometry_ByUser_ByHost(user, host_id):
-    host_query_tuple = GetUserGroupQuery(user)
     return HostPhotometry.objects.filter(
-        host_query_tuple[0] | host_query_tuple[1],
+        dataset_group_q(HostPhotometry, user),
         host_id=host_id,
     ).distinct()
 

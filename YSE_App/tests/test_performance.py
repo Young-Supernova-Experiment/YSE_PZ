@@ -43,16 +43,16 @@ from YSE_App.tests.perf_tracking import LoadTimeRegistry
 # +2 (#440, #445): the user's picker preferences and the system/inactive group flags,
 # one query each, memoised for the request.
 MAX_QUERIES_TRANSIENT_DETAIL_SHELL = 61
-MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 61
+MAX_QUERIES_TRANSIENT_DETAIL_DEFERRED_SHELL = 63
 # +3 (#446): the PI names on the spectra and photometry tables ("pis" prefetches, loaded page only;
 # measured 100 -> 103 in CI). The check is strict (count < ceiling).
-MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 104  # audience form loads shared collaboration groups
+MAX_QUERIES_TRANSIENT_DETAIL_LOADED = 106  # audience form loads shared collaboration groups
 MAX_QUERIES_PERSONAL_DASHBOARD = 40
 # Cold: five explorer SQL runs + five table builds (heavy; ceiling guards regressions).
-MAX_QUERIES_PERSONAL_DASHBOARD_FIVE_QUERIES_COLD = 33
+MAX_QUERIES_PERSONAL_DASHBOARD_FIVE_QUERIES_COLD = 35
 # Warm: SQL results cached; exercises second-pass table build only.
 MAX_QUERIES_PERSONAL_DASHBOARD_FIVE_QUERIES_WARM = 28
-MAX_QUERIES_MAIN_DASHBOARD = 32
+MAX_QUERIES_MAIN_DASHBOARD = 42
 # Explorer index: empty querylog ~6 queries; with logs ~1 + N counts (django-sql-explorer).
 MAX_QUERIES_EXPLORER_INDEX_CATALOG = 15
 MAX_QUERIES_EXPLORER_INDEX_PER_50_WITH_LOGS = 60

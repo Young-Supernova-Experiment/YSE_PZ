@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Iterable, List, NamedTuple, Optional, Set, Union
 
 from django.contrib.auth.models import Group, User
-from django.db.models import Count, Exists, OuterRef, Q, QuerySet
+from django.db.models import Case, Count, Exists, OuterRef, Q, QuerySet, Value, When
 
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 
@@ -63,6 +63,46 @@ def get_user_group_query(user: User, names: Optional[Iterable[str]] = None):
     no_group = Q(groups__isnull=True)
     contains_group = Q(groups__name__in=names)
     return no_group, contains_group
+
+
+# Data (photometry sets and spectra, transient and host) use a stricter group
+# rule than observing resources (``get_user_group_query``):
+#
+# * ``Public`` shows a dataset only when it is the dataset's only group. A set
+#   that also carries a team group (for example TNS points merged into the YSE
+#   set of the same instrument and observation group) stays with that team;
+#   with the plain rule every member of ``Public``, i.e. every user, saw it.
+# * A dataset of the ``YSE`` observation group without a team group is YSE
+#   data that was never labelled: only members of the ``YSE`` group see it.
+YSE_COLLABORATION_GROUP_NAME = "YSE"
+YSE_OBSERVATION_GROUP_NAME = "YSE"
+
+
+def _open_dataset_q(model, names: Iterable[str]) -> Q:
+    """Rows of ``model`` that are open data for a user with group ``names``.
+
+    Open data has no group other than ``Public`` (``Public`` alone counts
+    only for its members) and, for a user outside ``YSE``, is not unlabelled
+    YSE data.
+    """
+    names = set(names)
+    links = model.groups.through.objects.filter(**{model._meta.model_name + "_id": OuterRef("pk")})
+    if PUBLIC_COLLABORATION_GROUP_NAME in names:
+        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
+    q = Q(~Exists(links))
+    if YSE_COLLABORATION_GROUP_NAME not in names:
+        q &= ~Q(obs_group__name=YSE_OBSERVATION_GROUP_NAME)
+    return q
+
+
+def dataset_group_q(model, user: User, names: Optional[Iterable[str]] = None) -> Q:
+    """The group rule for data rows of ``model``: open data, or a team group the user is in.
+
+    Joins ``groups``, so querysets filtered with it need ``.distinct()``.
+    """
+    names = user_group_names(user) if names is None else list(names)
+    team_names = [n for n in names if n != PUBLIC_COLLABORATION_GROUP_NAME]
+    return _open_dataset_q(model, names) | Q(groups__name__in=team_names)
 
 
 def object_has_groups(obj) -> bool:
@@ -383,21 +423,17 @@ def _public_dataset_q(model, names: Iterable[str]) -> Q:
     """Rows of ``model`` that are public for this user, so no deny may hide them.
 
     Public data (Ryan, #648, 2026-10-17) can never be restricted from anyone:
-    a dataset with no collaboration group, and, for a member of the ``Public``
-    group, a dataset whose only group is ``Public``. Both are rows the group
-    rule already shows the user, so this only limits what a deny removes.
+    the open data of :func:`_open_dataset_q` (no collaboration group, or
+    ``Public`` alone for its members; unlabelled or Public-only YSE data only
+    for YSE members). These are rows the group rule already shows the user,
+    so this only limits what a deny removes.
     """
-    through = model.groups.through
-    links = through.objects.filter(**{model._meta.model_name + '_id': OuterRef('pk')})
-    if PUBLIC_COLLABORATION_GROUP_NAME in set(names):
-        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
-    return Q(~Exists(links))
+    return _open_dataset_q(model, names)
 
 
 def _dataset_visible_q(model, rules: AccessRules, user: User, names: Optional[Iterable[str]]) -> Q:
     names = user_group_names(user) if names is None else list(names)
-    no_group, contains_group = get_user_group_query(user, names=names)
-    q = no_group | contains_group
+    q = dataset_group_q(model, user, names=names)
     if rules.allow is not None:
         q |= rules.allow
     if rules.deny is not None:
@@ -456,13 +492,19 @@ def dataset_visible_to_user(user: User, obj, names: Optional[Iterable[str]] = No
         return model.objects.filter(pk=obj.pk).filter(
             _dataset_visible_q(model, rules, user, names)).exists()
     if names is None:
-        if not object_has_groups(obj):
-            return True
         names = user_group_names(user)
         obj_names = set(obj.groups.values_list("name", flat=True))
     else:
         obj_names = {g.name for g in obj.groups.all()}
-    return not obj_names or bool(set(names) & obj_names)
+    names = set(names)
+    if (names - {PUBLIC_COLLABORATION_GROUP_NAME}) & obj_names:
+        return True  # a team group the user is in
+    # Open data (:func:`_open_dataset_q`).
+    if obj_names - ({PUBLIC_COLLABORATION_GROUP_NAME} & names):
+        return False
+    if YSE_COLLABORATION_GROUP_NAME in names or not obj.obs_group_id:
+        return True
+    return obj.obs_group.name != YSE_OBSERVATION_GROUP_NAME
 
 
 def tns_named_q() -> Q:
@@ -551,15 +593,22 @@ def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
         # Header-level rules only (the hook shape, #648 PR 0): the exact complement of the central rule.
         visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
         return Exists(on_transient.exclude(pk__in=visible))
-    # No rules: the group rule's complement by group id, the indexed form #607 tuned.
+    # No rules: the complement of ``dataset_group_q`` by group id, the indexed form #607 tuned:
+    # not open data, and no team group of the user's.
     through = TransientPhotometry.groups.through
-    restricted = on_transient.filter(
-        Exists(through.objects.filter(transientphotometry_id=OuterRef('pk')))
-    )
-    gids = user_group_ids(user)
-    if gids:
+    names = set(user_group_names(user)) if getattr(user, 'is_authenticated', False) else set()
+    links = through.objects.filter(transientphotometry_id=OuterRef('pk'))
+    if PUBLIC_COLLABORATION_GROUP_NAME in names:
+        links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
+    not_open = Q(Exists(links))
+    if YSE_COLLABORATION_GROUP_NAME not in names:
+        not_open |= Q(obs_group__name=YSE_OBSERVATION_GROUP_NAME)
+    restricted = on_transient.filter(not_open)
+    team_gids = list(user.groups.exclude(name=PUBLIC_COLLABORATION_GROUP_NAME).values_list('id', flat=True)) \
+        if getattr(user, 'is_authenticated', False) else []
+    if team_gids:
         restricted = restricted.filter(~Exists(
-            through.objects.filter(transientphotometry_id=OuterRef('pk'), group_id__in=gids)
+            through.objects.filter(transientphotometry_id=OuterRef('pk'), group_id__in=team_gids)
         ))
     return Exists(restricted)
 
@@ -595,6 +644,45 @@ def transients_with_hidden_photometry(user: User, transient_ids: Iterable[int]) 
         Transient.objects.filter(pk__in=ids).filter(hidden_photometry_exists(user))
         .values_list('pk', flat=True)
     )
+
+
+def user_has_hidden_photometry(user: User, transient_id: int) -> bool:
+    return bool(transients_with_hidden_photometry(user, [transient_id]))
+
+
+def visible_photometry_ids(user: User, names: Optional[Iterable[str]] = None):
+    """Subquery of the ``TransientPhotometry`` pks ``user`` may see, or None (service readers: all).
+
+    For computing derived values (latest magnitude, last date) per viewer:
+    ``TransientPhotData.objects.filter(photometry_id__in=visible_photometry_ids(user))``.
+    """
+    if user_sees_everything(user):
+        return None
+    from YSE_App.models import TransientPhotometry
+
+    return TransientPhotometry.objects.filter(photometry_visible_q(user, names=names)).values("pk")
+
+
+def null_if_hidden_photometry(user: User, expression, transient_ref: str = "pk", output_field=None):
+    """``expression``, or NULL where the transient at ``transient_ref`` has photometry hidden from ``user``.
+
+    For annotations, sorts and filters on values derived from all of a
+    transient's photometry (``TransientPhotStat`` fields and the like).
+    """
+    if user_sees_everything(user):
+        return expression
+    return Case(
+        When(hidden_photometry_exists(user, transient_ref), then=Value(None)),
+        default=expression,
+        output_field=output_field,
+    )
+
+
+def exclude_hidden_photometry(queryset: QuerySet, user: User, transient_ref: str = "pk") -> QuerySet:
+    """``queryset`` without rows whose transient (at ``transient_ref``) has photometry hidden from ``user``."""
+    if user_sees_everything(user):
+        return queryset
+    return queryset.exclude(hidden_photometry_exists(user, transient_ref))
 
 
 # Transient detail shell allows broad metadata; export zip headers must stay narrow.

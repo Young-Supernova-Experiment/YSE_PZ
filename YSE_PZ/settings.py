@@ -743,6 +743,13 @@ DASHBOARD_CACHE_WARM_ENABLED = (
 )
 DASHBOARD_CACHE_WARM_MINUTES = config.getint('site_settings', 'DASHBOARD_CACHE_WARM_MINUTES', fallback=60)
 
+# Bazin fits inside page rendering (the "Bazin Mag @ Night"/"Bazin Mag Now"
+# columns and the observing-night target-list download). Each fit is a
+# least-squares solve per transient, so a long night list timed out the page
+# on Ziggy (2026-11-10). Off unless [site_settings] BAZIN_TABLE_FITS_ENABLED
+# is True; the "Show Bazin Fit" plot overlay is not affected.
+BAZIN_TABLE_FITS_ENABLED = config.getboolean('site_settings', 'BAZIN_TABLE_FITS_ENABLED', fallback=False)
+
 # Where `manage.py rewrite_dashboard_queries --apply` writes the previous SQL
 # of every saved query it changes ([site_settings] DASHBOARD_QUERY_BACKUP_DIR).
 DASHBOARD_QUERY_BACKUP_DIR = config.get(
@@ -940,10 +947,10 @@ EXPLORER_DERIVED_VALUE_COLUMNS = _str_setting(
     'YSE_EXPLORER_DERIVED_VALUE_COLUMNS', 'site_settings', 'EXPLORER_DERIVED_VALUE_COLUMNS', '')
 
 REST_FRAMEWORK = {
-    # Use Django's standard `django.contrib.auth` permissions,
-    # or allow read-only access for unauthenticated users.
+    # Every viewset sets its own permission classes; the default only covers
+    # views that do not (API root, schema): never anonymous reads.
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly'
+        'rest_framework.permissions.IsAuthenticated'
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
        # Cheap per-request auth for scripts (no PBKDF2); Basic is kept (#457).
