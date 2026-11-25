@@ -220,6 +220,20 @@ class SameAnswerAsTheApplicationTests(_Fixture):
             cursor.execute('SELECT @@SESSION.max_execution_time')
             self.assertEqual(int(cursor.fetchone()[0]), 0)
 
+    def test_timeout_is_a_readable_query_error(self):
+        from contextlib import nullcontext
+
+        from django.db import OperationalError
+
+        from YSE_App.explorer_scope_hooks import ExplorerScopeError, run_with_time_cap
+
+        def slow():
+            raise OperationalError(3024, "Query execution was interrupted, maximum statement execution time exceeded")
+
+        with self.assertRaisesMessage(ExplorerScopeError, "Query stopped after 120 seconds"):
+            run_with_time_cap(slow, connection, 120000, lambda conn, ms: nullcontext())
+        self.assertEqual(run_with_time_cap(lambda: "ok", connection, 120000, lambda conn, ms: nullcontext()), "ok")
+
     def test_derived_values_select_but_are_not_returned(self):
         sql = ("SELECT name, ra, ra * 2 AS twice FROM YSE_App_transient WHERE name LIKE 'xsc%' AND ra > 10.035 "
                "ORDER BY ra")

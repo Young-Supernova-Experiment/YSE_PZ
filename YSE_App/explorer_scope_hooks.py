@@ -48,6 +48,23 @@ def current_viewer():
     return _VIEWER.get()
 
 
+TIMEOUT_MESSAGE = ('Query stopped after %d seconds, the SQL Explorer time limit for queries run on your visible '
+                   'data. Narrow it (a WHERE on dates or names, fewer joins, a LIMIT) and run it again.')
+
+
+def run_with_time_cap(run, connection, cap_ms, time_cap=None):
+    """``run()`` under the viewer's statement time cap; a timeout becomes a readable query error (#1015)."""
+    from YSE_App.common.db_time_cap import QueryTimeout, translate_query_timeout
+    if time_cap is None:
+        from YSE_App.services.explorer_scope import viewer_time_cap as time_cap
+    try:
+        with translate_query_timeout(cap_ms):
+            with time_cap(connection, cap_ms):
+                return run()
+    except QueryTimeout:
+        raise ExplorerScopeError(TIMEOUT_MESSAGE % max(1, round((cap_ms or 0) / 1000))) from None
+
+
 def _install_dispatch():
     from explorer.views import auth as explorer_auth
 
@@ -78,8 +95,7 @@ def _install_execute():
         self.sql = plan.sql
         if not plan.rewritten:
             return original(self)
-        with viewer_time_cap(self.connection, plan.time_cap_ms):
-            return original(self)
+        return run_with_time_cap(lambda: original(self), self.connection, plan.time_cap_ms, viewer_time_cap)
 
     explorer_models.QueryResult.execute_query = execute_query
 
