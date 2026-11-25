@@ -622,7 +622,7 @@ class Finder(TemplateView):
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
-        options, args = parser.parse_args()
+        options, args = parser.parse_args([])
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
@@ -662,12 +662,13 @@ class Finder(TemplateView):
     
     @method_decorator(login_required)
     def finderim(self, request, transient_id, clobber=False):
+        _load_heavy_plot_stack()  # Figure, FigureCanvas, mpimg are lazy module globals
         transient = get_object_or_404(Transient, pk=transient_id)
         _outdir, output_offset_file, output_finder_file = finder_chart_paths(transient.name)
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
-        options,  args = parser.parse_args()
+        options,  args = parser.parse_args([])
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
@@ -699,6 +700,7 @@ class Finder(TemplateView):
         return response
 
     def finderchart_noview(self, transient_id, clobber=False):
+        _load_heavy_plot_stack()  # mpimg is a lazy module global
         import os
         from .util import mkFinderChart
 
@@ -714,7 +716,7 @@ class Finder(TemplateView):
 
         find = mkFinderChart.finder()
         parser = find.add_options(usage='')
-        options,  args = parser.parse_args()
+        options,  args = parser.parse_args([])
         options.ra = str(transient.ra)
         options.dec = str(transient.dec)
         options.snid = transient.name
