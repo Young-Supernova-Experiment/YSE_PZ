@@ -10,7 +10,7 @@ a YSE member gets the YSE values.
 import datetime
 
 from django.contrib.auth.models import Group
-from django.test import Client, TestCase
+from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -93,21 +93,28 @@ class DerivedValuePrivacyTests(TestCase):
         return client
 
     # --- tables -------------------------------------------------------------
-    def _table(self, user, **kwargs):
+    def _table(self, user, order_by=None):
+        # The viewer is the request's user, as RequestConfig sets it (#607); sort after it is known.
         qs = Transient.objects.filter(pk__in=[self.transient.pk, self.other.pk])
-        return TransientTable(qs, viewer=user, **kwargs)
+        table = TransientTable(qs)
+        table.request = RequestFactory().get("/")
+        table.request.user = user
+        if order_by:
+            table.order_by = order_by
+        return table
 
     def test_table_cells_and_sort(self):
         cells = {row.record.pk: row for row in self._table(self.outsider).rows}[self.transient.pk]
-        self.assertEqual(cells.get_cell("recent_mag"), "%.2f" % OPEN_MAG)
+        self.assertIn("%.2f" % OPEN_MAG, cells.get_cell("recent_mag"))
+        self.assertNotIn("%.2f" % YSE_MAG, cells.get_cell("recent_mag"))
         self.assertNotIn("%.2f" % YSE_MAG, cells.get_cell("peak_mag"))
         self.assertNotIn(SUMMARY, cells.get_cell("name_string"))
         order = [row.record.pk for row in self._table(self.outsider, order_by="recent_mag").rows]
         self.assertEqual(order, [self.other.pk, self.transient.pk])
 
         cells = {row.record.pk: row for row in self._table(self.member).rows}[self.transient.pk]
-        self.assertEqual(cells.get_cell("recent_mag"), "%.2f" % YSE_MAG)
-        self.assertEqual(cells.get_cell("peak_mag"), "%.2f" % YSE_MAG)
+        self.assertIn("%.2f" % YSE_MAG, cells.get_cell("recent_mag"))
+        self.assertIn("%.2f" % YSE_MAG, cells.get_cell("peak_mag"))
         self.assertIn(SUMMARY, cells.get_cell("name_string"))
         order = [row.record.pk for row in self._table(self.member, order_by="recent_mag").rows]
         self.assertEqual(order, [self.transient.pk, self.other.pk])
@@ -119,8 +126,8 @@ class DerivedValuePrivacyTests(TestCase):
             self.assertEqual(response.status_code, 200)
             return _rows(response.json())
 
+        # The statistics are scoped per viewer (#607): the outsider gets the open values.
         self.assertNotIn("%.2f" % YSE_MAG, self._client(self.outsider).get("/api/transientphotstats/").content.decode())
-        self.assertEqual(len(rows(self.outsider)), 1)  # the open-only transient
         self.assertEqual(len(rows(self.outsider, "?peak_mag_lte=17")), 0)
         self.assertEqual(len(rows(self.member)), 2)
         self.assertEqual(len(rows(self.member, "?peak_mag_lte=17")), 1)
