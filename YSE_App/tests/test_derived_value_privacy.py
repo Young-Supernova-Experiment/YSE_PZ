@@ -126,7 +126,7 @@ class DerivedValuePrivacyTests(TestCase):
             self.assertEqual(response.status_code, 200)
             return _rows(response.json())
 
-        # Experimental scopes the statistics per viewer (#607): the outsider gets the open values.
+        # The statistics are scoped per viewer (#607): the outsider gets the open values.
         self.assertNotIn("%.2f" % YSE_MAG, self._client(self.outsider).get("/api/transientphotstats/").content.decode())
         self.assertEqual(len(rows(self.outsider, "?peak_mag_lte=17")), 0)
         self.assertEqual(len(rows(self.member)), 2)
