@@ -23,6 +23,7 @@ from YSE_App.models.researcher_models import ENCRYPTED_FIELDS, STUDENT_LEVELS
 from YSE_App.profile_forms import (
     AdvisorForm, AgreementForm, ResearchConsentChoiceForm, ResearcherProfileForm, StudentForm, StudentUpdateForm,
 )
+from YSE_App.services import membership
 from YSE_App.services import research_consent as rc
 from YSE_App.services import research_crypto
 from YSE_App.services import researcher_profile as rp
@@ -243,6 +244,12 @@ def _save_profile(request, form, before):
     obj.user = user
     obj.save()
     form.save_m2m()
+    names = {name: form.cleaned_data.get(name) or "" for name in rp.ACCOUNT_NAME_FIELDS}
+    changed = [name for name, value in names.items() if getattr(user, name) != value]
+    if changed:
+        for name in changed:
+            setattr(user, name, names[name])
+        user.save(update_fields=changed)
     rp.record_plain_changes(user, before, rp.snapshot(obj), changed_by=user)
     to_set, to_clear = form.encrypted_changes()
     for name in to_clear:
@@ -259,6 +266,8 @@ def _save_profile(request, form, before):
         obj.profile_completed_at = timezone.now()
         obj.profile_confirmed_at = obj.profile_confirmed_at or obj.profile_completed_at
         obj.save(update_fields=["profile_completed_at", "profile_confirmed_at", "updated_at"])
+        # Teams chosen on the signup form now go to their owners.
+        transaction.on_commit(lambda: membership.release_held(user))
     onboarding.clear_session_flag(request)
 
 

@@ -1,0 +1,26 @@
+{
+  "_comment": "How catalogue telescope/instrument strings map to YSE telescopes and instruments (#894, #1003). `manage.py catalog_instruments --census <OSC_DIR>/sne-* --load` plans every string found in the catalogue and, with --apply, creates what is missing and one alias row per string. Order: (1) the first rule below that matches; (2) an existing YSE instrument of that name; (3) automatic: telescope and instrument given -> Telescope/Instrument, one given -> X/X, 'Telescope - Instrument' in one field -> split. Strings in `unknown` stay on the Unknown instrument. A rule's `telescope` / `instrument` patterns are case-insensitive regular expressions matched against the whole telescope / instrument string, and `any` is searched in either; a rule matches when all the patterns it gives match. `existing` names a YSE instrument to use when there is exactly one of that name (so catalogue data join YSE's own); otherwise target_telescope / target_instrument are created. \\1 in a target is the rule's first group. Ryan's mappings, 2026-11-16.",
+  "unknown": ["", "none", "other", "unknown", "other - other", "n/a", "-"],
+  "rules": [
+    {"any": "gaia", "target_telescope": "Gaia", "target_instrument": "Gaia"},
+    {"any": "uvot", "existing": "UVOT", "target_telescope": "Swift", "target_instrument": "UVOT"},
+    {"telescope": "swift", "instrument": "", "existing": "UVOT", "target_telescope": "Swift", "target_instrument": "UVOT"},
+    {"telescope": "(ps2|pan-?starrs ?2)", "existing": "GPC2", "target_telescope": "PS2", "target_instrument": "GPC2"},
+    {"telescope": "(ps1|pan-?starrs ?1?)", "existing": "GPC1", "target_telescope": "PS1", "target_instrument": "GPC1"},
+    {"telescope": "", "instrument": "(ps1|pan-?starrs ?1|gpc1?)", "existing": "GPC1", "target_telescope": "PS1", "target_instrument": "GPC1"},
+    {"telescope": "(sdss|sloan)", "instrument": "(|sdss)", "target_telescope": "SDSS", "target_instrument": "SDSS"},
+    {"telescope": "(catalina schmidt|catalina|css)", "target_telescope": "CSS", "target_instrument": "CSS"},
+    {"any": "ptf48", "target_telescope": "P48", "target_instrument": "PTF"},
+    {"telescope": "(p48|palomar[ -]?48(-?in)?)", "instrument": "cfh12k", "target_telescope": "P48", "target_instrument": "PTF"},
+    {"telescope": "", "instrument": "cfh12k", "target_telescope": "P48", "target_instrument": "PTF"},
+    {"telescope": "(p48|palomar[ -]?48(-?in)?)", "instrument": "", "target_telescope": "P48", "target_instrument": "P48"},
+    {"telescope": "kait([0-9])", "target_telescope": "KAIT", "target_instrument": "KAIT\\1"},
+    {"telescope": "kait", "instrument": "(|kait)", "target_telescope": "KAIT", "target_instrument": "KAIT"},
+    {"telescope": "", "instrument": "kait", "target_telescope": "KAIT", "target_instrument": "KAIT"},
+    {"telescope": "nickel([0-9])", "target_telescope": "Nickel", "target_instrument": "Nickel\\1"},
+    {"telescope": "nickel", "instrument": "", "target_telescope": "Nickel", "target_instrument": "Nickel"},
+    {"telescope": "pairitel", "target_telescope": "PAIRITEL", "target_instrument": "2MASS"},
+    {"any": "^io:o$", "existing": "IO:O", "target_telescope": "Liverpool Telescope", "target_instrument": "IO:O"},
+    {"telescope": "hubble", "instrument": "(.+)", "target_telescope": "HST", "target_instrument": "\\1"}
+  ]
+}

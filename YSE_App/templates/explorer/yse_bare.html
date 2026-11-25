@@ -12,23 +12,49 @@ takes its colours from the YSE-PZ theme so it matches the page around it.
 	<title>{% trans "SQL Explorer" %}</title>
 	<script>
 	(function () {
-		try {
-			var t = localStorage.getItem("yse-theme") || "dark";
-			document.documentElement.setAttribute("data-yse-theme", t !== "light" ? "dark" : "light");
-		} catch (e) {
-			document.documentElement.setAttribute("data-yse-theme", "dark");
+		// Same rule as base.html (#821): an explicit choice ("yse-theme-choice", set only
+		// by the toggle) wins; a legacy "yse-theme" of "light" counts as one; otherwise
+		// follow the OS setting.
+		function theme() {
+			var t = null;
+			try {
+				t = localStorage.getItem("yse-theme-choice");
+				if (t !== "light" && t !== "dark") {
+					t = null;
+					if (localStorage.getItem("yse-theme") === "light") {
+						t = "light";
+						localStorage.setItem("yse-theme-choice", "light");
+					}
+				}
+			} catch (e) {}
+			if (!t) {
+				t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+			}
+			return t;
 		}
-		// Follow the theme toggle on the page around the iframe.
+		function set() {
+			document.documentElement.setAttribute("data-yse-theme", theme() !== "light" ? "dark" : "light");
+		}
+		set();
+		// Follow the theme toggle on the page around the iframe, and the OS while no choice is stored.
 		window.addEventListener("storage", function (e) {
-			if (e.key === "yse-theme") {
-				document.documentElement.setAttribute("data-yse-theme", e.newValue !== "light" ? "dark" : "light");
+			if (e.key === "yse-theme-choice") {
+				set();
 			}
 		});
+		if (window.matchMedia) {
+			var mq = window.matchMedia("(prefers-color-scheme: light)");
+			if (mq.addEventListener) {
+				mq.addEventListener("change", set);
+			} else if (mq.addListener) {
+				mq.addListener(set);
+			}
+		}
 	})();
 	</script>
 	<link rel="stylesheet" href="{% static 'explorer/css/bootstrap.min.css' %}">
 	<link rel="stylesheet" href="{% static 'explorer/css/explorer.css' %}">
-	<link rel="stylesheet" href="{% static 'YSE_App/yse-theme.css' %}?v=obs-night-3">
+	<link rel="stylesheet" href="{% static 'YSE_App/yse-theme.css' %}?v=chrome-nav-1">
 	<link rel="stylesheet" href="{% static 'YSE_App/explorer-theme.css' %}?v=450-1">
 </head>
 <body class="yse-theme yse-explorer yse-explorer-bare">

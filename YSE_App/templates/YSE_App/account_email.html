@@ -13,12 +13,19 @@
 	{% endif %}
 	<div class="box box-default box-solid">
 		<div class="box-body">
+			{% if continue_url %}
+			<p class="alert alert-success">Your email address is confirmed. <a href="{{ continue_url }}">Continue</a></p>
+			{% endif %}
+			{% if required %}
+			<p class="alert alert-info">YSE-PZ needs a confirmed email address on every account before you continue. It is used for notifications and password resets{% if verification %}; after you confirm the link we email you, come back to this page{% endif %}.</p>
+			{% endif %}
 			{% if has_email %}
 			<p>Your account has a confirmed email address. Enter a new one to change it{% if verification %}; we send a confirmation link to the new address first{% endif %}.</p>
 			{% else %}
 			<p>Your account has no confirmed email address yet, so you get no email notifications and cannot reset your password by email.{% if verification %} Enter your address and we will send you a confirmation link.{% endif %}</p>
 			{% endif %}
 			<form method="post" action="{% url 'account_email' %}" style="max-width: 28em">{% csrf_token %}
+				{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
 				<div class="form-group">{{ form.email.label_tag }} {{ form.email }}
 					{% if form.email.errors %}<div class="text-danger small">{{ form.email.errors|join:" " }}</div>{% endif %}</div>
 				<button type="submit" class="btn btn-primary">{% if verification %}Send confirmation link{% else %}Save{% endif %}</button>

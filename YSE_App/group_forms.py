@@ -1,4 +1,4 @@
-"""Forms for the team pages and the user settings page (#445, #440)."""
+"""Forms for the team pages and the user settings page (#445, #440), team creation and direct adds."""
 
 from __future__ import annotations
 
@@ -33,11 +33,23 @@ class InvitationForm(forms.Form):
 
 
 class GroupProfileForm(forms.ModelForm):
+    # Declared here: the model field is nullable, which ModelForm would turn into a 3-way choice.
+    accepts_requests = forms.BooleanField(
+        required=False, label="Accept membership requests",
+        help_text="Signed-in users can ask to join; owners and deputies approve or deny. Off: invitation "
+                  "links and direct adds only.")
+
     class Meta:
         model = GroupProfile
-        fields = ("description", "is_active")
+        fields = ("description", "is_active", "accepts_requests")
         labels = {"is_active": "Active (shown in group pickers)"}
         widgets = {"description": forms.Textarea(attrs={"rows": 3, "class": "form-control"})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NULL (never set) means the team takes requests.
+        if self.instance is not None and self.instance.accepts_requests is None:
+            self.initial["accepts_requests"] = True
 
 
 class _GroupChoices(forms.ModelMultipleChoiceField):
@@ -83,3 +95,21 @@ class UserPreferenceForm(forms.ModelForm):
         self.fields["hidden_groups"].queryset = qs.exclude(id__in=group_svc.public_group_ids(user))
         if self.instance is not None and self.instance.comment_default_public is not None:
             self.initial["comment_default_public"] = bool(self.instance.comment_default_public)
+
+
+class TeamCreateForm(forms.Form):
+    name = forms.CharField(
+        max_length=group_svc.TEAM_NAME_MAX, label="Team name",
+        widget=forms.TextInput(attrs={"class": "form-control", "maxlength": group_svc.TEAM_NAME_MAX}),
+    )
+    description = forms.CharField(
+        required=False, max_length=2000, label="Description (optional)",
+        widget=forms.Textarea(attrs={"rows": 2, "class": "form-control"}),
+    )
+
+
+class MemberAddForm(forms.Form):
+    identifier = forms.CharField(
+        max_length=254, label="Username or email address",
+        widget=forms.TextInput(attrs={"class": "form-control form-control-sm", "autocomplete": "off"}),
+    )

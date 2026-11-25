@@ -46,7 +46,7 @@
 						<td><code class="small">{{ rule.criteria }}</code></td>
 						<td>{% if rule.tns_enabled %}on{% else %}off{% endif %}</td>
 						<td>{% if rule.hermes_enabled %}on{% else %}off{% endif %}</td>
-						<td>{{ rule.last_run_at|date:"Y-m-d H:i"|default:"never" }}</td>
+						<td>{{ rule.last_run_at|utcdate|default:"never" }}</td>
 						{% if user.is_staff %}
 						<td><button type="button" class="btn btn-xs btn-outline-secondary yse-rule-dryrun" data-url="{% url 'sharing_autopublisher_dry_run' row.service.pk rule.pk %}">Dry run</button>
 							<span class="small text-muted yse-rule-dryrun-result"></span></td>

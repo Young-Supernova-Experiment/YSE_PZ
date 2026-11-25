@@ -2,11 +2,12 @@ from YSE_App.models import *
 from django.db.models import Q
 from YSE_App.common.quality_mask import legacy_good
 from YSE_App.models import phot_models
-from YSE_App.services.visibility import dataset_group_q, photometry_points_visible_q, photometry_visible_q
+from YSE_App.services.visibility import dataset_group_q
+from YSE_App.services.visibility import photometry_points_visible_q, photometry_visible_q
 
 # Transient photometry visibility is the central read rule (#648):
-# ``services.visibility.photometry_visible_q``. Host photometry follows
-# ``dataset_group_q`` (no read-time grants for host data).
+# ``services.visibility.photometry_visible_q``. Host photometry follows the
+# data group rule ``dataset_group_q`` (#975; no read-time grants for host data).
 
 def GetAuthorizedTransientPhotometry_ByUser(user):
     allowed_phot = TransientPhotometry.objects.filter(photometry_visible_q(user)).distinct()

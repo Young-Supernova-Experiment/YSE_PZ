@@ -40,8 +40,8 @@
 						{% for row in rows %}
 						{% with l=row.log %}
 						<tr data-log-id="{{ l.id }}" data-source="{{ l.source }}">
-							<td class="text-nowrap">{{ l.start|date:"Y-m-d H:i" }}</td>
-							<td class="text-nowrap">{% if l.end %}{{ l.end|date:"Y-m-d H:i" }}{% else %}<span class="text-muted">&ndash;</span>{% endif %}</td>
+							<td class="text-nowrap">{{ l.start|utcdate }}</td>
+							<td class="text-nowrap">{% if l.end %}{{ l.end|utcdate }}{% else %}<span class="text-muted">&ndash;</span>{% endif %}</td>
 							<td>
 								{% if l.message %}<div class="instlog-message">{% if row.entries|length == 1 and row.entries.0.level %}{% with lvl=row.entries.0.level %}<span class="badge instlog-level {% if lvl == 'error' or lvl == 'critical' %}badge-danger{% elif lvl == 'warning' or lvl == 'warn' %}badge-warning{% else %}badge-secondary{% endif %}" data-level="{{ lvl }}">{{ lvl }}</span> {% endwith %}{% endif %}{{ l.message|linebreaksbr }}</div>{% endif %}
 								{% if row.entries %}
@@ -65,7 +65,7 @@
 							</td>
 							<td>{% if l.source == 'api' %}<span class="badge badge-info" title="{{ l.source_name }}">facility API</span>{% else %}<span class="badge badge-secondary">manual</span>{% endif %}
 								{% if l.run_id and request.user.is_staff %}<br><a class="small" href="{% url 'external_service_run_detail' l.run.uuid %}">run</a>{% endif %}</td>
-							<td class="small">{{ l.created_by.username }}<br><span class="text-muted">{{ l.created_date|date:"Y-m-d H:i" }}</span></td>
+							<td class="small">{{ l.created_by.username }}<br><span class="text-muted">{{ l.created_date|utcdate }}</span></td>
 						</tr>
 						{% endwith %}
 						{% empty %}

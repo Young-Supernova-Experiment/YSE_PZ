@@ -1,12 +1,13 @@
 {% extends 'YSE_App/base.html' %}
 {% load static %}
 {% load widget_tweaks %}
+{% load glossary_extras %}
 {% load render_table from django_tables2 %}
 
 {% block content_header %}
     <h1>
         Transient Search
-        <small>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% endif %}</small>
+        <small{% if ui_preview %} id="search-result-count"{% endif %}>{% if result_count is not None %}{{ result_count }} match{{ result_count|pluralize:"es" }}{% endif %}</small>
     </h1>
     <ol class="breadcrumb">
       <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
@@ -26,9 +27,16 @@
   .yse-search-chip a { margin-left: .35rem; text-decoration: none; }
   .yse-search-actions .form-group { margin-right: .75rem; }
 </style>
+{% if ui_preview %}<link rel="stylesheet" href="{% static 'YSE_App/search-facets.css' %}?v=search-facets-2">{% endif %}
+{% if rule_builder %}<link rel="stylesheet" href="{% static 'YSE_App/rule-builder.css' %}?v=rule-builder-1">{% endif %}
 {% endblock %}
 
 {% block content %}
+{% if ui_preview %}{# facet sidebar with live counts (#842) #}
+<div class="row" id="search-preview-layout">
+<aside class="col-lg-3" id="search-facets-col">{% include 'YSE_App/search/facets.html' %}</aside>
+<div class="col-lg-9" id="search-main">
+{% endif %}
 <div class="box" id="search-filters">
   <div class="box-body">
     <form id="transient-search-form" class="yse-search-form" action="{% url 'search' %}" method="get">
@@ -44,35 +52,7 @@
       {% endif %}
 
       <div class="accordion" id="search-filter-groups">
-        {% for group in filter_groups %}
-        <div class="card yse-search-group" id="search-group-{{ group.key }}">
-          <div class="card-header">
-            <button class="btn btn-link" type="button" data-toggle="collapse" data-target="#search-group-{{ group.key }}-body"
-                    aria-expanded="{% if group.active or forloop.first and not active_chips %}true{% else %}false{% endif %}"
-                    aria-controls="search-group-{{ group.key }}-body">
-              <i class="fa fa-caret-down" aria-hidden="true"></i> {{ group.title }}
-              {% if group.active %}<span class="badge badge-primary">{{ group.active }}</span>{% endif %}
-            </button>
-          </div>
-          <div id="search-group-{{ group.key }}-body" class="collapse{% if group.active or forloop.first and not active_chips %} show{% endif %}"
-               data-parent="#search-filter-groups-never">
-            <div class="card-body">
-              <div class="form-row">
-                {% for field in group.fields %}
-                <div class="form-group col-sm-6 col-md-3 col-xl-2">
-                  <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-                  {% if field.field.widget.input_type == 'select' %}
-                    {% render_field field class+="form-control form-control-sm" %}
-                  {% else %}
-                    {% render_field field class+="form-control form-control-sm" %}
-                  {% endif %}
-                </div>
-                {% endfor %}
-              </div>
-            </div>
-          </div>
-        </div>
-        {% endfor %}
+        {% include 'YSE_App/search/_filter_groups.html' %}
       </div>
 
       <div class="form-inline yse-search-actions mt-2">
@@ -91,6 +71,7 @@
         <button type="button" class="btn btn-outline-secondary btn-sm mr-2" id="search-copy-link" title="Copy this search's URL">Copy link</button>
         <a class="btn btn-outline-secondary btn-sm mr-2" href="{{ api_url }}" id="search-api-link" title="The same search on the REST API">API</a>
         <button type="button" class="btn btn-outline-primary btn-sm" id="search-save-open" data-toggle="modal" data-target="#search-save-modal" title="Save this search as an SQL query, optionally on your personal dashboard"><i class="fa fa-save" aria-hidden="true"></i> Save as SQL query</button>
+        {% if selection_save %}<button type="button" class="btn btn-outline-primary btn-sm ml-2" id="selection-save-open" data-toggle="modal" data-target="#selection-save-modal" title="Keep these filters as a Selection you can reopen and share (preview)"><i class="fa fa-bookmark" aria-hidden="true"></i> Save as Selection</button>{% endif %}
       </div>
     </form>
 
@@ -104,25 +85,26 @@
     {% elif save_error %}
     <div class="alert alert-danger mt-2 py-2" role="alert" id="search-save-error">{{ save_error }}</div>
     {% endif %}
-
-    {% if active_chips %}
-    <div class="mt-2" id="search-active-filters">
-      {% for chip in active_chips %}
-      <span class="yse-search-chip"><strong>{{ chip.label }}</strong>: {{ chip.value }}<a href="{{ chip.remove_url }}" title="Remove this filter" aria-label="Remove {{ chip.label }}">&times;</a></span>
-      {% endfor %}
-    </div>
+    {% if selection_save.error %}
+    <div class="alert alert-danger mt-2 py-2" role="alert" id="selection-save-error">{{ selection_save.error }}</div>
     {% endif %}
+
+    {% if ui_preview %}<div id="search-chips-slot">{% endif %}{% include 'YSE_App/search/_chips.html' %}{% if ui_preview %}</div>{% endif %}
   </div>
 </div>
 
-<div class="box" id="search-results">
+<div class="box" id="search-results"{% if ui_preview %} data-obs-blocked="{{ obs_tonight.blocked }}"{% endif %}>
   <div class="box-header with-border">
     <h3 class="box-title">Results{% if cone %} within {{ cone.2|floatformat:1 }}&Prime; of {{ cone.0|floatformat:5 }}, {{ cone.1|floatformat:5 }}{% endif %}</h3>
     <a class="btn btn-outline-secondary btn-sm float-right" id="search-export-csv" href="{{ export_url }}" title="Download every row of this search you may see as CSV"><i class="fa fa-download" aria-hidden="true"></i> CSV</a>
+    {% if download_menu %}{% include 'YSE_App/partials/download_menu.html' %}{% endif %}
   </div>
   <div class="box-body">
     {% if bulk_result %}
     <div class="alert alert-info py-1 px-2" role="alert" id="search-bulk-result">{{ bulk_result }}</div>
+    {% endif %}
+    {% if obs_tonight %}{% load observable_tonight %}
+    {% observable_tonight_control id_selector=".search-select-row" scope="#search-results" blocked=obs_tonight.blocked %}
     {% endif %}
     <form id="search-bulk-form" class="form-inline mb-2" action="{% url 'search_bulk_action' %}" method="post">
       {% csrf_token %}
@@ -133,9 +115,10 @@
         <option value="status">Set status</option>
         <option value="add_tag">Add tag</option>
         <option value="photometry">Download photometry (zip)</option>
+        {% if ui_preview %}<option value="repeat_followup">Repeat follow-up…</option>{% endif %}
       </select>
       <select name="status_id" id="search-bulk-status" class="form-control form-control-sm mr-2" style="display:none">
-        {% for st in all_transient_statuses %}<option value="{{ st.id }}">{{ st.name }}</option>{% endfor %}
+        {% for st in all_transient_statuses %}<option value="{{ st.id }}" title="{{ st.name|status_title }}">{{ st.name|status_label }}</option>{% endfor %}
       </select>
       <select name="tag_id" id="search-bulk-tag" class="form-control form-control-sm mr-2" style="display:none">
         {% for tag in all_transient_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
@@ -150,7 +133,9 @@
       </div>
       <button type="submit" class="btn btn-primary btn-sm" id="search-bulk-submit">Apply</button>
     </form>
+    {% if ui_preview %}<div data-yse-list-source="search" id="search-results-table">{% endif %}{# links into a transient keep this search (#850) #}
     {% render_table table %}
+    {% if ui_preview %}</div>{% endif %}
   </div>
   <div class="box-footer"></div>
 </div>
@@ -190,6 +175,51 @@
     </form>
   </div>
 </div>
+{% if selection_save %}{# "Save as Selection" (#841), UI preview only #}
+<div class="modal fade" id="selection-save-modal" tabindex="-1" role="dialog" aria-labelledby="selection-save-modal-title" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <form class="modal-content" id="selection-save-form" action="{% url 'selection_save' %}" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="params" value="{{ bulk_params }}">
+      <div class="modal-header">
+        <h5 class="modal-title" id="selection-save-modal-title">Save as Selection</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">A Selection keeps these filters, not today's rows: each time it is opened it lists what matches then, showing only the data each viewer may see. Find it under <a href="{% url 'selection_list' %}">My Selections</a>.</p>
+        <div class="form-group">
+          <label for="selection-save-name">Name</label>
+          <input type="text" class="form-control" id="selection-save-name" name="name" maxlength="200" required value="{{ selection_save.name }}">
+        </div>
+        <div class="form-group">
+          <label for="selection-save-visibility">Shared with</label>
+          <select class="form-control" id="selection-save-visibility" name="visibility">
+            <option value="me">Only me</option>
+            {% if selection_save.teams %}<option value="team">My team</option>{% endif %}
+            <option value="all">All YSE</option>
+          </select>
+        </div>
+        {% if selection_save.teams %}
+        <div class="form-group" id="selection-save-team-group" hidden>
+          <label for="selection-save-team">Team</label>
+          <select class="form-control" id="selection-save-team" name="team" disabled>
+            {% for team in selection_save.teams %}<option value="{{ team.pk }}">{{ team.name }}</option>{% endfor %}
+          </select>
+          <small class="form-text text-muted">Everyone on the team can open, rename and re-share it.</small>
+        </div>
+        {% endif %}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="selection-save-submit"><i class="fa fa-bookmark" aria-hidden="true"></i> Save Selection</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% if ui_preview %}</div>{# #search-main #}
+</div>{# #search-preview-layout #}
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -205,6 +235,12 @@ $(function() {
     }
   });
 
+  $('#selection-save-visibility').on('change', function() {
+    var team = $(this).val() === 'team';
+    $('#selection-save-team-group').prop('hidden', !team);
+    $('#selection-save-team').prop('disabled', !team);
+  });
+
   $('#search-bulk-action').on('change', function() {
     $('#search-bulk-status').toggle($(this).val() === 'status');
     $('#search-bulk-tag').toggle($(this).val() === 'add_tag');
@@ -218,7 +254,8 @@ $(function() {
     var n = $('.search-select-row:checked').length;
     if (!action) { event.preventDefault(); alert('Choose an action first.'); return; }
     if (!all && n === 0) { event.preventDefault(); alert('Tick at least one row, or choose "All matches".'); return; }
-    if (action !== 'photometry') {
+    // Repeat follow-up has its own review page, so no confirmation here (#853).
+    if (action !== 'photometry' && action !== 'repeat_followup') {
       var what = all ? 'every match of this search' : (n + ' selected transient(s)');
       if (!window.confirm('Apply "' + $('#search-bulk-action option:selected').text() + '" to ' + what + '?')) {
         event.preventDefault();
@@ -227,13 +264,14 @@ $(function() {
   });
 
   function transientStatusChangeErr() {
-    alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.");
+    alert("Transient Status may not have changed -- please use YSE Admin and contact the site admins.");
   }
-  $('.transientStatusChange').on('click', function(event) {
+  $(document).on('click', '.transientStatusChange', function(event) {
     event.preventDefault();
     var status_id = $(this).attr('data-status_id');
     var transient_id = $(this).attr('transient_id');
     var status_name = $(this).attr('data-status_name');
+    var status_title = $(this).attr('title') || '';
     var url_target = "{% url 'transient-detail' -1 %}".replace('-1', transient_id);
     var status_target = "{% url 'transientstatus-list' %}" + status_id + "/";
     var base_url = window.location.protocol + "//" + window.location.host;
@@ -246,7 +284,7 @@ $(function() {
         if (jqXHR.status == 200 && textStatus == "success") {
           var tokens = data.status.split("/");
           if (tokens[tokens.length - 2] == status_id) {
-            $("#" + transient_id + "_status_name").text(status_name);
+            $("#" + transient_id + "_status_name").text(status_name).attr('title', status_title);
           } else {
             transientStatusChangeErr();
           }
@@ -259,4 +297,7 @@ $(function() {
   });
 });
 </script>
+{% if ui_preview %}<script src="{% static 'YSE_App/list-context.js' %}?v=list-steps-1"></script>
+<script src="{% static 'YSE_App/search-facets.js' %}?v=search-facets-2"></script>{% endif %}
+{% if rule_builder %}<script src="{% static 'YSE_App/rule-builder.js' %}?v=rule-builder-1"></script>{% endif %}
 {% endblock %}

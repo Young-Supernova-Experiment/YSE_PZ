@@ -50,6 +50,79 @@ _reddest_yse_filter = djangoSettings.REDYSEFILTER
 def is_ajax(request):
 	return request.META.get('HTTP_X_REQUESTED_WITH') == 'XMLHttpRequest'
 
+
+def save_followup_request(user, cleaned_data):
+	"""Save one validated ``TransientFollowupForm``: the single-request path.
+
+	Shared by the follow-up form (``add_transient_followup``) and "Repeat follow-up"
+	(``bulk_followup_views``, #853), so both set the audience, ``modified_by``, the
+	transient status and the comment log the same way. Returns ``(parent, created_parent)``.
+	"""
+	from YSE_App.services.audience import resolve_followup_audience
+
+	classical_resource = cleaned_data.get("classical_resource")
+	valid_start = cleaned_data["valid_start"]
+	valid_stop = cleaned_data["valid_stop"]
+	if classical_resource:
+		valid_start = classical_resource.begin_date_valid
+		valid_stop = classical_resource.end_date_valid
+
+	priority = cleaned_data.get("priority")
+	if priority is None:
+		priority = DEFAULT_PRIORITY
+
+	instance, _child, created_parent = create_or_attach_request(
+		user,
+		cleaned_data["transient"],
+		status=cleaned_data["status"],
+		valid_start=valid_start,
+		valid_stop=valid_stop,
+		priority=priority,
+		comment=cleaned_data.get("comment") or "",
+		classical_resource=classical_resource,
+		too_resource=cleaned_data.get("too_resource"),
+		queued_resource=cleaned_data.get("queued_resource"),
+		offset_star_ra=cleaned_data.get("offset_star_ra"),
+		offset_star_dec=cleaned_data.get("offset_star_dec"),
+		offset_north=cleaned_data.get("offset_north"),
+		offset_east=cleaned_data.get("offset_east"),
+	)
+
+	if created_parent:
+		is_public, audience_groups = resolve_followup_audience(
+			user,
+			instance.transient_id,
+			audience_groups=list(cleaned_data.get("audience_groups") or []),
+			linked_resource=(
+				classical_resource
+				or cleaned_data.get("too_resource")
+				or cleaned_data.get("queued_resource")
+			),
+			explicit_audience=True,
+		)
+		instance.is_public = is_public
+		instance.save(update_fields=["is_public"])
+		if audience_groups:
+			instance.groups.set(audience_groups)
+
+	if instance.transient.status.name in ["New", "Watch", "Ignore", "Interesting"]:
+		instance.transient.status = TransientStatus.objects.filter(
+			name="FollowupRequested"
+		)[0]
+		instance.transient.save()
+
+	if cleaned_data.get("comment"):
+		log = Log(
+			transient_followup=instance,
+			comment=cleaned_data["comment"],
+			created_by=user,
+			modified_by=user,
+		)
+		log.save()
+
+	return instance, created_parent
+
+
 @method_decorator(login_required, name='dispatch')
 class AddTransientFollowupFormView(FormView):
 	form_class = TransientFollowupForm
@@ -92,69 +165,7 @@ class AddTransientFollowupFormView(FormView):
 		return data_dict
 
 	def _save_followup_request(self, form):
-		from YSE_App.services.audience import resolve_followup_audience
-
-		classical_resource = form.cleaned_data.get("classical_resource")
-		valid_start = form.cleaned_data["valid_start"]
-		valid_stop = form.cleaned_data["valid_stop"]
-		if classical_resource:
-			valid_start = classical_resource.begin_date_valid
-			valid_stop = classical_resource.end_date_valid
-
-		priority = form.cleaned_data.get("priority")
-		if priority is None:
-			priority = DEFAULT_PRIORITY
-
-		instance, _child, created_parent = create_or_attach_request(
-			self.request.user,
-			form.cleaned_data["transient"],
-			status=form.cleaned_data["status"],
-			valid_start=valid_start,
-			valid_stop=valid_stop,
-			priority=priority,
-			comment=form.cleaned_data.get("comment") or "",
-			classical_resource=classical_resource,
-			too_resource=form.cleaned_data.get("too_resource"),
-			queued_resource=form.cleaned_data.get("queued_resource"),
-			offset_star_ra=form.cleaned_data.get("offset_star_ra"),
-			offset_star_dec=form.cleaned_data.get("offset_star_dec"),
-			offset_north=form.cleaned_data.get("offset_north"),
-			offset_east=form.cleaned_data.get("offset_east"),
-		)
-
-		if created_parent:
-			is_public, audience_groups = resolve_followup_audience(
-				self.request.user,
-				instance.transient_id,
-				audience_groups=list(form.cleaned_data.get("audience_groups") or []),
-				linked_resource=(
-					classical_resource
-					or form.cleaned_data.get("too_resource")
-					or form.cleaned_data.get("queued_resource")
-				),
-				explicit_audience=True,
-			)
-			instance.is_public = is_public
-			instance.save(update_fields=["is_public"])
-			if audience_groups:
-				instance.groups.set(audience_groups)
-
-		if instance.transient.status.name in ["New", "Watch", "Ignore", "Interesting"]:
-			instance.transient.status = TransientStatus.objects.filter(
-				name="FollowupRequested"
-			)[0]
-			instance.transient.save()
-
-		if form.cleaned_data.get("comment"):
-			log = Log(
-				transient_followup=instance,
-				comment=form.cleaned_data["comment"],
-				created_by=self.request.user,
-				modified_by=self.request.user,
-			)
-			log.save()
-
-		return instance, created_parent
+		return save_followup_request(self.request.user, form.cleaned_data)
 
 	def form_invalid(self, form):
 		if is_ajax(self.request):
@@ -689,6 +700,11 @@ class AddDashboardQueryFormView(FormView):
 	form_class = AddDashboardQueryForm
 	template_name = 'YSE_App/form_snippets/dashboard_query_form.html'
 	success_url = '/form-success/'
+
+	def get_form_kwargs(self):
+		kwargs = super().get_form_kwargs()
+		kwargs['user'] = self.request.user
+		return kwargs
 	
 	def form_invalid(self, form):
 		response = super(AddDashboardQueryFormView, self).form_invalid(form)

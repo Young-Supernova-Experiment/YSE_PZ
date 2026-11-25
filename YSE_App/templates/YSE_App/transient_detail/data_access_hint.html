@@ -12,7 +12,7 @@ Only counts, owner-group names and PI names (#446) are shown, never the hidden r
         <strong>{{ row.count }} {{ row.kind_label }}</strong> on this transient {% if row.count == 1 %}is{% else %}are{% endif %} restricted to <strong>{{ row.group.name }}</strong>{% if row.pis %}; <span class="yse-data-pis">PI{{ row.pis|length|pluralize }}: {{ row.pis|join:", " }}</span>{% else %}; <span class="yse-data-no-pi">no PI assigned</span>{% endif %}.
         {% if row.request and row.request.status == 'pending' %}
             <span class="badge badge-info">Access request pending</span>
-            <span class="small text-muted">sent {{ row.request.created_date|date:"Y-m-d H:i" }} UTC, to be shared with {{ row.request.target_group.name }}</span>
+            <span class="small text-muted">sent {{ row.request.created_date|utcdate }} UTC, to be shared with {{ row.request.target_group.name }}</span>
             <a class="small" href="{% url 'data_access_requests' %}?box=mine">view</a>
         {% elif row.request and row.request.status == 'declined' %}
             <span class="badge badge-secondary">Declined</span>

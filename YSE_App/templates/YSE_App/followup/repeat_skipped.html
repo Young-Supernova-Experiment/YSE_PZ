@@ -1,0 +1,8 @@
+{% if skipped %}
+<h4>Skipped</h4>
+<ul id="yse-repeat-fu-skipped">
+  {% for transient, reason in skipped %}
+  <li>{% if transient %}<a href="{% url 'transient_detail' transient.slug %}#followup_tab">{{ transient.name }}</a>{% else %}<span class="text-muted">an object</span>{% endif %}: {{ reason }}</li>
+  {% endfor %}
+</ul>
+{% endif %}

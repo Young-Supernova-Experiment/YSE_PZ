@@ -1,0 +1,149 @@
+{% extends 'YSE_App/base.html' %}
+
+{% block page_title %}YSE | PZ: Glossary{% endblock %}
+
+{% block styles %}
+<style>
+  .yse-glossary dt { margin-top: .5rem; }
+  .yse-glossary .card { scroll-margin-top: 4rem; }
+  .yse-glossary-toc a { margin-right: .75rem; white-space: nowrap; }
+  .yse-glossary-flags { columns: 2 14rem; font-size: .85rem; }
+</style>
+{% endblock %}
+
+{% block content_header %}
+<h1>Glossary <small>the terms used on the transient pages</small></h1>
+{% endblock %}
+
+{% block content %}
+<div class="yse-glossary">
+  <p class="yse-glossary-toc">
+    <a href="#status">Statuses</a>
+    <a href="#real-bogus">Real/bogus</a>
+    <a href="#quality-flags">Quality flags</a>
+    <a href="#mjd">MJD</a>
+    <a href="#magnitudes">Magnitude systems</a>
+    <a href="#phase">Phase</a>
+    <a href="#bazin-salt">Bazin vs SALT</a>
+  </p>
+
+  <div class="card" id="status">
+    <div class="card-header"><h2 class="card-title">Statuses</h2></div>
+    <div class="card-body">
+      <p>Every transient has one status. It says where the team is with it, not what the object is.</p>
+      <dl>
+        {% for s in statuses %}
+        <dt>{{ s.label }}{% if s.label != s.name %} <small class="text-muted">({{ s.name }})</small>{% endif %}</dt>
+        <dd>{{ s.definition }}</dd>
+        {% endfor %}
+      </dl>
+      <p class="mb-0 text-muted small">Nobody should set <em>New</em> by hand; new objects start there.</p>
+    </div>
+  </div>
+
+  <div class="card" id="real-bogus">
+    <div class="card-header"><h2 class="card-title">Real/bogus score</h2></div>
+    <div class="card-body">
+      <p>A machine-learning score from the survey or broker pipeline, from 0 to 1, for how likely a detection is a real
+        astrophysical source (near 1) rather than an artefact such as a bad subtraction, a cosmic ray or a bad pixel
+        (near 0).</p>
+      <p class="mb-0">The transient's <em>real_bogus_score</em> keeps the score from its ingest; for Pan-STARRS objects
+        this is the QUB score, which also runs from 0 to 1. On <em>Broker Candidates</em> the <em>RB</em> column is the
+        broker's score (ZTF <em>rb</em>, or the deep-learning <em>drb</em> when there is no <em>rb</em>). Each survey
+        trains its own classifier, so compare scores within one survey.</p>
+    </div>
+  </div>
+
+  <div class="card" id="quality-flags">
+    <div class="card-header"><h2 class="card-title">Quality flags</h2></div>
+    <div class="card-body">
+      <p>Each photometry point and spectrum has a <em>quality mask</em>: a number in which every set bit records one
+        problem. <strong>0 is the best data.</strong> Higher bits are more serious, and <code>REJECTED</code> (bit 51)
+        means "do not use". <code>OTHER</code> (bit 50) means "there is an issue; someone should look".
+        <code>NOT_PUBLISHED</code> (bit 0) only says the data are not in a paper yet.</p>
+      <p>Older points may instead carry a named data-quality flag (for example "Bad Subtraction"). Points with one
+        are left out of the latest magnitude and the Bazin fit.</p>
+      <div class="row">
+        <div class="col-md-6">
+          <h3 class="h6">Photometry bits</h3>
+          <ul class="list-unstyled yse-glossary-flags">
+            {% for bit, name in phot_flags %}<li><code>{{ bit }}</code> {{ name }}</li>{% endfor %}
+          </ul>
+        </div>
+        <div class="col-md-6">
+          <h3 class="h6">Spectrum bits</h3>
+          <ul class="list-unstyled yse-glossary-flags">
+            {% for bit, name in spec_flags %}<li><code>{{ bit }}</code> {{ name }}</li>{% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="mjd">
+    <div class="card-header"><h2 class="card-title">MJD (Modified Julian Date)</h2></div>
+    <div class="card-body">
+      <p class="mb-0">A count of days: MJD = JD &minus; 2400000.5, so MJD 0 is 1858-11-17 00:00 UTC and the day starts at
+        midnight UTC. Fractions are fractions of a day. The site shows dates as UTC <code>YYYYMMDD.ddd</code> with the
+        MJD when you hover over them.</p>
+    </div>
+  </div>
+
+  <div class="card" id="magnitudes">
+    <div class="card-header"><h2 class="card-title">Magnitude systems</h2></div>
+    <div class="card-body">
+      <p>Magnitudes are logarithmic and brighter is smaller: 5 magnitudes is a factor of 100 in flux.</p>
+      <p>Most data on the site are AB magnitudes. Each point stores its own magnitude system (<em>mag_sys</em>), and
+        that stored system is the one shown with the point.</p>
+      <dl class="mb-0">
+        <dt>AB</dt>
+        <dd>Zero point set by a flat spectrum of 3631 Jy. Survey photometry (Pan-STARRS, ZTF, ATLAS, Rubin) is in AB.
+          Fluxes stored by the ZTF and Rubin ingests use an AB zero point of 27.5.</dd>
+        <dt>Vega</dt>
+        <dd>Zero point set by the star Vega. The fits treat Bessell (UBVRI) bands as Vega magnitudes.</dd>
+        <dt>Upper limit</dt>
+        <dd>A non-detection: the source was fainter than this magnitude.</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="card" id="phase">
+    <div class="card-header"><h2 class="card-title">Phase</h2></div>
+    <div class="card-body">
+      <p>Time in days relative to a reference date. Always check which one:</p>
+      <dl class="mb-0">
+        <dt>Days since discovery</dt>
+        <dd>Today minus the discovery date (the follow-up and planning tables).</dd>
+        <dt>SALT3 phase</dt>
+        <dd>Days from <em>t0</em>, the fitted time of B-band maximum, in the rest frame (observer-frame days divided
+          by 1&nbsp;+&nbsp;<em>z</em>).</dd>
+        <dt>Phase today (Analysis tab)</dt>
+        <dd>Today minus the Bazin peak or the SALT3 <em>t0</em>. "Rest-frame days" divides by 1&nbsp;+&nbsp;<em>z</em> and
+          is shown first; it is missing when there is no redshift. "Observer-frame days" is the plain difference.</dd>
+        <dt>Spectrum phase</dt>
+        <dd>The phase stored with a spectrum when it was uploaded. It is usually relative to the time of maximum light;
+          in some cases it is relative to discovery or to the time of first light. "&mdash;" means none was
+          recorded.</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="card" id="bazin-salt">
+    <div class="card-header"><h2 class="card-title">Bazin vs SALT</h2></div>
+    <div class="card-body">
+      <dl class="mb-0">
+        <dt>Bazin</dt>
+        <dd>A simple rise-and-fall curve (Bazin et al. 2009) fitted to any transient's detections in all bands at once.
+          It makes no assumption about the type, so it is the default for predicting tonight's magnitude
+          (<em>Show Bazin Fit</em>, the <em>Bazin Mag</em> column). It describes the shape only and can be poor far from
+          the data.</dd>
+        <dt>SALT (SALT3)</dt>
+        <dd>A model for <strong>Type Ia supernovae</strong> only. The fit gives <em>t0</em> (time of maximum), redshift,
+          stretch <em>x1</em>, colour <em>c</em> and peak magnitude <em>mB</em>. It is run on request (<em>Refit</em> on
+          the Summary tab) and the stored fit is shown with <em>Show SALT3 Fit</em>. On other types its numbers mean
+          little.</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+{% endblock %}

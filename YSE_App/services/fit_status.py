@@ -26,9 +26,9 @@ from YSE_App.models.analysis_models import AnalysisService
 from YSE_App.models.external_service_models import ExternalService, ExternalServiceRun
 from YSE_App.services.visibility import (
     hidden_photometry_exists,
-    is_service_reader,
     spectrum_visible_q,
     user_group_names,
+    user_sees_everything,
 )
 
 log = logging.getLogger(__name__)
@@ -56,12 +56,26 @@ def runs_of_runner(transient, runner_path: str):
         .select_related("service", "created_by").order_by("-created_date", "-pk"))
 
 
+#: How many of the newest runs :func:`_first_full_run` looks through for one that is not a subset.
+FULL_RUN_SCAN = 200
+
+
+def _first_full_run(qs) -> Optional[ExternalServiceRun]:
+    """The newest run in ``qs`` that is not a subset fit (#847): subsets never stand for the fit."""
+    from YSE_App.services.fit_tables import selection_of
+
+    for run in qs[:FULL_RUN_SCAN]:
+        if selection_of(run) is None:
+            return run
+    return None
+
+
 def latest_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
-    return runs_of_runner(transient, runner_path).first()
+    return _first_full_run(runs_of_runner(transient, runner_path))
 
 
 def latest_successful_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
-    return runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED).first()
+    return _first_full_run(runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED))
 
 
 def active_run(transient, runner_path: str) -> Optional[ExternalServiceRun]:
@@ -91,7 +105,7 @@ def hidden_data_exists(user, transient_ref: str = "pk") -> Q:
     """Condition: the transient at ``OuterRef(transient_ref)`` has photometry or spectra ``user`` may not see."""
     from YSE_App.models import TransientSpectrum
 
-    if is_service_reader(user):
+    if user_sees_everything(user):
         return Q(pk__in=[])
     on_transient = TransientSpectrum.objects.filter(transient_id=OuterRef(transient_ref))
     names = user_group_names(user) if _is_user(user) else []
@@ -103,7 +117,7 @@ def others_runs_visible(transient, user) -> bool:
     """Whether ``user`` may see analysis runs that other users made on ``transient``."""
     if not _is_user(user):
         return False
-    if is_service_reader(user):
+    if user_sees_everything(user):
         return True
     from YSE_App.models import Transient
 
@@ -116,7 +130,7 @@ def run_visible_to_user(run: Optional[ExternalServiceRun], user, *, allow_creato
         return False
     if allow_creator and run.created_by_id is not None and run.created_by_id == user.pk:
         return True
-    if is_service_reader(user):
+    if user_sees_everything(user):
         return True
     if run.transient_id is None:
         return False
@@ -125,7 +139,7 @@ def run_visible_to_user(run: Optional[ExternalServiceRun], user, *, allow_creato
 
 def visible_runs_q(user) -> Q:
     """``ExternalServiceRun`` rows whose results ``user`` may see: their own, or on a transient with no hidden data."""
-    if is_service_reader(user):
+    if user_sees_everything(user):
         return Q()
     return ~hidden_data_exists(user, "transient_id") | Q(created_by_id=user.pk)
 
@@ -135,24 +149,27 @@ def latest_successful_run_for_user(transient, runner_path: str, user, *,
     """The newest successful run ``user`` may see: anyone's, or only their own when data are hidden from them."""
     if not _is_user(user):
         return None
-    qs = runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED)
-    newest = latest_successful_run(transient, runner_path)
+    newest = latest_successful_run(transient, runner_path)  # never a subset fit (#847)
     if newest is None or (allow_creator and getattr(newest, "created_by_id", None) == user.pk):
         return newest  # no visibility queries when there is nothing to hide
     if others_runs_visible(transient, user):
         return newest
     if allow_creator:
-        return qs.filter(created_by_id=user.pk).first()
+        return _first_full_run(runs_of_runner(transient, runner_path)
+                               .filter(status=ExternalServiceRun.STATUS_SUCCEEDED, created_by_id=user.pk))
     return None
 
 
 # --- the stored SALT fit --------------------------------------------------------------------
 
 def stored_salt_fit(transient, user=None, *, allow_creator: bool = True) -> Optional[ExternalServiceRun]:
-    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit ``user`` may see.
+    """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit
+    that is not a subset fit (#847) and that ``user`` may see (master hotfix #975).
 
-    Cached plot HTML (keyed by group access, not user) must pass ``allow_creator=False``.
-    ``user=None`` (scripts, no viewer) returns the newest fit, as before the merge with master.
+    A stored fit was made from its creator's data, so a viewer with photometry
+    or spectra hidden on the transient sees only their own fits. Cached plot
+    HTML (keyed by group access, not user) must pass ``allow_creator=False``.
+    ``user=None`` (scripts, no viewer) returns the newest fit.
     """
     if user is None:
         return latest_successful_run(transient, SNCOSMO_RUNNER)

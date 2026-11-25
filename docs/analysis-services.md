@@ -44,6 +44,23 @@ run they start is built from the data *they* may access (usually none, so it fai
 message). Result files are served by `analysis_runs/<uuid>/files/<id>/<name>` (requester, staff, or
 anyone with data access), never from `MEDIA_URL`.
 
+### Subset fits (#847, UI preview only)
+
+With the UI preview on, **Fit part of the data** (under the run form; the light-curve toolbar's
+**Fit Part of the Data** button opens it) runs a Bazin or SALT fit on some of the points: those up to
+a date (an MJD or a UTC `YYYYMMDD.ddd`, inclusive) and/or only some bands, telescopes or quality levels
+(the `quality_mask` groups of `common/quality_mask.py`: best, method caveat, reduction issue,
+quicklook/blended, artefact/calibration/other, rejected). It posts `{service, params: {selection: ...}}`
+to the same run endpoint, so permissions, the daily cap and the job queue are those of any run.
+`coerce_params` stores the selection in canonical form (`until_mjd`, `bands`, `telescopes`, `quality`;
+`services/fit_subset.py`), and the payload applies it after the access check, so a subset only ever
+narrows the points the requester may see. A date cut is also the fit's "today" (phase, today's magnitude).
+
+The fit tables keep such runs with `is_subset` and the `selection`; the fit history labels them
+**subset** with a one-line summary and a **Repeat this fit** button, which posts the run's own
+parameters again. Subset runs never supply default values (`fit_tables.latest_*`, the Summary-tab
+stored SALT3 fit and its status line) and never trigger the spectral-phase recomputation.
+
 ## The Summary tab: stored SALT3 fit, Refit, NGSF (#315)
 
 The Summary tab no longer fits SALT2 inside the plot request. **Show SALT3 Fit** (`salt2plot/<id>/1`,

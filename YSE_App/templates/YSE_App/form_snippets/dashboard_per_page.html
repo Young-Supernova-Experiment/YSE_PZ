@@ -1,0 +1,7 @@
+<form method="get" action="" class="form-inline yse-dashboard-per-page" style="margin-bottom:8px;">
+  <label for="dash_per_page">Rows per page</label>
+  <select id="dash_per_page" name="dash_per_page" class="form-control input-sm form-control-sm" onchange="this.form.submit()">
+    {% for n in dashboard_per_page_choices %}<option value="{{ n }}"{% if n == dashboard_per_page %} selected{% endif %}>{{ n }}</option>{% endfor %}
+  </select>
+  <noscript><button type="submit" class="btn btn-sm btn-default">Apply</button></noscript>
+</form>

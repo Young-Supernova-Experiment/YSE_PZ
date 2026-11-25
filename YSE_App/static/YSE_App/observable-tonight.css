@@ -1,0 +1,12 @@
+/* "Observable tonight" control and per-row lines (#854, UI preview only). */
+.yse-obs-tonight { margin: 0.5rem 0 0.75rem; padding: 0.4rem 0.6rem; border: 1px solid #d2d6de; border-radius: 3px; }
+.yse-obs-tonight .yse-obs-label { margin-right: 0.6rem; font-weight: normal; }
+.yse-obs-tonight .yse-obs-airmass { width: 5em; }
+.yse-obs-tonight .yse-obs-status { margin-left: 0.5rem; }
+.yse-obs-tonight .yse-obs-help { display: block; margin-top: 0.25rem; }
+.yse-obs-tonight-blocked { border: 0; padding: 0; }
+.yse-obs-line { white-space: nowrap; margin-top: 2px; }
+.yse-obs-line.yse-obs-up strong { color: #2e7d32; }
+.yse-obs-line.yse-obs-down { color: #6c757d; }
+.yse-obs-tonight .yse-obs-make-default { padding-left: 0; margin-right: 0.6rem; }
+.yse-obs-tonight .yse-obs-default-note { margin-right: 0.6rem; }

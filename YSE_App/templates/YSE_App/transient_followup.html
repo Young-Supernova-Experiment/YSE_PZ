@@ -20,6 +20,9 @@
     <!-- Main content -->
     <section class="content">
 
+      {% if ui_preview and followup_tables %}{% load observable_tonight %}
+      {% observable_tonight_control id_selector="tr[data-transient-id]" %}
+      {% endif %}
       <!-- Default box -->
     {% for followup_table in followup_tables %}
     {% if followup_table.3|length %}
@@ -45,6 +48,8 @@
     </div>
   </div>
   {% endif %}
+    {% empty %}
+    <p class="text-muted">No follow-up has been requested yet. Open a transient and use its Follow-up tab to request follow-up.</p>
     {% endfor %}
     <!-- /.box-footer-->
   
@@ -62,7 +67,7 @@ $(document).ready(function(){
 {% endif %}
     $(function() {
       function transientStatusChangeErr() {
-        alert("Transient Status may not have changed -- please use YSE Admin and contact Dave C or David J.")
+        alert("Transient Status may not have changed -- please use YSE Admin and contact the site admins.")
       }
 
       $('.transientStatusChange').on('click', function(event){

@@ -1,0 +1,19 @@
+{% comment %}A group of rules (#843), recursive. Context: group (view-tree group), field_groups, max_depth.{% endcomment %}
+<li class="yse-rule-group{% if group.depth == 1 %} yse-rule-root{% endif %}" role="group" aria-label="{% if group.depth == 1 %}All rules{% else %}Group of rules{% endif %}" data-depth="{{ group.depth }}">
+  <div class="yse-rule-group-head">
+    <label class="mb-0">Match
+      <select class="form-control form-control-sm d-inline-block w-auto yse-rule-op" aria-label="Match all or any of the rules in this group">
+        <option value="and"{% if group.op == 'and' %} selected{% endif %}>all (AND)</option>
+        <option value="or"{% if group.op == 'or' %} selected{% endif %}>any (OR)</option>
+      </select>
+      of:</label>
+    {% if group.depth > 1 %}<button type="button" class="btn btn-outline-secondary btn-sm yse-rule-remove-group" aria-label="Remove this group" title="Remove this group"><i class="fa fa-times" aria-hidden="true"></i></button>{% endif %}
+  </div>
+  <ul class="list-unstyled yse-rule-children">
+    {% for child in group.children %}{% if child.is_group %}{% include 'YSE_App/selections/_rule_group.html' with group=child %}{% else %}{% include 'YSE_App/selections/_rule_row.html' with rule=child %}{% endif %}{% endfor %}
+  </ul>
+  <div class="yse-rule-group-actions">
+    <button type="button" class="btn btn-outline-primary btn-sm yse-rule-add"><i class="fa fa-plus" aria-hidden="true"></i> Rule</button>
+    <button type="button" class="btn btn-outline-primary btn-sm yse-rule-add-group"{% if not group.can_nest %} hidden{% endif %}><i class="fa fa-plus" aria-hidden="true"></i> Group</button>
+  </div>
+</li>

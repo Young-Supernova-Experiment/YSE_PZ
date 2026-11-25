@@ -20,6 +20,9 @@ Shape (every key present, empty when not requested)::
       "params": {...}            # the run's request parameters
     }
 
+A run with ``params["selection"]`` (a subset fit, #847) gets only the selected points
+among those the user may see; see :mod:`YSE_App.services.fit_subset`.
+
 Fluxes are on the 27.5 zero point used by the light-curve plots and the
 Bazin fit (``services.bazin.FLUX_ZERO_POINT``); when a row has only a
 magnitude the flux is derived from it. Rows without a magnitude but with a
@@ -105,19 +108,30 @@ def transient_section(transient) -> Dict:
     }
 
 
-def photometry_rows(user, transient) -> List[Dict]:
-    """Every photometry point the user may see, oldest first."""
+def photometry_rows(user, transient, selection: Optional[Dict] = None) -> List[Dict]:
+    """Every photometry point the user may see, oldest first.
+
+    With ``selection`` (a canonical subset from :mod:`YSE_App.services.fit_subset`, #847),
+    only those of them it selects: the subset is applied after the access check, so it can
+    only ever narrow what the user may see.
+    """
     from YSE_App.data import PhotometryService
+    from YSE_App.services.fit_subset import point_matches
 
     rows = (
         PhotometryService.GetAuthorizedTransientPhotData_ByUser_ByTransient(user, transient.pk, includeBadData=True)
-        .select_related("band", "band__instrument", "mag_sys")
+        .select_related("band", "band__instrument", "band__instrument__telescope", "mag_sys")
         .order_by("obs_date")
     )
     out = []
     for p in rows:
         band = p.band
         instrument = band.instrument.name if band.instrument_id else ""
+        if selection:
+            telescope = band.instrument.telescope.name if band.instrument_id and band.instrument.telescope_id else ""
+            if not point_matches(selection, mjd=mjd_of(p.obs_date), band=band.name, telescope=telescope,
+                                 mask=p.quality_mask):
+                continue
         mag = _finite(p.mag)
         mag_err = _finite(p.mag_err)
         flux = _finite(p.flux)
@@ -155,14 +169,16 @@ def photometry_rows(user, transient) -> List[Dict]:
 
 
 def spectra_rows(user, transient, *, include_data: bool = True) -> List[Dict]:
+    from YSE_App.common import spectrum_arrays
     from YSE_App.data import SpectraService
-    from YSE_App.models import TransientSpecData
 
-    spectra = (
+    spectra = list(
         SpectraService.GetAuthorizedTransientSpectrum_ByUser_ByTransient(user, transient.pk, includeBadData=True)
         .select_related("instrument", "obs_group")
         .order_by("obs_date")
     )
+    # arrays row or per-pixel rows (#891), sorted by wavelength; only the authorized spectra
+    pixels = spectrum_arrays.arrays_for([s.pk for s in spectra]) if include_data else {}
     out = []
     for spec in spectra:
         entry = {
@@ -176,16 +192,13 @@ def spectra_rows(user, transient, *, include_data: bool = True) -> List[Dict]:
             "flux": [],
             "flux_err": None,
         }
-        if include_data:
-            points = list(
-                TransientSpecData.objects.filter(spectrum=spec)
-                .order_by("wavelength")
-                .values_list("wavelength", "flux", "flux_err")[:MAX_SPECTRUM_POINTS]
-            )
-            entry["n_points"] = len(points)
-            entry["wavelength"] = [_finite(w) for w, _f, _e in points]
-            entry["flux"] = [_finite(f) for _w, f, _e in points]
-            errs = [_finite(e) for _w, _f, e in points]
+        if include_data and spec.pk in pixels:
+            wave, flux, err = pixels[spec.pk]
+            wave, flux = wave[:MAX_SPECTRUM_POINTS], flux[:MAX_SPECTRUM_POINTS]
+            entry["n_points"] = int(wave.size)
+            entry["wavelength"] = [_finite(w) for w in wave]
+            entry["flux"] = [_finite(f) for f in flux]
+            errs = [_finite(e) for e in err[:MAX_SPECTRUM_POINTS]] if err is not None else []
             entry["flux_err"] = errs if any(e is not None for e in errs) else None
         out.append(entry)
     return out
@@ -245,7 +258,9 @@ def build_payload(transient, user, input_spec=None, params=None) -> Dict:
         "params": dict(params or {}),
     }
     if want_all or "photometry" in spec:
-        payload["photometry"] = photometry_rows(user, transient)
+        from YSE_App.services.fit_subset import selection_from_params
+
+        payload["photometry"] = photometry_rows(user, transient, selection_from_params(params))
         payload["photstat"] = photstat_section(transient, user)
     if want_all or "spectra" in spec:
         payload["spectra"] = spectra_rows(user, transient)

@@ -85,6 +85,11 @@ class ResearcherProfileForm(forms.ModelForm):
     clear_phd_year = forms.BooleanField(required=False, label="Delete my stored PhD year")
     clear_gender = forms.BooleanField(required=False, label="Delete my stored gender")
     # Current advisor (students): a YSE-PZ user picked from the list, or a free-form name.
+    # On the account (auth.User), not the profile: entered separately, never parsed.
+    first_name = forms.CharField(max_length=150, label="Given name(s)",
+                                 help_text="First and any middle names, as you write them.")
+    last_name = forms.CharField(max_length=150, label="Family name",
+                                help_text="Surname(s); used to sort member lists.")
     advisor_name = forms.CharField(max_length=200, required=False, label="Current advisor")
     advisor_user_id = forms.CharField(required=False, widget=forms.HiddenInput)
 
@@ -112,6 +117,11 @@ class ResearcherProfileForm(forms.ModelForm):
         self.research_consented = research_consented
         self.encrypted_status = encrypted_status or {}
         self.current_advisor = advisor
+        if user is not None and not self.is_bound:
+            self.initial.setdefault("first_name", user.first_name)
+            self.initial.setdefault("last_name", user.last_name)
+            if not self.initial.get("full_name") and user.first_name and user.last_name:
+                self.initial["full_name"] = "%s %s" % (user.first_name, user.last_name)
         # Check boxes grouped by telescope (#638). Assigning grouped choices keeps the queryset
         # for validation; the widget renders one group per telescope.
         instruments = Instrument.objects.select_related("telescope").order_by("telescope__name", "name")
@@ -171,6 +181,12 @@ class ResearcherProfileForm(forms.ModelForm):
         if not lo <= value <= hi:
             raise forms.ValidationError("Enter a year between %d and %d." % (lo, hi))
         return value
+
+    def clean_first_name(self):
+        return " ".join((self.cleaned_data.get("first_name") or "").split())
+
+    def clean_last_name(self):
+        return " ".join((self.cleaned_data.get("last_name") or "").split())
 
     def clean_country(self):
         return (self.cleaned_data.get("country") or "").strip()

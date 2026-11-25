@@ -16,7 +16,7 @@
                         <div class="yse-comment-meta">
                             <strong class="yse-comment-author">{{ l.created_by }}</strong>
                             <time class="yse-comment-time text-muted" datetime="{{ l.modified_date|date:'c' }}">
-                                {{ l.modified_date }} UT
+                                {{ l.modified_date|utcdate }} UTC
                             </time>
                         </div>
                         <div class="yse-comment-body">{{ l.comment|format_comment_text }}</div>

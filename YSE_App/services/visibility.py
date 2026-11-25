@@ -105,6 +105,49 @@ def dataset_group_q(model, user: User, names: Optional[Iterable[str]] = None) ->
     return _open_dataset_q(model, names) | Q(groups__name__in=team_names)
 
 
+def user_has_hidden_photometry(user: User, transient_id: int) -> bool:
+    """Whether ``transient_id`` has photometry ``user`` may not see (service readers: never)."""
+    return bool(transients_with_hidden_photometry(user, [transient_id]))
+
+
+def visible_photometry_ids(user: User, names: Optional[Iterable[str]] = None):
+    """Subquery of the ``TransientPhotometry`` pks ``user`` may see, or None (service readers: all).
+
+    For computing derived values (latest magnitude, last date) per viewer:
+    ``TransientPhotData.objects.filter(photometry_id__in=visible_photometry_ids(user))``.
+    Prefer :func:`visible_photometry_ids_q`, which also applies per-point rules (#648).
+    """
+    if user_sees_everything(user):
+        return None
+    from YSE_App.models import TransientPhotometry
+
+    return TransientPhotometry.objects.filter(photometry_visible_q(user, names=names)).values("pk")
+
+
+def null_if_hidden_photometry(user: User, expression, transient_ref: str = "pk", output_field=None,
+                              names: Optional[Iterable[str]] = None):
+    """``expression``, or NULL where the transient at ``transient_ref`` has photometry hidden from ``user``.
+
+    For annotations, sorts and filters on values derived from all of a
+    transient's photometry when no per-viewer value exists (``names`` is
+    accepted for older callers and ignored).
+    """
+    if user_sees_everything(user):
+        return expression
+    return Case(
+        When(hidden_photometry_exists(user, transient_ref), then=Value(None)),
+        default=expression,
+        output_field=output_field,
+    )
+
+
+def exclude_hidden_photometry(queryset: QuerySet, user: User, transient_ref: str = "pk") -> QuerySet:
+    """``queryset`` without rows whose transient (at ``transient_ref``) has photometry hidden from ``user``."""
+    if user_sees_everything(user):
+        return queryset
+    return queryset.exclude(hidden_photometry_exists(user, transient_ref))
+
+
 def object_has_groups(obj) -> bool:
     return obj.groups.exists()
 
@@ -424,19 +467,21 @@ def photometry_points_visible_q(user: User) -> Optional[Q]:
 
 
 def _public_dataset_q(model, names: Iterable[str]) -> Q:
-    """Rows of ``model`` that are public for this user, so no deny may hide them.
+    """Rows of ``model`` that are open data for this user, so no deny may hide them.
 
-    Public data (Ryan, #648, 2026-10-17) can never be restricted from anyone:
-    the open data of :func:`_open_dataset_q` (no collaboration group, or
-    ``Public`` alone for its members; unlabelled or Public-only YSE data only
-    for YSE members). These are rows the group rule already shows the user,
-    so this only limits what a deny removes.
+    Public data (Ryan, #648, 2026-10-17) can never be restricted from anyone.
+    Open data is :func:`_open_dataset_q` (master hotfix #975): no group other
+    than ``Public`` (``Public`` alone counts only for its members) and, for a
+    user outside ``YSE``, not unlabelled ``YSE`` observation-group data. These
+    are rows the group rule already shows the user, so this only limits what
+    a deny removes.
     """
     return _open_dataset_q(model, names)
 
 
 def _dataset_visible_q(model, rules: AccessRules, user: User, names: Optional[Iterable[str]]) -> Q:
     names = user_group_names(user) if names is None else list(names)
+    # The data group rule (#975): a team group the user is in, or open data.
     q = dataset_group_q(model, user, names=names)
     if rules.allow is not None:
         q |= rules.allow
@@ -659,45 +704,6 @@ def transients_with_hidden_photometry(user: User, transient_ids: Iterable[int]) 
         Transient.objects.filter(pk__in=ids).filter(hidden_photometry_exists(user))
         .values_list('pk', flat=True)
     )
-
-
-def user_has_hidden_photometry(user: User, transient_id: int) -> bool:
-    return bool(transients_with_hidden_photometry(user, [transient_id]))
-
-
-def visible_photometry_ids(user: User, names: Optional[Iterable[str]] = None):
-    """Subquery of the ``TransientPhotometry`` pks ``user`` may see, or None (service readers: all).
-
-    For computing derived values (latest magnitude, last date) per viewer:
-    ``TransientPhotData.objects.filter(photometry_id__in=visible_photometry_ids(user))``.
-    """
-    if user_sees_everything(user):
-        return None
-    from YSE_App.models import TransientPhotometry
-
-    return TransientPhotometry.objects.filter(photometry_visible_q(user, names=names)).values("pk")
-
-
-def null_if_hidden_photometry(user: User, expression, transient_ref: str = "pk", output_field=None):
-    """``expression``, or NULL where the transient at ``transient_ref`` has photometry hidden from ``user``.
-
-    For annotations, sorts and filters on values derived from all of a
-    transient's photometry (``TransientPhotStat`` fields and the like).
-    """
-    if user_sees_everything(user):
-        return expression
-    return Case(
-        When(hidden_photometry_exists(user, transient_ref), then=Value(None)),
-        default=expression,
-        output_field=output_field,
-    )
-
-
-def exclude_hidden_photometry(queryset: QuerySet, user: User, transient_ref: str = "pk") -> QuerySet:
-    """``queryset`` without rows whose transient (at ``transient_ref``) has photometry hidden from ``user``."""
-    if user_sees_everything(user):
-        return queryset
-    return queryset.exclude(hidden_photometry_exists(user, transient_ref))
 
 
 # Transient detail shell allows broad metadata; export zip headers must stay narrow.

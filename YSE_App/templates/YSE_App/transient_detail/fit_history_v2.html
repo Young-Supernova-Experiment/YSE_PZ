@@ -1,0 +1,80 @@
+{% load analysis_extras %}{# Fit history on the Analysis tab, UI preview only (#846). Context: fit_history from services.fit_tables.history. #}
+<div class="card card-outline card-info" id="fit_history_card">
+	<div class="card-header">
+		<h3 class="card-title"><i class="fa fa-history"></i> Fit history</h3>
+		<div class="card-tools"><button type="button" class="btn btn-tool" data-card-widget="collapse"><i class="fa fa-minus"></i></button></div>
+	</div>
+	<div class="card-body">
+		<p class="text-muted small">Every Bazin and SALT fit kept, newest first. Default values elsewhere come from the newest full fit (marked <span class="badge badge-primary">current</span>), never from a <span class="badge badge-secondary">subset</span> fit; the Bazin peak is the default reference epoch, SALT t₀ the alternative.</p>
+		{% if fit_history.bazin %}
+		<h5>Bazin</h5>
+		<div class="table-responsive">
+		<table class="table table-sm table-condensed table-bordered" id="tbl_fit_history_bazin">
+			<thead>
+				<tr>
+					<th>Fitted (UTC)</th><th>By</th><th>Band</th><th>Peak (MJD)</th><th>Peak (mag)</th>
+					<th>τ_rise (days)</th><th>τ_fall (days)</th><th>χ²/dof</th><th>Points</th>
+					<th title="Is the fitted peak no earlier than the last non-detection before the first detection?">Peak after last non-det.</th>
+				</tr>
+			</thead>
+			<tbody>
+				{% for entry in fit_history.bazin %}{% for row in entry.rows %}
+				<tr class="fit-history-bazin{% if entry.current %} table-primary{% endif %}" data-run-id="{{ entry.run.pk }}">
+					{% if forloop.first %}
+					<td rowspan="{{ entry.rows|length }}" class="text-nowrap">{{ row.fit_date|utcdate|default:"-" }}
+						{% if entry.current %}<span class="badge badge-primary">current</span>{% endif %}
+						{% if row.is_subset %}<span class="badge badge-secondary" title="Fit to part of the light curve; never the default">subset</span>{% endif %}
+						{% if entry.run.request_payload.scheduled_refit %}<span class="badge badge-light" title="{{ entry.run.request_payload.refit_reason }}">scheduled</span>{% endif %}
+						{% include "YSE_App/transient_detail/fit_subset_line_v2.html" %}</td>
+					<td rowspan="{{ entry.rows|length }}">{{ entry.run.created_by.username|default:"-" }}</td>
+					{% endif %}
+					<td>{% if row.is_reference_band %}<strong title="Reference band">{{ row.band }}</strong>{% else %}{{ row.band }}{% endif %}</td>
+					<td>{{ row.peak_mjd|fit_value }}</td>
+					<td>{{ row.peak_mag|fit_value }}</td>
+					<td>{{ row.tau_rise|fit_value:row.tau_rise_err }}</td>
+					<td>{{ row.tau_fall|fit_value:row.tau_fall_err }}</td>
+					<td>{{ row.reduced_chi2|fit_value }}</td>
+					<td>{{ row.n_points|default:"-" }}</td>
+					<td>{% if row.peak_after_last_non_detection is None %}-{% elif row.peak_after_last_non_detection %}yes{% else %}<span class="text-warning">no</span>{% endif %}</td>
+				</tr>
+				{% endfor %}{% endfor %}
+			</tbody>
+		</table>
+		</div>
+		{% endif %}
+		{% if fit_history.salt %}
+		<h5>SALT</h5>
+		<div class="table-responsive">
+		<table class="table table-sm table-condensed table-bordered" id="tbl_fit_history_salt">
+			<thead>
+				<tr>
+					<th>Fitted (UTC)</th><th>By</th><th>Model</th><th>t₀ (MJD)</th><th>x₁</th><th>c</th><th>m_B (mag)</th>
+					<th>z used</th><th>χ²/dof</th><th>Points</th><th>Bands</th>
+				</tr>
+			</thead>
+			<tbody>
+				{% for entry in fit_history.salt %}{% with row=entry.row %}
+				<tr class="fit-history-salt{% if entry.current %} table-primary{% endif %}" data-run-id="{{ row.run_id }}">
+					<td class="text-nowrap">{{ row.fit_date|utcdate|default:"-" }}
+						{% if entry.current %}<span class="badge badge-primary">current</span>{% endif %}
+						{% if row.is_subset %}<span class="badge badge-secondary" title="Fit to part of the light curve; never the default">subset</span>{% endif %}
+						{% if row.run.request_payload.scheduled_refit %}<span class="badge badge-light" title="{{ row.run.request_payload.refit_reason }}">scheduled</span>{% endif %}
+						{% include "YSE_App/transient_detail/fit_subset_line_v2.html" %}</td>
+					<td>{{ row.run.created_by.username|default:"-" }}</td>
+					<td>{{ row.model }}{% if row.model_version %} v{{ row.model_version }}{% endif %}</td>
+					<td>{{ row.t0|fit_value:row.t0_err }}</td>
+					<td>{{ row.x1|fit_value:row.x1_err }}</td>
+					<td>{{ row.c|fit_value:row.c_err }}</td>
+					<td>{{ row.m_b|fit_value:row.m_b_err }}</td>
+					<td>{{ row.z|fit_value:row.z_err }}{% if row.z_source %} <span class="text-muted small">({{ row.z_source }})</span>{% endif %}</td>
+					<td>{{ row.reduced_chi2|fit_value }}</td>
+					<td>{{ row.n_points|default:"-" }}</td>
+					<td class="small">{{ row.bands|join:", " }}</td>
+				</tr>
+				{% endwith %}{% endfor %}
+			</tbody>
+		</table>
+		</div>
+		{% endif %}
+	</div>
+</div>

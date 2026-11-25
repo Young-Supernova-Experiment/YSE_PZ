@@ -1,0 +1,139 @@
+{% extends 'YSE_App/base.html' %}
+{% load static %}
+{% comment %}Repeat follow-up requests in bulk (#853, UI preview only): review, then the result.{% endcomment %}
+
+{% block content_header %}
+    <h1>Repeat follow-up <small>objects already being followed</small></h1>
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{% url 'dashboard' %}">Home</a></li>
+      <li class="breadcrumb-item active">Repeat follow-up</li>
+    </ol>
+{% endblock %}
+
+{% block content %}
+<div class="yse-repeat-fu-page" id="yse-repeat-fu">
+{% if step == 'done' %}
+  <div class="box" id="yse-repeat-fu-result">
+    <div class="box-body">
+      <p class="lead mb-2" id="yse-repeat-fu-done-summary">
+        Requested {{ created|length }} of {{ n_selected }} selected on {{ resource }}{% if failed %}; {{ failed|length }} failed{% endif %}{% if skipped %}; {{ skipped|length }} skipped{% endif %}.
+      </p>
+      {% if created %}
+      <h4>Requested</h4>
+      <ul id="yse-repeat-fu-created">
+        {% for row, parent, created_parent in created %}
+        <li><a href="{% url 'transient_detail' row.transient.slug %}#followup_tab">{{ row.transient.name }}</a>{% if not created_parent %} <small class="text-muted">(added to the open request on this resource)</small>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if failed %}
+      <h4>Not requested</h4>
+      <ul id="yse-repeat-fu-failed">
+        {% for row, reason in failed %}
+        <li><a href="{% url 'transient_detail' row.transient.slug %}#followup_tab">{{ row.transient.name }}</a>: {{ reason }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% include 'YSE_App/followup/repeat_skipped.html' %}
+      <a class="btn btn-default btn-outline-secondary btn-sm" href="{{ next_url }}">Back to the list</a>
+    </div>
+  </div>
+{% else %}
+  {% if too_many %}
+  <div class="alert alert-warning py-2" role="alert" id="yse-repeat-fu-too-many">
+    Too many objects ticked: repeat follow-up works on at most {{ max_objects }} at a time. Tick fewer and try again.
+  </div>
+  {% else %}
+  <div class="box" id="yse-repeat-fu-summary">
+    <div class="box-body">
+      <p class="lead mb-1" id="yse-repeat-fu-summary-text">{{ summary }}</p>
+      <p class="small text-muted mb-2">Bulk requests are only for objects that already have a follow-up request.
+        New targets need review on their own page, so they are skipped here.</p>
+      {% if rows %}
+      <h4>Will get a new request</h4>
+      <table class="table table-sm table-condensed" id="yse-repeat-fu-rows">
+        <thead><tr><th>Object</th><th>Most recent request</th><th>Priority</th><th>Window (UTC)</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for row in rows %}
+          <tr>
+            <td><a href="{% url 'transient_detail' row.transient.slug %}#followup_tab">{{ row.transient.name }}</a></td>
+            <td>{% if row.last_resource %}{{ row.last_resource }}{% else %}<span class="text-muted">no resource</span>{% endif %}</td>
+            <td>{{ row.last_priority|floatformat:1 }}</td>
+            <td>{{ row.last.valid_start|date:'Y-m-d H:i' }} to {{ row.last.valid_stop|date:'Y-m-d H:i' }}</td>
+            <td>{{ row.last.status.name }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% include 'YSE_App/followup/repeat_skipped.html' %}
+    </div>
+  </div>
+
+  {% if rows %}
+  <div class="box yse-repeat-fu-review" id="yse-repeat-fu-options">
+    <div class="box-header with-border"><h3 class="box-title">Options for all {{ rows|length }}</h3></div>
+    <div class="box-body">
+      {{ form.resource_audience_map|json_script:"yse-repeat-fu-resource-map" }}
+      <form method="post" action="{% url 'bulk_repeat_followup' %}" id="yse-repeat-fu-form">
+        {% csrf_token %}
+        <input type="hidden" name="confirm" value="1">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        {% for row in rows %}<input type="hidden" name="transient_id" value="{{ row.transient.pk }}">{% endfor %}
+        {% for row, reason in skipped %}{% if row %}<input type="hidden" name="transient_id" value="{{ row.pk }}">{% endif %}{% endfor %}
+        {% if form.non_field_errors %}<div class="alert alert-danger py-2" id="yse-repeat-fu-errors">{{ form.non_field_errors|join:' ' }}</div>{% endif %}
+        <div class="form-group">
+          <label for="{{ form.resource.id_for_label }}">{{ form.resource.label }}</label>
+          {{ form.resource }}
+          {% if form.resource.errors %}<div class="text-danger small">{{ form.resource.errors|join:' ' }}</div>{% endif %}
+        </div>
+        <div class="form-group">
+          <label for="{{ form.priority.id_for_label }}">{{ form.priority.label }}</label>
+          {{ form.priority }}
+          <small class="form-text text-muted">{{ form.priority.help_text }}</small>
+          {% if form.priority.errors %}<div class="text-danger small">{{ form.priority.errors|join:' ' }}</div>{% endif %}
+        </div>
+        <fieldset class="form-group yse-repeat-fu-window">
+          <legend class="h5">Date window (ToO and queued resources)</legend>
+          <label for="{{ form.valid_start.id_for_label }}">{{ form.valid_start.label }}</label>
+          <input type="text" name="valid_start" id="{{ form.valid_start.id_for_label }}" class="form-control form-control-sm" placeholder="YYYY-MM-DD HH:MM" value="{{ form.valid_start.value|default_if_none:'' }}" autocomplete="off">
+          <label for="{{ form.valid_stop.id_for_label }}">{{ form.valid_stop.label }}</label>
+          <input type="text" name="valid_stop" id="{{ form.valid_stop.id_for_label }}" class="form-control form-control-sm" placeholder="YYYY-MM-DD HH:MM" value="{{ form.valid_stop.value|default_if_none:'' }}" autocomplete="off">
+          <small class="form-text text-muted">Leave both blank to give each object a window as long as its last one, starting now. Classical nights use the night's own dates.</small>
+          {% if form.valid_start.errors or form.valid_stop.errors %}<div class="text-danger small">{{ form.valid_start.errors|join:' ' }} {{ form.valid_stop.errors|join:' ' }}</div>{% endif %}
+        </fieldset>
+        <fieldset class="form-group">
+          <legend class="h5">{{ form.audience_groups.label }}</legend>
+          {% for choice in audience_choices %}
+          <div class="form-check yse-repeat-fu-group" data-public="{% if choice.is_public_group %}1{% else %}0{% endif %}"{% if not choice.enabled %} hidden{% endif %}>
+            <label class="form-check-label">
+              <input class="form-check-input" type="checkbox" name="audience_groups" value="{{ choice.group.pk }}"{% if choice.checked %} checked{% endif %}{% if not choice.enabled %} disabled{% endif %}>
+              {{ choice.group.name }}
+            </label>
+          </div>
+          {% empty %}
+          <p class="small text-muted">You are not in any collaboration group.</p>
+          {% endfor %}
+          <small class="form-text text-muted">Used when an object gets a new request on this resource. Groups the resource does not allow are not offered.</small>
+          {% if form.audience_groups.errors %}<div class="text-danger small" id="yse-repeat-fu-group-errors">{{ form.audience_groups.errors|join:' ' }}</div>{% endif %}
+        </fieldset>
+        <div class="form-group">
+          <label for="{{ form.comment.id_for_label }}">{{ form.comment.label }}</label>
+          {{ form.comment }}
+        </div>
+        <button type="submit" class="btn btn-primary" id="yse-repeat-fu-confirm">Request {{ rows|length }} follow-up{{ rows|length|pluralize }}</button>
+        <a class="btn btn-link" href="{{ next_url }}">Cancel</a>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p id="yse-repeat-fu-none">None of the selected objects has a follow-up request yet, so there is nothing to repeat. <a href="{{ next_url }}">Back to the list</a></p>
+  {% endif %}
+  {% endif %}
+{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'YSE_App/repeat-followup.js' %}?v=repeat-fu-1"></script>
+{% endblock %}

@@ -13,3 +13,10 @@ def csrf_cookie_name(request):
     name is per stack, [site_settings] CSRF_COOKIE_NAME, so templates must not hard-code
     ``csrftoken``). SQL Explorer's own base template reads the same variable."""
     return {"csrf_cookie_name": getattr(settings, "CSRF_COOKIE_NAME", "csrftoken") or "csrftoken"}
+
+
+def ui_preview(request):
+    """``ui_preview`` (bool): show the Tier 2 preview layout to this user (#947; off by default)."""
+    from YSE_App.common.ui_preview import ui_preview_enabled
+
+    return {"ui_preview": ui_preview_enabled(request)}

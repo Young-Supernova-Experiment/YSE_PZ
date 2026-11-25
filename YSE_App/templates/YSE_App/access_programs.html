@@ -19,7 +19,7 @@
 								<td><a href="{% url 'access_program' a.id %}">{{ a.name }}</a>{% if a.proposal_id %} <span class="text-muted small">{{ a.proposal_id }}</span>{% endif %}</td>
 								<td>{{ a.telescope.name }}</td>
 								<td>{{ a.principal_investigator.name|default:"-" }}</td>
-								<td><small>{{ a.start_date|date:"Y-m-d" }} to {{ a.end_date|date:"Y-m-d" }}</small></td>
+								<td><small>{{ a.start_date|utcnight }} to {{ a.end_date|utcnight }}</small></td>
 							</tr>
 						{% endfor %}
 						</tbody>

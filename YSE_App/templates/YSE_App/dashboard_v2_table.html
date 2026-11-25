@@ -1,0 +1,29 @@
+{% extends "YSE_App/django-tables2/bootstrap.html" %}
+{% load django_tables2 %}
+{% comment %}Tabbed dashboard table (#859): data-col on every cell so the Columns menu can hide it.{% endcomment %}
+{% block table.thead %}
+{% if table.show_header %}
+    <thead>
+        <tr>
+        {% for column in table.columns %}
+            <th scope="col" data-col="{{ column.name }}" {{ column.attrs.th.as_html }}>
+                {% if column.name == 'select' %}
+                    <input type="checkbox" class="yse-dash-select-all" aria-label="Select every row on this page">
+                {% elif column.orderable %}
+                    <a href="{% querystring table.prefixed_order_by_field=column.order_by_alias.next %}#{{ table.prefix }}">{{ column.header }}</a>
+                {% else %}
+                    {{ column.header }}
+                {% endif %}
+            </th>
+        {% endfor %}
+        </tr>
+    </thead>
+{% endif %}
+{% endblock table.thead %}
+{% block table.tbody.row %}
+<tr {{ row.attrs.as_html }}>
+    {% for column, cell in row.items %}
+        <td data-col="{{ column.name }}" {{ column.attrs.td.as_html }}>{{ cell }}</td>
+    {% endfor %}
+</tr>
+{% endblock table.tbody.row %}

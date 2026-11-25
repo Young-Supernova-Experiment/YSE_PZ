@@ -8,7 +8,9 @@ with its parameters and covariance, and downloaded.
 Results per band: ``A``, ``t0``, ``tau_rise``, ``tau_fall``, ``B`` with the
 diagonal errors, ``chi2`` / ``dof``, the peak MJD (``t0 + tau_rise *
 ln(tau_fall / tau_rise - 1)`` when defined) and peak magnitude, plus the
-extrapolated magnitude ``extrapolate_days`` after the last detection. The
+extrapolated magnitude ``extrapolate_days`` after the last detection.
+``phase_today`` is observer-frame days since the reference band's peak;
+``phase_today_rest`` (only when the redshift is known) divides it by ``1 + z``. The
 top-level results carry the reference band's numbers (``params["band"]``,
 else the band with the most detections). Plots: data with the fitted
 (solid) and extrapolated (dashed) curves. Files: ``bazin_fit.json``
@@ -28,6 +30,7 @@ from YSE_App.analysis.base import AnalysisError, AnalysisResult, band_colors, cl
 from YSE_App.common.filter_display import band_effective_wavelength
 from YSE_App.services import bazin
 from YSE_App.services.analysis_payload import detections
+from YSE_App.services.fit_subset import as_of_mjd
 
 NAME = "Bazin light-curve fit"
 DESCRIPTION = ("Joint Bazin fit of every band (rise/fall time scales tied across neighbouring filters) "
@@ -54,6 +57,32 @@ def peak_mjd(fit: bazin.BazinFit):
     return t0 + tau_rise * math.log(ratio)
 
 
+def last_non_detection_mjd(payload: Dict, first_detection_mjd, *, include_flagged: bool = False):
+    """MJD of the last upper limit before ``first_detection_mjd`` in the payload, or None (#846)."""
+    if first_detection_mjd is None:
+        return None
+    out = None
+    for row in payload.get("photometry") or []:
+        if not row.get("upper_limit") or (row.get("flagged") and not include_flagged):
+            continue
+        mjd = row.get("mjd")
+        if mjd is None or not math.isfinite(float(mjd)) or float(mjd) >= first_detection_mjd:
+            continue
+        out = float(mjd) if out is None else max(out, float(mjd))
+    return out
+
+
+def rest_frame_phase(observer_days, z):
+    """Observer-frame days divided by ``1 + z``; None when either is unknown (#964)."""
+    try:
+        z = float(z)
+    except (TypeError, ValueError):
+        return None
+    if observer_days is None or not math.isfinite(z) or z < 0:
+        return None
+    return observer_days / (1.0 + z)
+
+
 def run(payload: Dict, params: Dict) -> AnalysisResult:
     ref_band = str(param(params, "band", "", str) or "").strip()
     extrapolate_days = param(params, "extrapolate_days", 7.0, float)
@@ -74,7 +103,7 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
 
     if not ref_band or ref_band not in fits:
         ref_band = max(fits, key=lambda b: (fits[b].n_points, -wavelengths.get(b, 0.0)))
-    today = _today_mjd()
+    today = as_of_mjd(params, _today_mjd())  # a subset cut at a date: "today" is that date (#847)
     last_mjd = max(f.mjd_max for f in fits.values())
     extrap_mjd = last_mjd + extrapolate_days
 
@@ -103,13 +132,22 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
         "tau_rise": ref["tau_rise"], "tau_rise_err": ref["tau_rise_err"],
         "tau_fall": ref["tau_fall"], "tau_fall_err": ref["tau_fall_err"],
         "peak_mjd": ref["peak_mjd"], "peak_mag": ref["peak_mag"],
+        # Observer-frame days since the peak (kept for API compatibility) and, when
+        # the transient's or host's redshift is known, rest-frame days (#964).
         "phase_today": (today - ref["peak_mjd"]) if ref["peak_mjd"] is not None else None,
         "reduced_chi2": ref["reduced_chi2"],
         "mag_today": ref["mag_today"],
         "extrapolate_mjd": extrap_mjd,
         "mag_extrapolated": ref["mag_extrapolated"],
         "per_band": per_band,
+        # For the fit tables' "peak no earlier than the last non-detection" flag (#846).
+        "first_detection_mjd": min(r["mjd"] for r in rows),
+        "last_non_detection_mjd": last_non_detection_mjd(payload, min(r["mjd"] for r in rows),
+                                                         include_flagged=include_flagged),
     }
+    rest = rest_frame_phase(results["phase_today"], payload.get("redshift"))
+    if rest is not None:
+        results["phase_today_rest"] = rest
     out = AnalysisResult(results=clean_json(results))
     if ref["peak_mag"] is not None:
         out.summary = "%s peak %.2f at MJD %.1f" % (ref_band, ref["peak_mag"], ref["peak_mjd"])

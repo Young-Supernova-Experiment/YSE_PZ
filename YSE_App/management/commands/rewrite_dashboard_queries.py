@@ -49,6 +49,9 @@ def _diff(old, new, label):
 
 class Command(BaseCommand):
     help = "Rewrite slow dashboard saved queries (explorer_query rows) to faster, result-identical SQL."
+    #: Name shown in the backup file and the revert hint (subclasses override).
+    command_name = "rewrite_dashboard_queries"
+    backup_prefix = "saved_queries"
 
     def add_arguments(self, parser):
         mode = parser.add_mutually_exclusive_group()
@@ -82,11 +85,11 @@ class Command(BaseCommand):
         backup_dir = self._backup_dir(options)
         os.makedirs(backup_dir, exist_ok=True)
         stamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        path = os.path.join(backup_dir, f"saved_queries_{action}_{stamp}.json")
+        path = os.path.join(backup_dir, f"{self.backup_prefix}_{action}_{stamp}.json")
         payload = {
             "created_utc": datetime.datetime.utcnow().isoformat() + "Z",
             "action": action,
-            "command": "manage.py rewrite_dashboard_queries",
+            "command": f"manage.py {self.command_name}",
             "queries": [
                 {"id": q.id, "title": q.title, "previous_sql": q.sql, "new_sql": new_sql}
                 for q, new_sql in changes
@@ -126,7 +129,7 @@ class Command(BaseCommand):
         self._apply(changes)
         self.stdout.write(self.style.SUCCESS(f"Updated {len(changes)} saved quer{'y' if len(changes) == 1 else 'ies'}."))
         if action == "rewrite":
-            self.stdout.write(f"Revert with: manage.py rewrite_dashboard_queries --revert {path} --apply")
+            self.stdout.write(f"Revert with: manage.py {self.command_name} --revert {path} --apply")
 
     # ------------------------------------------------------------- planning
 
