@@ -175,7 +175,7 @@ class TNSReportPrivacyTests(PrivacyBase):
         self.assertEqual(data["problems"], [])
         group = data["payload"]["at_report"]["0"]["photometry"]["photometry_group"]
         fluxes = sorted(entry["flux"] for entry in group.values())
-        # The YSE-only set is visible to the member but on experimental only its PI or a
+        # The YSE-only set is visible to the member but only its PI or a
         # deputy may send it (#691), so the report holds the open points; never the other team's.
         self.assertEqual(fluxes, ["18.250", "18.250"])
         self.assertEqual(data["omitted"], {"photometry_sets": 1, "spectra": 0})
