@@ -205,6 +205,13 @@ class NEDClientTests(SimpleTestCase):
 
 @override_settings(DESI_REQUEST_INTERVAL_SECONDS=0, DESI_TABLE="desi_dr1.zpix", DESI_MIN_DELTACHI2=25)
 class DESIClientTests(SimpleTestCase):
+    def test_redshift_is_rounded(self):
+        csv_text = ("targetid,mean_fiber_ra,mean_fiber_dec,z,zerr,deltachi2\n"
+                    "39000000000000003,150.0001,2.0,0.041234567890123,0.0000123456789,120.0\n")
+        session = FakeSession({"/tap/sync": csv_text})
+        match = desi.host_match(150.0, 2.0, client=desi.DESIClient(session=session), radius_arcsec=2.0)
+        self.assertEqual((match.z, match.z_err), (0.04123, 0.000012))
+
     def test_query_and_nearest_match(self):
         session = FakeSession({"/tap/sync": DESI_CSV})
         match = desi.host_match(150.0, 2.0, client=desi.DESIClient(session=session), radius_arcsec=2.0)

@@ -56,8 +56,8 @@ Element ids match the current summary tab, so the page's scripts drive both.
                             <p class="text-muted mb-0">
                                 {% with bz=transient.best_z %}
                                 {% if bz.value is not None %}
-                                    {{ bz.value }}{% if bz.kind %} <span class="badge badge-light yse-z-kind" title="{{ bz.kind_title }}">{{ bz.kind }}</span>{% endif %}
-                                    {% if bz.error %}+/- {{ bz.error }}{% endif %}
+                                    {{ bz.value|floatformat:4 }}{% if bz.kind %} <span class="badge badge-light yse-z-kind" title="{{ bz.kind_title }}">{{ bz.kind }}</span>{% endif %}
+                                    {% if bz.error %}+/- {{ bz.error|floatformat:5 }}{% endif %}
                                     <br><small>{{ bz.source|default:"source unknown" }}{% if bz.override %}, override{% endif %}{% if bz.origin != "transient" %}, from host{% endif %}</small>
                                 {% else %}
                                     Unknown
@@ -257,7 +257,7 @@ Element ids match the current summary tab, so the page's scripts drive both.
                                     <strong>Redshift</strong>
                                     <p class="text-muted mb-0">
                                         {% if host.redshift %}
-                                            {{ host.redshift }}{% if host.redshift_err %} +/- {{ host.redshift_err }}{% endif %}
+                                            {{ host.redshift|floatformat:4 }}{% if host.redshift_err %} +/- {{ host.redshift_err|floatformat:5 }}{% endif %}
                                             {% if host.redshift_source or host.redshift_override %}<small>({{ host.redshift_source|default:"source unknown" }}{% if host.redshift_override %}, override{% endif %})</small>{% endif %}
                                         {% else %}
                                             Unknown

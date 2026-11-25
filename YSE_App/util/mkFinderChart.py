@@ -14,6 +14,7 @@ from photutils import CircularAperture,aperture_photometry
 import pylab as plt
 import time
 import urllib.request
+import urllib.error
 import logging
 
 logger = logging.getLogger(__name__)
@@ -249,12 +250,28 @@ RA (to targ): %.3f E, Dec (to targ): %.3f N"""%(i,ra_str,dec_str,m,ro.arcsec,do.
 
 		return(xpos,ypos,ralist,declist,mag,raofflist,decofflist)
 
+def _ps1_fits_url(href):
+	"""Absolute https URL for a FITS link scraped from the ps1cutouts page.
+
+	The page uses protocol-relative links (``//ps1images.stsci.edu/...``) and HTML-escaped
+	ampersands. Since the http->https switch (#418) the old string surgery built
+	``http:https://...``, which urllib rejects, so every finder chart failed (#1011).
+	"""
+	href = href.replace('&amp;', '&')
+	if href.startswith('//'):
+		return 'https:' + href
+	if href.startswith('http:'):
+		return 'https:' + href[len('http:'):]
+	if href.startswith('/'):
+		return 'https://ps1images.stsci.edu' + href
+	return href
+
 def panstamps_lite(ra,dec,filt,size,outfile):
+	"""Download a PS1 stack cutout; return its path, or None so the caller falls back to DSS."""
 	import requests
 	import re
-	
-	pos = """%(ra)s %(dec)s""" % locals()
 
+	pos = """%(ra)s %(dec)s""" % locals()
 
 	try:
 		response = requests.get(
@@ -269,40 +286,30 @@ def panstamps_lite(ra,dec,filt,size,outfile):
 				"autoscale": "99.500000",
 				"catlist": "",
 			},
+			timeout=60,
 		)
-	except requests.exceptions.RequestException:
-		print('HTTP Request failed')
-		
+		response.raise_for_status()
+	except requests.exceptions.RequestException as e:
+		print('PS1 cutout request failed: %s' % e)
+		return(None)
+
 	reFitscutouts = re.compile(
-			r"""<th>(?P<imagetype>\w+)\s+(?P<skycellid>\d+.\d+)\s+(?P<ffilter>[\w\\]+)(\s+(?P<mjd>\d+\.\d+))?<br.*?href="(http:)?//ps1images.*?Display</a>.*?Fits cutout" href="(?P<fiturl>(http:)?//ps1images.*?\.fits)".*?</th>""", re.I)
+			r"""<th>(?P<imagetype>\w+)\s+(?P<skycellid>\d+.\d+)\s+(?P<ffilter>[\w\\]+)(\s+(?P<mjd>\d+\.\d+))?<br.*?href="(https?:)?//ps1images.*?Display</a>.*?Fits cutout" href="(?P<fiturl>(https?:)?//ps1images.*?\.fits)".*?</th>""", re.I)
 
-	if sys.version_info[0] < 3:
-		thisIter = reFitscutouts.finditer(response.content)
-	else:
-		thisIter = reFitscutouts.finditer(response.content.decode('utf-8'))
-
-	stackFitsUrls = []
-	for item in thisIter:
-		imagetype = item.group("imagetype")
-		skycellid = item.group("skycellid")
-		ffilter = item.group("ffilter")
-		fiturl = 'https://ps1images.stsci.edu%s'%item.group("fiturl")
-		if fiturl[0:5] != "http:":
-			fiturl = "http:" + fiturl
-			mjd = item.group("mjd")
-		stackFitsUrls.append(fiturl)
-		
+	stackFitsUrls = [_ps1_fits_url(item.group("fiturl"))
+					 for item in reFitscutouts.finditer(response.content.decode('utf-8'))]
 	if not len(stackFitsUrls):
 		return(None)
-		
-	for s in stackFitsUrls:
-		s = s.replace('ps1images.stsci.edu//','').replace('amp;','')
-		if not os.path.dirname(outfile):
-			outdlfile = '%.7f_%.7f_%s.PS1.fits'%(ra,dec,time.time())
-		else:
-			outdlfile = '%s/%.7f_%.7f_%s.PS1.fits'%(os.path.dirname(outfile),ra,dec,time.time())
-		urllib.request.urlretrieve (s, filename=outdlfile)
-		break
+
+	if not os.path.dirname(outfile):
+		outdlfile = '%.7f_%.7f_%s.PS1.fits'%(ra,dec,time.time())
+	else:
+		outdlfile = '%s/%.7f_%.7f_%s.PS1.fits'%(os.path.dirname(outfile),ra,dec,time.time())
+	try:
+		urllib.request.urlretrieve(stackFitsUrls[0], filename=outdlfile)
+	except (urllib.error.URLError, OSError, ValueError) as e:
+		print('PS1 cutout download failed: %s' % e)
+		return(None)
 
 	if os.path.exists(outdlfile):
 		return(outdlfile)
