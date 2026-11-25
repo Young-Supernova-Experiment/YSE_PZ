@@ -378,7 +378,6 @@ class ForcedPhot(CronJobBase):
         stamp_request_name,skycelldict = self.stamp_request(
             transient_list,ra_list,dec_list,camera_list,diff_id_list,warp_id_list,[])
         print('submitted stamp request {}'.format(stamp_request_name))
-
         phot_request_names = self.forcedphot_request(
             transient_list,ra_list,dec_list,mjd_list,filt_list,camera_list,diff_id_list,skycelldict)
         print('submitted phot requests:')
@@ -767,7 +766,7 @@ class ForcedPhot(CronJobBase):
     
     def get_status(self,request_name):
         
-        status_link = 'https://pstamp.ipp.ifa.hawaii.edu/status.php'
+        status_link = 'http://128.171.123.254:22297/pstamp/status.php'
         session = ingest_session()
         session.auth = (self.options.ifauser,self.options.ifapass)
 
@@ -915,7 +914,8 @@ class ForcedPhot(CronJobBase):
 
         session = ingest_session()
         session.auth = (self.options.ifauser,self.options.ifapass)
-        stampurl = 'https://pstamp.ipp.ifa.hawaii.edu/upload.php'
+        stampurl = 'http://128.171.123.254:22297/pstamp/upload.php'
+        #stampurl = 'https://pstamp.ipp.ifa.hawaii.edu/upload.php'
 
         # First login. Returns session cookie in response header. Even though status_code=401, it is ok
         page = _pstamp_post(session, stampurl)
