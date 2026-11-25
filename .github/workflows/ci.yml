@@ -31,8 +31,14 @@ jobs:
             --exclude YSE_App/static,YSE_App/migrations,docker/web_image_history,YSE_App/util,YSE_App/common/getGWevents.py \
             .
 
-      - name: Shared-database migration check (its unit tests)
+      - name: CI script unit tests (shared-database and template checks)
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+
+      # Every template, include and block must open and close its tags on every
+      # {% if %} branch; an unclosed <div> on one branch nested every tab pane of
+      # the transient page inside Summary (#1039).
+      - name: Templates have balanced HTML tags on every branch
+        run: python3 scripts/ci/check_template_markup.py
 
       # develop's code runs on the YSE_test database that experimental's migrations
       # change (#934). Fail on migrations develop does not have that its code cannot
