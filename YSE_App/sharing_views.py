@@ -29,7 +29,7 @@ from YSE_App.models import (SharingService, SharingSubmission, Transient, Transi
                             TransientSpectrum)
 from YSE_App.models.sharing_models import AutoPublisher
 from YSE_App.services import autopublish_optin as optin_service
-from YSE_App.services.visibility import YSE_COLLABORATION_GROUP_NAME, user_group_names
+from YSE_App.services.visibility import YSE_COLLABORATION_GROUP_NAME, spectrum_visible_q, user_group_names
 from YSE_App.sharing import tns
 from YSE_App.sharing.report_scope import OMITTED_REASON, ReportScope
 
@@ -183,16 +183,14 @@ def _report_options(request, transient):
     }
     if kind == tns.KIND_CLASSIFICATION:
         spectrum_id = data.get("spectrum")
-        # only spectra the submitter may see and send (#691); an unknown or hidden id is a 404
-        spectrum = None
-        if spectrum_id:
-            if str(spectrum_id).isdigit():
-                spectrum = TransientSpectrum.objects.filter(
-                    pk=int(spectrum_id), transient=transient, pk__in=scope.spectrum_ids(transient)
-                ).select_related("instrument", "obs_group").first()
-            if spectrum is None:
-                raise Http404("unknown spectrum")
-        options["spectrum"] = spectrum
+        if spectrum_id and not (str(spectrum_id).isdigit() and TransientSpectrum.objects.filter(
+                spectrum_visible_q(request.user), pk=int(spectrum_id), transient=transient).exists()):
+            # an unknown id, or one the submitter may not see, is a 404 (master hotfix #975)
+            raise Http404("unknown spectrum")
+        # only spectra the submitter may see and send (#691)
+        options["spectrum"] = TransientSpectrum.objects.filter(
+            pk=spectrum_id, transient=transient, pk__in=scope.spectrum_ids(transient)
+        ).select_related("instrument", "obs_group").first() if spectrum_id else None
         options["classification"] = (data.get("classification") or "").strip()
         redshift = (data.get("redshift") or "").strip()
         options["redshift"] = redshift if redshift else None
