@@ -45,7 +45,7 @@
             <td>{{ t.disc_mag }}</td>
             <td>{{ t.obs_group.name }}</td>
             <td>{{ t.best_spec_class }}</td>
-            <td>{{ t.host.redshift }}</td>
+            <td>{{ t.host.redshift|floatformat:4 }}</td>
             <td>{{ t.internal_survey }}</td>
           </tr>
           {% endfor %}

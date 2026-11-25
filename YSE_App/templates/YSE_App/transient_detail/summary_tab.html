@@ -65,9 +65,9 @@
                                                 <p class="text-muted">
                                                     {% with bz=transient.best_z %}
                                                     {% if bz.value is not None %}
-                                                        {{ bz.value }}
+                                                        {{ bz.value|floatformat:4 }}
                                                             {% if bz.error %}
-                                                                +/- {{ bz.error }}
+                                                                +/- {{ bz.error|floatformat:5 }}
                                                             {% endif %}
                                                             <small>({{ bz.source|default:"source unknown" }}{% if bz.override %}, override{% endif %}{% if bz.origin != "transient" %}, from host{% endif %})</small>
                                                     {% else %}
@@ -384,10 +384,10 @@
                                                 <p class="text-muted">
                                                     {% if transient.host %}
                                                         {% if transient.host.redshift %}
-                                                            {{ transient.host.redshift }}
+                                                            {{ transient.host.redshift|floatformat:4 }}
 
                                                             {% if transient.host.redshift_err %}
-                                                                +/- {{ transient.host.redshift_err }}
+                                                                +/- {{ transient.host.redshift_err|floatformat:5 }}
                                                             {% endif %}
                                                             {% if transient.host.redshift_source or transient.host.redshift_override %}
                                                                 <small>({{ transient.host.redshift_source|default:"source unknown" }}{% if transient.host.redshift_override %}, override{% endif %})</small>
