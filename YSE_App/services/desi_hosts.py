@@ -96,7 +96,7 @@ def match_transient(transient, *, dry_run: bool = False, user=None, client=None)
     change_log.record_change(transient, "host", None, "%s (host %s)" % (host.name, host.pk), service=SERVICE_SLUG,
                              category=ValueChange.CATEGORY_HOST, source=rp.desi_label())
     decision = rp.apply_redshift(host, best.z, best.z_err, rp.desi_label(), user=user, service=SERVICE_SLUG)
-    summary += "; z %s (%s)" % (best.z, decision.reason)
+    summary += "; z %.4f (%s)" % (best.z, decision.reason)
     data["host_id"] = host.pk
     return Outcome(UPDATED, "linked " + summary, data=data)
 
@@ -169,7 +169,7 @@ def lookup_status(transient) -> dict:
         if not text and result.get("action"):  # a ``desi-redshift`` host check
             text = "%s%s" % (result["action"], (" (%s)" % result["reason"]) if result.get("reason") else "")
             if result.get("new") is not None:
-                text += ", z = %s" % result["new"]
+                text += ", z = %.4f" % float(result["new"])
         out["result"] = (text or run.error or run.status)[:300]
         out["when"] = run.finished_at.isoformat() if run.finished_at else ""
     return out

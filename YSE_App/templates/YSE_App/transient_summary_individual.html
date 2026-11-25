@@ -100,9 +100,9 @@
                 <td>
                   {% with bz=transient.best_z %}
                   {% if bz.value is not None %}
-                    {{ bz.value }} 
+                    {{ bz.value|floatformat:4 }} 
                     {% if bz.error %}
-                    +/- {{ bz.error }}
+                    +/- {{ bz.error|floatformat:5 }}
                   {% endif %}
                   {% else %}
                     Unknown
@@ -148,10 +148,10 @@
                  <td>
                   {% if transient.host %}
                    {% if transient.host.redshift %}
-                   {{ transient.host.redshift }} 
+                   {{ transient.host.redshift|floatformat:4 }} 
 
                   {% if transient.host.redshift_err %}
-                     +/- {{ transient.host.redshift_err }}
+                     +/- {{ transient.host.redshift_err|floatformat:5 }}
                    {% endif %}
                     {% endif %}
                     {% else %}

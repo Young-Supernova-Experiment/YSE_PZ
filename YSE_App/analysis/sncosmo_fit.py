@@ -50,7 +50,10 @@ SUMMARY_KEYS = ["t0", "x1", "c", "mB", "z", "reduced_chi2"]
 PARAM_SCHEMA = {
     "source": {"type": "choice", "label": "Model", "choices": ["salt3", "salt2"], "default": "salt3",
                "help": "sncosmo source name."},
-    "fit_redshift": {"type": "boolean", "label": "Fit redshift when unknown", "default": False},
+    "fit_redshift": {"type": "boolean", "label": "Fit for redshift if none is known", "default": False,
+                     "help": ("Only used when neither the transient nor its host has a redshift: z becomes a "
+                              "free SALT parameter between 0.005 and 'Max redshift'. A known redshift is "
+                              "always held fixed, so this box then has no effect.")},
     "z_max": {"type": "number", "label": "Max redshift (when fitted)", "default": 0.7},
     "minsnr": {"type": "number", "label": "Min S/N for the peak guess", "default": 3.0},
     "window_before": {"type": "number", "label": "Days before peak", "default": 20.0},
@@ -122,7 +125,8 @@ def run(payload: Dict, params: Dict) -> AnalysisResult:
         bounds["z"] = (Z_MIN, float(z_max))
         z_source = "fitted"
     else:
-        raise AnalysisError("no redshift for the transient or its host; enable 'Fit redshift' to fit it.")
+        raise AnalysisError("no redshift for the transient or its host; add one, or run the SALT3 fit "
+                            "from the Analysis tab with 'Fit for redshift if none is known' ticked.")
 
     data = _data_table(rows)
     snr = data["flux"] / data["fluxerr"]
