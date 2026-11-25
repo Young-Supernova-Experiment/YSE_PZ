@@ -155,7 +155,7 @@ pycparser==2.20
 pycurl==7.45.7
 pycurl-requests==0.5.1
 pyerfa==2.0.0.1
-Pygments==2.9.0
+Pygments==2.20.0
 pyparsing==3.1.4
 pyrsistent==0.20.0
 pytest==6.2.4
