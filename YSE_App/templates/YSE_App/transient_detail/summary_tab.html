@@ -344,6 +344,7 @@
                                         <div class="row">
                                         {% if not transient.host %}
                                         <div class="col-12"><p class="text-muted">No host galaxy</p></div>
+                                        </div>{# closes the row: the else branch closes it below, so both branches must, or every later tab pane nests inside Summary #}
                                         {% else %}
                                         <div class="col-4">
                                             <div class="form-group">
