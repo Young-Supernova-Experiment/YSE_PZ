@@ -120,6 +120,10 @@ def object_visible_to_user(user: User, obj) -> bool:
     if _dataset_model(obj) is not None:
         # Data: staff follow the rule like everyone (#706); only service readers see everything.
         return user_sees_everything(user) or dataset_visible_to_user(user, obj)
+    if type(obj).__name__ in ("HostPhotometry", "HostSpectrum"):
+        # Host data follow the data group rule too (#975), no staff exemption.
+        return user_sees_everything(user) or _dataset_names_visible(
+            obj, obj.groups.values_list("name", flat=True), user_group_names(user))
     if user.is_staff or user.is_superuser:
         return True  # observing resources and other administrative objects
     if not object_has_groups(obj):
@@ -496,15 +500,25 @@ def dataset_visible_to_user(user: User, obj, names: Optional[Iterable[str]] = No
         obj_names = set(obj.groups.values_list("name", flat=True))
     else:
         obj_names = {g.name for g in obj.groups.all()}
+    return _dataset_names_visible(obj, obj_names, names)
+
+
+def _dataset_names_visible(obj, obj_names: Iterable[str], names: Iterable[str]) -> bool:
+    """:func:`dataset_group_q` in Python for one dataset with group names ``obj_names``."""
     names = set(names)
-    if (names - {PUBLIC_COLLABORATION_GROUP_NAME}) & obj_names:
-        return True  # a team group the user is in
-    # Open data (:func:`_open_dataset_q`).
-    if obj_names - ({PUBLIC_COLLABORATION_GROUP_NAME} & names):
-        return False
-    if YSE_COLLABORATION_GROUP_NAME in names or not obj.obs_group_id:
+    obj_names = set(obj_names)
+    team = obj_names - {PUBLIC_COLLABORATION_GROUP_NAME}
+    if team & (names - {PUBLIC_COLLABORATION_GROUP_NAME}):
         return True
-    return obj.obs_group.name != YSE_OBSERVATION_GROUP_NAME
+    if team:
+        return False
+    if obj_names and PUBLIC_COLLABORATION_GROUP_NAME not in names:
+        return False  # Public alone counts only for its members
+    if YSE_COLLABORATION_GROUP_NAME not in names:
+        obs_group = getattr(obj, "obs_group", None)
+        if getattr(obs_group, "name", None) == YSE_OBSERVATION_GROUP_NAME:
+            return False  # unlabelled YSE data is YSE-only
+    return True
 
 
 def tns_named_q() -> Q:
@@ -593,22 +607,23 @@ def hidden_photometry_exists(user: User, transient_ref: str = 'pk'):
         # Header-level rules only (the hook shape, #648 PR 0): the exact complement of the central rule.
         visible = TransientPhotometry.objects.filter(photometry_visible_q(user)).values('pk')
         return Exists(on_transient.exclude(pk__in=visible))
-    # No rules: the complement of ``dataset_group_q`` by group id, the indexed form #607 tuned:
-    # not open data, and no team group of the user's.
+    # No rules: the complement of the data group rule (``dataset_group_q``, #975) in
+    # the EXISTS form #607 tuned: a set with a group other than Public (any group,
+    # for a user outside Public) or unlabelled YSE data for a user outside YSE,
+    # and no team group of the user.
     through = TransientPhotometry.groups.through
     names = set(user_group_names(user)) if getattr(user, 'is_authenticated', False) else set()
     links = through.objects.filter(transientphotometry_id=OuterRef('pk'))
     if PUBLIC_COLLABORATION_GROUP_NAME in names:
         links = links.exclude(group__name=PUBLIC_COLLABORATION_GROUP_NAME)
-    not_open = Q(Exists(links))
+    closed = Q(Exists(links))
     if YSE_COLLABORATION_GROUP_NAME not in names:
-        not_open |= Q(obs_group__name=YSE_OBSERVATION_GROUP_NAME)
-    restricted = on_transient.filter(not_open)
-    team_gids = list(user.groups.exclude(name=PUBLIC_COLLABORATION_GROUP_NAME).values_list('id', flat=True)) \
-        if getattr(user, 'is_authenticated', False) else []
-    if team_gids:
+        closed |= Q(obs_group__name=YSE_OBSERVATION_GROUP_NAME)
+    restricted = on_transient.filter(closed)
+    team_names = sorted(names - {PUBLIC_COLLABORATION_GROUP_NAME})
+    if team_names:
         restricted = restricted.filter(~Exists(
-            through.objects.filter(transientphotometry_id=OuterRef('pk'), group_id__in=team_gids)
+            through.objects.filter(transientphotometry_id=OuterRef('pk'), group__name__in=team_names)
         ))
     return Exists(restricted)
 

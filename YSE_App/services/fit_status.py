@@ -136,8 +136,8 @@ def latest_successful_run_for_user(transient, runner_path: str, user, *,
     if not _is_user(user):
         return None
     qs = runs_of_runner(transient, runner_path).filter(status=ExternalServiceRun.STATUS_SUCCEEDED)
-    newest = qs.first()
-    if newest is None or (allow_creator and newest.created_by_id == user.pk):
+    newest = latest_successful_run(transient, runner_path)
+    if newest is None or (allow_creator and getattr(newest, "created_by_id", None) == user.pk):
         return newest  # no visibility queries when there is nothing to hide
     if others_runs_visible(transient, user):
         return newest
@@ -148,11 +148,14 @@ def latest_successful_run_for_user(transient, runner_path: str, user, *,
 
 # --- the stored SALT fit --------------------------------------------------------------------
 
-def stored_salt_fit(transient, user, *, allow_creator: bool = True) -> Optional[ExternalServiceRun]:
+def stored_salt_fit(transient, user=None, *, allow_creator: bool = True) -> Optional[ExternalServiceRun]:
     """The run whose model the Summary-tab plots overlay: the newest successful sncosmo fit ``user`` may see.
 
     Cached plot HTML (keyed by group access, not user) must pass ``allow_creator=False``.
+    ``user=None`` (scripts, no viewer) returns the newest fit, as before the merge with master.
     """
+    if user is None:
+        return latest_successful_run(transient, SNCOSMO_RUNNER)
     return latest_successful_run_for_user(transient, SNCOSMO_RUNNER, user, allow_creator=allow_creator)
 
 

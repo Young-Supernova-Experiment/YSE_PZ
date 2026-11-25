@@ -11,6 +11,7 @@ import datetime
 import json
 
 from auditlog.models import LogEntry
+from django.contrib.auth.models import Group
 from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -47,6 +48,10 @@ class ReportBase(PiBase):
         self.deputy = _member("rv_deputy", self.owners)
         data_sharing.add_delegate(self.pi_user, self.pi, self.deputy)
         self.staff = _member("rv_staff", staff=True)
+        # Reporting through a service without groups needs staff or the YSE group (master hotfix #975).
+        yse, _ = Group.objects.get_or_create(name="YSE")
+        for reporter in (self.member, self.pi_user, self.deputy):
+            reporter.groups.add(yse)
         self.service = SharingService.objects.create(
             slug="rv-tns", name="RV TNS", kind=SharingService.KIND_TNS, tns_group_id="83", tns_group_name="YSE",
             config={"instrument_ids": {self.instrument.name: 172}}, created_by=self.admin, modified_by=self.admin)
