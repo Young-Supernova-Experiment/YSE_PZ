@@ -158,7 +158,7 @@ pyerfa==2.0.0.1
 Pygments==2.9.0
 pyparsing==3.1.4
 pyrsistent==0.20.0
-pytest==6.2.4
+pytest==9.0.3
 python-dateutil==2.8.2
 python-utils==2.5.6
 pytz==2018.3
