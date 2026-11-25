@@ -419,6 +419,8 @@ TEMPLATES = [
                 'YSE_App.explorer_shell.explorer_shell',
                 # feedback_enabled for the navbar Feedback button (#443).
                 'YSE_App.context_processors.feedback',
+                # csrf_cookie_name for inline scripts (per-stack CSRF_COOKIE_NAME, #637).
+                'YSE_App.context_processors.csrf_cookie_name',
             ],
         },
     },

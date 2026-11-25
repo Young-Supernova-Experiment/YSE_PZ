@@ -174,7 +174,7 @@
             return (/^(GET|HEAD|OPTIONS|TRACE)$/.test(method));
         }
 
-        var csrftoken = Cookies.get('csrftoken');
+        var csrftoken = Cookies.get('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
         $.ajaxSetup({
             beforeSend: function(xhr, settings) {
              if (!csrfSafeMethod(settings.type) && !this.crossDomain) {

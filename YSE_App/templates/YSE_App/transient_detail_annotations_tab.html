@@ -62,6 +62,7 @@
 						<li class="mb-2 annotation-service" data-service="{{ e.slug }}" data-status="{% if e.run %}{{ e.run.status }}{% else %}none{% endif %}">
 							<strong>{{ e.name }}</strong>
 							{% if e.active %}<i class="fa fa-spinner fa-spin text-muted" title="running"></i>{% elif e.run and e.run.status == 'failed' %}<span class="badge badge-danger" title="{{ e.run.error }}">failed</span>{% elif e.run %}<span class="badge badge-light">{{ e.run.finished_at|date:"Y-m-d H:i" }}</span>{% endif %}
+							{% if not e.active and e.run and e.run.status == 'failed' and e.run.error %}<br><small class="text-danger annotation-error"><i class="fa fa-exclamation-triangle"></i> {{ e.run.error|truncatechars:200 }}</small>{% endif %}
 							<br><small class="text-muted">{{ e.description }}</small>
 							{% if e.can_run %}<br><button type="button" class="btn btn-xs btn-sm btn-primary mt-1" data-annotation-action="run" data-service="{{ e.slug }}"{% if e.active %} disabled{% endif %}><i class="fa fa-play"></i> {% if e.run %}Rerun{% else %}Check{% endif %}</button>{% endif %}
 						</li>

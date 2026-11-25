@@ -351,7 +351,7 @@
 			});
 		}
 		function csrfToken() {
-			var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+			var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + '{{ csrf_cookie_name|default:'csrftoken'|escapejs }}' + '=([^;]+)'));
 			if (m) { return decodeURIComponent(m[1]); }
 			var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
 			return input ? input.value : "";

@@ -51,7 +51,7 @@
 (function() {
 	var $box = $('#facility_request_box');
 	if (!$box.length) { return; }
-	var csrftoken = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || $box.find('input[name=csrfmiddlewaretoken]').val();
+	var csrftoken = (document.cookie.match(new RegExp('(?:^|;\\s*)' + '{{ csrf_cookie_name|default:'csrftoken'|escapejs }}' + '=([^;]+)')) || [])[1] || $box.find('input[name=csrfmiddlewaretoken]').val();
 	var actionUrlTemplate = "{% url 'facility_request_action' 0 %}";
 
 	function fieldHtml(f, prefix) {

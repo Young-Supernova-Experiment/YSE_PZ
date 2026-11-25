@@ -1399,6 +1399,10 @@ def download_target_list(request, telescope, obs_date):
     # get follow requests for telescope/date
     classical_obs_date = ClassicalObservingDate.objects.filter(obs_date__startswith = obs_date).\
         filter(resource__telescope__name = telescope.replace('_',' ')).select_related('resource__telescope')
+    # the night page is per PI; without this, a night shared by two programs gave the other one's list
+    pi_name = request.GET.get('pi')
+    if pi_name and pi_name != 'None':
+        classical_obs_date = classical_obs_date.filter(resource__principal_investigator__name = pi_name)
     # evaluate once; an empty result is a 404, not a 500
     classical_obs_date = classical_obs_date.first()
     if classical_obs_date is None:
@@ -1407,13 +1411,6 @@ def download_target_list(request, telescope, obs_date):
     follow_requests = night_followups(classical_obs_date, request.user).\
         select_related('transient').prefetch_related(requests_prefetch())
 
-    location = EarthLocation.from_geodetic(
-        classical_obs_date.resource.telescope.longitude*u.deg,classical_obs_date.resource.telescope.latitude*u.deg,
-        classical_obs_date.resource.telescope.elevation*u.m)
-    time = Time(str(classical_obs_date.obs_date).split('+')[0], format='iso')
-    tel = Observer(location=location, timezone="UTC")
-
-    
     # Bazin-extrapolated magnitude at local midnight of the night (#225), one
     # photometry query for the whole list; blank when no band has a usable fit.
     from YSE_App.common.filter_display import display_filter_label

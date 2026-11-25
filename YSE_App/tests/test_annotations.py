@@ -588,6 +588,17 @@ class DetailPanelTests(AnnotationBase):
         self.assertIn(" Check</button>", html)
         self.assertIn('data-active="0"', html)
 
+    def test_failed_check_shows_its_error(self):
+        # The failure reason was only a hover tooltip on the "failed" badge.
+        from django.utils import timezone
+        run = svc.start_annotation_run(self.services["wise"], self.transient, self.staff)
+        ExternalServiceRun.objects.filter(pk=run.pk).update(
+            status=ExternalServiceRun.STATUS_FAILED, error="VizieR TAP: connection timed out",
+            finished_at=timezone.now())
+        self.client.force_login(self.staff)
+        html = self.client.get(self.fragment_url).content.decode()
+        self.assertIn('annotation-error"><i class="fa fa-exclamation-triangle"></i> VizieR TAP: connection timed out', html)
+
     def test_fragment_for_users(self):
         self.client.force_login(self.user)
         html = self.client.get(self.fragment_url).content.decode()

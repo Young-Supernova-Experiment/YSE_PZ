@@ -133,7 +133,10 @@ class DESIClient:
             mra, mdec, z = _float(row.get("mean_fiber_ra")), _float(row.get("mean_fiber_dec")), _float(row.get("z"))
             if mra is None or mdec is None or z is None or z <= 0:
                 continue
-            matches.append(DESIMatch(str(row.get("targetid") or ""), mra, mdec, z, _float(row.get("zerr")),
+            # Redrock returns full doubles; keep the precision a spectroscopic z supports.
+            zerr = _float(row.get("zerr"))
+            z, zerr = round(z, 5), (round(zerr, 6) if zerr is not None else None)
+            matches.append(DESIMatch(str(row.get("targetid") or ""), mra, mdec, z, zerr,
                                      _float(row.get("deltachi2")), _sep_arcsec(ra, dec, mra, mdec)))
         return sorted(matches, key=lambda m: m.sep_arcsec)
 

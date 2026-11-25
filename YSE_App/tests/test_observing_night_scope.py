@@ -15,6 +15,7 @@ from YSE_App.models import (
     ClassicalObservingDate,
     ClassicalResource,
     FollowupStatus,
+    PrincipalInvestigator,
     ToOResource,
     TransientFollowup,
 )
@@ -138,6 +139,29 @@ class ObservingNightScopeTests(_NightFixture):
         self.assertIn(self.open_sn.name, first)
         second = self._get(self.staff, "download_target_list", self.night_2).content.decode()
         self.assertNotIn(self.open_sn.name, second)
+
+    def test_download_target_list_uses_the_pages_pi(self):
+        # #999: the night page is per PI; the download must not pick another program's night.
+        audit = audit_fields(self.staff)
+        pi = PrincipalInvestigator.objects.create(name="Other PI", phone="", email="pi@example.org",
+                                                  institution="", **audit)
+        other = ClassicalResource.objects.create(
+            telescope=self.telescope, principal_investigator=pi,
+            begin_date_valid=self.resource.begin_date_valid, end_date_valid=self.resource.end_date_valid, **audit,
+        )
+        ClassicalObservingDate.objects.create(resource=other, night_type=self.night_1.night_type,
+                                              obs_date=self.NIGHT_1, **audit)
+        url = reverse("download_target_list", kwargs={
+            "telescope": self.telescope.name.replace(" ", "_"), "obs_date": self.NIGHT_1.strftime("%Y-%m-%d")})
+        with iers_offline(), _no_finder():
+            response = self._client(self.staff).get(url, {"pi": "Other PI"})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(self.open_sn.name, response.content.decode())
+        main = PrincipalInvestigator.objects.create(name="Main PI", phone="", email="main@example.org",
+                                                    institution="", **audit)
+        ClassicalResource.objects.filter(pk=self.resource.pk).update(principal_investigator=main)
+        page = self._get(self.staff, "observing_night", self.night_1, pi_name="Main PI").content.decode()
+        self.assertIn("?pi=Main%20PI", page)
 
 
 class ObservingNightVisibilityTests(_NightFixture):

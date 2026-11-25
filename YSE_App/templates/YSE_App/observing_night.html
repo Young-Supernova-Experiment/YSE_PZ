@@ -58,7 +58,7 @@
     <div class="box" id="{{followup_table.2}}">
     <div class="box-body">
       <div class="yse-obs-night-toolbar">
-        <input class="btn btn-primary" type="button" value="Download Target List" onclick="window.open('{% url 'download_target_list' classical_obs_date.resource.telescope|replace_space obs_date %}')">
+        <input class="btn btn-primary" type="button" value="Download Target List" onclick="window.open('{% url 'download_target_list' classical_obs_date.resource.telescope|replace_space obs_date %}{% if classical_obs_date.resource.principal_investigator %}?pi={{ classical_obs_date.resource.principal_investigator.name|urlencode }}{% endif %}')">
         {% if followup_table.4 %}
         <form action="" method="get" class="form form-inline yse-obs-night-filter" style="margin-top: 12px;">
           {% bootstrap_form followup_table.4.form layout='inline' %}
@@ -213,7 +213,7 @@ $(document).ready(function(){
         return cookieValue;
       }
 
-      var csrftoken = getCookie('csrftoken');
+      var csrftoken = getCookie('{{ csrf_cookie_name|default:'csrftoken'|escapejs }}');
 
       /*
       The functions below will create a header with csrftoken
