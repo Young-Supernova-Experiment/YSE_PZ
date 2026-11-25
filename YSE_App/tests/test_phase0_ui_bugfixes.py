@@ -111,6 +111,19 @@ class BokehStaticTests(TestCase):
         self.assertTrue(path.is_file())
         self.assertGreater(path.stat().st_size, 100_000)
 
+    def test_transient_detail_loads_bokeh_widgets_bundle(self):
+        # The detail light curve carries a Toggle ("Show flagged"), which only
+        # renders when BokehJS's widgets bundle is on the page (#1040).
+        from pathlib import Path
+
+        app = Path(__file__).resolve().parents[1]
+        widgets = app / "static" / "YSE_App" / "bokeh-widgets-2.4.2.min.js"
+        self.assertTrue(widgets.is_file())
+        self.assertGreater(widgets.stat().st_size, 100_000)
+        template = (app / "templates" / "YSE_App" / "transient_detail.html").read_text()
+        core = template.index("YSE_App/bokeh-2.4.2.min.js")
+        self.assertGreater(template.index("YSE_App/bokeh-widgets-2.4.2.min.js"), core)
+
 
 class PhotDataQualityLabelTests(TestCase):
     def test_label_good_when_no_flags(self):
