@@ -606,7 +606,7 @@ class ForcedPhot(CronJobBase):
 
         phot_dict = {}
         for request_name in request_names:
-            phot_link = 'http://128.171.123.254:22281/ds/pstampresults/'
+            phot_link = 'http://128.171.123.254:22296/ds/pstampresults/'
             phot_results_link = '{}/{}/'.format(phot_link,request_name)
 
             phot_page = ingest_http.get(url=phot_results_link)
@@ -690,7 +690,7 @@ class ForcedPhot(CronJobBase):
 
     def get_stamps(self,request_name,transient_list):
 
-        stamp_link = 'http://128.171.123.254:22281/ds/yse-pstamp-results/'
+        stamp_link = 'http://128.171.123.254:22296/ds/yse-pstamp-results/'
         stamp_results_link = '{}/{}/results.mdc'.format(stamp_link,request_name)
         stamp_fitsfile_link = '{}/{}/'.format(stamp_link,request_name)
         
