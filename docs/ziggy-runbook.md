@@ -994,61 +994,7 @@ Or set `YSE_REDSHIFT_CATALOG_CRON=1` for the cron. Then restart. The job runner 
 <a id="osc-step1"></a>
 ### Open Supernova Catalog, step 1: download and offline dry run (2026-10-30, #887, #905, #906): when Ryan asks; writes nothing to any database
 
-**What this is.** The first step of the OSC import plan (docs/osc-import.md, "Plan for the full import"). It downloads the OSC data once (about 13 GB of git data, 55,500 files) and the TNS public-objects file, and runs two dry runs. **Nothing is written to any database.** These commands need #896 deployed on yse\_experimental, so they use that checkout. Its Python is `/data/yse_pz/YSE_PZ_experimental/venv/bin/python`, called `<EXP_PYTHON>` below. `<OSC_DIR>` is a new directory of your choice on a disk with at least 50 GB free, e.g. `/data/osc`.
-
-**O1. Disk space.**
-```bash
-df -h /data
-```
-**Expected:** at least 50G in the `Avail` column for the disk holding `<OSC_DIR>`. **If not:** pick another disk for `<OSC_DIR>` and tell Ryan.
-
-**O2. Download the OSC data** (30-90 minutes; it keeps running if the session drops):
-```bash
-mkdir -p <OSC_DIR>/reports && cd <OSC_DIR>
-nohup sh -c 'for r in sne-pre-1990 sne-1990-1999 sne-2000-2004 sne-2005-2009 sne-2010-2014 sne-2015-2019; do git clone --depth 1 https://github.com/astrocatalogs/$r.git; done' > reports/clone.log 2>&1 &
-```
-**Check, when `jobs` (or `pgrep -f "git clone"`) shows nothing running:**
-```bash
-for r in <OSC_DIR>/sne-*; do echo "$r $(ls $r | grep -c json)"; done
-```
-**Expected (about):**
-
-| repository | files |
-| --- | --- |
-| `sne-pre-1990` | 5229 |
-| `sne-1990-1999` | 2358 |
-| `sne-2000-2004` | 1925 |
-| `sne-2005-2009` | 7997 |
-| `sne-2010-2014` | 10321 |
-| `sne-2015-2019` | 27658 |
-
-**If not:** send Ryan `<OSC_DIR>/reports/clone.log`.
-
-**O3. TNS public-objects file** (one request to TNS, with the bot credentials the TNS crons use):
-```bash
-cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py osc_tns_check --download-tns-file <OSC_DIR>/tns_public_objects.csv.zip
-```
-**Expected:** `saved <OSC_DIR>/tns_public_objects.csv.zip; N objects`, where N is in the hundreds of thousands. Keep this file; production uses the same one. **If it fails:** send Ryan the error. The TNS bot credentials may need to be named; nothing else depends on this step.
-
-**O4. Offline dry run of every entry** (no database access; 1-3 hours):
-```bash
-cd /data/yse_pz/YSE_PZ_experimental && nohup <EXP_PYTHON> manage.py import_osc <OSC_DIR>/sne-* --offline --quiet --report <OSC_DIR>/reports/offline.jsonl > <OSC_DIR>/reports/offline.log 2>&1 &
-```
-**Expected, when it finishes:** the last line of `<OSC_DIR>/reports/offline.log` reads `Dry run: 55xxx entries, 0 written (0 new transients), N failed, ... s`. N may be a few dozen (unreadable files are expected and are what this step is for).
-
-**O5. Summary of the dry run:**
-```bash
-cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py osc_report_summary <OSC_DIR>/reports/offline.jsonl --review-dir <OSC_DIR>/reports/offline-review > <OSC_DIR>/reports/offline-summary.txt
-```
-**Expected:** `offline-summary.txt` starts with `entries: 55xxx`. `offline-review/` holds four CSV files.
-
-**O6. Instrument census** (reads the database only to name known instruments; writes nothing):
-```bash
-cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py catalog_instruments --census <OSC_DIR>/sne-* --top 300 > <OSC_DIR>/reports/instrument-census.txt
-```
-**Expected:** the first line names the database (`Using database YSE_test on ...`), then up to 300 lines of `count kind telescope instrument -> target`.
-
-**O7. Send Ryan** `offline-summary.txt`, `instrument-census.txt` and `offline-review/failures.csv` from `<OSC_DIR>/reports/`. They hold only public catalogue data. Keep `<OSC_DIR>`: every later step reads it.
+The commands, with the shell variables to declare first, are in `docs/osc-import.md`, sections "Variables" and "Step 1" (1.1-1.7). Status: the instrument census (1.6) ran on 2026-11-16; whether 1.3-1.5 ran is not recorded.
 
 <a id="saved-queries-data-quality"></a>
 ### Saved queries that use the dropped `data_quality_id` column (2026-10-31, #939): when Ryan asks
@@ -1108,63 +1054,9 @@ cd /data/yse_pz/YSE_PZ_experimental && <EXP_PYTHON> manage.py backfill_spectral_
 **Expected:** `N transient(s) with spectra: R phase row(s) written, 0 error(s)`. It replaces each transient's rows, so running it again is safe (and refreshes phases after redshift or discovery-date edits).
 
 <a id="osc-step2"></a>
-### Open Supernova Catalog, step 2: instruments, then a read-only dry run (2026-11-16, #1003, #906): when Ryan asks
+### Open Supernova Catalog, steps 2-6: instruments, dry run, pilot, trial, full import, production (2026-11-16, #1003, #906): when Ryan asks
 
-**What this is.** Step 2 of the OSC plan (docs/osc-import.md). Same machine, files and paths as step 1. S4 is the only step that writes: it adds telescopes, instruments and catalogue alias rows to `YSE_test`, and only after Ryan approves the plan from S3. Nothing else writes to any database. Run S5 off-peak.
-
-**S1. Paths** (again in every new shell; `/data/osc` is the directory used in step 1):
-```bash
-export OSC_DIR=/data/osc
-export EXP=/data/yse_pz/YSE_PZ_experimental
-export PY=$EXP/venv/bin/python
-```
-
-**S2. Check the deploy has the instrument rules (#1003):**
-```bash
-grep -c '"rules"' $EXP/YSE_App/catalog_import/osc_instruments.json
-```
-**Expected:** `1`. If `0`, stop: the deploy has not finished.
-
-**S3. Instrument plan** (reads only; a few minutes):
-```bash
-cd $EXP && $PY manage.py catalog_instruments --census $OSC_DIR/sne-* --top 0 > $OSC_DIR/reports/instrument-plan.txt
-```
-```bash
-tail -1 $OSC_DIR/reports/instrument-plan.txt
-```
-**Expected:** `N strings: ... to existing instruments ..., ... to M new instruments ..., ... Unknown ...`. **Send Ryan `instrument-plan.txt` and wait for his OK before S4.**
-
-**S4. Create the instruments** (writes to `YSE_test`; only after Ryan's OK). Replace `<USERNAME>` with your YSE_PZ username:
-```bash
-cd $EXP && $PY manage.py catalog_instruments --census $OSC_DIR/sne-* --load --apply --user <USERNAME> --database YSE_test > $OSC_DIR/reports/instrument-load.txt
-```
-```bash
-tail -1 $OSC_DIR/reports/instrument-load.txt
-```
-**Expected:** `Created: aliases N, instruments created M, telescopes created K`, with M matching S3. Running it again creates nothing new. **If it says the database does not match:** stop and tell Ryan which database it names.
-
-**S5. Read-only dry run against `YSE_test`**, one repository at a time, in the background, off-peak (likely a few hours):
-```bash
-cd $EXP && nohup sh -c 'for r in sne-pre-1990 sne-1990-1999 sne-2000-2004 sne-2005-2009 sne-2010-2014 sne-2015-2019; do $PY manage.py import_osc $OSC_DIR/$r --quiet --report $OSC_DIR/reports/dry-run-$r.jsonl > $OSC_DIR/reports/dry-run-$r.log 2>&1; done' > /dev/null 2>&1 &
-```
-Check whether it is still running (no output means it is done):
-```bash
-pgrep -fa "import_osc"
-```
-When it is done:
-```bash
-tail -qn1 $OSC_DIR/reports/dry-run-sne-*.log
-```
-**Expected:** six lines `Dry run: N entries, 0 written (0 new transients), F failed, ... s`. The N add up to 55,482.
-
-**S6. Summary for Ryan:**
-```bash
-cat $OSC_DIR/reports/dry-run-sne-*.jsonl > $OSC_DIR/reports/dry-run.jsonl
-```
-```bash
-cd $EXP && $PY manage.py osc_report_summary $OSC_DIR/reports/dry-run.jsonl --review-dir $OSC_DIR/reports/dry-run-review --sample 100 > $OSC_DIR/reports/dry-run-summary.txt
-```
-**Send Ryan** `dry-run-summary.txt` and the four CSV files in `dry-run-review/`. They hold only public catalogue data and the names of matching YSE_PZ transients.
+The commands, with the shell variables to declare first, are in `docs/osc-import.md`, sections "Variables" and "Step 2" to "Step 6". Only 2.3 and later steps write; each waits for Ryan's OK on the step before.
 
 <a id="spectrum-arrays"></a>
 ### Spectra stored as arrays (2026-10-28, #492, #891): migration applied by the deploy; test conversion on yse\_experimental when Ryan asks
@@ -3845,6 +3737,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-11-25 v125, **nothing to run** (docs only). The OSC import commands (steps 1-6) moved to `docs/osc-import.md`, with the shell variables to declare first; the two OSC sections here now point there.
 * 2026-11-25 v124, **nothing to run** (no migration, no package). Master and develop merged into experimental after #792: every change already had an experimental equivalent (#1006, #1019, #1023); this adds only the commented `BAZIN_TABLE_FITS_ENABLED` line in `public_settings.ini`. #1021's privacy code on develop matches experimental's.
 * 2026-11-24 v123, **nothing to run** (no migration, no package). Backport of develop-direct #1017 (#1018): DESI redshifts rounded and shown with 4 decimals (#1010); Generate Finder Chart works again and falls back to DSS when PS1 fails (#1011); clearer SALT3 "Fit for redshift if none is known" option (#1013); failed catalogue checks show their reason (#1014); SQL Explorer timeouts give a readable message (#1015); faster, per-PI target-list download (#999).
 * 2026-11-16 v122, **when Ryan asks: OSC step 2, S1-S6** (S4 writes telescopes, instruments and catalogue alias rows to `YSE_test` after Ryan approves the S3 plan; nothing else writes). Every catalogue telescope/instrument string now maps to a YSE instrument: Ryan's rules, then existing instruments of that name, then Telescope/Instrument from the strings ([#1003](https://github.com/Young-Supernova-Experiment/YSE_PZ/issues/1003)). See [Open Supernova Catalog, step 2](#osc-step2).
