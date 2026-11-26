@@ -53,7 +53,7 @@ changed by hand. An entry is imported in steps:
    - weak match from a refereed paper: both kept, marked `review`.
 4. **No transient**: a new one with name, position, discovery date, class, redshift, MW E(B-V) and
    peak from the OSC; status `--status` (default `Ignore`), observation group `OSC`.
-5. **TNS check** (#889, #905) of each new transient: `manage.py osc_tns_check --tns-file FILE`
+5. **TNS check** (#889, #905) of each new transient: `osc_tns_check --tns-file $TNS_FILE`
    matches it against TNS's bulk file of all public objects (`tns_public_objects.csv.zip`,
    downloaded once with `--download-tns-file`; no request per object). Lookup: its IAU-style names,
    then its names and alternate names among the TNS objects' internal (survey) names (PTF11kly,
@@ -88,11 +88,11 @@ alias row naming a YSE instrument, decided in this order:
    - one given -> X/X;
    - `Telescope - Instrument` in one field -> split.
 
-Empty strings, `None` and `Other` stay on `Unknown`. `manage.py catalog_instruments --census
-<OSC_DIR>/sne-*` prints the plan, most frequent strings first, with totals. Adding `--load --apply
---user <USERNAME> --database <DB_NAME>` creates the missing telescopes and instruments and the
-alias rows. New telescopes get latitude, longitude and elevation 0, as the TNS import does; fill
-them in by hand where they matter. To change a mapping, edit the rules and run it again.
+Empty strings, `None` and `Other` stay on `Unknown`. `catalog_instruments --census` prints the
+plan, most frequent strings first, with totals; with `--load --apply` it creates the missing
+telescopes and instruments and the alias rows (commands: step 2.2 and 2.3 below). New telescopes
+get latitude, longitude and elevation 0, as the TNS import does; fill them in by hand where they
+matter. To change a mapping, edit the rules and run it again.
 
 **Other rules.**
 - Peak: the visual-band peak (`maxvisual*`) when there is one.
@@ -117,55 +117,6 @@ them in by hand where they matter. To change a mapping, edit the rules and run i
 `--retry-failed` runs every failed entry again (re-downloading if needed); the run ends with the
 failures by stage.
 
-## Running it
-
-Dry run (the default) parses each entry and, with a database, says which transient it would go
-to, what it would do with duplicates, what the host rule says and which instruments its data would
-use. Nothing is written. Every command prints the database it uses; `--apply` also needs
-`--database <DB_NAME>` naming that database (#904).
-
-```bash
-python3 manage.py import_osc --fetch SN2011fe SN1987A            # download from GitHub, dry run
-python3 manage.py import_osc --fetch SN2011fe --offline          # no database access at all
-python3 -m YSE_App.catalog_import.osc path/to/SN2011fe.json      # same, without Django
-```
-
-`--fetch` looks entries up by their OSC file name (`SN2011fe`, `2011fe`, `ASASSN-14lp`), not by
-alias. The index of the repositories (one GitHub API request each, about 55,000 names) is cached
-in `--fetch-dir` (default `~/.cache/yse_osc`); `--refresh-index` rebuilds it, `--boneyard` adds
-`sne-boneyard`. Set `GITHUB_TOKEN` if the unauthenticated API limit (60 requests an hour) is hit.
-
-Write:
-
-```bash
-python3 manage.py import_osc --fetch SN2011fe --apply --user <USERNAME> --database <DB_NAME>
-```
-
-The whole catalogue, from local clones (about 12 GB):
-
-```bash
-for r in sne-pre-1990 sne-1990-1999 sne-2000-2004 sne-2005-2009 sne-2010-2014 sne-2015-2019; do
-  git clone --depth 1 https://github.com/astrocatalogs/$r.git <OSC_DIR>/$r
-done
-python3 manage.py import_osc <OSC_DIR>/sne-* --quiet --report osc-dry-run.jsonl
-python3 manage.py osc_report_summary osc-dry-run.jsonl --review-dir osc-review     # #906
-python3 manage.py import_osc <OSC_DIR>/sne-* --apply --user <USERNAME> --database <DB_NAME> --quiet --report osc-import.jsonl
-```
-
-Then:
-
-```bash
-python3 manage.py import_osc --retry-failed --apply --user <USERNAME> --database <DB_NAME>   # until nothing fails
-python3 manage.py osc_tns_check --download-tns-file <TNS_FILE>                                # once; keep it
-python3 manage.py osc_tns_check --tns-file <TNS_FILE> --max 0                                 # dry run
-python3 manage.py osc_tns_check --tns-file <TNS_FILE> --max 0 --apply --database <DB_NAME>
-python3 manage.py import_osc --revert SN2011fe --apply --database <DB_NAME>                   # undo one entry
-```
-
-Other options: `--limit N`, `--no-spectra`, `--no-tns`, `--match-radius`,
-`--phot-tolerance`, `--spec-tolerance`, `--status`. Run `catalog_instruments --census <OSC_DIR>/sne-*
---load --apply` before the first import so instruments resolve.
-
 ## Size
 
 From a sample of the catalogue: SN 2011fe has 3,483 photometry points and 158 spectra
@@ -173,6 +124,60 @@ From a sample of the catalogue: SN 2011fe has 3,483 photometry points and 158 sp
 model points (not imported). Stored as arrays, a spectrum
 is one row, so the full import adds tens of thousands of spectrum rows rather than about 10^8
 pixel rows.
+
+## Running it
+
+This section is the only list of OSC commands; the Ziggy runbook points here. Commands are bash
+and run on Ziggy. Every command prints the database it uses (`Using database NAME on HOST`).
+Nothing is written without `--apply`, and `--apply` also needs `--database` repeating that
+name (#904).
+
+<a id="variables"></a>
+### Variables
+
+Declare these in every new shell before running any command below. Steps 1-5 use the test stack
+(yse\_experimental, database `YSE_test`); step 6 changes the stack variables to production.
+
+```bash
+# Data: the OSC clones, the TNS file and every report. Pick a disk with at least 50 GB free.
+export OSC_DIR=/data/osc
+export REPORTS=$OSC_DIR/reports
+export TNS_FILE=$OSC_DIR/tns_public_objects.csv.zip
+export OSC_REPOS="sne-pre-1990 sne-1990-1999 sne-2000-2004 sne-2005-2009 sne-2010-2014 sne-2015-2019"
+
+# Your YSE_PZ username: recorded as the creator of every row written.
+export YSE_USER=<your YSE_PZ username>
+
+# Stack: checkout, its Python, and its database (test stack for steps 1-5).
+export APP=/data/yse_pz/YSE_PZ_experimental
+export PY=$APP/venv/bin/python
+export DB=YSE_test
+cd $APP
+```
+
+Production (step 6 only), instead of the three stack lines above:
+
+```bash
+export APP=/data/yse_pz/YSE_PZ
+export PY=/data/yse_pz/yse_virtual/bin/python
+export DB=YSE
+cd $APP
+```
+
+**Check the stack** (reads nothing but the settings):
+
+```bash
+$PY manage.py shell -c "from django.db import connection as c; print('Using database %s on %s' % (c.settings_dict['NAME'], c.settings_dict['HOST']))"
+echo "DB=$DB"
+```
+
+**Expected:** `Using database <DB> on ...` with the same name as the `DB=` line (system-check
+warnings printed before it are harmless). **If not:** stop; the variables point at the wrong
+stack. Don't pipe these commands into `head`: closing the pipe early makes Django end with a
+`BrokenPipeError` traceback.
+
+Report files of steps 5 and 6 start with `$DB-`, so test and production reports never overwrite
+each other.
 
 ## Plan for the full import (Ryan, 2026-10-29)
 
@@ -192,77 +197,300 @@ Facts that shape it:
 
 ### Step 0: before any data
 
-1. Merge #896 (this code) into experimental; the import tables then exist, empty.
-2. Check which database each stack uses (`import_osc` prints it). Every `--apply` names it
-   (`--database`, #904).
-3. Download TNS's public objects file once (`osc_tns_check --download-tns-file`, #905) and keep it
-   for the whole project.
-4. Back up production and check disk space for the new rows.
+- The code is on master and deployed to production (2026-11-25), and on yse\_test and
+  yse\_experimental. The import tables (migration 0057) exist, empty.
+- Production is backed up and has room for the new rows before step 6.
 
-### Step 1: offline, no database
+### Step 1: download and offline dry run (writes nothing to any database)
 
-On Ziggy, David runs it step by step from docs/ziggy-runbook.md, section "Open Supernova Catalog,
-step 1" (O1-O7).
+Status: the instrument census (1.6) ran on 2026-11-16: 55,482 entries, no failures. Ryan's
+mappings went into the rules (#1003) after it, so that census is stale: it shows strings such as
+`'CFHT' 'MegaCam' -> Unknown` that the current code maps (here to CFHT / MegaCam). Use the plan
+from 2.2 instead. Whether 1.3-1.5 ran is not recorded.
 
-- Clone the six repositories once (see "Running it"). Every later step reads these files; nothing
-  is downloaded again.
-- Offline dry run of everything: `import_osc <OSC_DIR>/sne-* --offline --quiet --report offline.jsonl`,
-  then `osc_report_summary offline.jsonl`. Gives parse failures, warnings, entries with no
-  position, and exact row and pixel counts.
-- `catalog_instruments --census <OSC_DIR>/sne-*`. Done 2026-11-16: 55,482 entries, no failures.
-  Ryan's mappings went into the rules (#1003).
+**1.1 Disk space:**
 
-### Step 2: instruments, then a read-only dry run against the database
+```bash
+df -h $(dirname $OSC_DIR)
+```
 
-On Ziggy, David runs it from docs/ziggy-runbook.md, section "Open Supernova Catalog, step 2"
-(S1-S6).
+**Expected:** at least 50G in the `Avail` column. **If not:** set `OSC_DIR` (and the variables
+after it) to a directory on another disk.
 
-- Instruments first: the plan is a dry run, and Ryan approves it before `--load --apply` writes
-  the new telescopes, instruments and alias rows. Duplicate matching and the Unknown-instrument
-  report depend on them.
-- `import_osc <OSC_DIR>/sne-* --quiet --report dry-run.jsonl` against `YSE_test`, off-peak, one
-  repository at a time. It only reads, but it is around a million queries, and load caused the
-  2026-10-21 outage.
-- `osc_report_summary dry-run.jsonl --review-dir review`. Ryan reviews: the sample of matched
-  entries, every `superseded_existing` and `review` case, host discrepancies, and instrument strings
-  that resolve to Unknown.
-- Fix anything the review finds before step 3.
+**1.2 Download the OSC data** (30-90 minutes; it keeps running if the session drops):
+
+```bash
+mkdir -p $REPORTS && cd $OSC_DIR
+nohup sh -c 'for r in $OSC_REPOS; do git clone --depth 1 https://github.com/astrocatalogs/$r.git; done' > $REPORTS/clone.log 2>&1 &
+cd $APP
+```
+
+When `pgrep -f "git clone"` prints nothing, count the files:
+
+```bash
+for r in $OSC_REPOS; do echo "$r $(ls $OSC_DIR/$r | grep -c json)"; done
+```
+
+**Expected (about):**
+
+| repository | files |
+| --- | --- |
+| `sne-pre-1990` | 5229 |
+| `sne-1990-1999` | 2358 |
+| `sne-2000-2004` | 1925 |
+| `sne-2005-2009` | 7997 |
+| `sne-2010-2014` | 10321 |
+| `sne-2015-2019` | 27658 |
+
+**If not:** send Ryan `$REPORTS/clone.log`.
+
+**1.3 TNS public-objects file** (one request to TNS, with the TNS bot credentials of the stack):
+
+```bash
+$PY manage.py osc_tns_check --download-tns-file $TNS_FILE
+```
+
+**Expected:** `saved <TNS_FILE>; N objects`, N in the hundreds of thousands. Keep this file:
+every TNS check, including production's, uses it.
+
+**1.4 Offline dry run of every entry** (no database access; 1-3 hours):
+
+```bash
+nohup $PY manage.py import_osc $OSC_DIR/sne-* --offline --quiet --report $REPORTS/offline.jsonl > $REPORTS/offline.log 2>&1 &
+```
+
+**Expected, when `pgrep -fa import_osc` prints nothing:** the last line of
+`$REPORTS/offline.log` reads `Dry run: 55xxx entries, 0 written (0 new transients), N failed, ... s`.
+N may be a few dozen: unreadable files are what this step finds.
+
+**1.5 Summary of the offline dry run:**
+
+```bash
+$PY manage.py osc_report_summary $REPORTS/offline.jsonl --review-dir $REPORTS/offline-review > $REPORTS/offline-summary.txt
+```
+
+**Expected:** `offline-summary.txt` starts with `entries: 55xxx`; `offline-review/` holds four CSV
+files.
+
+**1.6 Instrument census** (reads the database only to name known instruments):
+
+```bash
+$PY manage.py catalog_instruments --census $OSC_DIR/sne-* --top 300 > $REPORTS/instrument-census.txt
+```
+
+**Expected:** `Using database YSE_test on ...`, then up to 300 lines of
+`count kind telescope instrument -> target`.
+
+**1.7 Send Ryan** `offline-summary.txt`, `instrument-census.txt` and `offline-review/failures.csv`
+from `$REPORTS`. They hold only public catalogue data. Keep `$OSC_DIR`: every later step reads it.
+
+### Step 2: instruments, then a read-only dry run against YSE_test
+
+2.3 is the only command that writes (telescopes, instruments and catalogue alias rows in
+`YSE_test`), and only after Ryan approves the plan from 2.2. Run 2.4 off-peak: it only reads,
+but it is around a million queries, and load caused the 2026-10-21 outage.
+
+**2.1 The deploy has the instrument rules (#1003):**
+
+```bash
+grep -c '"rules"' $APP/YSE_App/catalog_import/osc_instruments.json
+grep -c 'def auto_target' $APP/YSE_App/catalog_import/instruments.py
+```
+
+**Expected:** `1` and `1`. **If either is `0`:** stop; the stack runs the code from before #1003,
+whose plan sends unmapped strings (`CFHT` / `MegaCam`, ...) to `Unknown`. Deploy current code first.
+
+**2.2 Instrument plan** (reads only; a few minutes):
+
+```bash
+$PY manage.py catalog_instruments --census $OSC_DIR/sne-* --top 0 > $REPORTS/$DB-instrument-plan.txt
+tail -1 $REPORTS/$DB-instrument-plan.txt
+```
+
+**Expected:** `N strings: ... to existing instruments ..., ... to M new instruments ..., ... Unknown ...`.
+**Send Ryan `$DB-instrument-plan.txt` and wait for his OK before 2.3.**
+
+**2.3 Create the instruments** (writes; only after Ryan's OK):
+
+```bash
+$PY manage.py catalog_instruments --census $OSC_DIR/sne-* --load --apply --user $YSE_USER --database $DB > $REPORTS/$DB-instrument-load.txt
+tail -1 $REPORTS/$DB-instrument-load.txt
+```
+
+**Expected:** `Created: aliases N, instruments created M, telescopes created K`, M as in 2.2.
+Running it again creates nothing new. New telescopes get latitude, longitude and elevation 0; fill
+them in by hand where they matter.
+
+**2.4 Read-only dry run**, one repository at a time, in the background (likely a few hours):
+
+```bash
+nohup sh -c 'for r in $OSC_REPOS; do $PY manage.py import_osc $OSC_DIR/$r --quiet --report $REPORTS/dry-run-$r.jsonl > $REPORTS/dry-run-$r.log 2>&1; done' > /dev/null 2>&1 &
+```
+
+When `pgrep -fa import_osc` prints nothing:
+
+```bash
+tail -qn1 $REPORTS/dry-run-sne-*.log
+```
+
+**Expected:** six lines `Dry run: N entries, 0 written (0 new transients), F failed, ... s`; the N
+add up to 55,482.
+
+**2.5 Summary for Ryan:**
+
+```bash
+cat $REPORTS/dry-run-sne-*.jsonl > $REPORTS/dry-run.jsonl
+$PY manage.py osc_report_summary $REPORTS/dry-run.jsonl --review-dir $REPORTS/dry-run-review --sample 100 > $REPORTS/dry-run-summary.txt
+```
+
+**Send Ryan** `dry-run-summary.txt` and the four CSV files in `dry-run-review/`
+(`sample_matches.csv`, `review_duplicates.csv`, `host_discrepancies.csv`, `failures.csv`). They hold
+only public catalogue data and the names of matching YSE_PZ transients. Ryan reviews the sample of
+matched entries, every `superseded_existing` and `review` case, the host discrepancies and the
+instrument strings that resolve to Unknown. Anything the review finds is fixed before step 3.
 
 ### Step 3: pilot import on YSE_test, about 25 entries chosen by hand
 
-- Entries covering every path:
-  - rich historical SNe (SN 2011fe, 1987A, 1993J, 2013dy);
-  - X-ray and radio photometry (2006gy, 2014C);
-  - model data, which must be skipped (2017egm);
-  - objects YSE_PZ already has from TNS or its own data (duplicates and refereed superseding);
-  - an object with no IAU name from 2013-2016 (TNS internal-name match);
-  - hosts nearer and farther than 20 Mpc;
-  - an entry with no position.
-- Then `osc_tns_check --tns-file` for the new transients.
-- Check on yse\_experimental: transient pages, light curves, spectra, downloads, the API, SQL
-  Explorer, photometry statistics, `--revert` on one entry and a re-import of another.
+The pilot covers every path. The first names below are fixed; add the rest from the step 2 review
+files:
+
+- rich historical SNe (SN 2011fe, 1987A, 1993J, 2013dy);
+- X-ray and radio photometry (2006gy, 2014C);
+- model data, which must be skipped (2017egm);
+- objects YSE_PZ already has from TNS or its own data: a kept duplicate, a refereed
+  `superseded_existing` and a `review` case (`review_duplicates.csv`);
+- an object with no IAU name from 2013-2016 (TNS internal-name match);
+- hosts nearer and farther than 20 Mpc (`host_discrepancies.csv`, `sample_matches.csv`);
+- an entry with no position.
+
+```bash
+export PILOT="SN2011fe SN1987A SN1993J SN2013dy SN2006gy SN2014C SN2017egm <more entry names>"
+for n in $PILOT; do ls $OSC_DIR/sne-*/$n.json* 2>/dev/null || echo "not found: $n" >&2; done > $REPORTS/pilot-files.txt
+wc -l < $REPORTS/pilot-files.txt
+```
+
+**Expected:** one file per name and no `not found` lines.
+
+**3.1 Dry run, then import:**
+
+```bash
+$PY manage.py import_osc $(cat $REPORTS/pilot-files.txt) --report $REPORTS/$DB-pilot-dry-run.jsonl
+$PY manage.py import_osc $(cat $REPORTS/pilot-files.txt) --apply --user $YSE_USER --database $DB --report $REPORTS/$DB-pilot.jsonl
+```
+
+**Expected:** the last line reads `Imported: N entries, N written (K new transients), 0 failed, ... s`.
+
+**3.2 TNS check of the new transients** (dry run, then write):
+
+```bash
+$PY manage.py osc_tns_check --tns-file $TNS_FILE --max 0
+$PY manage.py osc_tns_check --tns-file $TNS_FILE --max 0 --apply --database $DB
+```
+
+**3.3 Check on yse\_experimental:** transient pages, light curves, spectra, downloads, the API,
+SQL Explorer and photometry statistics of the pilot transients. Then undo one entry and import
+another again:
+
+```bash
+$PY manage.py import_osc --revert SN2011fe --apply --database $DB
+$PY manage.py import_osc $(ls $OSC_DIR/sne-*/SN2011fe.json*) --apply --user $YSE_USER --database $DB
+```
 
 ### Step 4: 1% trial on YSE_test, about 500 random entries
 
 Measures time per entry, database growth and the failure and retry path, so the full run can be
 estimated, and checks that the heaviest transient pages stay fast.
 
+```bash
+find $OSC_DIR/sne-* -path '*/.git' -prune -o \( -name '*.json' -o -name '*.json.gz' \) -print | shuf -n 500 > $REPORTS/trial-files.txt
+nohup $PY manage.py import_osc $(cat $REPORTS/trial-files.txt) --apply --user $YSE_USER --database $DB --quiet --report $REPORTS/$DB-trial.jsonl > $REPORTS/$DB-trial.log 2>&1 &
+```
+
+When `pgrep -fa import_osc` prints nothing:
+
+```bash
+tail -2 $REPORTS/$DB-trial.log
+$PY manage.py import_osc --retry-failed --apply --user $YSE_USER --database $DB --quiet --report $REPORTS/$DB-trial-retry.jsonl
+$PY manage.py osc_tns_check --tns-file $TNS_FILE --max 0 --apply --database $DB
+```
+
+**Expected:** `Imported: 500 entries, ...` with the run time in seconds (× 110 estimates the full
+run), and the retry ends with no failures. Send Ryan the two lines and the time.
+
 ### Step 5: full import on YSE_test (rehearsal)
 
-- One repository at a time, oldest first, `--report` for each, `--retry-failed` until nothing
-  fails, then the TNS check from the same file.
-- yse\_test runs `develop` code on this database; it cannot read array-stored spectra until #492
-  is promoted.
+One repository at a time, oldest first. Set `R` to each name in `$OSC_REPOS` in turn and wait for
+each run to finish:
+
+```bash
+export R=sne-pre-1990
+nohup $PY manage.py import_osc $OSC_DIR/$R --apply --user $YSE_USER --database $DB --quiet --report $REPORTS/$DB-import-$R.jsonl > $REPORTS/$DB-import-$R.log 2>&1 &
+```
+
+When `pgrep -fa import_osc` prints nothing:
+
+```bash
+tail -2 $REPORTS/$DB-import-$R.log
+```
+
+**Expected:** `Imported: N entries, ..., F failed, ... s` (and the failures by stage if F > 0).
+Look at a few transient pages, then go on with the next `R`.
+
+After all six, retry until nothing fails, then the TNS check from the same file:
+
+```bash
+$PY manage.py import_osc --retry-failed --apply --user $YSE_USER --database $DB --quiet --report $REPORTS/$DB-retry.jsonl
+$PY manage.py osc_tns_check --tns-file $TNS_FILE --max 0
+$PY manage.py osc_tns_check --tns-file $TNS_FILE --max 0 --apply --database $DB
+```
 
 ### Step 6: production
 
-- Rows are not copied from test: transient, instrument, user and group ids differ between the
-  databases, and duplicate matching depends on what each holds.
-- Instead, the same importer runs on the same local files with the same TNS file. It is
-  deterministic and makes no outside requests. Prost host matching stays off during the import and
-  runs afterwards as its own step.
-- Order: backup, instruments, one repository at a time off-peak (check counts and a few pages after
-  each), then the TNS check.
-- Not a good idea: importing into a copy of production and swapping it in. Everything the crons
-  write between the copy and the swap would be lost.
+Rows are not copied from test: transient, instrument, user and group ids differ between the
+databases, and duplicate matching depends on what each holds. Instead, the same importer runs on
+the same local files with the same TNS file. It is deterministic and makes no outside requests.
+Not a good idea: importing into a copy of production and swapping it in. Everything the crons
+write between the copy and the swap would be lost.
 
+**6.1** Declare the production stack variables ([Variables](#variables)) and check the stack.
+
+**6.2 Prost host matching stays off** during the import and runs afterwards as its own step:
+
+```bash
+grep -i prost $APP/YSE_PZ/settings.ini; echo "env: ${YSE_PROST_HOST_MATCH:-unset}"
+```
+
+**Expected:** no `PROST_HOST_MATCH_ENABLED = True` line and `env: unset`.
+
+**6.3 Backup** of the production database, confirmed before anything below writes.
+
+**6.4 Instruments:** 2.1-2.3 with the production variables (Ryan approves the production plan too).
+
+**6.5 Import**, one repository at a time, off-peak: the step 5 commands. After each repository, check
+the counts and a few pages before the next.
+
+**6.6 Retry and TNS check:** the last three step 5 commands.
+
+## Other commands
+
+Single entries from GitHub (cached in `--fetch-dir`, default `~/.cache/yse_osc`):
+
+```bash
+$PY manage.py import_osc --fetch SN2011fe SN1987A                                       # dry run
+$PY manage.py import_osc --fetch SN2011fe --offline                                     # no database access
+$PY manage.py import_osc --fetch SN2011fe --apply --user $YSE_USER --database $DB       # write
+$PY -m YSE_App.catalog_import.osc $(ls $OSC_DIR/sne-*/SN2011fe.json*)                  # parse only, no Django
+$PY manage.py import_osc --revert SN2011fe --apply --database $DB                       # undo one entry
+```
+
+`--fetch` looks entries up by their OSC file name (`SN2011fe`, `2011fe`, `ASASSN-14lp`), not by
+alias. The index of the repositories (one GitHub API request each, about 55,000 names) is cached
+in `--fetch-dir`; `--refresh-index` rebuilds it, `--boneyard` adds `sne-boneyard`. Set
+`GITHUB_TOKEN` if the unauthenticated API limit (60 requests an hour) is hit.
+
+Without `--tns-file`, `osc_tns_check` asks the TNS API one object at a time, one request a minute
+(`OSC_TNS_REQUEST_INTERVAL_SECONDS`); use that only for stragglers (`--max 20`, or `--queue
+--database $DB` for the background sweep job).
+
+Other `import_osc` options: `--limit N`, `--no-spectra`, `--no-tns`, `--match-radius`,
+`--phot-tolerance`, `--spec-tolerance`, `--status`.
