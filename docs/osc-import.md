@@ -164,14 +164,17 @@ export DB=YSE
 cd $APP
 ```
 
-**Check the stack** (once the clones exist, after step 1.2):
+**Check the stack** (reads nothing but the settings):
 
 ```bash
-$PY manage.py catalog_instruments --census $OSC_DIR/sne-pre-1990 --top 1 | head -1
+$PY manage.py shell -c "from django.db import connection as c; print('Using database %s on %s' % (c.settings_dict['NAME'], c.settings_dict['HOST']))"
+echo "DB=$DB"
 ```
 
-**Expected:** `Using database <DB> on ...` with the value of `$DB`. **If not:** stop; the
-variables point at the wrong stack.
+**Expected:** `Using database <DB> on ...` with the same name as the `DB=` line (system-check
+warnings printed before it are harmless). **If not:** stop; the variables point at the wrong
+stack. Don't pipe these commands into `head`: closing the pipe early makes Django end with a
+`BrokenPipeError` traceback.
 
 Report files of steps 5 and 6 start with `$DB-`, so test and production reports never overwrite
 each other.
