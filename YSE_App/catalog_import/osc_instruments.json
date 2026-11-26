@@ -1,5 +1,5 @@
 {
-  "_comment": "How catalogue telescope/instrument strings map to YSE telescopes and instruments (#894, #1003). `manage.py catalog_instruments --census <OSC_DIR>/sne-* --load` plans every string found in the catalogue and, with --apply, creates what is missing and one alias row per string. Order: (1) the first rule below that matches; (2) an existing YSE instrument of that name; (3) automatic: telescope and instrument given -> Telescope/Instrument, one given -> X/X, 'Telescope - Instrument' in one field -> split. Strings in `unknown` stay on the Unknown instrument. A rule's `telescope` / `instrument` patterns are case-insensitive regular expressions matched against the whole telescope / instrument string, and `any` is searched in either; a rule matches when all the patterns it gives match. `existing` names a YSE instrument to use when there is exactly one of that name (so catalogue data join YSE's own); otherwise target_telescope / target_instrument are created. \\1 in a target is the rule's first group. Ryan's mappings, 2026-11-16.",
+  "_comment": "How catalogue telescope/instrument strings map to YSE telescopes and instruments (#894, #1003). `manage.py catalog_instruments --census <OSC_DIR>/sne-* --load` plans every string found in the catalogue and, with --apply, creates what is missing and one alias row per string. Order: (1) the first rule below that matches; (2) an existing YSE instrument of that name; (3) automatic: telescope and instrument given -> Telescope/Instrument, one given -> X/X, 'Telescope - Instrument' in one field -> split. Strings in `unknown` stay on the Unknown instrument. A rule's `telescope` / `instrument` patterns are case-insensitive regular expressions matched against the whole telescope / instrument string, and `any` is searched in either; a rule matches when all the patterns it gives match. `existing` names a YSE instrument to use when there is exactly one of that name (so catalogue data join YSE's own); otherwise target_telescope / target_instrument are created. \\1 in a target is the rule's first group. Ryan's mappings, 2026-11-16 and 2026-11-25.",
   "unknown": ["", "none", "other", "unknown", "other - other", "n/a", "-"],
   "rules": [
     {"any": "gaia", "target_telescope": "Gaia", "target_instrument": "Gaia"},
@@ -21,6 +21,13 @@
     {"telescope": "nickel", "instrument": "", "target_telescope": "Nickel", "target_instrument": "Nickel"},
     {"telescope": "pairitel", "target_telescope": "PAIRITEL", "target_instrument": "2MASS"},
     {"any": "^io:o$", "existing": "IO:O", "target_telescope": "Liverpool Telescope", "target_instrument": "IO:O"},
-    {"telescope": "hubble", "instrument": "(.+)", "target_telescope": "HST", "target_instrument": "\\1"}
+    {"telescope": "hubble", "instrument": "(.+)", "target_telescope": "HST", "target_instrument": "\\1"},
+    {"any": "^cfa3_kep$", "target_telescope": "1.2-m FLWO", "target_instrument": "KeplerCam"},
+    {"any": "^cfa4_kep1$", "target_telescope": "1.2-m FLWO", "target_instrument": "KeplerCam1"},
+    {"any": "^cfa3_mini$", "target_telescope": "1.2-m FLWO", "target_instrument": "Minicam"},
+    {"any": "^cfa3_4sh$", "target_telescope": "1.2-m FLWO", "target_instrument": "4Shooter"},
+    {"telescope": "flwo", "instrument": "keplercam", "target_telescope": "1.2-m FLWO", "target_instrument": "KeplerCam"},
+    {"any": "^mdm 1\\.3m\\+2\\.4m\\+site$", "target_telescope": "MDM 1.3m+2.4m", "target_instrument": "SITe"},
+    {"any": "^mt\\. laguna 1m\\+loral$", "target_telescope": "Mt. Laguna 1m", "target_instrument": "Loral"}
   ]
 }

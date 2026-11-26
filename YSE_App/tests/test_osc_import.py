@@ -328,6 +328,12 @@ class InstrumentRulesTests(SimpleTestCase):
             ('kait4', ''): ('KAIT', 'KAIT4'), ('P48', ''): ('P48', 'P48'), ('p48', ''): ('P48', 'P48'),
             ('PTF48', ''): ('P48', 'PTF'), ('PAIRITEL', ''): ('PAIRITEL', '2MASS'),
             ('nickel2', ''): ('Nickel', 'Nickel2'), ('Hubble', 'ACS'): ('HST', 'ACS'),
+            # 2026-11-25: CfA, FLWO, MDM and Mt. Laguna strings
+            ('CfA3_KEP', ''): ('1.2-m FLWO', 'KeplerCam'), ('', 'CfA3_KEP'): ('1.2-m FLWO', 'KeplerCam'),
+            ('CfA4_KEP1', ''): ('1.2-m FLWO', 'KeplerCam1'), ('CfA3_MINI', ''): ('1.2-m FLWO', 'Minicam'),
+            ('CfA3_4SH', ''): ('1.2-m FLWO', '4Shooter'), ('FLWO', 'KeplerCam'): ('1.2-m FLWO', 'KeplerCam'),
+            ('MDM 1.3m+2.4m+SITe', ''): ('MDM 1.3m+2.4m', 'SITe'),
+            ('Mt. Laguna 1m+Loral', ''): ('Mt. Laguna 1m', 'Loral'),
         }
         for (tel, inst), target in expected.items():
             with self.subTest(telescope=tel, instrument=inst):
