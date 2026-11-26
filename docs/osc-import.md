@@ -82,6 +82,9 @@ alias row naming a YSE instrument, decided in this order:
    - kaitN -> KAIT/KAITN; P48 and p48 -> P48/P48; PTF48 (and P48 with CFH12k) -> P48/PTF;
    - PAIRITEL -> PAIRITEL/2MASS; nickelN -> Nickel/NickelN;
    - anything UVOT -> the existing UVOT; Hubble -> HST;
+   - CfA3_KEP and FLWO/KeplerCam -> 1.2-m FLWO/KeplerCam; CfA4_KEP1 -> 1.2-m FLWO/KeplerCam1;
+     CfA3_MINI -> 1.2-m FLWO/Minicam; CfA3_4SH -> 1.2-m FLWO/4Shooter (2026-11-25);
+   - MDM 1.3m+2.4m+SITe -> MDM 1.3m+2.4m/SITe; Mt. Laguna 1m+Loral -> Mt. Laguna 1m/Loral (2026-11-25);
 2. an existing YSE instrument of that name;
 3. otherwise, automatically:
    - telescope and instrument given -> Telescope/Instrument;
