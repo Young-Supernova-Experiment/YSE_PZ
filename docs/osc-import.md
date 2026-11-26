@@ -204,7 +204,9 @@ Facts that shape it:
 ### Step 1: download and offline dry run (writes nothing to any database)
 
 Status: the instrument census (1.6) ran on 2026-11-16: 55,482 entries, no failures. Ryan's
-mappings went into the rules (#1003). Whether 1.3-1.5 ran is not recorded.
+mappings went into the rules (#1003) after it, so that census is stale: it shows strings such as
+`'CFHT' 'MegaCam' -> Unknown` that the current code maps (here to CFHT / MegaCam). Use the plan
+from 2.2 instead. Whether 1.3-1.5 ran is not recorded.
 
 **1.1 Disk space:**
 
@@ -292,9 +294,11 @@ but it is around a million queries, and load caused the 2026-10-21 outage.
 
 ```bash
 grep -c '"rules"' $APP/YSE_App/catalog_import/osc_instruments.json
+grep -c 'def auto_target' $APP/YSE_App/catalog_import/instruments.py
 ```
 
-**Expected:** `1`. **If `0`:** stop; the stack does not run current code.
+**Expected:** `1` and `1`. **If either is `0`:** stop; the stack runs the code from before #1003,
+whose plan sends unmapped strings (`CFHT` / `MegaCam`, ...) to `Unknown`. Deploy current code first.
 
 **2.2 Instrument plan** (reads only; a few minutes):
 
