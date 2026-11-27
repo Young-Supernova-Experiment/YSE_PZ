@@ -806,6 +806,34 @@ class ReportSummaryTests(SimpleTestCase):
         self.assertEqual(summary['actions'], {'excluded': 1, 'failed': 1})
         self.assertEqual(summary['failures_by_stage'], {'preview': 1})
 
+    def test_pilot_candidates(self):
+        def line(name, action, **preview):
+            return {'entry': name, 'counts': {}, 'preview': dict(preview, action=action)}
+        lines = [
+            line('SN2011fe', 'add data to 2011fe (matched by name 2011fe)', photometry={'superseded_existing': 2}),
+            line('SN2001aa', 'skip: no match and no position'),
+            line('SN2002bb', 'add data to 2002bb (matched by name 2002bb)', photometry={'superseded_existing': 1}),
+            line('PS1-13abc', 'add data to 2013xyz (matched by alternate name PS1-13abc)'),
+            line('SN2003cc', 'create SN2003cc', host={'status': 'discrepant', 'distance_mpc': 12.5}),
+            line('SN2004dd', 'create SN2004dd', host={'status': 'consistent', 'distance_mpc': 80.0}),
+            {'entry': 'SN2005ee', 'counts': {}, 'error': 'boom', 'stage': 'preview',
+             'preview': {'action': 'skip: no match and no position'}},
+        ]
+        picked = dict(report.pilot_candidates(lines, skip=['SN2011fe']))
+        self.assertEqual(picked['no position'], 'SN2001aa')
+        self.assertEqual(picked['no IAU name, matched by alternate name'], 'PS1-13abc')
+        self.assertEqual(picked['superseded_existing'], 'SN2002bb')
+        self.assertIsNone(picked['review'])
+        self.assertEqual(picked['host nearer than 20 Mpc'], 'SN2003cc')
+        self.assertEqual(picked['host farther than 20 Mpc'], 'SN2004dd')
+
+    def test_command_pilot(self):
+        out, err = StringIO(), StringIO()
+        call_command('osc_report_summary', self._report(), '--pilot', 'SN2011fe', 'SN1987A', stdout=out, stderr=err)
+        self.assertEqual(out.getvalue().strip(), 'SN2011fe SN1987A %s' % NAME)
+        self.assertIn('superseded_existing', err.getvalue())
+        self.assertIn('(none in this report)', err.getvalue())
+
     def test_command(self):
         out = StringIO()
         call_command('osc_report_summary', self._report(), stdout=out)

@@ -3,6 +3,7 @@ Summarise an ``import_osc --report`` file for review (#906). Reads only the file
 
   python3 manage.py osc_report_summary osc-dry-run.jsonl
   python3 manage.py osc_report_summary osc-dry-run.jsonl --review-dir osc-review --sample 100
+  python3 manage.py osc_report_summary osc-dry-run.jsonl --pilot SN2011fe SN1987A    # pilot names only
 """
 
 from __future__ import annotations
@@ -21,9 +22,20 @@ class Command(BaseCommand):
         parser.add_argument('--review-dir', default='', help='Write review CSV files here.')
         parser.add_argument('--sample', type=int, default=50, help='Matched entries to sample for a hand check.')
         parser.add_argument('--top', type=int, default=25, help='Rows per warning / instrument list.')
+        parser.add_argument('--pilot', nargs='*', metavar='NAME',
+                            help='Print only the given names plus one entry for each pilot case of step 3, '
+                                 'space-separated; the cases go to stderr.')
 
     def handle(self, *args, **opts):
         lines = list(report.read(opts['report']))
+        if opts['pilot'] is not None:
+            names = list(opts['pilot'])
+            for kind, name in report.pilot_candidates(lines, skip=names):
+                self.stderr.write('%-40s %s' % (kind, name or '(none in this report)'))
+                if name:
+                    names.append(name)
+            self.stdout.write(' '.join(names))
+            return
         self.stdout.write(report.format_summary(report.summarise(lines), top=opts['top']))
         if opts['review_dir']:
             for name, n in report.write_review_files(lines, opts['review_dir'], sample=opts['sample']).items():

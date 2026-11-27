@@ -111,6 +111,47 @@ def format_summary(summary: dict, top: int = 25) -> str:
     return '\n'.join(lines)
 
 
+PILOT_KINDS = (
+    ('no position', lambda name, p: p.get('action', '').startswith('skip: no match and no position')),
+    ('no IAU name, matched by alternate name',
+     lambda name, p: not re.match(r'^(SN|AT) ?[0-9]{4}', name) and 'matched by alternate name' in p.get('action', '')),
+    ('superseded_existing', lambda name, p: _decided(p, matching.SUPERSEDED_EXISTING)),
+    ('review', lambda name, p: _decided(p, matching.REVIEW)),
+    ('kept_existing', lambda name, p: _decided(p, matching.KEPT_EXISTING)),
+    ('host nearer than 20 Mpc', lambda name, p: _host_distance(p) is not None and _host_distance(p) < 20),
+    ('host farther than 20 Mpc', lambda name, p: _host_distance(p) is not None and _host_distance(p) >= 20),
+)
+
+
+def _decided(preview: dict, decision: str) -> int:
+    return (preview.get('photometry') or {}).get(decision, 0) + (preview.get('spectra') or {}).get(decision, 0)
+
+
+def _host_distance(preview: dict):
+    host = preview.get('host')
+    distance = host.get('distance_mpc') if isinstance(host, dict) else None
+    return distance if isinstance(distance, (int, float)) else None
+
+
+def pilot_candidates(lines: Iterable[dict], skip: Iterable[str] = ()) -> List[tuple]:
+    """One dry-run entry for each pilot case of step 3 that a hand-picked name does not cover.
+
+    Returns ``(kind, entry)`` pairs, with ``entry`` None when the report has no such entry.
+    """
+    used = set(skip)
+    picked = {}
+    for line in lines:
+        preview, name = line.get('preview'), line.get('entry') or ''
+        if not isinstance(preview, dict) or line.get('error') or name in used:
+            continue
+        for kind, test in PILOT_KINDS:
+            if kind not in picked and test(name, preview):
+                picked[kind] = name
+                used.add(name)
+                break
+    return [(kind, picked.get(kind)) for kind, _ in PILOT_KINDS]
+
+
 def write_review_files(lines: List[dict], out_dir: str, *, sample: int = 50, seed: int = 1) -> Dict[str, int]:
     """CSV lists to check by hand; returns rows per file."""
     os.makedirs(out_dir, exist_ok=True)

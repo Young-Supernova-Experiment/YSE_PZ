@@ -362,27 +362,32 @@ only public catalogue data and the names of matching YSE_PZ transients. Ryan rev
 matched entries, every `superseded_existing` and `review` case, the host discrepancies and the
 instrument strings that resolve to Unknown. Anything the review finds is fixed before step 3.
 
-### Step 3: pilot import on YSE_test, about 25 entries chosen by hand
+### Step 3: pilot import on YSE_test, about 14 entries
 
-The pilot covers every path. The first names below are fixed; add the rest from the step 2 review
-files:
+The pilot covers every path. The first seven names are fixed; `osc_report_summary --pilot` adds one
+entry for each other case from `$REPORTS/dry-run.jsonl` (step 2.5, made after the step 2.4 dry run
+of every repository):
 
 - rich historical SNe (SN 2011fe, 1987A, 1993J, 2013dy);
 - X-ray and radio photometry (2006gy, 2014C);
 - model data, which must be skipped (2017egm);
 - objects YSE_PZ already has from TNS or its own data: a kept duplicate, a refereed
-  `superseded_existing` and a `review` case (`review_duplicates.csv`);
+  `superseded_existing` and a `review` case;
 - an object with no IAU name from 2013-2016 (TNS internal-name match);
-- hosts nearer and farther than 20 Mpc (`host_discrepancies.csv`, `sample_matches.csv`);
+- hosts nearer and farther than 20 Mpc;
 - an entry with no position.
 
 ```bash
-export PILOT="SN2011fe SN1987A SN1993J SN2013dy SN2006gy SN2014C SN2017egm <more entry names>"
+export PILOT=$($PY manage.py osc_report_summary $REPORTS/dry-run.jsonl --pilot SN2011fe SN1987A SN1993J SN2013dy SN2006gy SN2014C SN2017egm)
+echo $PILOT | wc -w
 for n in $PILOT; do ls $OSC_DIR/sne-*/$n.json* 2>/dev/null || echo "not found: $n" >&2; done > $REPORTS/pilot-files.txt
 wc -l < $REPORTS/pilot-files.txt
 ```
 
-**Expected:** one file per name and no `not found` lines.
+**Expected:** `--pilot` prints one line per case with the entry it picked (or `(none in this report)`),
+the two counts are equal (about 14), and there are no `not found` lines. To add an entry by hand, put
+its name after `--pilot` with the others. Every name must be an OSC file name (`SN2011fe`, not
+`SN 2011fe`); don't type a placeholder such as `<name>`, because the shell splits it into separate words.
 
 **3.1 Dry run, then import:**
 

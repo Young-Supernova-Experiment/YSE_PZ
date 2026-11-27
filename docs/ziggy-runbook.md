@@ -3737,6 +3737,7 @@ The TNS cron keeps working under the share rule from #647: its header is new, an
 
 ## 6 · Changelog
 
+* 2026-11-26 v126, **nothing to run** (no migration, no package). OSC step 3: `osc_report_summary --pilot` picks the pilot entries from the dry-run report, replacing the `<more entry names>` placeholder that the shell read as three names; see `docs/osc-import.md`.
 * 2026-11-25 v125, **nothing to run** (docs only). The OSC import commands (steps 1-6) moved to `docs/osc-import.md`, with the shell variables to declare first; the two OSC sections here now point there.
 * 2026-11-25 v124, **nothing to run** (no migration, no package). Master and develop merged into experimental after #792: every change already had an experimental equivalent (#1006, #1019, #1023); this adds only the commented `BAZIN_TABLE_FITS_ENABLED` line in `public_settings.ini`. #1021's privacy code on develop matches experimental's.
 * 2026-11-24 v123, **nothing to run** (no migration, no package). Backport of develop-direct #1017 (#1018): DESI redshifts rounded and shown with 4 decimals (#1010); Generate Finder Chart works again and falls back to DSS when PS1 fails (#1011); clearer SALT3 "Fit for redshift if none is known" option (#1013); failed catalogue checks show their reason (#1014); SQL Explorer timeouts give a readable message (#1015); faster, per-PI target-list download (#999).
