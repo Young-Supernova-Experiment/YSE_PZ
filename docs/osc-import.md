@@ -113,6 +113,16 @@ matter. To change a mapping, edit the rules and run it again.
 - Historical import: no automatic TNS publishing, minor-planet screen or annotation runs; no
   new-observation signals for spectra; photometry statistics recomputed once per transient.
 - Dates before year 1000 stay in the quantities only (MySQL `DATETIME`).
+- Excluded entries (Ryan, 2026-11-26): entries whose name matches a pattern in
+  `catalog_import/osc_exclude.json` are skipped before parsing, never matched or created, and counted
+  as `excluded`. Today: test entries (`test...`, e.g. `test_25_20171001`) and the `mbr144.26.1005`
+  style entries. Add a pattern there to drop more.
+- Names with characters outside Latin-1 (en dashes, Greek letters, ...) are not used to look up an
+  existing transient: YSE_PZ's name columns are latin1, so they cannot match, and MySQL rejects the
+  query (`Illegal mix of collations`, error 1270). Matching then falls back on the other names and the
+  position.
+- A dry run records an entry whose preview fails as failed (stage `preview`) and goes on with the next
+  one, as `--apply` does.
 
 **Failures** (#895). With `--apply`, each entry's last download, parse and ingest outcome is in
 `CatalogImportAttempt` (stage, status, attempts, error). Downloads are retried with backoff
@@ -263,7 +273,7 @@ nohup $PY manage.py import_osc $OSC_DIR/sne-* --offline --quiet --report $REPORT
 ```
 
 **Expected, when `pgrep -fa import_osc` prints nothing:** the last line of
-`$REPORTS/offline.log` reads `Dry run: 55xxx entries, 0 written (0 new transients), N failed, ... s`.
+`$REPORTS/offline.log` reads `Dry run: 55xxx entries, 0 written (0 new transients), N failed, X excluded, ... s`.
 N may be a few dozen: unreadable files are what this step finds.
 
 **1.5 Summary of the offline dry run:**
@@ -336,7 +346,7 @@ When `pgrep -fa import_osc` prints nothing:
 tail -qn1 $REPORTS/dry-run-sne-*.log
 ```
 
-**Expected:** six lines `Dry run: N entries, 0 written (0 new transients), F failed, ... s`; the N
+**Expected:** six lines `Dry run: N entries, 0 written (0 new transients), F failed, X excluded, ... s`; the N
 add up to 55,482.
 
 **2.5 Summary for Ryan:**
@@ -381,7 +391,7 @@ $PY manage.py import_osc $(cat $REPORTS/pilot-files.txt) --report $REPORTS/$DB-p
 $PY manage.py import_osc $(cat $REPORTS/pilot-files.txt) --apply --user $YSE_USER --database $DB --report $REPORTS/$DB-pilot.jsonl
 ```
 
-**Expected:** the last line reads `Imported: N entries, N written (K new transients), 0 failed, ... s`.
+**Expected:** the last line reads `Imported: N entries, N written (K new transients), 0 failed, 0 excluded, ... s`.
 
 **3.2 TNS check of the new transients** (dry run, then write):
 
@@ -436,7 +446,7 @@ When `pgrep -fa import_osc` prints nothing:
 tail -2 $REPORTS/$DB-import-$R.log
 ```
 
-**Expected:** `Imported: N entries, ..., F failed, ... s` (and the failures by stage if F > 0).
+**Expected:** `Imported: N entries, ..., F failed, X excluded, ... s` (and the failures by stage if F > 0).
 Look at a few transient pages, then go on with the next `R`.
 
 After all six, retry until nothing fails, then the TNS check from the same file:

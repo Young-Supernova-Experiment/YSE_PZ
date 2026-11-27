@@ -23,9 +23,11 @@ Run a dry run on local files without Django::
 from __future__ import annotations
 
 import datetime
+import functools
 import gzip
 import json
 import math
+import os
 import re
 from collections import Counter, OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -280,6 +282,22 @@ def yse_class_name(claimed: str) -> Optional[str]:
     if _SN_TYPE_RE.match(claimed):
         return 'SN ' + claimed
     return claimed
+
+
+# ---- excluded entries -----------------------------------------------------------------------
+
+EXCLUDE_PATH = os.path.join(os.path.dirname(__file__), 'osc_exclude.json')
+
+
+@functools.lru_cache(maxsize=None)
+def _exclude_patterns(path: str) -> Tuple[Tuple[str, Any], ...]:
+    with open(path) as handle:
+        return tuple((p, re.compile(p, re.IGNORECASE)) for p in json.load(handle).get('entry_names', []))
+
+
+def excluded(name: str, path: str = EXCLUDE_PATH) -> Optional[str]:
+    """The ``osc_exclude.json`` pattern that excludes this entry name (test entries, ...), else None."""
+    return next((p for p, rx in _exclude_patterns(path) if rx.search(name or '')), None)
 
 
 # ---- parsing --------------------------------------------------------------------------------

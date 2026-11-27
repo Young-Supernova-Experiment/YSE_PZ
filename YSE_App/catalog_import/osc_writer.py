@@ -120,16 +120,30 @@ def candidate_names(plan: dict) -> List[str]:
     return out
 
 
+def lookup_names(names: List[str]) -> List[str]:
+    """The names a name query can use. Transient names are in latin1 columns: a name with other
+    characters cannot match one, and MySQL rejects the query ("Illegal mix of collations", 1270)."""
+    out = []
+    for n in names:
+        try:
+            n.encode('latin-1')
+        except UnicodeEncodeError:
+            continue
+        out.append(n)
+    return out
+
+
 def match_transient(plan: dict, match_radius: float = DEFAULT_MATCH_RADIUS_ARCSEC) -> Tuple[Optional[Transient], str]:
     """Step 1: the existing transient for this entry, and how it was found ('' when there is none)."""
     entry = CatalogEntry.objects.filter(catalog=plan['catalog'], entry_name=plan['entry_name']).select_related('transient').first()
     if entry is not None:
         return entry.transient, 'imported before'
-    names = candidate_names(plan)
-    found = list(Transient.objects.filter(name__in=names).order_by('id')[:2])
+    names = lookup_names(candidate_names(plan))
+    found = list(Transient.objects.filter(name__in=names).order_by('id')[:2]) if names else []
     if found:
         return found[0], 'name %s' % found[0].name
-    alt = AlternateTransientNames.objects.filter(name__in=names).select_related('transient').order_by('id').first()
+    alt = (AlternateTransientNames.objects.filter(name__in=names).select_related('transient').order_by('id').first()
+           if names else None)
     if alt is not None:
         return alt.transient, 'alternate name %s' % alt.name
     t = plan['transient']

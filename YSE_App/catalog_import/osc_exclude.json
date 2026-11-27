@@ -1,0 +1,7 @@
+{
+  "_comment": "OSC entries the import skips (never created, never matched), by entry name: case-insensitive regular expressions searched in the name. Test and placeholder entries, not real transients. Ryan, 2026-11-26.",
+  "entry_names": [
+    "^test",
+    "^mbr[0-9]+\\.[0-9]+\\.[0-9]+$"
+  ]
+}

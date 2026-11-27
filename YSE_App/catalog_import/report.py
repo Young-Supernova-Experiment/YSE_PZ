@@ -43,6 +43,10 @@ def warning_kind(text: str) -> str:
 
 
 def _action(line: dict) -> str:
+    if line.get('excluded'):
+        return 'excluded'
+    if line.get('error'):
+        return 'failed'
     if 'result' in line:
         return 'created' if line['result'].get('created') else 'added data'
     action = (line.get('preview') or {}).get('action', '')
@@ -65,7 +69,7 @@ def summarise(lines: Iterable[dict]) -> dict:
             continue
         out['entries'] += 1
         if line.get('error'):
-            out['failures_by_stage']['ingest'] += 1
+            out['failures_by_stage'][line.get('stage', 'ingest')] += 1
         out['actions'][_action(line)] += 1
         c = line['counts']
         for key in ('sources', 'quantities', 'photometry_sets', 'photometry_points', 'spectra', 'spectrum_pixels'):

@@ -123,6 +123,13 @@ class Command(BaseCommand):
                     continue
                 for name, entry in entries:
                     self.counts['entries'] += 1
+                    pattern = osc.excluded(name)
+                    if pattern:
+                        self.counts['excluded'] += 1
+                        self.stdout.write('%s: skip: excluded (%s)' % (name, pattern))
+                        if report:
+                            report.write(json.dumps({'entry': name, 'excluded': pattern, 'counts': {}}) + '\n')
+                        continue
                     try:
                         plan = osc.parse_entry(name, entry, origin=origin)
                     except Exception as exc:  # noqa: BLE001 - a malformed entry must not stop the run
@@ -137,9 +144,9 @@ class Command(BaseCommand):
         if writer is not None and self.counts['created'] and not opts['no_tns']:
             self.stdout.write('%d new transients wait for the TNS check: manage.py osc_tns_check --tns-file '
                               '<TNS public objects file> (see docs/osc-import.md).' % self.counts['created'])
-        self.stdout.write('%s: %d entries, %d written (%d new transients), %d failed, %.0f s' % (
+        self.stdout.write('%s: %d entries, %d written (%d new transients), %d failed, %d excluded, %.0f s' % (
             'Imported' if writer else 'Dry run', self.counts['entries'], self.counts['written'], self.counts['created'],
-            sum(self.failures.values()), time.time() - started))
+            sum(self.failures.values()), self.counts['excluded'], time.time() - started))
         if self.failures:
             self.stdout.write('  failures by stage: %s%s' % (
                 ', '.join('%s %d' % kv for kv in sorted(self.failures.items())),
@@ -155,7 +162,12 @@ class Command(BaseCommand):
             if not opts['offline']:
                 from YSE_App.catalog_import.osc_writer import preview_entry
 
-                preview = preview_entry(plan, opts['match_radius'])
+                try:
+                    preview = preview_entry(plan, opts['match_radius'])
+                except Exception as exc:  # noqa: BLE001 - one bad entry must not stop a dry run either
+                    line.update(error=repr(exc), stage='preview')
+                    self._failed(key, origin, 'preview', repr(exc), entry=plan['entry_name'])
+                    return line
                 line['preview'] = {k: v for k, v in preview.items() if k != 'transient'}
                 if opts['quiet']:
                     self.stdout.write('%s: would %s' % (plan['entry_name'], preview['action']))
@@ -216,7 +228,7 @@ class Command(BaseCommand):
         self.failures[stage] += 1
         self.stderr.write('%s: %s failed: %s' % (entry or key, stage, error))
         self._attempt(key, origin, stage, error)
-        if getattr(self, 'report', None) and stage != 'ingest':  # ingest failures are in the entry's line
+        if getattr(self, 'report', None) and stage not in ('ingest', 'preview'):  # those are in the entry's line
             self.report.write(json.dumps({'entry': entry or key, 'origin': origin, 'stage': stage,
                                           'error': error}) + '\n')
 
