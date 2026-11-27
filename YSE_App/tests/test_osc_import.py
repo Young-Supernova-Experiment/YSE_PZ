@@ -16,7 +16,7 @@ from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase, TestCase
 
 from YSE_App.catalog_import import guard, instruments, matching, osc, osc_fetch, osc_tns, report, tns_public
-from YSE_App.catalog_import.osc_writer import EntryNotImported, Writer, preview_entry
+from YSE_App.catalog_import.osc_writer import EntryNotImported, Writer, lookup_names, preview_entry
 from YSE_App.common import spectrum_arrays
 from YSE_App.common.collaboration_groups import PUBLIC_COLLABORATION_GROUP_NAME
 from YSE_App.common.quality_mask import PhotFlag, SpecFlag
@@ -238,6 +238,23 @@ class OSCParserTests(SimpleTestCase):
         self.assertLessEqual(set(osc.QUANTITY_FLOAT_FIELDS + osc.QUANTITY_TEXT_FIELDS + osc.QUANTITY_BOOL_FIELDS),
                              names(TransientCatalogQuantity))
         self.assertLessEqual(set(osc.SOURCE_FIELDS), names(CatalogSource))
+
+
+class ExclusionAndNameTests(SimpleTestCase):
+    """2026-11-26: test entries are skipped; names a latin1 column cannot hold are not queried."""
+
+    def test_excluded_entries(self):
+        for name in ('test_25_20171001', 'test20170930', 'test_Sladjana1_20171002', 'TEST_nikola_20171001',
+                     'mbr144.26.1005', 'mbr145.32.271'):
+            with self.subTest(name=name):
+                self.assertIsNotNone(osc.excluded(name))
+        for name in ('SN2011fe', 'PTF11kly', 'ASASSN-14lp', 'LSQ12test', 'mbr144'):
+            with self.subTest(name=name):
+                self.assertIsNone(osc.excluded(name))
+
+    def test_lookup_names(self):
+        self.assertEqual(lookup_names(['SN2010ab', 'SN 2010\u2013ab', 'caf\u00e9', '\u03b1 Cen']),
+                         ['SN2010ab', 'caf\u00e9'])
 
 
 class MatchingTests(SimpleTestCase):
@@ -681,6 +698,19 @@ class ImportOSCCommandTests(TestCase):
         self.assertFalse(CatalogEntry.objects.exists())
         self.assertFalse(CatalogImportAttempt.objects.exists())
 
+    def test_dry_run_skips_excluded_entries_and_odd_names(self):
+        with open(os.path.join(self.tmp.name, 'test_5_20171001.json'), 'w') as handle:
+            json.dump({'test_5_20171001': entry(name='test_5_20171001')}, handle)
+        with open(os.path.join(self.tmp.name, 'SN2099yy.json'), 'w') as handle:
+            json.dump({'SN2099yy': entry(name='SN2099yy', alias=[{'value': 'SN2099yy', 'source': '1'},
+                                                                 {'value': 'PSN J10\u2013x', 'source': '1'}])}, handle)
+        out, err = StringIO(), StringIO()
+        call_command('import_osc', self.tmp.name, '--quiet', stdout=out, stderr=err)
+        self.assertIn('test_5_20171001: skip: excluded', out.getvalue())
+        self.assertIn('SN2099yy: would create', out.getvalue())
+        self.assertIn('Dry run: 3 entries, 0 written (0 new transients), 0 failed, 1 excluded', out.getvalue())
+        self.assertEqual(err.getvalue(), '')
+
     def test_apply_records_attempts_and_retries_failures(self):
         broken = os.path.join(self.tmp.name, 'SN2099yy.json')
         with open(broken, 'w') as handle:
@@ -768,6 +798,13 @@ class ReportSummaryTests(SimpleTestCase):
         counts = report.write_review_files(lines, out_dir)
         self.assertEqual(counts, {'review_duplicates.csv': 1, 'host_discrepancies.csv': 1, 'failures.csv': 1,
                                   'sample_matches.csv': 1})
+
+    def test_excluded_and_preview_failures(self):
+        lines = [{'entry': 'test_1', 'excluded': '^test', 'counts': {}},
+                 {'entry': NAME, 'counts': {}, 'warnings': [], 'error': 'OperationalError()', 'stage': 'preview'}]
+        summary = report.summarise(lines)
+        self.assertEqual(summary['actions'], {'excluded': 1, 'failed': 1})
+        self.assertEqual(summary['failures_by_stage'], {'preview': 1})
 
     def test_command(self):
         out = StringIO()
